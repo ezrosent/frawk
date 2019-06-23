@@ -5,7 +5,7 @@ use std::ptr;
 
 struct Buffer {
     len: Cell<usize>,
-    data: PushOnlyVec<u8>,
+    data: PushOnlyVec<UnsafeCell<u8>>,
 }
 
 impl Buffer {
@@ -28,8 +28,9 @@ impl Buffer {
         if new_len > cap {
             return None;
         }
-        unsafe { ptr::write(self.data.get_raw_mut(start) as *mut T, f()) };
+        // must set len before f, as f may call alloc recursively!
         self.len.set(new_len);
+        unsafe { ptr::write(self.data.get_raw_mut(start) as *mut T, f()) };
         unsafe { Some(&*(self.data.get_raw(start) as *const T)) }
     }
 }
@@ -145,7 +146,7 @@ mod tests {
     fn basic_alloc() {
         let mut v = Vec::new();
         let a = Arena::with_size(1 << 10);
-        let mut sum = 0;
+        let mut sum: usize = 0;
         for i in 0..1024 {
             v.push(a.alloc(|| i));
             sum += i;
@@ -208,6 +209,28 @@ mod tests {
         Sub(&'a Arith2<'a>, &'a Arith2<'a>),
     }
 
+    impl<'a> Arith2<'a> {
+        fn eval(&self) -> i64 {
+            use Arith2::*;
+            match self {
+                N(i) => *i,
+                Add(n1, n2) => n1.eval() + n2.eval(),
+                Sub(n1, n2) => n1.eval() - n2.eval(),
+            }
+        }
+    }
+
+    impl Arith1 {
+        fn eval(&self) -> i64 {
+            use Arith1::*;
+            match self {
+                N(i) => *i,
+                Add(n1, n2) => n1.eval() + n2.eval(),
+                Sub(n1, n2) => n1.eval() - n2.eval(),
+            }
+        }
+    }
+
     fn build_1(depth: usize) -> Box<Arith1> {
         use Arith1::*;
         let mut expr = Box::new(N(1));
@@ -268,4 +291,30 @@ mod tests {
             black_box(build_2_cheat(&a, 1000));
         })
     }
+
+    #[bench]
+    fn arith_box_eval_1000(b: &mut Bencher) {
+        b.iter(|| black_box(build_1(1000).eval()))
+    }
+
+    #[bench]
+    fn arith_arena_eval_1000(b: &mut Bencher) {
+        let mut i=0;
+        b.iter(|| {
+            let a = Arena::with_size(1 << 12);
+            black_box(build_2(&a, 1000).eval());
+            i += 1;
+        })
+    }
+
+    #[bench]
+    fn arith_arena_cheat_eval_1000(b: &mut Bencher) {
+        let mut i=0;
+        b.iter(|| {
+            let a = Arena::with_size(1 << 12);
+            black_box(build_2_cheat(&a, 1000).eval());
+            i += 1;
+        })
+    }
+
 }
