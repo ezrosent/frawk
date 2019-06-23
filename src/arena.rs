@@ -22,16 +22,18 @@ impl Buffer {
         let len = self.len.get();
         let cap = self.data.capacity();
 
-        let extra = unsafe { self.data.get_raw_mut(len).align_offset(align) };
+        let extra = unsafe { self.data.get_raw(len).align_offset(align) };
         let start = len + extra;
         let new_len = start + size;
         if new_len > cap {
             return None;
         }
-        // must set len before f, as f may call alloc recursively!
+        // must set len before calling f, as f may call alloc recursively!
         self.len.set(new_len);
-        unsafe { ptr::write(self.data.get_raw_mut(start) as *mut T, f()) };
-        unsafe { Some(&*(self.data.get_raw(start) as *const T)) }
+        unsafe {
+            ptr::write((*self.data.get_raw(start)).get() as *mut T, f());
+            Some(&*(self.data.get_raw(start) as *const T))
+        }
     }
 }
 
@@ -123,11 +125,6 @@ impl<T> PushOnlyVec<T> {
     unsafe fn get_raw(&self, ix: usize) -> *const T {
         debug_assert!(ix <= self.capacity());
         (*self.0.get()).get_unchecked(ix)
-    }
-
-    unsafe fn get_raw_mut(&self, ix: usize) -> *mut T {
-        debug_assert!(ix <= self.capacity());
-        (*self.0.get()).get_unchecked_mut(ix)
     }
 
     fn drain(&mut self) -> impl Iterator<Item = T> {
@@ -299,7 +296,7 @@ mod tests {
 
     #[bench]
     fn arith_arena_eval_1000(b: &mut Bencher) {
-        let mut i=0;
+        let mut i = 0;
         b.iter(|| {
             let a = Arena::with_size(1 << 12);
             black_box(build_2(&a, 1000).eval());
@@ -309,7 +306,7 @@ mod tests {
 
     #[bench]
     fn arith_arena_cheat_eval_1000(b: &mut Bencher) {
-        let mut i=0;
+        let mut i = 0;
         b.iter(|| {
             let a = Arena::with_size(1 << 12);
             black_box(build_2_cheat(&a, 1000).eval());
