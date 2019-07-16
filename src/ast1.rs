@@ -263,7 +263,7 @@ mod ast2 {
                 }
                 Assign(Var(v), to) => unimplemented!(),
                 Assign(Index(arr, ix), to) => unimplemented!(),
-                // TODO(ezr): let's move this up one level?
+                // TODO(ezr): let's move this up one level? If so, maybe just always split the ops?
                 Assign(_, to) => panic!("invalid assignment expression"),
                 AssignOp(v, op, to) => unimplemented!(),
             }
