@@ -1,7 +1,7 @@
 use super::hashbrown::HashMap;
 use std::hash::Hash;
 
-#[derive(Copy,Clone)]
+#[derive(Copy, Clone)]
 pub(crate) enum NumUnop {
     Column, // $
     Not,    // !
@@ -10,10 +10,10 @@ pub(crate) enum NumUnop {
 }
 
 // TODO(ezr) builtins?
-#[derive(Copy,Clone)]
+#[derive(Copy, Clone)]
 pub(crate) enum StrUnop {}
 
-#[derive(Copy,Clone)]
+#[derive(Copy, Clone)]
 pub(crate) enum NumBinop {
     Plus,
     Minus,
@@ -22,7 +22,7 @@ pub(crate) enum NumBinop {
     Mod,
 }
 
-#[derive(Copy,Clone)]
+#[derive(Copy, Clone)]
 pub(crate) enum StrBinop {
     Concat,
     Match,
@@ -188,18 +188,19 @@ mod ast2 {
                     self.cfg.add_edge(h, b_start, Some(cond_val));
                     self.cfg.add_edge(h, f, None);
                     f
-                },
+                }
                 While(cond, body) => {
                     let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open);
                     let cond_val = self.convert_val(cond, h);
                     self.cfg.add_edge(h, b_start, Some(cond_val));
                     self.cfg.add_edge(h, f, None);
                     f
-                },
+                }
                 ForEach(v, array, body) => {
-                    let v_id= self.get_identifier(v);
+                    let v_id = self.get_identifier(v);
                     let array_val = self.convert_val(array, current_open);
-                    let array_iter = self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open);
+                    let array_iter =
+                        self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open);
 
                     // First, create the loop header, which checks if there are any more elements
                     // in the array.
@@ -222,7 +223,7 @@ mod ast2 {
                     self.cfg.add_edge(cond_block, footer, None);
 
                     footer
-                },
+                }
             }
         }
 
@@ -242,24 +243,24 @@ mod ast2 {
                         Ok(numop) => PrimExpr::NumUnop(*numop, v),
                         Err(strop) => PrimExpr::StrUnop(*strop, v),
                     }
-                },
+                }
                 Binop(op, e1, e2) => {
                     let v1 = self.convert_val(e1, current_open);
                     let v2 = self.convert_val(e2, current_open);
                     match op {
-                        Ok(numop) => PrimExpr::NumBinop(*numop, v1 ,v2),
-                        Err(strop) => PrimExpr::StrBinop(*strop, v1 ,v2),
+                        Ok(numop) => PrimExpr::NumBinop(*numop, v1, v2),
+                        Err(strop) => PrimExpr::StrBinop(*strop, v1, v2),
                     }
                 }
                 Var(id) => {
                     let ident = self.get_identifier(id);
                     PrimExpr::Val(PrimVal::Var(ident))
-                },
+                }
                 Index(arr, ix) => {
                     let arr_v = self.convert_val(arr, current_open);
                     let ix_v = self.convert_val(ix, current_open);
                     PrimExpr::Index(arr_v, ix_v)
-                },
+                }
                 Assign(Var(v), to) => unimplemented!(),
                 Assign(Index(arr, ix), to) => unimplemented!(),
                 // TODO(ezr): let's move this up one level?
@@ -291,7 +292,7 @@ mod ast2 {
             // Create header, body, and footer nodes.
             let h = self.cfg.add_node(V::default());
             let (b_start, b_end) = if let Some(u) = update {
-                let (start,mid) = self.standalone_block(body);
+                let (start, mid) = self.standalone_block(body);
                 let end = self.convert_stmt(u, mid);
                 (start, end)
             } else {
@@ -320,7 +321,9 @@ mod ast2 {
         }
 
         fn get_identifier(&mut self, i: &I) -> Ident {
-            if let Some(id)= self.hm.get(i) { return *id; }
+            if let Some(id) = self.hm.get(i) {
+                return *id;
+            }
             let next = self.fresh();
             self.hm.insert(i.clone(), next);
             next
