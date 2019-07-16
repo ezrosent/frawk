@@ -16,8 +16,8 @@ impl Buffer {
         }
     }
 
-    fn alloc<T>(&self, f: &impl Fn() -> T) -> Option<&T> {
-        let size = mem::size_of::<T>();
+    unsafe fn alloc_inner<T>(&self, n: usize) -> Option<*mut T> {
+        let size = mem::size_of::<T>() * n;
         let align = mem::align_of::<T>();
         let len = self.len.get();
         let cap = self.data.capacity();
@@ -30,9 +30,25 @@ impl Buffer {
         }
         // must set len before calling f, as f may call alloc recursively!
         self.len.set(new_len);
+        Some((*self.data.get_raw(start)).get() as *mut T)
+    }
+
+    fn alloc_many<T>(&self, v: impl Iterator<Item = T>, n: usize) -> Option<&[T]> {
         unsafe {
-            ptr::write((*self.data.get_raw(start)).get() as *mut T, f());
-            Some(&*(self.data.get_raw(start) as *const T))
+            let start = self.alloc_inner::<T>(n)?;
+            let mut len = 0;
+            for t in v.take(n) {
+                ptr::write(start.offset(len), t);
+                len += 1;
+            }
+            Some(std::slice::from_raw_parts(start, len as usize))
+        }
+    }
+    fn alloc<T>(&self, f: &impl Fn() -> T) -> Option<&T> {
+        unsafe {
+            let start = self.alloc_inner::<T>(1)?;
+            ptr::write(start, f());
+            Some(&*start)
         }
     }
 }
@@ -67,6 +83,8 @@ impl<'outer> Arena<'outer> {
     fn head(&self) -> &Buffer {
         self.data.get(self.data.len() - 1)
     }
+
+    // TODO(ezr): implement alloc_many method for collection of our choice (smallvec?)
 
     pub fn alloc<T: 'outer>(&self, f: impl Fn() -> T) -> &T {
         if let Some(r) = self.head().alloc(&f) {
