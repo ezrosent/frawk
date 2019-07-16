@@ -1,0 +1,343 @@
+use super::hashbrown::HashMap;
+use std::hash::Hash;
+
+#[derive(Copy,Clone)]
+pub(crate) enum NumUnop {
+    Column, // $
+    Not,    // !
+    Neg,    // -
+    Pos,    // +
+}
+
+// TODO(ezr) builtins?
+#[derive(Copy,Clone)]
+pub(crate) enum StrUnop {}
+
+#[derive(Copy,Clone)]
+pub(crate) enum NumBinop {
+    Plus,
+    Minus,
+    Mult,
+    Div,
+    Mod,
+}
+
+#[derive(Copy,Clone)]
+pub(crate) enum StrBinop {
+    Concat,
+    Match,
+}
+
+mod ast1 {
+    use super::*;
+    pub(crate) enum Expr<'a, 'b, I> {
+        NumLit(f64),
+        StrLit(&'b str),
+        Unop(Result<NumUnop, StrUnop>, &'a Expr<'a, 'b, I>),
+        Binop(
+            Result<NumBinop, StrBinop>,
+            &'a Expr<'a, 'b, I>,
+            &'a Expr<'a, 'b, I>,
+        ),
+        Var(I),
+        Index(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
+        Assign(
+            &'a Expr<'a, 'b, I>, /*var or index expression*/
+            &'a Expr<'a, 'b, I>,
+        ),
+        AssignOp(&'a Expr<'a, 'b, I>, NumBinop, &'a Expr<'a, 'b, I>),
+    }
+
+    pub(crate) enum Stmt<'a, 'b, I> {
+        Block(Vec<&'a Stmt<'a, 'b, I>>),
+        // of course, Print can have 0 arguments. But let's handle that up the stack.
+        Print(Vec<&'a Expr<'a, 'b, I>>, Option<&'a Expr<'a, 'b, I>>),
+        If(
+            &'a Expr<'a, 'b, I>,
+            &'a Stmt<'a, 'b, I>,
+            Option<&'a Stmt<'a, 'b, I>>,
+        ),
+        For(
+            Option<&'a Stmt<'a, 'b, I>>,
+            Option<&'a Expr<'a, 'b, I>>,
+            Option<&'a Stmt<'a, 'b, I>>,
+            &'a Stmt<'a, 'b, I>,
+        ),
+        While(&'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
+        ForEach(I, &'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
+    }
+}
+
+use petgraph::graph::Graph;
+
+mod ast2 {
+    use super::*;
+
+    // consider making this just "by number" and putting branch instructions elsewhere.
+    // need to verify the order
+    type BasicBlock<'a> = V<PrimStmt<'a>>;
+    // None indicates `else`
+    type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>, petgraph::Directed, Ident>;
+    type Ident = u32; // change to u64?
+    type V<T> = Vec<T>; // change to smallvec?
+
+    #[derive(Clone)]
+    enum PrimVal<'a> {
+        Var(Ident),
+        NumLit(f64),
+        StrLit(&'a str),
+    }
+    enum PrimExpr<'a> {
+        Val(PrimVal<'a>),
+        Phi(V<PrimVal<'a>>),
+        StrUnop(StrUnop, PrimVal<'a>),
+        StrBinop(StrBinop, PrimVal<'a>, PrimVal<'a>),
+        NumUnop(NumUnop, PrimVal<'a>),
+        NumBinop(NumBinop, PrimVal<'a>, PrimVal<'a>),
+        Index(PrimVal<'a>, PrimVal<'a>),
+
+        // For iterating over vectors.
+        IterBegin(PrimVal<'a>),
+        HasNext(PrimVal<'a>),
+        Next(PrimVal<'a>),
+    }
+    enum PrimStmt<'a> {
+        Print(V<PrimVal<'a>>, Option<PrimVal<'a>>),
+        AsgnIndex(
+            Ident,        /*map*/
+            PrimVal<'a>,  /* index */
+            PrimExpr<'a>, /* assign to */
+        ),
+        AsgnVar(Ident /* var */, PrimExpr<'a>),
+    }
+    struct Context<'b, I> {
+        hm: HashMap<I, Ident>,
+        max: Ident,
+        cfg: CFG<'b>,
+    }
+
+    type NodeIx = petgraph::graph::NodeIndex<Ident>;
+
+    impl<'b, I: Hash + Eq + Clone> Context<'b, I> {
+        fn standalone_block<'a>(
+            &mut self,
+            stmt: &'a ast1::Stmt<'a, 'b, I>,
+        ) -> (NodeIx /*start*/, NodeIx /*end*/) {
+            let start = self.cfg.add_node(V::default());
+            let end = self.convert_stmt(stmt, start);
+            (start, end)
+        }
+        fn convert_stmt<'a>(
+            &mut self,
+            stmt: &'a ast1::Stmt<'a, 'b, I>,
+            mut current_open: NodeIx,
+        ) -> NodeIx /*next open */ {
+            // need "current open basic block"
+            use ast1::Stmt::*;
+            match stmt {
+                Block(stmts) => {
+                    for s in stmts {
+                        current_open = self.convert_stmt(s, current_open);
+                    }
+                    current_open
+                }
+                Print(vs, out) => {
+                    debug_assert!(vs.len() > 0);
+                    let mut v = V::with_capacity(vs.len());
+                    for i in vs.iter() {
+                        v.push(self.convert_val(*i, current_open))
+                    }
+                    let out = out.as_ref().map(|x| self.convert_val(x, current_open));
+                    self.add_stmt(current_open, PrimStmt::Print(v, out));
+                    current_open
+                }
+                If(cond, tcase, fcase) => {
+                    let c_val = self.convert_val(cond, current_open);
+                    let (t_start, t_end) = self.standalone_block(tcase);
+                    let next = self.cfg.add_node(V::default());
+
+                    // current_open => t_start if the condition holds
+                    self.cfg.add_edge(current_open, t_start, Some(c_val));
+                    // continue to next after the true case is evaluated
+                    self.cfg.add_edge(t_end, next, None);
+
+                    if let Some(fcase) = fcase {
+                        // if an else case is there, compute a standalone block and set up the same
+                        // connections as before, this time with a null edge rather than c_val.
+                        let (f_start, f_end) = self.standalone_block(fcase);
+                        self.cfg.add_edge(current_open, f_start, None);
+                        self.cfg.add_edge(f_end, next, None);
+                    } else {
+                        // otherwise continue directly from current_open.
+                        self.cfg.add_edge(current_open, next, None);
+                    }
+                    next
+                }
+                For(init, cond, update, body) => {
+                    let init_end = if let Some(i) = init {
+                        self.convert_stmt(i, current_open)
+                    } else {
+                        current_open
+                    };
+                    let (h, b_start, _b_end, f) = self.make_loop(body, update.clone(), init_end);
+                    let cond_val = if let Some(c) = cond {
+                        self.convert_val(c, h)
+                    } else {
+                        PrimVal::NumLit(1.0)
+                    };
+                    self.cfg.add_edge(h, b_start, Some(cond_val));
+                    self.cfg.add_edge(h, f, None);
+                    f
+                },
+                While(cond, body) => {
+                    let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open);
+                    let cond_val = self.convert_val(cond, h);
+                    self.cfg.add_edge(h, b_start, Some(cond_val));
+                    self.cfg.add_edge(h, f, None);
+                    f
+                },
+                ForEach(v, array, body) => {
+                    let v_id= self.get_identifier(v);
+                    let array_val = self.convert_val(array, current_open);
+                    let array_iter = self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open);
+
+                    // First, create the loop header, which checks if there are any more elements
+                    // in the array.
+                    let cond = PrimExpr::HasNext(array_iter.clone());
+                    let cond_block = self.cfg.add_node(V::default());
+                    let cond_v = self.to_val(cond, cond_block);
+                    self.cfg.add_edge(current_open, cond_block, None);
+
+                    // Create the body, but start by getting the next element from the iterator and
+                    // assigning it to `v`
+                    let update = PrimStmt::AsgnVar(v_id, PrimExpr::Next(array_iter.clone()));
+                    let body_start = self.cfg.add_node(V::default());
+                    self.add_stmt(body_start, update);
+                    let body_end = self.convert_stmt(body, body_start);
+                    self.cfg.add_edge(cond_block, body_start, Some(cond_v));
+                    self.cfg.add_edge(body_end, cond_block, None);
+
+                    // Then add a footer to exit the loop from cond.
+                    let footer = self.cfg.add_node(V::default());
+                    self.cfg.add_edge(cond_block, footer, None);
+
+                    footer
+                },
+            }
+        }
+
+        fn convert_expr<'a>(
+            &mut self,
+            expr: &'a ast1::Expr<'a, 'b, I>,
+            current_open: NodeIx,
+        ) -> PrimExpr<'b> /* should not create any new nodes. Expressions don't cause us to branch */
+        {
+            use ast1::Expr::*;
+            match expr {
+                NumLit(n) => PrimExpr::Val(PrimVal::NumLit(*n)),
+                StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
+                Unop(op, e) => {
+                    let v = self.convert_val(e, current_open);
+                    match op {
+                        Ok(numop) => PrimExpr::NumUnop(*numop, v),
+                        Err(strop) => PrimExpr::StrUnop(*strop, v),
+                    }
+                },
+                Binop(op, e1, e2) => {
+                    let v1 = self.convert_val(e1, current_open);
+                    let v2 = self.convert_val(e2, current_open);
+                    match op {
+                        Ok(numop) => PrimExpr::NumBinop(*numop, v1 ,v2),
+                        Err(strop) => PrimExpr::StrBinop(*strop, v1 ,v2),
+                    }
+                }
+                Var(id) => {
+                    let ident = self.get_identifier(id);
+                    PrimExpr::Val(PrimVal::Var(ident))
+                },
+                Index(arr, ix) => {
+                    let arr_v = self.convert_val(arr, current_open);
+                    let ix_v = self.convert_val(ix, current_open);
+                    PrimExpr::Index(arr_v, ix_v)
+                },
+                Assign(Var(v), to) => unimplemented!(),
+                Assign(Index(arr, ix), to) => unimplemented!(),
+                // TODO(ezr): let's move this up one level?
+                Assign(_, to) => panic!("invalid assignment expression"),
+                AssignOp(v, op, to) => unimplemented!(),
+            }
+        }
+
+        fn convert_val<'a>(
+            &mut self,
+            expr: &'a ast1::Expr<'a, 'b, I>,
+            current_open: NodeIx,
+        ) -> PrimVal<'b> {
+            let e = self.convert_expr(expr, current_open);
+            self.to_val(e, current_open)
+        }
+
+        fn make_loop<'a>(
+            &mut self,
+            body: &'a ast1::Stmt<'a, 'b, I>,
+            update: Option<&'a ast1::Stmt<'a, 'b, I>>,
+            current_open: NodeIx,
+        ) -> (
+            NodeIx, /* header */
+            NodeIx, /* body header */
+            NodeIx, /* body footer */
+            NodeIx, /* footer = next open */
+        ) {
+            // Create header, body, and footer nodes.
+            let h = self.cfg.add_node(V::default());
+            let (b_start, b_end) = if let Some(u) = update {
+                let (start,mid) = self.standalone_block(body);
+                let end = self.convert_stmt(u, mid);
+                (start, end)
+            } else {
+                self.standalone_block(body)
+            };
+            let f = self.cfg.add_node(V::default());
+            self.cfg.add_edge(current_open, h, None);
+            self.cfg.add_edge(b_end, h, None);
+            (h, b_start, b_end, f)
+        }
+
+        fn to_val(&mut self, exp: PrimExpr<'b>, current_open: NodeIx) -> PrimVal<'b> {
+            if let PrimExpr::Val(v) = exp {
+                v
+            } else {
+                let f = self.fresh();
+                self.add_stmt(current_open, PrimStmt::AsgnVar(f, exp));
+                PrimVal::Var(f)
+            }
+        }
+
+        fn fresh(&mut self) -> Ident {
+            let res = self.max;
+            self.max += 1;
+            res
+        }
+
+        fn get_identifier(&mut self, i: &I) -> Ident {
+            if let Some(id)= self.hm.get(i) { return *id; }
+            let next = self.fresh();
+            self.hm.insert(i.clone(), next);
+            next
+        }
+
+        fn add_stmt(&mut self, at: NodeIx, stmt: PrimStmt<'b>) {
+            self.cfg.node_weight_mut(at).unwrap().push(stmt);
+        }
+    }
+}
+// AST1: normalize identifier => array index, along with map pointing back (maybe just do this as
+// part of the AST2 conversion)
+// AST2 (graph):
+//  As part of conversion to AST2
+//  * Desugar For/While/Foreach/(If?) into conditional jump (with new ITER_BEGIN and ITER_END expressions)
+//  * Normalize expressions to only contain primitive statements
+//  AST2 => AST2 passes
+//  * SSA conversion
+//  * type analysis
+//
