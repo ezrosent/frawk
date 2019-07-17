@@ -49,6 +49,7 @@ mod ast1 {
     }
 
     pub(crate) enum Stmt<'a, 'b, I> {
+        Expr(&'a Expr<'a, 'b, I>),
         Block(Vec<&'a Stmt<'a, 'b, I>>),
         // of course, Print can have 0 arguments. But let's handle that up the stack.
         Print(Vec<&'a Expr<'a, 'b, I>>, Option<&'a Expr<'a, 'b, I>>),
@@ -87,6 +88,7 @@ mod ast2 {
         NumLit(f64),
         StrLit(&'a str),
     }
+    #[derive(Clone)]
     enum PrimExpr<'a> {
         Val(PrimVal<'a>),
         Phi(V<PrimVal<'a>>),
@@ -135,6 +137,10 @@ mod ast2 {
             // need "current open basic block"
             use ast1::Stmt::*;
             match stmt {
+                Expr(e) => {
+                    self.convert_expr(e, current_open);
+                    current_open
+                }
                 Block(stmts) => {
                     for s in stmts {
                         current_open = self.convert_stmt(s, current_open);
@@ -261,12 +267,65 @@ mod ast2 {
                     let ix_v = self.convert_val(ix, current_open);
                     PrimExpr::Index(arr_v, ix_v)
                 }
-                Assign(Var(v), to) => unimplemented!(),
-                Assign(Index(arr, ix), to) => unimplemented!(),
-                // TODO(ezr): let's move this up one level? If so, maybe just always split the ops?
-                Assign(_, to) => panic!("invalid assignment expression"),
-                AssignOp(v, op, to) => unimplemented!(),
+                Assign(Var(v), to) => {
+                    let to_e = self.convert_expr(to, current_open);
+                    let ident = self.get_identifier(v);
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to_e));
+                    PrimExpr::Val(PrimVal::Var(ident))
+                }
+                AssignOp(Var(v), op, to) => {
+                    let to_v = self.convert_val(to, current_open);
+                    let ident = self.get_identifier(v);
+                    let tmp = PrimExpr::NumBinop(*op, PrimVal::Var(ident), to_v);
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(ident, tmp));
+                    PrimExpr::Val(PrimVal::Var(ident))
+                }
+
+                Assign(Index(arr, ix), to) => self.do_assign(
+                    arr,
+                    ix,
+                    |slf, _, _| slf.convert_expr(to, current_open),
+                    current_open,
+                ),
+
+                AssignOp(Index(arr, ix), op, to) => self.do_assign(
+                    arr,
+                    ix,
+                    |slf, arr_v, ix_v| {
+                        let to_v = slf.convert_val(to, current_open);
+                        let arr_cell_v =
+                            slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), current_open);
+                        PrimExpr::NumBinop(*op, arr_cell_v, to_v)
+                    },
+                    current_open,
+                ),
+                // Panic here because this marks an internal error. We could move this distinction
+                // up to the ast1:: level, but then we would have 4 different variants to handle
+                // here.
+                Assign(_, _to) => panic!("invalid assignment expression"),
+                AssignOp(_, _op, _to) => panic!("invalid assign-op expression"),
             }
+        }
+
+        fn do_assign<'a>(
+            &mut self,
+            arr: &'a ast1::Expr<'a, 'b, I>,
+            ix: &'a ast1::Expr<'a, 'b, I>,
+            mut to_f: impl FnMut(&mut Self, PrimVal<'b>, PrimVal<'b>) -> PrimExpr<'b>,
+            current_open: NodeIx,
+        ) -> PrimExpr<'b> {
+            let arr_e = self.convert_expr(arr, current_open);
+            let arr_id = self.fresh();
+            self.add_stmt(current_open, PrimStmt::AsgnVar(arr_id, arr_e));
+            let arr_v = PrimVal::Var(arr_id);
+
+            let ix_v = self.convert_val(ix, current_open);
+            let to_e = to_f(self, arr_v.clone(), ix_v.clone());
+            self.add_stmt(
+                current_open,
+                PrimStmt::AsgnIndex(arr_id, ix_v.clone(), to_e.clone()),
+            );
+            PrimExpr::Index(arr_v, ix_v)
         }
 
         fn convert_val<'a>(
