@@ -1,7 +1,7 @@
 use super::hashbrown::HashMap;
 use std::hash::Hash;
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) enum NumUnop {
     Column, // $
     Not,    // !
@@ -10,10 +10,10 @@ pub(crate) enum NumUnop {
 }
 
 // TODO(ezr) builtins?
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) enum StrUnop {}
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) enum NumBinop {
     Plus,
     Minus,
@@ -22,14 +22,22 @@ pub(crate) enum NumBinop {
     Mod,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) enum StrBinop {
     Concat,
     Match,
 }
 
-mod ast1 {
+// TODO perform some manual tests
+// TODO SSA conversion:
+// * Compute Dominator Tree
+// * Migrate identifier representation to tuple of numbers (for subscripts)
+// * Rename and insert Phi functions
+
+pub(crate) mod ast1 {
     use super::*;
+
+    #[derive(Debug)]
     pub(crate) enum Expr<'a, 'b, I> {
         NumLit(f64),
         StrLit(&'b str),
@@ -48,6 +56,7 @@ mod ast1 {
         AssignOp(&'a Expr<'a, 'b, I>, NumBinop, &'a Expr<'a, 'b, I>),
     }
 
+    #[derive(Debug)]
     pub(crate) enum Stmt<'a, 'b, I> {
         Expr(&'a Expr<'a, 'b, I>),
         Block(Vec<&'a Stmt<'a, 'b, I>>),
@@ -71,25 +80,26 @@ mod ast1 {
 
 use petgraph::graph::Graph;
 
-mod ast2 {
+pub(crate) mod ast2 {
     use super::*;
 
     // consider making this just "by number" and putting branch instructions elsewhere.
     // need to verify the order
     type BasicBlock<'a> = V<PrimStmt<'a>>;
     // None indicates `else`
-    type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>, petgraph::Directed, Ident>;
-    type Ident = u32; // change to u64?
+    type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>, petgraph::Directed, NumTy>;
+    type NumTy = u32;
+    type Ident = (NumTy, NumTy); // change to u64?
     type V<T> = Vec<T>; // change to smallvec?
 
-    #[derive(Clone)]
-    enum PrimVal<'a> {
+    #[derive(Debug, Clone)]
+    pub(crate) enum PrimVal<'a> {
         Var(Ident),
         NumLit(f64),
         StrLit(&'a str),
     }
-    #[derive(Clone)]
-    enum PrimExpr<'a> {
+    #[derive(Debug, Clone)]
+    pub(crate) enum PrimExpr<'a> {
         Val(PrimVal<'a>),
         Phi(V<PrimVal<'a>>),
         StrUnop(StrUnop, PrimVal<'a>),
@@ -103,7 +113,8 @@ mod ast2 {
         HasNext(PrimVal<'a>),
         Next(PrimVal<'a>),
     }
-    enum PrimStmt<'a> {
+    #[derive(Debug)]
+    pub(crate) enum PrimStmt<'a> {
         Print(V<PrimVal<'a>>, Option<PrimVal<'a>>),
         AsgnIndex(
             Ident,        /*map*/
@@ -112,16 +123,17 @@ mod ast2 {
         ),
         AsgnVar(Ident /* var */, PrimExpr<'a>),
     }
-    struct Context<'b, I> {
+    #[derive(Default)]
+    pub(crate) struct Context<'b, I> {
         hm: HashMap<I, Ident>,
-        max: Ident,
-        cfg: CFG<'b>,
+        max: NumTy,
+        pub cfg: CFG<'b>,
     }
 
-    type NodeIx = petgraph::graph::NodeIndex<Ident>;
+    type NodeIx = petgraph::graph::NodeIndex<NumTy>;
 
     impl<'b, I: Hash + Eq + Clone> Context<'b, I> {
-        fn standalone_block<'a>(
+        pub fn standalone_block<'a>(
             &mut self,
             stmt: &'a ast1::Stmt<'a, 'b, I>,
         ) -> (NodeIx /*start*/, NodeIx /*end*/) {
@@ -376,7 +388,7 @@ mod ast2 {
         fn fresh(&mut self) -> Ident {
             let res = self.max;
             self.max += 1;
-            res
+            (res, 0)
         }
 
         fn get_identifier(&mut self, i: &I) -> Ident {
