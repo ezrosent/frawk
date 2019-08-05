@@ -82,9 +82,123 @@ use petgraph::graph::Graph;
 
 pub(crate) mod ast2 {
     use super::*;
-    pub(crate) fn dom_tree<'a, I>(ctx: &Context<'a, I>) -> Vec<NodeIx> {
-        unimplemented!()
+
+    #[derive(Default)]
+    pub(crate) struct Context<'b, I> {
+        hm: HashMap<I, Ident>,
+        max: NumTy,
+        cfg: CFG<'b>,
+        entry: NodeIx,
     }
+
+    pub(crate) struct NodeInfo {
+        // order reached in DFS.
+        dfsnum: NumTy,
+        // immediate dominator
+        idom: NumTy,
+        // semidominator,
+        sdom: NumTy,
+        // parent in spanning tree, or in spanning forest, depending on the phase of the algorithm
+        parent: NumTy,
+        // TODO: figure out if ancestor and best are needed, or if we can just path compress
+        // separately.
+        // Seems like we assign idom and parent to same thing, then overwrite parent to be
+        // ancestor. Can we path-compress in ancestor without an extra "best" array? Potentially
+        // not.
+    }
+    impl Default for NodeInfo {
+        fn default() -> NodeInfo {
+            NodeInfo {
+                dfsnum: NODEINFO_UNINIT,
+                idom: NODEINFO_UNINIT,
+                sdom: NODEINFO_UNINIT,
+                parent: NODEINFO_UNINIT,
+            }
+        }
+    }
+
+    impl NodeInfo {
+        fn seen(&self) -> bool {
+            self.dfsnum != NODEINFO_UNINIT
+        }
+    }
+    const NODEINFO_UNINIT: NumTy = !0;
+
+    // TODO: explain dominator tree algorithm choice, (why not the one in PetGraph?)
+    // TODO: consider building a safe-index API around "vector whose length is the same as this
+    // graph and will not change" and generative-lifetime style safe index type, so as to avoid
+    // bounds-checks.
+    struct DomTreeBuilder<'a, 'b, I> {
+        // Underlying program context
+        ctx: &'a Context<'b, I>,
+        // Semi-NCA metadata, indexed by NodeIndex
+        info: Vec<NodeInfo>,
+        // (pre-order) depth-first ordering of nodes.
+        dfs: Vec<NodeIx>,
+        // Used in semidominator calculation.
+        // ancestor: Vec<NumTy>,
+        // best: Vec<NumTy>,
+    }
+    pub(crate) fn dom_tree<'a, I>(ctx: &Context<'a, I>) -> Vec<NodeInfo> {
+        DomTreeBuilder::new(ctx).tree()
+    }
+
+    impl<'a, 'b, I> DomTreeBuilder<'a, 'b, I> {
+        fn new(ctx: &'a Context<'b, I>) -> Self {
+            DomTreeBuilder {
+                ctx: ctx,
+                info: (0..ctx.cfg.node_count())
+                    .map(|_| Default::default())
+                    .collect(),
+                dfs: Default::default(),
+            }
+        }
+        fn num_nodes(&self) -> NumTy {
+            debug_assert_eq!(self.ctx.cfg.node_count(), self.info.len());
+            self.info.len() as NumTy
+        }
+        fn seen(&self) -> NumTy {
+            self.dfs.len() as NumTy
+        }
+        fn at(&self, ix: NodeIx) -> &NodeInfo {
+            &self.info[ix.index()]
+        }
+        fn at_mut(&mut self, ix: NodeIx) -> &mut NodeInfo {
+            &mut self.info[ix.index()]
+        }
+        fn dfs(&mut self, cur_node: NodeIx, parent: NumTy) {
+            // TODO: consider explicit maintenance of stack.
+            //       probably not a huge win performance-wise, but it could avoid stack overflow on
+            //       pathological inputs.
+            debug_assert!(!self.at(cur_node).seen());
+            {
+                let seen_so_far = self.seen();
+                let info = self.at_mut(cur_node);
+                *(&mut info.dfsnum) = seen_so_far;
+                *(&mut info.parent) = parent;
+            }
+            self.dfs.push(cur_node);
+            // NB assumes that CFG is fully connected.
+            for n in self
+                .ctx
+                .cfg
+                .neighbors_directed(cur_node, petgraph::Direction::Outgoing)
+            {
+                if self.seen() == self.num_nodes() {
+                    break;
+                }
+                if self.at(n).seen() {
+                    continue;
+                }
+                self.dfs(n, cur_node.index() as NumTy);
+            }
+        }
+        fn tree(mut self) -> Vec<NodeInfo> {
+            self.dfs(self.ctx.entry, NODEINFO_UNINIT);
+            self.info
+        }
+    }
+
     // consider making this just "by number" and putting branch instructions elsewhere.
     // need to verify the order
     type BasicBlock<'a> = V<PrimStmt<'a>>;
@@ -124,13 +238,6 @@ pub(crate) mod ast2 {
             PrimExpr<'a>, /* assign to */
         ),
         AsgnVar(Ident /* var */, PrimExpr<'a>),
-    }
-    #[derive(Default)]
-    pub(crate) struct Context<'b, I> {
-        hm: HashMap<I, Ident>,
-        max: NumTy,
-        cfg: CFG<'b>,
-        entry: NodeIx,
     }
 
     pub type NodeIx = petgraph::graph::NodeIndex<NumTy>;
