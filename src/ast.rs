@@ -82,6 +82,38 @@ use petgraph::graph::Graph;
 
 pub(crate) mod ast2 {
     use super::*;
+    // TODO: split out dominator calculation to its own module.
+    // TODO: split all of these modules into their own files.
+
+    // Several utility functions operate on both NodeIx and NumTy values. Making them polymorphic
+    // on HasNum automates the conversion between these two types.
+    trait HasNum: Copy {
+        #[inline]
+        fn ix(self) -> usize {
+            self.num() as usize
+        }
+
+        #[inline]
+        fn num(self) -> NumTy {
+            const _MAX_NUMTY: NumTy = !0;
+            debug_assert!((_MAX_NUMTY as usize) >= self.ix());
+            self.ix() as NumTy
+        }
+    }
+
+    impl HasNum for NumTy {
+        #[inline]
+        fn num(self) -> NumTy {
+            self
+        }
+    }
+
+    impl HasNum for NodeIx {
+        #[inline]
+        fn ix(self) -> usize {
+            self.index()
+        }
+    }
 
     #[derive(Default)]
     pub(crate) struct Context<'b, I> {
@@ -98,14 +130,15 @@ pub(crate) mod ast2 {
         idom: NumTy,
         // semidominator,
         sdom: NumTy,
-        // parent in spanning tree, or in spanning forest, depending on the phase of the algorithm
+        // parent in spanning tree
         parent: NumTy,
-        // TODO: figure out if ancestor and best are needed, or if we can just path compress
-        // separately.
-        // Seems like we assign idom and parent to same thing, then overwrite parent to be
-        // ancestor. Can we path-compress in ancestor without an extra "best" array? Potentially
-        // not.
+        // ancestor in spanning forest during semidominator calculation.
+        // TODO: The LLVM implementation combines parents and ancestors, and instead passes in a
+        // "Last Visited" dfsnum into `eval` in order to skip nodes that haven't been linked into
+        // the tree. Make that change once confident in the initial one.
+        ancestor: NumTy,
     }
+
     impl Default for NodeInfo {
         fn default() -> NodeInfo {
             NodeInfo {
@@ -113,6 +146,7 @@ pub(crate) mod ast2 {
                 idom: NODEINFO_UNINIT,
                 sdom: NODEINFO_UNINIT,
                 parent: NODEINFO_UNINIT,
+                ancestor: NODEINFO_UNINIT,
             }
         }
     }
@@ -137,7 +171,7 @@ pub(crate) mod ast2 {
         dfs: Vec<NodeIx>,
         // Used in semidominator calculation.
         // ancestor: Vec<NumTy>,
-        // best: Vec<NumTy>,
+        best: Vec<NumTy>,
     }
     pub(crate) fn dom_tree<'a, I>(ctx: &Context<'a, I>) -> Vec<NodeInfo> {
         DomTreeBuilder::new(ctx).tree()
@@ -151,6 +185,7 @@ pub(crate) mod ast2 {
                     .map(|_| Default::default())
                     .collect(),
                 dfs: Default::default(),
+                best: (0..ctx.cfg.node_count()).map(|_| NODEINFO_UNINIT).collect(),
             }
         }
         fn num_nodes(&self) -> NumTy {
@@ -160,23 +195,80 @@ pub(crate) mod ast2 {
         fn seen(&self) -> NumTy {
             self.dfs.len() as NumTy
         }
-        fn at(&self, ix: NodeIx) -> &NodeInfo {
-            &self.info[ix.index()]
+        fn at(&self, ix: impl HasNum) -> &NodeInfo {
+            &self.info[ix.ix()]
         }
-        fn at_mut(&mut self, ix: NodeIx) -> &mut NodeInfo {
-            &mut self.info[ix.index()]
+        fn best_at(&self, ix: impl HasNum) -> NumTy {
+            self.best[ix.ix()]
         }
+        fn set_best(&mut self, n: impl HasNum, v: impl HasNum) {
+            self.best[n.ix()] = v.num();
+        }
+        fn at_mut(&mut self, ix: impl HasNum) -> &mut NodeInfo {
+            &mut self.info[ix.ix()]
+        }
+        fn link(&mut self, parent: impl HasNum, node: impl HasNum) {
+            *(&mut self.at_mut(parent).ancestor) = parent.num();
+            self.set_best(node, node);
+        }
+
+        // a.k.a AncestorWithLowestSemi in Tiger Book
+        fn eval(&mut self, node: impl HasNum) -> NumTy {
+            let p = self.at(node).ancestor;
+            if self.at(p).ancestor != NODEINFO_UNINIT {
+                let b = self.eval(p);
+                *(&mut self.at_mut(node).ancestor) = self.at(p).ancestor;
+                if self.at(self.at(b).sdom).dfsnum
+                    < self.at(self.at(self.best_at(node)).sdom).dfsnum
+                {
+                    self.set_best(node, b);
+                }
+            }
+            self.best_at(node)
+        }
+
+        fn semis(&mut self) {
+            // We need to borrow self.dfs, but also other parts of the struct, so we swap it out.
+            // Note that this only works because we know that `eval` and `link` do not use the
+            // `dfs` vector.
+            let dfs = std::mem::replace(&mut self.dfs, Default::default());
+            for n in dfs[1..].iter().rev().map(|x| *x) {
+                let parent = self.at(n).parent;
+                let mut semi = parent;
+                for pred in self
+                    .ctx
+                    .cfg
+                    .neighbors_directed(NodeIx::new(n.ix()), petgraph::Direction::Incoming)
+                {
+                    let candidate = if self.at(pred).dfsnum <= self.at(n).dfsnum {
+                        pred.num()
+                    } else {
+                        let ancestor_with_lowest = self.eval(pred);
+                        self.at(ancestor_with_lowest).sdom
+                    };
+                    if self.at(candidate).dfsnum < self.at(semi).dfsnum {
+                        semi = candidate
+                    }
+                }
+                *(&mut self.at_mut(n).sdom) = semi;
+                self.link(parent, n);
+            }
+            std::mem::replace(&mut self.dfs, dfs);
+        }
+
         fn dfs(&mut self, cur_node: NodeIx, parent: NumTy) {
             // TODO: consider explicit maintenance of stack.
             //       probably not a huge win performance-wise, but it could avoid stack overflow on
             //       pathological inputs.
             debug_assert!(!self.at(cur_node).seen());
-            {
-                let seen_so_far = self.seen();
-                let info = self.at_mut(cur_node);
-                *(&mut info.dfsnum) = seen_so_far;
-                *(&mut info.parent) = parent;
-            }
+            let seen_so_far = self.seen();
+            *self.at_mut(cur_node) = NodeInfo {
+                dfsnum: seen_so_far,
+                parent: parent,
+                idom: parent, // provisional
+                sdom: NODEINFO_UNINIT,
+                ancestor: NODEINFO_UNINIT,
+            };
             self.dfs.push(cur_node);
             // NB assumes that CFG is fully connected.
             for n in self
@@ -193,8 +285,25 @@ pub(crate) mod ast2 {
                 self.dfs(n, cur_node.index() as NumTy);
             }
         }
+
+        fn idoms(&mut self) {
+            let dfs = std::mem::replace(&mut self.dfs, Default::default());
+            for n in dfs[1..].iter().map(|x| *x) {
+                let (mut idom, semi) = {
+                    let entry = self.at(n);
+                    (entry.idom, entry.sdom)
+                };
+                while idom > semi {
+                    idom = self.at(idom).idom;
+                }
+                (&mut self.at_mut(n)).idom = idom;
+            }
+            std::mem::replace(&mut self.dfs, dfs);
+        }
         fn tree(mut self) -> Vec<NodeInfo> {
             self.dfs(self.ctx.entry, NODEINFO_UNINIT);
+            self.semis();
+            self.idoms();
             self.info
         }
     }
