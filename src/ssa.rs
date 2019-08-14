@@ -86,6 +86,13 @@ struct DomTreeBuilder<'a, 'b, I> {
 /// al. for building dominance frontiers from the dominator tree. The ["Tiger Book"][3] by Appel
 /// was a helpful reference for computing semidominators.
 ///
+/// A brief note on why we are not using the iterative algorithm from the Cooper paper. There is a
+/// strong reason to do so: the algorithm is a bit simpler to implement, and if you iterate in
+/// reverse post-order as they suggest, the algorithm will complete in a single pass if the flow
+/// graph is reducible. While most AWK programs do have reducible CFGs, I want to hold open the
+/// possibility of adding proper tail calls to AWK functions at some point in the future, in which
+/// case Semi-NCA will handle more pathological cases.
+///
 /// [0]: https://en.wikipedia.org/wiki/Dominator_(graph_theory)
 /// [1]: http://jgaa.info/accepted/2006/GeorgiadisTarjanWerneck2006.10.1.pdf
 /// [2]: https://www.cs.rice.edu/~keith/EMBED/dom.pdf
@@ -102,33 +109,10 @@ impl<'a, 'b, I> DomTreeBuilder<'a, 'b, I> {
             dfs: Default::default(),
             best: vec![NODEINFO_UNINIT; ctx.cfg().node_count()],
         };
-        res.compute_doms();
+        res.dfs(res.ctx.entry(), NODEINFO_UNINIT);
+        res.semis();
+        res.idoms();
         res
-    }
-    fn num_nodes(&self) -> NumTy {
-        debug_assert_eq!(self.ctx.cfg().node_count(), self.info.len());
-        self.info.len() as NumTy
-    }
-    fn seen(&self) -> NumTy {
-        self.dfs.len() as NumTy
-    }
-    // TODO: Explore performance impact of performing checked indexing here and elsewhere. Is it
-    // worth using unsafe or building a safe index API?
-    fn at(&self, ix: impl HasNum) -> &NodeInfo {
-        &self.info[ix.ix()]
-    }
-    fn best_at(&self, ix: impl HasNum) -> NumTy {
-        self.best[ix.ix()]
-    }
-    fn set_best(&mut self, n: impl HasNum, v: impl HasNum) {
-        self.best[n.ix()] = v.num();
-    }
-    fn at_mut(&mut self, ix: impl HasNum) -> &mut NodeInfo {
-        &mut self.info[ix.ix()]
-    }
-    fn link(&mut self, parent: impl HasNum, node: impl HasNum) {
-        *(&mut self.at_mut(node).ancestor) = parent.num();
-        self.set_best(node, node);
     }
 
     // a.k.a AncestorWithLowestSemi in Tiger Book
@@ -148,35 +132,6 @@ impl<'a, 'b, I> DomTreeBuilder<'a, 'b, I> {
             }
         }
         self.best_at(node)
-    }
-
-    fn semis(&mut self) {
-        // We need to borrow self.dfs, but also other parts of the struct, so we swap it out.
-        // Note that this only works because we know that `eval` and `link` do not use the
-        // `dfs` vector.
-        let dfs = std::mem::replace(&mut self.dfs, Default::default());
-        for n in dfs[1..].iter().rev().map(|x| *x) {
-            let parent = self.at(n).parent;
-            let mut semi = parent;
-            for pred in self
-                .ctx
-                .cfg()
-                .neighbors_directed(NodeIx::new(n.ix()), Direction::Incoming)
-            {
-                let candidate = if self.at(pred).dfsnum <= self.at(n).dfsnum {
-                    pred.num()
-                } else {
-                    let ancestor_with_lowest = self.eval(pred);
-                    self.at(ancestor_with_lowest).sdom
-                };
-                if self.at(candidate).dfsnum < self.at(semi).dfsnum {
-                    semi = candidate
-                }
-            }
-            *(&mut self.at_mut(n).sdom) = semi;
-            self.link(parent, n);
-        }
-        std::mem::replace(&mut self.dfs, dfs);
     }
 
     fn dfs(&mut self, cur_node: NodeIx, parent: NumTy) {
@@ -209,6 +164,39 @@ impl<'a, 'b, I> DomTreeBuilder<'a, 'b, I> {
         }
     }
 
+    // Compute semidominators.
+    // Assumes self.dfs has been called.
+    fn semis(&mut self) {
+        // We need to borrow self.dfs, but also other parts of the struct, so we swap it out.
+        // Note that this only works because we know that `eval` and `link` do not use the
+        // `dfs` vector.
+        let dfs = std::mem::replace(&mut self.dfs, Default::default());
+        for n in dfs[1..].iter().rev().map(|x| *x) {
+            let parent = self.at(n).parent;
+            let mut semi = parent;
+            for pred in self
+                .ctx
+                .cfg()
+                .neighbors_directed(NodeIx::new(n.ix()), Direction::Incoming)
+            {
+                let candidate = if self.at(pred).dfsnum <= self.at(n).dfsnum {
+                    pred.num()
+                } else {
+                    let ancestor_with_lowest = self.eval(pred);
+                    self.at(ancestor_with_lowest).sdom
+                };
+                if self.at(candidate).dfsnum < self.at(semi).dfsnum {
+                    semi = candidate
+                }
+            }
+            *(&mut self.at_mut(n).sdom) = semi;
+            self.link(parent, n);
+        }
+        std::mem::replace(&mut self.dfs, dfs);
+    }
+
+    // Compute dominator tree.
+    // Assumes self.semis has been called.
     fn idoms(&mut self) {
         let dfs = std::mem::replace(&mut self.dfs, Default::default());
         for n in dfs[1..].iter().map(|x| *x) {
@@ -223,15 +211,10 @@ impl<'a, 'b, I> DomTreeBuilder<'a, 'b, I> {
         }
         std::mem::replace(&mut self.dfs, dfs);
     }
-    fn compute_doms(&mut self) {
-        self.dfs(self.ctx.entry(), NODEINFO_UNINIT);
-        self.semis();
-        self.idoms();
-    }
+
+    // Compute the dominance fromtier.
     // TODO: Add custom hash set and hash maps for dense integer keys.
     fn dom_frontier(&self) -> Vec<HashSet<NumTy>> {
-        // use Dominance Frontier algorithm from Copper, Harvey, Kennedy's "A Simple, Fast
-        // Dominance Algorithm."
         let mut fronts = vec![HashSet::<NumTy>::default(); self.info.len()];
         for (b_ix, b) in self.info.iter().enumerate() {
             let b_ix = b_ix as NumTy;
@@ -252,6 +235,34 @@ impl<'a, 'b, I> DomTreeBuilder<'a, 'b, I> {
             }
         }
         fronts
+    }
+
+    // Short helper methods
+
+    fn num_nodes(&self) -> NumTy {
+        debug_assert_eq!(self.ctx.cfg().node_count(), self.info.len());
+        self.info.len() as NumTy
+    }
+    fn seen(&self) -> NumTy {
+        self.dfs.len() as NumTy
+    }
+    // TODO: Explore performance impact of performing checked indexing here and elsewhere. Is it
+    // worth using unsafe or building a safe index API?
+    fn at(&self, ix: impl HasNum) -> &NodeInfo {
+        &self.info[ix.ix()]
+    }
+    fn best_at(&self, ix: impl HasNum) -> NumTy {
+        self.best[ix.ix()]
+    }
+    fn set_best(&mut self, n: impl HasNum, v: impl HasNum) {
+        self.best[n.ix()] = v.num();
+    }
+    fn at_mut(&mut self, ix: impl HasNum) -> &mut NodeInfo {
+        &mut self.info[ix.ix()]
+    }
+    fn link(&mut self, parent: impl HasNum, node: impl HasNum) {
+        *(&mut self.at_mut(node).ancestor) = parent.num();
+        self.set_best(node, node);
     }
 }
 
