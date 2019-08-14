@@ -3,6 +3,7 @@ use hashbrown::HashSet;
 use petgraph::Direction;
 use smallvec::SmallVec;
 
+/// A utility trait making it easier to write functions that are polymorphic on index type.
 trait HasNum: Copy {
     #[inline]
     fn ix(self) -> usize {
@@ -67,10 +68,6 @@ impl NodeInfo {
 }
 const NODEINFO_UNINIT: NumTy = !0;
 
-// TODO: explain dominator tree algorithm choice, (why not the one in PetGraph?)
-// TODO: consider building a safe-index API around "vector whose length is the same as this
-// graph and will not change" and generative-lifetime style safe index type, so as to avoid
-// bounds-checks.
 struct DomTreeBuilder<'a, 'b, I> {
     // Underlying program context
     ctx: &'a Context<'b, I>,
@@ -82,6 +79,17 @@ struct DomTreeBuilder<'a, 'b, I> {
     // ancestor: Vec<NumTy>,
     best: Vec<NumTy>,
 }
+
+/// Compute the [dominance frontier][0] for a control-flow graph. We use the Semi-NCA algorithm
+/// from ["Finding Dominators in Practice"][1] by Georgiadis et. al.  to compute the dominator
+/// tree, and then use the algorithm from ["A Simple, Fast Dominance Algorithm"][2] by Cooper et.
+/// al. for building dominance frontiers from the dominator tree. The ["Tiger Book"][3] by Appel
+/// was a helpful reference for computing semidominators.
+///
+/// [0]: https://en.wikipedia.org/wiki/Dominator_(graph_theory)
+/// [1]: http://jgaa.info/accepted/2006/GeorgiadisTarjanWerneck2006.10.1.pdf
+/// [2]: https://www.cs.rice.edu/~keith/EMBED/dom.pdf
+/// [3]: https://www.cs.princeton.edu/~appel/modern/
 pub(crate) fn dom_frontier<'a, I>(ctx: &Context<'a, I>) -> Vec<HashSet<NumTy>> {
     DomTreeBuilder::new(ctx).dom_frontier()
 }
@@ -104,6 +112,8 @@ impl<'a, 'b, I> DomTreeBuilder<'a, 'b, I> {
     fn seen(&self) -> NumTy {
         self.dfs.len() as NumTy
     }
+    // TODO: Explore performance impact of performing checked indexing here and elsewhere. Is it
+    // worth using unsafe or building a safe index API?
     fn at(&self, ix: impl HasNum) -> &NodeInfo {
         &self.info[ix.ix()]
     }
