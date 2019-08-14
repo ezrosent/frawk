@@ -1,16 +1,19 @@
 #![feature(test)]
 pub mod arena;
 pub mod ast;
+pub mod cfg;
+pub mod ssa;
 extern crate hashbrown;
 extern crate petgraph;
 extern crate petgraph_graphml;
+extern crate smallvec;
 
 fn main() {
     let a = arena::Arena::with_size(1024);
-    let ast1: &ast::ast1::Stmt<&'static str> = {
-        use ast::ast1::Expr::*;
-        use ast::ast1::Stmt::*;
+    let ast1: &ast::Stmt<&'static str> = {
+        use ast::Expr::*;
         use ast::NumBinop::*;
+        use ast::Stmt::*;
         a.alloc(|| {
             Block(vec![
                 a.alloc(|| Expr(a.alloc(|| Assign(a.alloc(|| Var("i")), a.alloc(|| NumLit(1.0)))))),
@@ -49,7 +52,7 @@ fn main() {
         }};
     }
     println!("ast1={:?}", ast1);
-    let mut ast2 = ast::ast2::Context::default();
+    let mut ast2 = cfg::Context::default();
     ast2.standalone_block(ast1);
     let gml = petgraph_graphml::GraphMl::new(ast2.cfg())
         .pretty_print(true)
@@ -57,4 +60,5 @@ fn main() {
         .export_edge_weights(Box::new(|edge| vec![tup!(format!("{:?}", edge).into())]));
     println!("{}", gml.to_string());
     println!("entry={:?}", ast2.entry());
+    println!("{:?}", ssa::dom_frontier(&ast2));
 }
