@@ -1,5 +1,7 @@
 use super::hashbrown::HashMap;
+use crate::types::{NodeIx, NumTy};
 use petgraph::graph::Graph;
+use std::collections::VecDeque;
 use std::hash::Hash;
 
 use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
@@ -9,13 +11,27 @@ use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
 
 // consider making this just "by number" and putting branch instructions elsewhere.
 // need to verify the order
-type BasicBlock<'a> = V<PrimStmt<'a>>;
+// Use VecDequeue to support things like prepending definitions and phi statements to blocks during
+// SSA conversion.
+type BasicBlock<'a> = VecDeque<PrimStmt<'a>>;
 // None indicates `else`
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>, petgraph::Directed, NumTy>;
-pub(crate) type NumTy = u32;
-pub(crate) type NodeIx = petgraph::graph::NodeIndex<NumTy>;
 type Ident = (NumTy, NumTy); // change to u64?
 type V<T> = Vec<T>; // change to smallvec?
+
+// Inserting Phi functions:
+// -1. look into making ssa generic on graphs, rename it to `dom.rs` or something, then insert Phis
+// here.
+//  0. Create a Declare(I) PrimStmt. (NO: instead assign it to the empty string.. hopefully
+//     lifetime subtyping works out there)
+//  1. populate A_orig.
+//   * Add as a field in BasicBlock (HashSet<I>)
+//   * Insert when a new temporary is created.
+//   * When a new non-temporary is encountered, prepend a Declare to the entry node.
+//  2. implement algorithm 19.6 (using vec prepends for Phi insertions)
+//
+// Variable renames:
+//  This should be very simple with the modifications for phi functions.
 
 #[derive(Debug, Clone)]
 pub(crate) enum PrimVal<'a> {
@@ -57,6 +73,7 @@ pub(crate) struct Context<'b, I> {
     entry: NodeIx,
 }
 
+#[cfg(test)]
 impl<'b, I: Default> Context<'b, I> {
     // for testing
     pub(crate) fn from_cfg(cfg: CFG<'b>) -> Self {
@@ -85,7 +102,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         &mut self,
         stmt: &'a Stmt<'a, 'b, I>,
     ) -> (NodeIx /*start*/, NodeIx /*end*/) {
-        let start = self.cfg.add_node(V::default());
+        let start = self.cfg.add_node(Default::default());
         let end = self.convert_stmt(stmt, start);
         (start, end)
     }
@@ -117,7 +134,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             If(cond, tcase, fcase) => {
                 let c_val = self.convert_val(cond, current_open);
                 let (t_start, t_end) = self.standalone_block(tcase);
-                let next = self.cfg.add_node(V::default());
+                let next = self.cfg.add_node(Default::default());
 
                 // current_open => t_start if the condition holds
                 self.cfg.add_edge(current_open, t_start, Some(c_val));
@@ -167,21 +184,21 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 // First, create the loop header, which checks if there are any more elements
                 // in the array.
                 let cond = PrimExpr::HasNext(array_iter.clone());
-                let cond_block = self.cfg.add_node(V::default());
+                let cond_block = self.cfg.add_node(Default::default());
                 let cond_v = self.to_val(cond, cond_block);
                 self.cfg.add_edge(current_open, cond_block, None);
 
                 // Create the body, but start by getting the next element from the iterator and
                 // assigning it to `v`
                 let update = PrimStmt::AsgnVar(v_id, PrimExpr::Next(array_iter.clone()));
-                let body_start = self.cfg.add_node(V::default());
+                let body_start = self.cfg.add_node(Default::default());
                 self.add_stmt(body_start, update);
                 let body_end = self.convert_stmt(body, body_start);
                 self.cfg.add_edge(cond_block, body_start, Some(cond_v));
                 self.cfg.add_edge(body_end, cond_block, None);
 
                 // Then add a footer to exit the loop from cond.
-                let footer = self.cfg.add_node(V::default());
+                let footer = self.cfg.add_node(Default::default());
                 self.cfg.add_edge(cond_block, footer, None);
 
                 footer
@@ -300,7 +317,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         NodeIx, /* footer = next open */
     ) {
         // Create header, body, and footer nodes.
-        let h = self.cfg.add_node(V::default());
+        let h = self.cfg.add_node(Default::default());
         let (b_start, b_end) = if let Some(u) = update {
             let (start, mid) = self.standalone_block(body);
             let end = self.convert_stmt(u, mid);
@@ -308,7 +325,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         } else {
             self.standalone_block(body)
         };
-        let f = self.cfg.add_node(V::default());
+        let f = self.cfg.add_node(Default::default());
         self.cfg.add_edge(current_open, h, None);
         self.cfg.add_edge(b_end, h, None);
         (h, b_start, b_end, f)
@@ -340,6 +357,6 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
     }
 
     fn add_stmt(&mut self, at: NodeIx, stmt: PrimStmt<'b>) {
-        self.cfg.node_weight_mut(at).unwrap().push(stmt);
+        self.cfg.node_weight_mut(at).unwrap().push_back(stmt);
     }
 }

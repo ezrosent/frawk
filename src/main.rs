@@ -2,7 +2,8 @@
 pub mod arena;
 pub mod ast;
 pub mod cfg;
-pub mod ssa;
+pub mod dom;
+pub mod types;
 extern crate hashbrown;
 extern crate petgraph;
 extern crate petgraph_graphml;
@@ -60,5 +61,5 @@ fn main() {
         .export_edge_weights(Box::new(|edge| vec![tup!(format!("{:?}", edge).into())]));
     println!("{}", gml.to_string());
     println!("entry={:?}", ast2.entry());
-    println!("{:?}", ssa::dom_frontier(&ast2));
+    println!("{:?}", dom::frontier(&ast2.cfg(), ast2.entry()));
 }

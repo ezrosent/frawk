@@ -1,7 +1,204 @@
-use crate::cfg::{Context, NodeIx, NumTy};
+use crate::types::{NodeIx, NumTy};
 use hashbrown::HashSet;
 use petgraph::Direction;
 use smallvec::SmallVec;
+
+type Graph<N, E> = petgraph::Graph<N, E, petgraph::Directed, NumTy>;
+
+/// Compute the [dominance frontier][0] for a control-flow graph. We use the Semi-NCA algorithm
+/// from ["Finding Dominators in Practice"][1] by Georgiadis et. al.  to compute the dominator
+/// tree, and then use the algorithm from ["A Simple, Fast Dominance Algorithm"][2] by Cooper et.
+/// al. for building dominance frontiers from the dominator tree. The ["Tiger Book"][3] by Appel
+/// was a helpful reference for computing semidominators.
+///
+/// A brief note on why we are not using the iterative algorithm from the Cooper paper. There is a
+/// strong reason to do so: the algorithm is a bit simpler to implement, and if you iterate in
+/// reverse post-order as they suggest, the algorithm will complete in a single pass if the flow
+/// graph is reducible. While most AWK programs do have reducible CFGs, I want to hold open the
+/// possibility of adding proper tail calls to AWK functions at some point in the future, in which
+/// case Semi-NCA will handle more pathological cases.
+///
+/// [0]: https://en.wikipedia.org/wiki/Dominator_(graph_theory)
+/// [1]: http://jgaa.info/accepted/2006/GeorgiadisTarjanWerneck2006.10.1.pdf
+/// [2]: https://www.cs.rice.edu/~keith/EMBED/dom.pdf
+/// [3]: https://www.cs.princeton.edu/~appel/modern/
+pub(crate) fn frontier<'a, N, E>(g: &'a Graph<N, E>, entry: NodeIx) -> Vec<HashSet<NumTy>> {
+    DomTreeBuilder::new(g, entry).dom_frontier()
+}
+
+struct DomTreeBuilder<'a, N, E> {
+    // `cfg` must be a flow graph: all nodes must be reachable from `entry`.
+    cfg: &'a Graph<N, E>,
+    entry: NodeIx,
+
+    // Semi-NCA metadata, indexed by NodeIndex
+    info: Vec<NodeInfo>,
+    // (pre-order) depth-first ordering of nodes.
+    dfs: Vec<NodeIx>,
+    // Used in semidominator calculation.
+    // ancestor: Vec<NumTy>,
+    best: Vec<NumTy>,
+}
+
+impl<'a, N, E> DomTreeBuilder<'a, N, E> {
+    fn new(g: &'a Graph<N, E>, entry: NodeIx) -> Self {
+        let mut res = DomTreeBuilder {
+            cfg: g,
+            entry: entry,
+            info: vec![Default::default(); g.node_count()],
+            dfs: Default::default(),
+            best: vec![NODEINFO_UNINIT; g.node_count()],
+        };
+        res.dfs(res.entry, NODEINFO_UNINIT);
+        res.semis();
+        res.idoms();
+        res
+    }
+
+    // a.k.a AncestorWithLowestSemi in Tiger Book
+    fn eval(&mut self, node: impl HasNum) -> NumTy {
+        let p = self.at(node).ancestor;
+        debug_assert!(
+            p != NODEINFO_UNINIT,
+            "node n={} has uninitialized ancestor. {:?}",
+            node.ix(),
+            self.at(node),
+        );
+        if self.at(p).ancestor != NODEINFO_UNINIT {
+            let b = self.eval(p);
+            *(&mut self.at_mut(node).ancestor) = self.at(p).ancestor;
+            if self.at(self.at(b).sdom).dfsnum < self.at(self.at(self.best_at(node)).sdom).dfsnum {
+                self.set_best(node, b);
+            }
+        }
+        self.best_at(node)
+    }
+
+    fn dfs(&mut self, cur_node: NodeIx, parent: NumTy) {
+        // TODO: consider explicit maintenance of stack.
+        //       probably not a huge win performance-wise, but it could avoid stack overflow on
+        //       pathological inputs.
+        debug_assert!(!self.at(cur_node).seen());
+        let seen_so_far = self.seen();
+        *self.at_mut(cur_node) = NodeInfo {
+            dfsnum: seen_so_far,
+            parent: parent,
+            idom: parent, // provisional
+            sdom: NODEINFO_UNINIT,
+            ancestor: NODEINFO_UNINIT,
+        };
+        self.dfs.push(cur_node);
+        // NB assumes that CFG is fully connected.
+        for n in self.cfg.neighbors_directed(cur_node, Direction::Outgoing) {
+            if self.seen() == self.num_nodes() {
+                break;
+            }
+            if self.at(n).seen() {
+                continue;
+            }
+            self.dfs(n, cur_node.index() as NumTy);
+        }
+    }
+
+    // Compute semidominators.
+    // Assumes self.dfs has been called.
+    fn semis(&mut self) {
+        // We need to borrow self.dfs, but also other parts of the struct, so we swap it out.
+        // Note that this only works because we know that `eval` and `link` do not use the
+        // `dfs` vector.
+        let dfs = std::mem::replace(&mut self.dfs, Default::default());
+        for n in dfs[1..].iter().rev().map(|x| *x) {
+            let parent = self.at(n).parent;
+            let mut semi = parent;
+            for pred in self
+                .cfg
+                .neighbors_directed(NodeIx::new(n.ix()), Direction::Incoming)
+            {
+                let candidate = if self.at(pred).dfsnum <= self.at(n).dfsnum {
+                    pred.num()
+                } else {
+                    let ancestor_with_lowest = self.eval(pred);
+                    self.at(ancestor_with_lowest).sdom
+                };
+                if self.at(candidate).dfsnum < self.at(semi).dfsnum {
+                    semi = candidate
+                }
+            }
+            *(&mut self.at_mut(n).sdom) = semi;
+            self.link(parent, n);
+        }
+        std::mem::replace(&mut self.dfs, dfs);
+    }
+
+    // Compute dominator tree.
+    // Assumes self.semis has been called.
+    fn idoms(&mut self) {
+        let dfs = std::mem::replace(&mut self.dfs, Default::default());
+        for n in dfs[1..].iter().map(|x| *x) {
+            let (mut idom, semi_dfs) = {
+                let entry = self.at(n);
+                (entry.idom, self.at(entry.sdom).dfsnum)
+            };
+            while self.at(idom).dfsnum > semi_dfs {
+                idom = self.at(idom).idom;
+            }
+            (&mut self.at_mut(n)).idom = idom;
+        }
+        std::mem::replace(&mut self.dfs, dfs);
+    }
+
+    // Compute the dominance fromtier.
+    // TODO: Add custom hash set and hash maps for dense integer keys.
+    fn dom_frontier(&self) -> Vec<HashSet<NumTy>> {
+        let mut fronts = vec![HashSet::<NumTy>::default(); self.info.len()];
+        for (b_ix, b) in self.info.iter().enumerate() {
+            let b_ix = b_ix as NumTy;
+            let neighs: SmallVec<[NodeIx; 4]> = self
+                .cfg
+                .neighbors_directed(NodeIx::new(b_ix.ix()), Direction::Incoming)
+                .collect();
+            let bdom = b.idom;
+            if neighs.len() >= 2 {
+                for p in neighs.into_iter() {
+                    let mut runner = p.num();
+                    while runner != bdom {
+                        fronts[runner.ix()].insert(b_ix);
+                        runner = self.at(runner).idom;
+                    }
+                }
+            }
+        }
+        fronts
+    }
+
+    // Short helper methods
+
+    fn num_nodes(&self) -> NumTy {
+        debug_assert_eq!(self.cfg.node_count(), self.info.len());
+        self.info.len() as NumTy
+    }
+    fn seen(&self) -> NumTy {
+        self.dfs.len() as NumTy
+    }
+    // TODO: Explore performance impact of performing checked indexing here and elsewhere. Is it
+    // worth using unsafe or building a safe index API?
+    fn at(&self, ix: impl HasNum) -> &NodeInfo {
+        &self.info[ix.ix()]
+    }
+    fn best_at(&self, ix: impl HasNum) -> NumTy {
+        self.best[ix.ix()]
+    }
+    fn set_best(&mut self, n: impl HasNum, v: impl HasNum) {
+        self.best[n.ix()] = v.num();
+    }
+    fn at_mut(&mut self, ix: impl HasNum) -> &mut NodeInfo {
+        &mut self.info[ix.ix()]
+    }
+    fn link(&mut self, parent: impl HasNum, node: impl HasNum) {
+        *(&mut self.at_mut(node).ancestor) = parent.num();
+        self.set_best(node, node);
+    }
+}
 
 /// A utility trait making it easier to write functions that are polymorphic on index type.
 trait HasNum: Copy {
@@ -67,205 +264,6 @@ impl NodeInfo {
     }
 }
 const NODEINFO_UNINIT: NumTy = !0;
-
-struct DomTreeBuilder<'a, 'b, I> {
-    // Underlying program context
-    ctx: &'a Context<'b, I>,
-    // Semi-NCA metadata, indexed by NodeIndex
-    info: Vec<NodeInfo>,
-    // (pre-order) depth-first ordering of nodes.
-    dfs: Vec<NodeIx>,
-    // Used in semidominator calculation.
-    // ancestor: Vec<NumTy>,
-    best: Vec<NumTy>,
-}
-
-/// Compute the [dominance frontier][0] for a control-flow graph. We use the Semi-NCA algorithm
-/// from ["Finding Dominators in Practice"][1] by Georgiadis et. al.  to compute the dominator
-/// tree, and then use the algorithm from ["A Simple, Fast Dominance Algorithm"][2] by Cooper et.
-/// al. for building dominance frontiers from the dominator tree. The ["Tiger Book"][3] by Appel
-/// was a helpful reference for computing semidominators.
-///
-/// A brief note on why we are not using the iterative algorithm from the Cooper paper. There is a
-/// strong reason to do so: the algorithm is a bit simpler to implement, and if you iterate in
-/// reverse post-order as they suggest, the algorithm will complete in a single pass if the flow
-/// graph is reducible. While most AWK programs do have reducible CFGs, I want to hold open the
-/// possibility of adding proper tail calls to AWK functions at some point in the future, in which
-/// case Semi-NCA will handle more pathological cases.
-///
-/// [0]: https://en.wikipedia.org/wiki/Dominator_(graph_theory)
-/// [1]: http://jgaa.info/accepted/2006/GeorgiadisTarjanWerneck2006.10.1.pdf
-/// [2]: https://www.cs.rice.edu/~keith/EMBED/dom.pdf
-/// [3]: https://www.cs.princeton.edu/~appel/modern/
-pub(crate) fn dom_frontier<'a, I>(ctx: &Context<'a, I>) -> Vec<HashSet<NumTy>> {
-    DomTreeBuilder::new(ctx).dom_frontier()
-}
-
-impl<'a, 'b, I> DomTreeBuilder<'a, 'b, I> {
-    fn new(ctx: &'a Context<'b, I>) -> Self {
-        let mut res = DomTreeBuilder {
-            ctx: ctx,
-            info: vec![Default::default(); ctx.cfg().node_count()],
-            dfs: Default::default(),
-            best: vec![NODEINFO_UNINIT; ctx.cfg().node_count()],
-        };
-        res.dfs(res.ctx.entry(), NODEINFO_UNINIT);
-        res.semis();
-        res.idoms();
-        res
-    }
-
-    // a.k.a AncestorWithLowestSemi in Tiger Book
-    fn eval(&mut self, node: impl HasNum) -> NumTy {
-        let p = self.at(node).ancestor;
-        debug_assert!(
-            p != NODEINFO_UNINIT,
-            "node n={} has uninitialized ancestor. {:?}",
-            node.ix(),
-            self.at(node),
-        );
-        if self.at(p).ancestor != NODEINFO_UNINIT {
-            let b = self.eval(p);
-            *(&mut self.at_mut(node).ancestor) = self.at(p).ancestor;
-            if self.at(self.at(b).sdom).dfsnum < self.at(self.at(self.best_at(node)).sdom).dfsnum {
-                self.set_best(node, b);
-            }
-        }
-        self.best_at(node)
-    }
-
-    fn dfs(&mut self, cur_node: NodeIx, parent: NumTy) {
-        // TODO: consider explicit maintenance of stack.
-        //       probably not a huge win performance-wise, but it could avoid stack overflow on
-        //       pathological inputs.
-        debug_assert!(!self.at(cur_node).seen());
-        let seen_so_far = self.seen();
-        *self.at_mut(cur_node) = NodeInfo {
-            dfsnum: seen_so_far,
-            parent: parent,
-            idom: parent, // provisional
-            sdom: NODEINFO_UNINIT,
-            ancestor: NODEINFO_UNINIT,
-        };
-        self.dfs.push(cur_node);
-        // NB assumes that CFG is fully connected.
-        for n in self
-            .ctx
-            .cfg()
-            .neighbors_directed(cur_node, Direction::Outgoing)
-        {
-            if self.seen() == self.num_nodes() {
-                break;
-            }
-            if self.at(n).seen() {
-                continue;
-            }
-            self.dfs(n, cur_node.index() as NumTy);
-        }
-    }
-
-    // Compute semidominators.
-    // Assumes self.dfs has been called.
-    fn semis(&mut self) {
-        // We need to borrow self.dfs, but also other parts of the struct, so we swap it out.
-        // Note that this only works because we know that `eval` and `link` do not use the
-        // `dfs` vector.
-        let dfs = std::mem::replace(&mut self.dfs, Default::default());
-        for n in dfs[1..].iter().rev().map(|x| *x) {
-            let parent = self.at(n).parent;
-            let mut semi = parent;
-            for pred in self
-                .ctx
-                .cfg()
-                .neighbors_directed(NodeIx::new(n.ix()), Direction::Incoming)
-            {
-                let candidate = if self.at(pred).dfsnum <= self.at(n).dfsnum {
-                    pred.num()
-                } else {
-                    let ancestor_with_lowest = self.eval(pred);
-                    self.at(ancestor_with_lowest).sdom
-                };
-                if self.at(candidate).dfsnum < self.at(semi).dfsnum {
-                    semi = candidate
-                }
-            }
-            *(&mut self.at_mut(n).sdom) = semi;
-            self.link(parent, n);
-        }
-        std::mem::replace(&mut self.dfs, dfs);
-    }
-
-    // Compute dominator tree.
-    // Assumes self.semis has been called.
-    fn idoms(&mut self) {
-        let dfs = std::mem::replace(&mut self.dfs, Default::default());
-        for n in dfs[1..].iter().map(|x| *x) {
-            let (mut idom, semi_dfs) = {
-                let entry = self.at(n);
-                (entry.idom, self.at(entry.sdom).dfsnum)
-            };
-            while self.at(idom).dfsnum > semi_dfs {
-                idom = self.at(idom).idom;
-            }
-            (&mut self.at_mut(n)).idom = idom;
-        }
-        std::mem::replace(&mut self.dfs, dfs);
-    }
-
-    // Compute the dominance fromtier.
-    // TODO: Add custom hash set and hash maps for dense integer keys.
-    fn dom_frontier(&self) -> Vec<HashSet<NumTy>> {
-        let mut fronts = vec![HashSet::<NumTy>::default(); self.info.len()];
-        for (b_ix, b) in self.info.iter().enumerate() {
-            let b_ix = b_ix as NumTy;
-            let neighs: SmallVec<[NodeIx; 4]> = self
-                .ctx
-                .cfg()
-                .neighbors_directed(NodeIx::new(b_ix.ix()), Direction::Incoming)
-                .collect();
-            let bdom = b.idom;
-            if neighs.len() >= 2 {
-                for p in neighs.into_iter() {
-                    let mut runner = p.num();
-                    while runner != bdom {
-                        fronts[runner.ix()].insert(b_ix);
-                        runner = self.at(runner).idom;
-                    }
-                }
-            }
-        }
-        fronts
-    }
-
-    // Short helper methods
-
-    fn num_nodes(&self) -> NumTy {
-        debug_assert_eq!(self.ctx.cfg().node_count(), self.info.len());
-        self.info.len() as NumTy
-    }
-    fn seen(&self) -> NumTy {
-        self.dfs.len() as NumTy
-    }
-    // TODO: Explore performance impact of performing checked indexing here and elsewhere. Is it
-    // worth using unsafe or building a safe index API?
-    fn at(&self, ix: impl HasNum) -> &NodeInfo {
-        &self.info[ix.ix()]
-    }
-    fn best_at(&self, ix: impl HasNum) -> NumTy {
-        self.best[ix.ix()]
-    }
-    fn set_best(&mut self, n: impl HasNum, v: impl HasNum) {
-        self.best[n.ix()] = v.num();
-    }
-    fn at_mut(&mut self, ix: impl HasNum) -> &mut NodeInfo {
-        &mut self.info[ix.ix()]
-    }
-    fn link(&mut self, parent: impl HasNum, node: impl HasNum) {
-        *(&mut self.at_mut(node).ancestor) = parent.num();
-        self.set_best(node, node);
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -275,16 +273,19 @@ mod test {
     // context around a vector of edges specifying a graph. The edges must create a connected
     // graph.
 
-    fn make_cfg_impl(edges: Vec<(NumTy, NumTy)>) -> Context<'static, usize> {
+    fn make_cfg_impl(edges: Vec<(NumTy, NumTy)>) -> (Graph<(), ()>, NodeIx) {
+        // we assume that node 0 is going to be the entry node.
         let n_nodes = 1 + edges
             .iter()
             .flat_map(|(i, j)| vec![*i, *j].into_iter())
             .max()
             .unwrap();
-        let mut cfg = CFG::<'static>::new();
-        let mut ixes: Vec<_> = (0..n_nodes).map(|_| cfg.add_node(Vec::new())).collect();
+        let mut cfg = Graph::<(), ()>::new();
+        let mut ixes: Vec<_> = (0..n_nodes)
+            .map(|_| cfg.add_node(Default::default()))
+            .collect();
         cfg.extend_with_edges(edges.into_iter().map(|(i, j)| (ixes[i.ix()], ixes[j.ix()])));
-        Context::from_cfg(cfg)
+        (cfg, NodeIx::new(0))
     }
 
     // In an effort to port over some test cases from the tiger book verbatim, here are some short
@@ -342,7 +343,7 @@ mod test {
     }
     #[test]
     fn dom_frontier_calc() {
-        let ctx = make_cfg_impl(vec![
+        let (cfg, entry) = make_cfg_impl(vec![
             (0, 1),
             (0, 4),
             (0, 8),
@@ -364,7 +365,7 @@ mod test {
             (10, 11),
             (11, 12),
         ]);
-        let fronts = dom_frontier(&ctx);
+        let fronts = frontier(&cfg, entry);
         assert_eq!(fronts[0], Default::default());
         assert_eq!(fronts[1], vec![3].into_iter().collect());
         assert_eq!(fronts[2], vec![2, 3].into_iter().collect());
@@ -378,7 +379,7 @@ mod test {
         // Tiger Book, Figure 19.8
         // Note that the semidominators will not necessarily be the same as they vary based on the
         // order in which successor nodes are visited.
-        let ctx = make_cfg! {
+        let (cfg, entry) = make_cfg! {
             A => B, A => C,
             B => D, B => G,
             C => E, C => H,
@@ -392,7 +393,7 @@ mod test {
             K => L,
             L => M, L => B,
         };
-        let builder = DomTreeBuilder::new(&ctx);
+        let builder = DomTreeBuilder::new(&cfg, entry);
 
         // In this case, semidominators and immediate dominators are the same.
         check_tree! { &builder, sdom,
