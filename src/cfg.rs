@@ -9,7 +9,6 @@ use smallvec::{smallvec, SmallVec};
 use std::collections::VecDeque;
 use std::hash::Hash;
 
-
 // consider making this just "by number" and putting branch instructions elsewhere.
 // need to verify the order
 // Use VecDequeue to support things like prepending definitions and phi statements to blocks during
@@ -19,17 +18,6 @@ type BasicBlock<'a> = VecDeque<PrimStmt<'a>>;
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>>;
 type Ident = (NumTy, NumTy);
 type V<T> = SmallVec<[T; 2]>;
-
-// Inserting Phi functions:
-//  1. populate A_orig.
-//   * Add as a field in BasicBlock (HashSet<I>)
-//   * Insert when a new temporary is created.
-//   * When a new non-temporary is encountered, prepend a AsgnVar(I, "") to the entry node, insert
-//     it there.
-//  2. implement algorithm 19.6 (using vec prepends for Phi insertions)
-//
-// Variable renames:
-//  This should be very simple with the modifications for phi functions.
 
 #[derive(Debug, Clone)]
 pub(crate) enum PrimVal<'a> {
@@ -455,7 +443,12 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         let mut worklist = HashSet::new();
         for ident in (0..self.max).map(|x| (x, 0 as NumTy)) {
             // Add all defsites into the worklist.
-            worklist.extend(self.defsites[&ident].iter().map(|x| *x));
+            let defsites = if let Some(ds) = self.defsites.get(&ident) {
+                ds
+            } else {
+                continue;
+            };
+            worklist.extend(defsites.iter().map(|x| *x));
             while worklist.len() > 0 {
                 // Remove a node from the worklist.
                 let node = {
@@ -473,7 +466,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 // block (no renaming).
                 for d in self.df[node.index()].iter() {
                     let d_ix = NodeIx::new(*d as usize);
-                    if !phis[&ident].contains(&d_ix) {
+                    if phis.get(&ident).map(|s| s.contains(&d_ix)) == Some(true) {
                         let phi = PrimExpr::Phi(
                             self.cfg()
                                 .neighbors_directed(d_ix, Direction::Incoming)
