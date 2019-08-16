@@ -177,7 +177,9 @@ impl<'a, V, E> DomInfo<'a, V, E> {
         // out rightside up.
         let mut tree = vec![SmallVec::new(); self.info.len()];
         for (i, info) in self.info.iter().enumerate() {
-            tree[info.idom as usize].push(i as NumTy)
+            if info.idom != NODEINFO_UNINIT {
+                tree[info.idom as usize].push(i as NumTy)
+            }
         }
         tree
     }
