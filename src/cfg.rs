@@ -1,13 +1,14 @@
-use super::hashbrown::HashMap;
-use crate::types::{NodeIx, NumTy};
-use petgraph::graph::Graph;
+use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
+use crate::dom;
+use crate::types::{Graph, NodeIx, NumTy};
+
+use hashbrown::{HashMap, HashSet};
+use petgraph::Direction;
+use smallvec::{smallvec, SmallVec};
+
 use std::collections::VecDeque;
 use std::hash::Hash;
 
-use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
-
-// Several utility functions operate on both NodeIx and NumTy values. Making them polymorphic
-// on HasNum automates the conversion between these two types.
 
 // consider making this just "by number" and putting branch instructions elsewhere.
 // need to verify the order
@@ -15,19 +16,16 @@ use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
 // SSA conversion.
 type BasicBlock<'a> = VecDeque<PrimStmt<'a>>;
 // None indicates `else`
-pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>, petgraph::Directed, NumTy>;
-type Ident = (NumTy, NumTy); // change to u64?
-type V<T> = Vec<T>; // change to smallvec?
+pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>>;
+type Ident = (NumTy, NumTy);
+type V<T> = SmallVec<[T; 2]>;
 
 // Inserting Phi functions:
-// -1. look into making ssa generic on graphs, rename it to `dom.rs` or something, then insert Phis
-// here.
-//  0. Create a Declare(I) PrimStmt. (NO: instead assign it to the empty string.. hopefully
-//     lifetime subtyping works out there)
 //  1. populate A_orig.
 //   * Add as a field in BasicBlock (HashSet<I>)
 //   * Insert when a new temporary is created.
-//   * When a new non-temporary is encountered, prepend a Declare to the entry node.
+//   * When a new non-temporary is encountered, prepend a AsgnVar(I, "") to the entry node, insert
+//     it there.
 //  2. implement algorithm 19.6 (using vec prepends for Phi insertions)
 //
 // Variable renames:
@@ -39,10 +37,11 @@ pub(crate) enum PrimVal<'a> {
     NumLit(f64),
     StrLit(&'a str),
 }
+
 #[derive(Debug, Clone)]
 pub(crate) enum PrimExpr<'a> {
     Val(PrimVal<'a>),
-    Phi(V<PrimVal<'a>>),
+    Phi(V<(NodeIx /* pred */, Ident)>),
     StrUnop(StrUnop, PrimVal<'a>),
     StrBinop(StrBinop, PrimVal<'a>, PrimVal<'a>),
     NumUnop(NumUnop, PrimVal<'a>),
@@ -54,6 +53,7 @@ pub(crate) enum PrimExpr<'a> {
     HasNext(PrimVal<'a>),
     Next(PrimVal<'a>),
 }
+
 #[derive(Debug)]
 pub(crate) enum PrimStmt<'a> {
     Print(V<PrimVal<'a>>, Option<PrimVal<'a>>),
@@ -65,26 +65,85 @@ pub(crate) enum PrimStmt<'a> {
     AsgnVar(Ident /* var */, PrimExpr<'a>),
 }
 
-#[derive(Default)]
-pub(crate) struct Context<'b, I> {
-    hm: HashMap<I, Ident>,
-    max: NumTy,
-    cfg: CFG<'b>,
-    entry: NodeIx,
-}
+// Basic tree-walking used in `Context::rename`
 
-#[cfg(test)]
-impl<'b, I: Default> Context<'b, I> {
-    // for testing
-    pub(crate) fn from_cfg(cfg: CFG<'b>) -> Self {
-        let mut res = Context::default();
-        res.cfg = cfg;
-        res
+impl<'a> PrimVal<'a> {
+    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+        if let PrimVal::Var(ident) = self {
+            *ident = update(*ident)
+        }
     }
 }
 
+impl<'a> PrimExpr<'a> {
+    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+        use PrimExpr::*;
+        match self {
+            Val(v) => v.replace(update),
+            Phi(_) => {}
+            StrUnop(_, v) => v.replace(update),
+            StrBinop(_, v1, v2) => {
+                v1.replace(&mut update);
+                v2.replace(update);
+            }
+            NumUnop(_, v) => v.replace(update),
+            NumBinop(_, v1, v2) => {
+                v1.replace(&mut update);
+                v2.replace(update);
+            }
+            Index(v1, v2) => {
+                v1.replace(&mut update);
+                v2.replace(update);
+            }
+            IterBegin(v) => v.replace(update),
+            HasNext(v) => v.replace(update),
+            Next(v) => v.replace(update),
+        }
+    }
+}
+
+impl<'a> PrimStmt<'a> {
+    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+        use PrimStmt::*;
+        match self {
+            Print(vs, None) => {
+                for v in vs.iter_mut() {
+                    v.replace(&mut update)
+                }
+            }
+            Print(vs, Some(v)) => {
+                for v in vs.iter_mut() {
+                    v.replace(&mut update)
+                }
+                v.replace(update);
+            }
+            AsgnIndex(ident, v, exp) => {
+                *ident = update(*ident);
+                v.replace(&mut update);
+                exp.replace(update);
+            }
+            // We handle assignments separately. Note that this is not needed for index
+            // expressions, because assignments to m[k] are *uses* of m, not definitions.
+            AsgnVar(_, e) => e.replace(update),
+        }
+    }
+}
+
+pub(crate) struct Context<'b, I> {
+    hm: HashMap<I, Ident>,
+    defsites: HashMap<Ident, HashSet<NodeIx>>,
+    orig: HashMap<NodeIx, HashSet<Ident>>,
+    max: NumTy,
+    cfg: CFG<'b>,
+    entry: NodeIx,
+
+    // Dominance information about `cfg`.
+    dt: dom::Tree,
+    df: dom::Frontier,
+}
+
 impl<'b, I> Context<'b, I> {
-    pub fn cfg(&self) -> &CFG<'b> {
+    pub fn cfg<'a>(&'a self) -> &'a CFG<'b> {
         &self.cfg
     }
     pub fn entry(&self) -> NodeIx {
@@ -92,10 +151,27 @@ impl<'b, I> Context<'b, I> {
     }
 }
 impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
-    fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Self {
-        let mut ctx = Self::default();
+    pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Self {
+        let mut ctx = Context {
+            hm: Default::default(),
+            defsites: Default::default(),
+            orig: Default::default(),
+            max: Default::default(),
+            cfg: Default::default(),
+            entry: Default::default(),
+            dt: Default::default(),
+            df: Default::default(),
+        };
         let (start, _) = ctx.standalone_block(stmt);
         ctx.entry = start;
+        let (dt, df) = {
+            let di = dom::DomInfo::new(ctx.cfg(), ctx.entry());
+            (di.dom_tree(), di.dom_frontier())
+        };
+        ctx.dt = dt;
+        ctx.df = df;
+        ctx.insert_phis();
+        ctx.rename(ctx.entry());
         ctx
     }
     pub fn standalone_block<'a>(
@@ -108,7 +184,6 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
     }
     fn convert_stmt<'a>(&mut self, stmt: &'a Stmt<'a, 'b, I>, mut current_open: NodeIx) -> NodeIx /*next open */
     {
-        // need "current open basic block"
         use Stmt::*;
         match stmt {
             Expr(e) => {
@@ -347,6 +422,17 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         (res, 0)
     }
 
+    fn record_ident(&mut self, id: Ident, blk: NodeIx) {
+        self.defsites
+            .entry(id)
+            .or_insert(HashSet::default())
+            .insert(blk);
+        self.orig
+            .entry(blk)
+            .or_insert(HashSet::default())
+            .insert(id);
+    }
+
     fn get_identifier(&mut self, i: &I) -> Ident {
         if let Some(id) = self.hm.get(i) {
             return *id;
@@ -357,6 +443,162 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
     }
 
     fn add_stmt(&mut self, at: NodeIx, stmt: PrimStmt<'b>) {
+        if let PrimStmt::AsgnVar(ident, _) = stmt {
+            self.record_ident(ident, at);
+        }
         self.cfg.node_weight_mut(at).unwrap().push_back(stmt);
+    }
+
+    fn insert_phis(&mut self) {
+        // TODO: do we need defsites and orig after this, or can we deallocate them here?
+        let mut phis = HashMap::<Ident, HashSet<NodeIx>>::new();
+        let mut worklist = HashSet::new();
+        for ident in (0..self.max).map(|x| (x, 0 as NumTy)) {
+            // Add all defsites into the worklist.
+            worklist.extend(self.defsites[&ident].iter().map(|x| *x));
+            while worklist.len() > 0 {
+                // Remove a node from the worklist.
+                let node = {
+                    let fst = worklist
+                        .iter()
+                        .next()
+                        .expect("worklist cannot be empty")
+                        .clone();
+                    worklist
+                        .take(&fst)
+                        .expect("worklist must yield elements from the set")
+                };
+                // For all nodes on the dominance frontier without phi nodes for this identifier,
+                // create a phi node of the appropriate size and insert it at the front of the
+                // block (no renaming).
+                for d in self.df[node.index()].iter() {
+                    let d_ix = NodeIx::new(*d as usize);
+                    if !phis[&ident].contains(&d_ix) {
+                        let phi = PrimExpr::Phi(
+                            self.cfg()
+                                .neighbors_directed(d_ix, Direction::Incoming)
+                                .map(|n| (n, ident))
+                                .collect(),
+                        );
+                        let stmt = PrimStmt::AsgnVar(ident, phi);
+                        self.cfg
+                            .node_weight_mut(d_ix)
+                            .expect("node in dominance frontier must be valid")
+                            .push_front(stmt);
+                        phis.entry(ident).or_insert(HashSet::default()).insert(d_ix);
+                    }
+                }
+            }
+        }
+    }
+
+    fn rename(&mut self, cur: NodeIx) {
+        #[derive(Clone)]
+        struct RenameStack {
+            count: NumTy,
+            stack: V<NumTy>,
+        }
+
+        impl RenameStack {
+            fn latest(&self) -> NumTy {
+                *self
+                    .stack
+                    .last()
+                    .expect("variable stack should never be empty")
+            }
+            fn get_next(&mut self) -> NumTy {
+                let next = self.count + 1;
+                self.count = next;
+                self.stack.push(next);
+                next
+            }
+        }
+
+        fn rename_recursive<'b, I>(
+            ctx: &mut Context<'b, I>,
+            cur: NodeIx,
+            state: &mut Vec<RenameStack>,
+        ) {
+            // We need to remember which new variables are introduced in this frame so we can
+            // remove them when we are done.
+            let mut defs = SmallVec::<[NumTy; 16]>::new();
+
+            // First, go through all the statements and update the variables to the highest
+            // subscript (second component in Ident).
+            for stmt in ctx
+                .cfg
+                .node_weight_mut(cur)
+                .expect("rename must be passed valid node indices")
+            {
+                // Note that `replace` is specialized to our use-case in this method. It does not hit
+                // AsgnVar identifiers, and it skips Phi nodes.
+                stmt.replace(|(x, _)| (x, state[x as usize].latest()));
+                if let PrimStmt::AsgnVar((a, i), _) = stmt {
+                    *i = state[*a as usize].get_next();
+                    defs.push(*a);
+                }
+            }
+
+            // The recursion is structured around the dominator tree. That means that normal
+            // renaming may not update join points in a graph to the right value. Consider
+            //
+            //            A
+            //          x = 1
+            //        /       \
+            //       B         C
+            //  x = x + 1     x = x + 2
+            //        \      /
+            //           D
+            //       x = x + 5
+            //
+            // With flow pointing downward. The dominator tree looks like
+            //
+            //          A
+            //        / | \
+            //       B  C  D
+            //
+            // Without this while loop, we would wind up with something like:
+            // A: x0 = 1
+            // B: x1 = x0 + 1
+            // C: x2 = x0 + 2
+            // D: x3 = phi(x0, x0)
+            //
+            // But of course D must be:
+            // D: x3 = phi(x1, x2)
+            //
+            // To fix this, we iterate over any outgoing neighbors and find phi functions that
+            // point back to the current node and update the subscript accordingly.
+            let mut walker = ctx
+                .cfg
+                .neighbors_directed(cur, Direction::Outgoing)
+                .detach();
+            while let Some(neigh) = walker.next_node(&ctx.cfg) {
+                for stmt in ctx.cfg.node_weight_mut(neigh).unwrap() {
+                    if let PrimStmt::AsgnVar(_, PrimExpr::Phi(ps)) = stmt {
+                        for (pred, (x, sub)) in ps.iter_mut() {
+                            if pred == &cur {
+                                *sub = state[*x as usize].latest();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            for child in ctx.dt[cur.index()].clone().iter() {
+                rename_recursive(ctx, NodeIx::new(*child as usize), state);
+            }
+            for d in defs.into_iter() {
+                let _res = state[d as usize].stack.pop();
+                debug_assert!(_res.is_some());
+            }
+        }
+        let mut state = vec![
+            RenameStack {
+                count: 0,
+                stack: smallvec![0],
+            };
+            self.max as usize
+        ];
+        rename_recursive(self, cur, &mut state);
     }
 }

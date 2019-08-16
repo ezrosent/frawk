@@ -1,15 +1,18 @@
-use crate::types::{NodeIx, NumTy};
+//! Compute dominance frontiers for a control flow graph. See the comments for `frontier` for more
+//! information.
+use crate::types::{Graph, NodeIx, NumTy};
 use hashbrown::HashSet;
 use petgraph::Direction;
 use smallvec::SmallVec;
 
-type Graph<N, E> = petgraph::Graph<N, E, petgraph::Directed, NumTy>;
+pub(crate) type Tree = Vec<SmallVec<[NumTy; 2]>>;
+pub(crate) type Frontier = Vec<HashSet<NumTy>>;
 
-/// Compute the [dominance frontier][0] for a control-flow graph. We use the Semi-NCA algorithm
-/// from ["Finding Dominators in Practice"][1] by Georgiadis et. al.  to compute the dominator
-/// tree, and then use the algorithm from ["A Simple, Fast Dominance Algorithm"][2] by Cooper et.
-/// al. for building dominance frontiers from the dominator tree. The ["Tiger Book"][3] by Appel
-/// was a helpful reference for computing semidominators.
+/// Compute the [dominator tree and dominance frontier][0] for a control-flow graph. We use the
+/// Semi-NCA algorithm from ["Finding Dominators in Practice"][1] by Georgiadis et. al.  to compute
+/// the dominator tree, and then use the algorithm from ["A Simple, Fast Dominance Algorithm"][2]
+/// by Cooper et.  al. for building dominance frontiers from the dominator tree. The ["Tiger
+/// Book"][3] by Appel was a helpful reference for computing semidominators.
 ///
 /// A brief note on why we are not using the iterative algorithm from the Cooper paper. There is a
 /// strong reason to do so: the algorithm is a bit simpler to implement, and if you iterate in
@@ -22,13 +25,9 @@ type Graph<N, E> = petgraph::Graph<N, E, petgraph::Directed, NumTy>;
 /// [1]: http://jgaa.info/accepted/2006/GeorgiadisTarjanWerneck2006.10.1.pdf
 /// [2]: https://www.cs.rice.edu/~keith/EMBED/dom.pdf
 /// [3]: https://www.cs.princeton.edu/~appel/modern/
-pub(crate) fn frontier<'a, N, E>(g: &'a Graph<N, E>, entry: NodeIx) -> Vec<HashSet<NumTy>> {
-    DomTreeBuilder::new(g, entry).dom_frontier()
-}
-
-struct DomTreeBuilder<'a, N, E> {
+pub(crate) struct DomInfo<'a, V, E> {
     // `cfg` must be a flow graph: all nodes must be reachable from `entry`.
-    cfg: &'a Graph<N, E>,
+    cfg: &'a Graph<V, E>,
     entry: NodeIx,
 
     // Semi-NCA metadata, indexed by NodeIndex
@@ -40,9 +39,9 @@ struct DomTreeBuilder<'a, N, E> {
     best: Vec<NumTy>,
 }
 
-impl<'a, N, E> DomTreeBuilder<'a, N, E> {
-    fn new(g: &'a Graph<N, E>, entry: NodeIx) -> Self {
-        let mut res = DomTreeBuilder {
+impl<'a, V, E> DomInfo<'a, V, E> {
+    pub fn new(g: &'a Graph<V, E>, entry: NodeIx) -> Self {
+        let mut res = DomInfo {
             cfg: g,
             entry: entry,
             info: vec![Default::default(); g.node_count()],
@@ -147,9 +146,9 @@ impl<'a, N, E> DomTreeBuilder<'a, N, E> {
         std::mem::replace(&mut self.dfs, dfs);
     }
 
-    // Compute the dominance fromtier.
-    // TODO: Add custom hash set and hash maps for dense integer keys.
-    fn dom_frontier(&self) -> Vec<HashSet<NumTy>> {
+    /// Compute the dominance fromtier.
+    pub fn dom_frontier(&self) -> Frontier {
+        // TODO: Add custom hash set and hash maps for dense integer keys.
         let mut fronts = vec![HashSet::<NumTy>::default(); self.info.len()];
         for (b_ix, b) in self.info.iter().enumerate() {
             let b_ix = b_ix as NumTy;
@@ -169,6 +168,18 @@ impl<'a, N, E> DomTreeBuilder<'a, N, E> {
             }
         }
         fronts
+    }
+
+    /// Compute the dominator tree.
+    pub fn dom_tree(&self) -> Tree {
+        // All the information for the tree that we need has already been computed in the
+        // initialization phase by `self.idoms`, but the tree is inverted. This method copies the tree
+        // out rightside up.
+        let mut tree = vec![SmallVec::new(); self.info.len()];
+        for (i, info) in self.info.iter().enumerate() {
+            tree[info.idom as usize].push(i as NumTy)
+        }
+        tree
     }
 
     // Short helper methods
@@ -267,7 +278,6 @@ const NODEINFO_UNINIT: NumTy = !0;
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::cfg::CFG;
 
     // The dominator logic is written against a full Context; this helper function creates a dummy
     // context around a vector of edges specifying a graph. The edges must create a connected
@@ -365,7 +375,7 @@ mod test {
             (10, 11),
             (11, 12),
         ]);
-        let fronts = frontier(&cfg, entry);
+        let fronts = DomInfo::new(&cfg, entry).dom_frontier();
         assert_eq!(fronts[0], Default::default());
         assert_eq!(fronts[1], vec![3].into_iter().collect());
         assert_eq!(fronts[2], vec![2, 3].into_iter().collect());
@@ -393,7 +403,7 @@ mod test {
             K => L,
             L => M, L => B,
         };
-        let builder = DomTreeBuilder::new(&cfg, entry);
+        let builder = DomInfo::new(&cfg, entry);
 
         // In this case, semidominators and immediate dominators are the same.
         check_tree! { &builder, sdom,
