@@ -1,6 +1,3 @@
-use super::hashbrown::HashMap;
-use std::hash::Hash;
-
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum NumUnop {
     Column, // $
@@ -27,15 +24,6 @@ pub(crate) enum StrBinop {
     Concat,
     Match,
 }
-
-// TODO perform some manual tests
-// TODO SSA conversion:
-// * Compute Dominator Tree
-// * Migrate identifier representation to tuple of numbers (for subscripts)
-// * Rename and insert Phi functions
-
-// pub(crate) mod ast1 {
-//     use super::*;
 
 #[derive(Debug)]
 pub(crate) enum Expr<'a, 'b, I> {
