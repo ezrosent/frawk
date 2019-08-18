@@ -128,6 +128,8 @@ pub(crate) struct Context<'b, I> {
     max: NumTy,
     cfg: CFG<'b>,
     entry: NodeIx,
+    // Stack of the entry and exit nodes for the loops within which the current statement is nested.
+    loop_ctx: V<(NodeIx, NodeIx)>,
 
     // Dominance information about `cfg`.
     dt: dom::Tree,
@@ -151,6 +153,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             max: Default::default(),
             cfg: Default::default(),
             entry: Default::default(),
+            loop_ctx: Default::default(),
             dt: Default::default(),
             df: Default::default(),
         };
@@ -262,6 +265,12 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 let cond_v = self.to_val(cond, cond_block);
                 self.cfg.add_edge(current_open, cond_block, None);
 
+                // Then add a footer to exit the loop from cond.
+                let footer = self.cfg.add_node(Default::default());
+                self.cfg.add_edge(cond_block, footer, None);
+
+                self.loop_ctx.push((cond_block, footer));
+
                 // Create the body, but start by getting the next element from the iterator and
                 // assigning it to `v`
                 let update = PrimStmt::AsgnVar(v_id, PrimExpr::Next(array_iter.clone()));
@@ -271,11 +280,35 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 self.cfg.add_edge(cond_block, body_start, Some(cond_v));
                 self.cfg.add_edge(body_end, cond_block, None);
 
-                // Then add a footer to exit the loop from cond.
-                let footer = self.cfg.add_node(Default::default());
-                self.cfg.add_edge(cond_block, footer, None);
+                self.loop_ctx.pop().unwrap();
 
                 footer
+            }
+            Break => {
+                match self.loop_ctx.pop() {
+                    Some((_, footer)) => {
+                        // Break statements unconditionally jump to the end of the loop.
+                        self.cfg.add_edge(current_open, footer, None);
+                        current_open
+                    }
+                    None => {
+                        return Err(CompileError("break statement must be inside a loop".into()))
+                    }
+                }
+            }
+            Continue => {
+                match self.loop_ctx.pop() {
+                    Some((header, _)) => {
+                        // Continue statements unconditionally jump to the top of the loop.
+                        self.cfg.add_edge(current_open, header, None);
+                        current_open
+                    }
+                    None => {
+                        return Err(CompileError(
+                            "continue statement must be inside a loop".into(),
+                        ))
+                    }
+                }
             }
         })
     }
@@ -402,6 +435,8 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
     )> {
         // Create header, body, and footer nodes.
         let h = self.cfg.add_node(Default::default());
+        let f = self.cfg.add_node(Default::default());
+        self.loop_ctx.push((h, f));
         let (b_start, b_end) = if let Some(u) = update {
             let (start, mid) = self.standalone_block(body)?;
             let end = self.convert_stmt(u, mid)?;
@@ -409,9 +444,9 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         } else {
             self.standalone_block(body)?
         };
-        let f = self.cfg.add_node(Default::default());
         self.cfg.add_edge(current_open, h, None);
         self.cfg.add_edge(b_end, h, None);
+        self.loop_ctx.pop().unwrap();
         Ok((h, b_start, b_end, f))
     }
 

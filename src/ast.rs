@@ -63,4 +63,6 @@ pub(crate) enum Stmt<'a, 'b, I> {
     ),
     While(&'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
     ForEach(I, &'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
+    Break,
+    Continue,
 }
