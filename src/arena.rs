@@ -1,12 +1,14 @@
-use crate::elsa;
+//! Implement a simple arena-allocation mechanism around frozen vectors.
+use crate::elsa::FrozenVec;
 use crate::stable_deref_trait::StableDeref;
 
 use std::alloc::{alloc, dealloc, Layout};
-use std::cell::{Cell, UnsafeCell};
+use std::cell::Cell;
 use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
 
+/// The size of arena chunks. Allocating objects larger than this will fall back to the heap.
 const CHUNK_SIZE: usize = 1024;
 
 struct Chunk {
@@ -83,151 +85,61 @@ impl std::ops::Deref for ChunkPtr {
 
 unsafe impl StableDeref for ChunkPtr {}
 
-struct Buffer {
-    len: Cell<usize>,
-    data: PushOnlyVec<UnsafeCell<u8>>,
-}
-
-impl Buffer {
-    fn of_size(cap: usize) -> Buffer {
-        Buffer {
-            len: Cell::new(0),
-            data: PushOnlyVec::with_capacity(cap),
-        }
-    }
-
-    unsafe fn alloc_inner<T>(&self, n: usize) -> Option<*mut T> {
-        let size = mem::size_of::<T>() * n;
-        let align = mem::align_of::<T>();
-        let len = self.len.get();
-        let cap = self.data.capacity();
-
-        let extra = unsafe { self.data.get_raw(len).align_offset(align) };
-        let start = len + extra;
-        let new_len = start + size;
-        if new_len > cap {
-            return None;
-        }
-        // must set len before calling f, as f may call alloc recursively!
-        self.len.set(new_len);
-        Some((*self.data.get_raw(start)).get() as *mut T)
-    }
-
-    fn alloc_many<T>(&self, v: impl Iterator<Item = T>, n: usize) -> Option<&[T]> {
-        unsafe {
-            let start = self.alloc_inner::<T>(n)?;
-            let mut len = 0;
-            for t in v.take(n) {
-                ptr::write(start.offset(len), t);
-                len += 1;
-            }
-            Some(std::slice::from_raw_parts(start, len as usize))
-        }
-    }
-    fn alloc<T>(&self, f: &impl Fn() -> T) -> Option<&T> {
-        unsafe {
-            let start = self.alloc_inner::<T>(1)?;
-            ptr::write(start, f());
-            Some(&*start)
-        }
-    }
-}
-
 pub struct Arena<'outer> {
-    chunk_size: usize,
-    data: PushOnlyVec<Buffer>,
-    drops: PushOnlyVec<(*mut u8, fn(*mut u8))>,
+    data: FrozenVec<ChunkPtr>,
+    drops: FrozenVec<Box<dyn Fn()>>,
     _marker: PhantomData<*const &'outer ()>,
 }
 
 impl<'outer> Drop for Arena<'outer> {
     fn drop(&mut self) {
-        for (p, f) in self.drops.drain() {
-            f(p)
+        for f in mem::replace(&mut self.drops, Default::default()).into_iter() {
+            f()
         }
     }
 }
 
-impl<'outer> Arena<'outer> {
-    pub fn with_size(s: usize) -> Arena<'outer> {
+impl<'outer> Default for Arena<'outer> {
+    fn default() -> Arena<'outer> {
         let res = Arena {
-            chunk_size: s,
             data: Default::default(),
             drops: Default::default(),
             _marker: PhantomData,
         };
-        res.data.push(Buffer::of_size(s));
+        res.data.push(Default::default());
         res
     }
+}
 
-    fn head(&self) -> &Buffer {
-        self.data.get(self.data.len() - 1)
+impl<'outer> Arena<'outer> {
+    fn head(&self) -> &Chunk {
+        &self.data[self.data.len() - 1]
     }
 
     // TODO(ezr): implement alloc_many method for collection of our choice (smallvec?)
 
     pub fn alloc<T: 'outer>(&self, f: impl Fn() -> T) -> &T {
         if let Some(r) = self.head().alloc(&f) {
-            fn free<T>(p: *mut u8) {
-                unsafe { ptr::drop_in_place(p as *mut T) };
-            }
             if mem::needs_drop::<T>() {
-                self.drops.push((r as *const _ as *mut u8, free::<T>));
+                let rr = r as *const _ as *mut u8;
+                self.drops.push(Box::new(move || unsafe {
+                    ptr::drop_in_place(rr as *mut T)
+                }));
             }
             return r;
         }
-        if mem::size_of::<T>() >= self.chunk_size / 2 {
+        if mem::size_of::<T>() >= CHUNK_SIZE / 2 {
             let b = Box::new(f());
             let p = Box::into_raw(b);
-            fn free_large<T>(p: *mut u8) {
-                unsafe { mem::drop(Box::from_raw(p as *mut T)) }
-            }
-            self.drops.push((p as *mut u8, free_large::<T>));
+            let r = p as *mut u8;
+            self.drops.push(Box::new(move || unsafe {
+                mem::drop(Box::from_raw(r as *mut T))
+            }));
             unsafe { &*(p as *const T) }
         } else {
-            self.data.push(Buffer::of_size(self.chunk_size));
+            self.data.push(ChunkPtr::default());
             self.alloc(f)
         }
-    }
-}
-
-struct PushOnlyVec<T>(UnsafeCell<Vec<T>>);
-
-impl<T> Default for PushOnlyVec<T> {
-    fn default() -> PushOnlyVec<T> {
-        PushOnlyVec(UnsafeCell::new(Default::default()))
-    }
-}
-
-impl<T> PushOnlyVec<T> {
-    fn with_capacity(n: usize) -> PushOnlyVec<T> {
-        PushOnlyVec(UnsafeCell::new(Vec::with_capacity(n)))
-    }
-
-    fn len(&self) -> usize {
-        unsafe { (*self.0.get()).len() }
-    }
-
-    fn capacity(&self) -> usize {
-        unsafe { (*self.0.get()).capacity() }
-    }
-
-    fn push(&self, item: T) {
-        unsafe { (&mut *self.0.get()).push(item) }
-    }
-
-    fn get(&self, ix: usize) -> &T {
-        unsafe { (*self.0.get()).get(ix).unwrap() }
-    }
-
-    unsafe fn get_raw(&self, ix: usize) -> *const T {
-        debug_assert!(ix <= self.capacity());
-        (*self.0.get()).get_unchecked(ix)
-    }
-
-    fn drain(&mut self) -> impl Iterator<Item = T> {
-        let rest = mem::replace(self, Default::default());
-        rest.0.into_inner().into_iter()
     }
 }
 
@@ -240,7 +152,7 @@ mod tests {
     #[test]
     fn basic_alloc() {
         let mut v = Vec::new();
-        let a = Arena::with_size(1 << 10);
+        let a = Arena::default();
         let mut sum: usize = 0;
         for i in 0..1024 {
             v.push(a.alloc(|| i));
@@ -265,12 +177,12 @@ mod tests {
             }
         }
         {
-            let a = Arena::with_size(100);
-            for _ in 0..128 {
+            let a = Arena::default();
+            for _ in 0..CHUNK_SIZE {
                 a.alloc(|| Dropper);
             }
         }
-        assert_eq!(unsafe { N_DROPS }, 128);
+        assert_eq!(unsafe { N_DROPS }, CHUNK_SIZE);
     }
 
     #[test]
@@ -286,7 +198,7 @@ mod tests {
             }
         }
         {
-            let a = Arena::with_size(100);
+            let a = Arena::default();
             for _ in 0..128 {
                 a.alloc(Dropper::default);
             }
@@ -374,7 +286,7 @@ mod tests {
     #[bench]
     fn arith_arena_1000(b: &mut Bencher) {
         b.iter(|| {
-            let a = Arena::with_size(1 << 12);
+            let a = Arena::default();
             black_box(build_2(&a, 1000));
         })
     }
@@ -382,7 +294,7 @@ mod tests {
     #[bench]
     fn arith_arena_cheat_1000(b: &mut Bencher) {
         b.iter(|| {
-            let a = Arena::with_size(1 << 12);
+            let a = Arena::default();
             black_box(build_2_cheat(&a, 1000));
         })
     }
@@ -396,7 +308,7 @@ mod tests {
     fn arith_arena_eval_1000(b: &mut Bencher) {
         let mut i = 0;
         b.iter(|| {
-            let a = Arena::with_size(1 << 12);
+            let a = Arena::default();
             black_box(build_2(&a, 1000).eval());
             i += 1;
         })
@@ -406,7 +318,7 @@ mod tests {
     fn arith_arena_cheat_eval_1000(b: &mut Bencher) {
         let mut i = 0;
         b.iter(|| {
-            let a = Arena::with_size(1 << 12);
+            let a = Arena::default();
             black_box(build_2_cheat(&a, 1000).eval());
             i += 1;
         })
