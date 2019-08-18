@@ -1,6 +1,6 @@
 //! Compute dominance frontiers for a control flow graph. See the comments for `DomInfo` for more
 //! information.
-use crate::types::{Graph, NodeIx, NumTy};
+use crate::common::{Graph, NodeIx, NumTy};
 use hashbrown::HashSet;
 use petgraph::Direction;
 use smallvec::SmallVec;
