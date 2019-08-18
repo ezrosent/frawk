@@ -122,8 +122,8 @@ impl<'outer> Arena<'outer> {
         if let Some(r) = self.head().alloc(&f) {
             if mem::needs_drop::<T>() {
                 // Close over a *mut u8 instead of a *mut T. Why? Without this the borrow checker
-                // complains that we are moving a T (with lifetime 'outer) into a Box (wwith
-                // lifetime 'static). We enforce that the Box's contents will be dropped within
+                // complains that we are moving a T (with lifetime : 'outer) into a Box (wwith
+                // lifetime 'static). We ensure that the Box's contents will be dropped within
                 // 'outer, so casting away this information is safe.
                 let rr = r as *const _ as *mut u8;
                 self.drops.push(Box::new(move || unsafe {

@@ -3,7 +3,7 @@ pub mod arena;
 pub mod ast;
 pub mod cfg;
 pub mod dom;
-pub mod types;
+pub mod common;
 extern crate elsa;
 extern crate hashbrown;
 extern crate petgraph;

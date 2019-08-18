@@ -1,6 +1,6 @@
 use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
 use crate::dom;
-use crate::types::{CompileError, Graph, NodeIx, NumTy, Result};
+use crate::common::{CompileError, Graph, NodeIx, NumTy, Result};
 
 use hashbrown::{HashMap, HashSet};
 use petgraph::Direction;
