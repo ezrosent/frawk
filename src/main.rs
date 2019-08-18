@@ -12,7 +12,7 @@ extern crate smallvec;
 extern crate stable_deref_trait;
 
 fn main() {
-    let a = arena::Arena::with_size(1024);
+    let a = arena::Arena::default();
     let ast1: &ast::Stmt<&'static str> = {
         use ast::Expr::*;
         use ast::NumBinop::*;
