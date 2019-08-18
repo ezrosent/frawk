@@ -1,6 +1,6 @@
 use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
 use crate::dom;
-use crate::types::{Graph, NodeIx, NumTy};
+use crate::types::{CompileError, Graph, NodeIx, NumTy, Result};
 
 use hashbrown::{HashMap, HashSet};
 use petgraph::Direction;
@@ -8,6 +8,10 @@ use smallvec::{smallvec, SmallVec};
 
 use std::collections::VecDeque;
 use std::hash::Hash;
+
+// TODO: nail down iteration order for edges
+// TODO: figure out some testing strategies
+// TODO: add in break and continue
 
 // consider making this just "by number" and putting branch instructions elsewhere.
 // need to verify the order
@@ -139,7 +143,7 @@ impl<'b, I> Context<'b, I> {
     }
 }
 impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
-    pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Self {
+    pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
         let mut ctx = Context {
             hm: Default::default(),
             defsites: Default::default(),
@@ -150,7 +154,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             dt: Default::default(),
             df: Default::default(),
         };
-        let (start, _) = ctx.standalone_block(stmt);
+        let (start, _) = ctx.standalone_block(stmt)?;
         ctx.entry = start;
         let (dt, df) = {
             let di = dom::DomInfo::new(ctx.cfg(), ctx.entry());
@@ -160,27 +164,31 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         ctx.df = df;
         ctx.insert_phis();
         ctx.rename(ctx.entry());
-        ctx
+        Ok(ctx)
     }
     pub fn standalone_block<'a>(
         &mut self,
         stmt: &'a Stmt<'a, 'b, I>,
-    ) -> (NodeIx /*start*/, NodeIx /*end*/) {
+    ) -> Result<(NodeIx /*start*/, NodeIx /*end*/)> {
         let start = self.cfg.add_node(Default::default());
-        let end = self.convert_stmt(stmt, start);
-        (start, end)
+        let end = self.convert_stmt(stmt, start)?;
+        Ok((start, end))
     }
-    fn convert_stmt<'a>(&mut self, stmt: &'a Stmt<'a, 'b, I>, mut current_open: NodeIx) -> NodeIx /*next open */
-    {
+
+    fn convert_stmt<'a>(
+        &mut self,
+        stmt: &'a Stmt<'a, 'b, I>,
+        mut current_open: NodeIx,
+    ) -> Result<NodeIx> /*next open */ {
         use Stmt::*;
-        match stmt {
+        Ok(match stmt {
             Expr(e) => {
-                self.convert_expr(e, current_open);
+                self.convert_expr(e, current_open)?;
                 current_open
             }
             Block(stmts) => {
                 for s in stmts {
-                    current_open = self.convert_stmt(s, current_open);
+                    current_open = self.convert_stmt(s, current_open)?;
                 }
                 current_open
             }
@@ -188,15 +196,18 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 debug_assert!(vs.len() > 0);
                 let mut v = V::with_capacity(vs.len());
                 for i in vs.iter() {
-                    v.push(self.convert_val(*i, current_open))
+                    v.push(self.convert_val(*i, current_open)?)
                 }
-                let out = out.as_ref().map(|x| self.convert_val(x, current_open));
+                let out = match out.as_ref() {
+                    Some(x) => Some(self.convert_val(x, current_open)?),
+                    None => None,
+                };
                 self.add_stmt(current_open, PrimStmt::Print(v, out));
                 current_open
             }
             If(cond, tcase, fcase) => {
-                let c_val = self.convert_val(cond, current_open);
-                let (t_start, t_end) = self.standalone_block(tcase);
+                let c_val = self.convert_val(cond, current_open)?;
+                let (t_start, t_end) = self.standalone_block(tcase)?;
                 let next = self.cfg.add_node(Default::default());
 
                 // current_open => t_start if the condition holds
@@ -207,7 +218,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 if let Some(fcase) = fcase {
                     // if an else case is there, compute a standalone block and set up the same
                     // connections as before, this time with a null edge rather than c_val.
-                    let (f_start, f_end) = self.standalone_block(fcase);
+                    let (f_start, f_end) = self.standalone_block(fcase)?;
                     self.cfg.add_edge(current_open, f_start, None);
                     self.cfg.add_edge(f_end, next, None);
                 } else {
@@ -218,13 +229,13 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             }
             For(init, cond, update, body) => {
                 let init_end = if let Some(i) = init {
-                    self.convert_stmt(i, current_open)
+                    self.convert_stmt(i, current_open)?
                 } else {
                     current_open
                 };
-                let (h, b_start, _b_end, f) = self.make_loop(body, update.clone(), init_end);
+                let (h, b_start, _b_end, f) = self.make_loop(body, update.clone(), init_end)?;
                 let cond_val = if let Some(c) = cond {
-                    self.convert_val(c, h)
+                    self.convert_val(c, h)?
                 } else {
                     PrimVal::NumLit(1.0)
                 };
@@ -233,15 +244,15 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 f
             }
             While(cond, body) => {
-                let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open);
-                let cond_val = self.convert_val(cond, h);
+                let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open)?;
+                let cond_val = self.convert_val(cond, h)?;
                 self.cfg.add_edge(h, b_start, Some(cond_val));
                 self.cfg.add_edge(h, f, None);
                 f
             }
             ForEach(v, array, body) => {
                 let v_id = self.get_identifier(v);
-                let array_val = self.convert_val(array, current_open);
+                let array_val = self.convert_val(array, current_open)?;
                 let array_iter = self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open);
 
                 // First, create the loop header, which checks if there are any more elements
@@ -256,7 +267,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 let update = PrimStmt::AsgnVar(v_id, PrimExpr::Next(array_iter.clone()));
                 let body_start = self.cfg.add_node(Default::default());
                 self.add_stmt(body_start, update);
-                let body_end = self.convert_stmt(body, body_start);
+                let body_end = self.convert_stmt(body, body_start)?;
                 self.cfg.add_edge(cond_block, body_start, Some(cond_v));
                 self.cfg.add_edge(body_end, cond_block, None);
 
@@ -266,29 +277,29 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
 
                 footer
             }
-        }
+        })
     }
 
     fn convert_expr<'a>(
         &mut self,
         expr: &'a Expr<'a, 'b, I>,
         current_open: NodeIx,
-    ) -> PrimExpr<'b> /* should not create any new nodes. Expressions don't cause us to branch */
+    ) -> Result<PrimExpr<'b>> /* should not create any new nodes. Expressions don't cause us to branch */
     {
         use Expr::*;
-        match expr {
+        Ok(match expr {
             NumLit(n) => PrimExpr::Val(PrimVal::NumLit(*n)),
             StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
             Unop(op, e) => {
-                let v = self.convert_val(e, current_open);
+                let v = self.convert_val(e, current_open)?;
                 match op {
                     Ok(numop) => PrimExpr::NumUnop(*numop, v),
                     Err(strop) => PrimExpr::StrUnop(*strop, v),
                 }
             }
             Binop(op, e1, e2) => {
-                let v1 = self.convert_val(e1, current_open);
-                let v2 = self.convert_val(e2, current_open);
+                let v1 = self.convert_val(e1, current_open)?;
+                let v2 = self.convert_val(e2, current_open)?;
                 match op {
                     Ok(numop) => PrimExpr::NumBinop(*numop, v1, v2),
                     Err(strop) => PrimExpr::StrBinop(*strop, v1, v2),
@@ -299,73 +310,83 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 PrimExpr::Val(PrimVal::Var(ident))
             }
             Index(arr, ix) => {
-                let arr_v = self.convert_val(arr, current_open);
-                let ix_v = self.convert_val(ix, current_open);
+                let arr_v = self.convert_val(arr, current_open)?;
+                let ix_v = self.convert_val(ix, current_open)?;
                 PrimExpr::Index(arr_v, ix_v)
             }
             Assign(Var(v), to) => {
-                let to_e = self.convert_expr(to, current_open);
+                let to_e = self.convert_expr(to, current_open)?;
                 let ident = self.get_identifier(v);
                 self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to_e));
                 PrimExpr::Val(PrimVal::Var(ident))
             }
             AssignOp(Var(v), op, to) => {
-                let to_v = self.convert_val(to, current_open);
+                let to_v = self.convert_val(to, current_open)?;
                 let ident = self.get_identifier(v);
                 let tmp = PrimExpr::NumBinop(*op, PrimVal::Var(ident), to_v);
                 self.add_stmt(current_open, PrimStmt::AsgnVar(ident, tmp));
                 PrimExpr::Val(PrimVal::Var(ident))
             }
 
-            Assign(Index(arr, ix), to) => self.do_assign(
-                arr,
-                ix,
-                |slf, _, _| slf.convert_expr(to, current_open),
-                current_open,
-            ),
+            Assign(Index(arr, ix), to) => {
+                return self.do_assign(
+                    arr,
+                    ix,
+                    |slf, _, _| slf.convert_expr(to, current_open),
+                    current_open,
+                )
+            }
 
-            AssignOp(Index(arr, ix), op, to) => self.do_assign(
-                arr,
-                ix,
-                |slf, arr_v, ix_v| {
-                    let to_v = slf.convert_val(to, current_open);
-                    let arr_cell_v = slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), current_open);
-                    PrimExpr::NumBinop(*op, arr_cell_v, to_v)
-                },
-                current_open,
-            ),
+            AssignOp(Index(arr, ix), op, to) => {
+                return self.do_assign(
+                    arr,
+                    ix,
+                    |slf, arr_v, ix_v| {
+                        let to_v = slf.convert_val(to, current_open)?;
+                        let arr_cell_v =
+                            slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), current_open);
+                        Ok(PrimExpr::NumBinop(*op, arr_cell_v, to_v))
+                    },
+                    current_open,
+                )
+            }
             // Panic here because this marks an internal error. We could move this distinction
             // up to the ast1:: level, but then we would have 4 different variants to handle
             // here.
-            Assign(_, _to) => panic!("invalid assignment expression"),
-            AssignOp(_, _op, _to) => panic!("invalid assign-op expression"),
-        }
+            Assign(_, _) | AssignOp(_, _, _) => {
+                return Err(CompileError(format!("{}", "invalid assignment expression")))
+            }
+        })
     }
 
     fn do_assign<'a>(
         &mut self,
         arr: &'a Expr<'a, 'b, I>,
         ix: &'a Expr<'a, 'b, I>,
-        mut to_f: impl FnMut(&mut Self, PrimVal<'b>, PrimVal<'b>) -> PrimExpr<'b>,
+        mut to_f: impl FnMut(&mut Self, PrimVal<'b>, PrimVal<'b>) -> Result<PrimExpr<'b>>,
         current_open: NodeIx,
-    ) -> PrimExpr<'b> {
-        let arr_e = self.convert_expr(arr, current_open);
+    ) -> Result<PrimExpr<'b>> {
+        let arr_e = self.convert_expr(arr, current_open)?;
         let arr_id = self.fresh();
         self.add_stmt(current_open, PrimStmt::AsgnVar(arr_id, arr_e));
         let arr_v = PrimVal::Var(arr_id);
 
-        let ix_v = self.convert_val(ix, current_open);
-        let to_e = to_f(self, arr_v.clone(), ix_v.clone());
+        let ix_v = self.convert_val(ix, current_open)?;
+        let to_e = to_f(self, arr_v.clone(), ix_v.clone())?;
         self.add_stmt(
             current_open,
             PrimStmt::AsgnIndex(arr_id, ix_v.clone(), to_e.clone()),
         );
-        PrimExpr::Index(arr_v, ix_v)
+        Ok(PrimExpr::Index(arr_v, ix_v))
     }
 
-    fn convert_val<'a>(&mut self, expr: &'a Expr<'a, 'b, I>, current_open: NodeIx) -> PrimVal<'b> {
-        let e = self.convert_expr(expr, current_open);
-        self.to_val(e, current_open)
+    fn convert_val<'a>(
+        &mut self,
+        expr: &'a Expr<'a, 'b, I>,
+        current_open: NodeIx,
+    ) -> Result<PrimVal<'b>> {
+        let e = self.convert_expr(expr, current_open)?;
+        Ok(self.to_val(e, current_open))
     }
 
     fn make_loop<'a>(
@@ -373,25 +394,25 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         body: &'a Stmt<'a, 'b, I>,
         update: Option<&'a Stmt<'a, 'b, I>>,
         current_open: NodeIx,
-    ) -> (
+    ) -> Result<(
         NodeIx, /* header */
         NodeIx, /* body header */
         NodeIx, /* body footer */
         NodeIx, /* footer = next open */
-    ) {
+    )> {
         // Create header, body, and footer nodes.
         let h = self.cfg.add_node(Default::default());
         let (b_start, b_end) = if let Some(u) = update {
-            let (start, mid) = self.standalone_block(body);
-            let end = self.convert_stmt(u, mid);
+            let (start, mid) = self.standalone_block(body)?;
+            let end = self.convert_stmt(u, mid)?;
             (start, end)
         } else {
-            self.standalone_block(body)
+            self.standalone_block(body)?
         };
         let f = self.cfg.add_node(Default::default());
         self.cfg.add_edge(current_open, h, None);
         self.cfg.add_edge(b_end, h, None);
-        (h, b_start, b_end, f)
+        Ok((h, b_start, b_end, f))
     }
 
     fn to_val(&mut self, exp: PrimExpr<'b>, current_open: NodeIx) -> PrimVal<'b> {

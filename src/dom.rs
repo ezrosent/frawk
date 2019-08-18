@@ -1,4 +1,4 @@
-//! Compute dominance frontiers for a control flow graph. See the comments for `frontier` for more
+//! Compute dominance frontiers for a control flow graph. See the comments for `DomInfo` for more
 //! information.
 use crate::types::{Graph, NodeIx, NumTy};
 use hashbrown::HashSet;
@@ -36,6 +36,7 @@ pub(crate) struct DomInfo<'a, V, E> {
     dfs: Vec<NodeIx>,
     // Used in semidominator calculation.
     // ancestor: Vec<NumTy>,
+    // TODO: should this go in NodeInfo?
     best: Vec<NumTy>,
 }
 
