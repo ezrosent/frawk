@@ -1,7 +1,87 @@
+use crate::elsa;
+use crate::stable_deref_trait::StableDeref;
+
+use std::alloc::{alloc, dealloc, Layout};
 use std::cell::{Cell, UnsafeCell};
 use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
+
+const CHUNK_SIZE: usize = 1024;
+
+struct Chunk {
+    len: Cell<usize>,
+}
+
+impl Chunk {
+    fn layout() -> Layout {
+        Layout::from_size_align(CHUNK_SIZE, mem::align_of::<Chunk>()).unwrap()
+    }
+    unsafe fn new() -> *mut Chunk {
+        let chunk = alloc(Self::layout()) as *mut Chunk;
+        ptr::write(
+            chunk,
+            Chunk {
+                len: Cell::new(mem::size_of::<Chunk>()),
+            },
+        );
+        chunk
+    }
+    unsafe fn dealloc(chunk: *mut Chunk) {
+        dealloc(chunk as *mut u8, Self::layout());
+    }
+    unsafe fn get_raw(&self, off: usize) -> *mut u8 {
+        let p = self as *const Chunk as *mut Chunk as *mut u8;
+        p.offset(off as isize)
+    }
+    unsafe fn alloc_inner<T>(&self, n: usize) -> Option<*mut T> {
+        let size = mem::size_of::<T>() * n;
+        let align = mem::align_of::<T>();
+        let len = self.len.get();
+        let cap = CHUNK_SIZE;
+
+        let extra = self.get_raw(len).align_offset(align);
+        let start = len + extra;
+        let new_len = start + size;
+        if new_len > cap {
+            return None;
+        }
+        // must set len before calling f, as f may call alloc recursively.
+        self.len.set(new_len);
+        Some(self.get_raw(start) as *mut T)
+    }
+
+    fn alloc<T>(&self, f: &impl Fn() -> T) -> Option<&T> {
+        unsafe {
+            let start = self.alloc_inner::<T>(1)?;
+            ptr::write(start, f());
+            Some(&*start)
+        }
+    }
+}
+
+struct ChunkPtr(*mut Chunk);
+
+impl Drop for ChunkPtr {
+    fn drop(&mut self) {
+        unsafe { Chunk::dealloc(self.0) };
+    }
+}
+
+impl Default for ChunkPtr {
+    fn default() -> ChunkPtr {
+        unsafe { ChunkPtr(Chunk::new()) }
+    }
+}
+
+impl std::ops::Deref for ChunkPtr {
+    type Target = Chunk;
+    fn deref(&self) -> &Chunk {
+        unsafe { &*self.0 }
+    }
+}
+
+unsafe impl StableDeref for ChunkPtr {}
 
 struct Buffer {
     len: Cell<usize>,

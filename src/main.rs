@@ -4,10 +4,12 @@ pub mod ast;
 pub mod cfg;
 pub mod dom;
 pub mod types;
+extern crate elsa;
 extern crate hashbrown;
 extern crate petgraph;
 extern crate petgraph_graphml;
 extern crate smallvec;
+extern crate stable_deref_trait;
 
 fn main() {
     let a = arena::Arena::with_size(1024);
@@ -53,7 +55,7 @@ fn main() {
         }};
     }
     println!("ast1={:?}", ast1);
-    let ast2 = cfg::Context::from_stmt(ast1);
+    let ast2 = cfg::Context::from_stmt(ast1).expect("ast1 must be valid");
     let gml = petgraph_graphml::GraphMl::new(ast2.cfg())
         .pretty_print(true)
         .export_node_weights(Box::new(|node| vec![tup!(format!("{:?}", node).into())]))
