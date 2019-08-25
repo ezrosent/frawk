@@ -29,7 +29,11 @@ pub(crate) struct MapTy {
 }
 
 pub(crate) trait Propagator<T>: Default {
-    fn step(&mut self, network: &Network<T, Self>) -> T;
+    fn step(
+        &mut self,
+        incoming: impl Iterator<Item = T>,
+        network: &Network<T, Self>,
+    ) -> (bool /* done */, T);
 }
 
 pub(crate) enum TypeRule {
@@ -40,14 +44,13 @@ pub(crate) enum TypeRule {
         lhs: Var,
         rhs: Var,
     },
-    MapIndex {
-        map_key: Target,
-        map_val: Target,
-    },
     CompareOp {
-        lhs: Target,
-        rhs: Target,
+        ty: Option<Scalar>,
+        lhs: Var,
+        rhs: Var,
     },
+    MapKey(Option<Scalar>),
+    MapVal(Option<Scalar>),
 }
 
 impl Default for TypeRule {
@@ -56,26 +59,40 @@ impl Default for TypeRule {
     }
 }
 
+fn op_helper(o1: &Option<Scalar>, o2: &Option<Scalar>) -> (bool, Option<Scalar>) {
+    use Scalar::*;
+    match (o1, o2) {
+        // No informmation to propagate
+        (None, None) => (false, None),
+        (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
+            (true, Some(Float))
+        }
+        (Some(Int), _) | (_, Some(Int)) => (false, Some(Int)),
+    }
+}
+
 impl Propagator<Option<Scalar>> for TypeRule {
-    fn step(&mut self, network: &Network<Option<Scalar>, Self>) -> Option<Scalar> {
+    fn step(
+        &mut self,
+        incoming: impl Iterator<Item = Option<Scalar>>,
+        network: &Network<Option<Scalar>, Self>,
+    ) -> (bool, Option<Scalar>) {
         use Scalar::*;
         use TypeRule::*;
         match self {
-            PlaceHolder => None,
-            ArithBinop { ty, lhs, rhs } => match (network.read(*lhs), network.read(*rhs)) {
-                // No informmation to propagate
-                (None, None) => None,
-                (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
-                    *ty = Some(Float);
-                    Some(Float)
-                }
-                (Some(Int), _) | (_, Some(Int)) => {
-                    *ty = Some(Int);
-                    Some(Int)
-                }
-            },
-            MapIndex { map_key, map_val } => unimplemented!(),
-            CompareOp { lhs, rhs } => unimplemented!(),
+            PlaceHolder => (false, None),
+            ArithBinop { ty, lhs, rhs } => {
+                let (done, res) = op_helper(network.read(*lhs), network.read(*rhs));
+                *ty = res;
+                (done, res)
+            }
+            CompareOp { ty, lhs, rhs } => {
+                let (done, res) = op_helper(network.read(*lhs), network.read(*rhs));
+                *ty = res;
+                (done, Some(Int))
+            }
+            MapKey(ty) => unimplemented!(),
+            MapVal(ty) => unimplemented!(),
         }
     }
 }
