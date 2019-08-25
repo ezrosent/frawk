@@ -28,27 +28,18 @@ pub(crate) struct MapTy {
     val: Option<Scalar>,
 }
 
-pub(crate) trait Propagator<T>: Default {
-    fn step(
-        &mut self,
-        incoming: impl Iterator<Item = T>,
-        network: &Network<T, Self>,
-    ) -> (bool /* done */, T);
+pub(crate) trait Propagator: Default {
+    type Item;
+    fn step(&mut self, incoming: impl Iterator<Item = Self::Item>)
+        -> (bool /* done */, Self::Item);
 }
 
 pub(crate) enum TypeRule {
     Placeholder,
+    Const(Scalar),
     // For things like +,% and *
-    ArithBinop {
-        ty: Option<Scalar>,
-        lhs: Var,
-        rhs: Var,
-    },
-    CompareOp {
-        ty: Option<Scalar>,
-        lhs: Var,
-        rhs: Var,
-    },
+    ArithOp(Option<Scalar>),
+    CompareOp(Option<Scalar>),
     MapKey(Option<Scalar>),
     MapVal(Option<Scalar>),
 }
@@ -71,38 +62,80 @@ fn op_helper(o1: &Option<Scalar>, o2: &Option<Scalar>) -> (bool, Option<Scalar>)
     }
 }
 
-impl Propagator<Option<Scalar>> for TypeRule {
+fn apply_binary_rule<T>(
+    mut start: T,
+    incoming: impl Iterator<Item = T>,
+    f: impl Fn(&T, &T) -> (bool, T),
+) -> (bool, T) {
+    let mut done = false;
+    for i in incoming {
+        let (stop, cur) = f(&start, &i);
+        start = cur;
+        done = stop;
+        if stop {
+            break;
+        }
+    }
+    (done, start)
+}
+
+impl Propagator for TypeRule {
+    type Item = Option<Scalar>;
     fn step(
         &mut self,
         incoming: impl Iterator<Item = Option<Scalar>>,
-        network: &Network<Option<Scalar>, Self>,
-    ) -> (bool, Option<Scalar>) {
-        use Scalar::*;
+    ) -> (bool /* done */, Option<Scalar>) {
         use TypeRule::*;
         match self {
-            PlaceHolder => (false, None),
-            ArithBinop { ty, lhs, rhs } => {
-                let (done, res) = op_helper(network.read(*lhs), network.read(*rhs));
+            Placeholder => (false, None),
+            Const(s) => (true, Some(*s)),
+            ArithOp(ty) => {
+                let (done, res) = apply_binary_rule(*ty, incoming, op_helper);
                 *ty = res;
                 (done, res)
             }
-            CompareOp { ty, lhs, rhs } => {
-                let (done, res) = op_helper(network.read(*lhs), network.read(*rhs));
+            CompareOp(ty) => {
+                let (done, res) = apply_binary_rule(*ty, incoming, op_helper);
                 *ty = res;
-                (done, Some(Int))
+                (done, Some(Scalar::Int))
             }
-            MapKey(ty) => unimplemented!(),
-            MapVal(ty) => unimplemented!(),
+            MapKey(ty) => {
+                let (done, res) = apply_binary_rule(*ty, incoming, |t1, t2| {
+                    use Scalar::*;
+                    match (t1, t2) {
+                        (None, None) => (false, None),
+                        (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
+                            (true, Some(Str))
+                        }
+                        (Some(Int), _) | (_, Some(Int)) => (false, Some(Int)),
+                    }
+                });
+                *ty = res;
+                (done, res)
+            }
+            MapVal(ty) => {
+                let (done, res) = apply_binary_rule(*ty, incoming, |t1, t2| {
+                    use Scalar::*;
+                    match (t1, t2) {
+                        (None, None) => (false, None),
+                        (Some(Str), _) | (_, Some(Str)) => (true, Some(Str)),
+                        (Some(Float), _) | (_, Some(Float)) => (true, Some(Float)),
+                        (Some(Int), _) | (_, Some(Int)) => (false, Some(Int)),
+                    }
+                });
+                *ty = res;
+                (done, res)
+            }
         }
     }
 }
 
-pub(crate) struct Network<T, P> {
-    g: Graph<(T, P), ()>,
+pub(crate) struct Network<P: Propagator> {
+    g: Graph<(P::Item, P), ()>,
 }
 
-impl<T, P: Propagator<T>> Network<T, P> {
-    fn read(&self, v: Var) -> &T {
+impl<P: Propagator> Network<P> {
+    fn read(&self, v: Var) -> &P::Item {
         &self.g.node_weight(v.0).unwrap().0
     }
 }
