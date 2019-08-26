@@ -54,18 +54,6 @@ impl Default for TypeRule {
     }
 }
 
-fn op_helper(o1: &Option<Scalar>, o2: &Option<Scalar>) -> (bool, Option<Scalar>) {
-    use Scalar::*;
-    match (o1, o2) {
-        // No informmation to propagate
-        (None, None) => (false, None),
-        (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
-            (true, Some(Float))
-        }
-        (Some(Int), _) | (_, Some(Int)) => (false, Some(Int)),
-    }
-}
-
 fn apply_binary_rule<T>(
     mut start: T,
     incoming: impl Iterator<Item = T>,
@@ -89,6 +77,17 @@ impl Propagator for TypeRule {
         &mut self,
         incoming: impl Iterator<Item = Option<Scalar>>,
     ) -> (bool /* done */, Option<Scalar>) {
+        fn op_helper(o1: &Option<Scalar>, o2: &Option<Scalar>) -> (bool, Option<Scalar>) {
+            use Scalar::*;
+            match (o1, o2) {
+                // No informmation to propagate
+                (None, None) => (false, None),
+                (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
+                    (true, Some(Float))
+                }
+                (Some(Int), _) | (_, Some(Int)) => (false, Some(Int)),
+            }
+        }
         use TypeRule::*;
         match self {
             Placeholder => (false, None),
@@ -143,6 +142,7 @@ where
     P::Item: Eq + Clone,
 {
     fn solve(&mut self) {
+        // TODO(ezr) consider addint a worklist type.
         let mut worklist: HashSet<NodeIx> = self.g.node_indices().collect();
         let mut incoming: SmallVec<P::Item> = Default::default();
         while worklist.len() > 0 {
@@ -166,11 +166,10 @@ where
                     .neighbors_directed(node, Incoming)
                     .map(|ix| self.g.node_weight(ix).unwrap().1.clone()),
             );
-            let (done_now, next) = p.step(incoming.drain());
-            let (ref mut done_ref, ref mut ty_ref, ref mut p_ref) =
-                self.g.node_weight_mut(node).unwrap();
+            let (done_now, ty) = p.step(incoming.drain());
+            let (done_ref, ty_ref, p_ref) = self.g.node_weight_mut(node).unwrap();
             *done_ref = done_now;
-            *ty_ref = next;
+            *ty_ref = ty;
             *p_ref = p;
             worklist.extend(self.g.neighbors_directed(node, Outgoing));
         }
