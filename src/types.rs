@@ -2,6 +2,7 @@
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
 use crate::common::{Graph, NodeIx};
+use crate::hashbrown::HashSet;
 type SmallVec<T> = crate::smallvec::SmallVec<[T; 2]>;
 #[derive(Clone, Copy)]
 pub(crate) struct Var(NodeIx);
@@ -28,14 +29,17 @@ pub(crate) struct MapTy {
     val: Option<Scalar>,
 }
 
-pub(crate) trait Propagator: Default {
+pub(crate) trait Propagator: Default + Clone {
     type Item;
     fn step(&mut self, incoming: impl Iterator<Item = Self::Item>)
         -> (bool /* done */, Self::Item);
 }
 
+#[derive(Clone)]
 pub(crate) enum TypeRule {
     Placeholder,
+    // For literals, and also operators like '/' (which will always coerce to float) or bitwise
+    // operations (which always coerce to integers).
     Const(Scalar),
     // For things like +,% and *
     ArithOp(Option<Scalar>),
@@ -131,11 +135,44 @@ impl Propagator for TypeRule {
 }
 
 pub(crate) struct Network<P: Propagator> {
-    g: Graph<(P::Item, P), ()>,
+    g: Graph<(bool, P::Item, P), ()>,
 }
 
-impl<P: Propagator> Network<P> {
-    fn read(&self, v: Var) -> &P::Item {
-        &self.g.node_weight(v.0).unwrap().0
+impl<P: Propagator> Network<P>
+where
+    P::Item: Eq + Clone,
+{
+    fn solve(&mut self) {
+        let mut worklist: HashSet<NodeIx> = self.g.node_indices().collect();
+        let mut incoming: SmallVec<P::Item> = Default::default();
+        while worklist.len() > 0 {
+            use petgraph::Direction::*;
+            let node = {
+                let fst = worklist
+                    .iter()
+                    .next()
+                    .expect("worklist cannot be empty")
+                    .clone();
+                worklist
+                    .take(&fst)
+                    .expect("worklist must yield elements from the set")
+            };
+            let (done, _ty, mut p) = self.g.node_weight(node).unwrap().clone();
+            if done {
+                continue;
+            }
+            incoming.extend(
+                self.g
+                    .neighbors_directed(node, Incoming)
+                    .map(|ix| self.g.node_weight(ix).unwrap().1.clone()),
+            );
+            let (done_now, next) = p.step(incoming.drain());
+            let (ref mut done_ref, ref mut ty_ref, ref mut p_ref) =
+                self.g.node_weight_mut(node).unwrap();
+            *done_ref = done_now;
+            *ty_ref = next;
+            *p_ref = p;
+            worklist.extend(self.g.neighbors_directed(node, Outgoing));
+        }
     }
 }
