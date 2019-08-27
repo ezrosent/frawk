@@ -147,7 +147,7 @@ struct Node<P: Propagator> {
 #[derive(Default)]
 pub(crate) struct Network<P: Propagator> {
     g: Graph<Node<P>, ()>,
-    wl: SmallVec<NodeIx>,
+    wl: Vec<NodeIx>,
 }
 
 impl<P: Propagator> Network<P>
