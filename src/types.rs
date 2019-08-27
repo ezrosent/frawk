@@ -17,7 +17,7 @@ impl Target {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Scalar {
     Str,
     Int,
@@ -133,45 +133,143 @@ impl Propagator for TypeRule {
     }
 }
 
+struct Node<P: Propagator> {
+    // The propagator rule.
+    prop: P,
+    // The last value returned by the rule, or the default value.
+    item: P::Item,
+    // Will the propagator return new values?
+    done: bool,
+    // Is this node in the worklist?
+    in_wl: bool,
+}
+
+#[derive(Default)]
 pub(crate) struct Network<P: Propagator> {
-    g: Graph<(bool, P::Item, P), ()>,
+    g: Graph<Node<P>, ()>,
+    wl: SmallVec<NodeIx>,
 }
 
 impl<P: Propagator> Network<P>
 where
-    P::Item: Eq + Clone,
+    P::Item: Eq + Clone + Default,
 {
+    fn insert(&mut self, p: P, deps: impl Iterator<Item = NodeIx>) -> NodeIx {
+        let ix = self.g.add_node(Node {
+            prop: p,
+            item: Default::default(),
+            done: false,
+            in_wl: true,
+        });
+        for d in deps {
+            self.g.add_edge(d, ix, ());
+        }
+        self.wl.push(ix);
+        ix
+    }
+
+    // TODO: document why this is a sketchy thing to do.
+    fn update(&mut self, ix: NodeIx, p: P, deps: impl Iterator<Item = NodeIx>) {
+        {
+            let Node {
+                prop,
+                item: _,
+                done: _,
+                in_wl,
+            } = self.g.node_weight_mut(ix).unwrap();
+            *prop = p;
+            *in_wl = true;
+        }
+        for d in deps {
+            self.g.add_edge(d, ix, ());
+        }
+        self.wl.push(ix);
+    }
+    fn read(&self, ix: NodeIx) -> &P::Item {
+        &self.g.node_weight(ix).unwrap().item
+    }
     fn solve(&mut self) {
-        // TODO(ezr) consider addint a worklist type.
-        let mut worklist: HashSet<NodeIx> = self.g.node_indices().collect();
         let mut incoming: SmallVec<P::Item> = Default::default();
-        while worklist.len() > 0 {
+        let mut neighs: SmallVec<NodeIx> = Default::default();
+        while let Some(node) = self.wl.pop() {
             use petgraph::Direction::*;
-            let node = {
-                let fst = worklist
-                    .iter()
-                    .next()
-                    .expect("worklist cannot be empty")
-                    .clone();
-                worklist
-                    .take(&fst)
-                    .expect("worklist must yield elements from the set")
+            let mut p = {
+                let Node {
+                    prop,
+                    item: _,
+                    done,
+                    in_wl,
+                } = self.g.node_weight_mut(node).unwrap();
+                *in_wl = false;
+                if *done {
+                    continue;
+                }
+                prop.clone()
             };
-            let (done, _ty, mut p) = self.g.node_weight(node).unwrap().clone();
-            if done {
-                continue;
-            }
+            // TODO: Add support for something like timestamps so that we could filter for nodes
+            // that have changed since the last iteration. Probably not a super high-priority
+            // feature, but could be useful if we made this more general. (But for full generality
+            // we could also probably just use timely/differential).
             incoming.extend(
                 self.g
                     .neighbors_directed(node, Incoming)
-                    .map(|ix| self.g.node_weight(ix).unwrap().1.clone()),
+                    .map(|ix| self.g.node_weight(ix).unwrap().item.clone()),
             );
             let (done_now, ty) = p.step(incoming.drain());
-            let (done_ref, ty_ref, p_ref) = self.g.node_weight_mut(node).unwrap();
-            *done_ref = done_now;
-            *ty_ref = ty;
-            *p_ref = p;
-            worklist.extend(self.g.neighbors_directed(node, Outgoing));
+            let Node {
+                prop,
+                item,
+                done,
+                in_wl: _,
+            } = self.g.node_weight_mut(node).unwrap();
+            *done = done_now;
+            *prop = p;
+            if item != &ty {
+                *item = ty;
+                neighs.extend(self.g.neighbors_directed(node, Outgoing));
+                for n in neighs.drain() {
+                    self.wl.push(n);
+                    *(&mut self.g.node_weight_mut(n).unwrap().in_wl) = true;
+                }
+            }
         }
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn plus_key_int() {
+        let mut n = Network::default();
+        use Scalar::*;
+        use TypeRule::*;
+        let i1 = n.insert(Const(Int), None.into_iter());
+        let i2 = n.insert(Placeholder, None.into_iter());
+        let addi12 = n.insert(ArithOp(None), vec![i1, i2].into_iter());
+        n.update(i2, MapKey(None), vec![addi12].into_iter());
+        n.solve();
+        assert_eq!(n.read(i1), &Some(Int));
+        assert_eq!(n.read(i2), &Some(Int));
+        assert_eq!(n.read(addi12), &Some(Int));
+    }
+
+    #[test]
+    fn plus_key_float() {
+        let mut n = Network::default();
+        use Scalar::*;
+        use TypeRule::*;
+        let i1 = n.insert(Const(Int), None.into_iter());
+        let f1 = n.insert(Placeholder, None.into_iter());
+        let add12 = n.insert(ArithOp(None), vec![i1, f1].into_iter());
+        let f2 = n.insert(Const(Float), None.into_iter());
+        n.update(f1, MapKey(None), vec![add12, f2].into_iter());
+        n.solve();
+        assert_eq!(n.read(i1), &Some(Int));
+        assert_eq!(n.read(f1), &Some(Str));
+        assert_eq!(n.read(f2), &Some(Float));
+        assert_eq!(n.read(add12), &Some(Float));
+    }
+
 }
