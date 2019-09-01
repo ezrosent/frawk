@@ -12,3 +12,7 @@ impl std::fmt::Display for CompileError {
         write!(f, "{}", self.0)
     }
 }
+
+macro_rules! err {
+    ($($t:tt),*) => { Err(CompileError(format!($($t),*))) }
+}
