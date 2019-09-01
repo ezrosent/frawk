@@ -1,10 +1,10 @@
 use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
-use crate::dom;
 use crate::common::{CompileError, Graph, NodeIx, NumTy, Result};
+use crate::dom;
 
 use hashbrown::{HashMap, HashSet};
 use petgraph::Direction;
-use smallvec::{smallvec, SmallVec};
+use smallvec::smallvec; // macro
 
 use std::collections::VecDeque;
 use std::hash::Hash;
@@ -21,19 +21,190 @@ type BasicBlock<'a> = VecDeque<PrimStmt<'a>>;
 // None indicates `else`
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>>;
 type Ident = (NumTy, NumTy);
-type V<T> = SmallVec<[T; 2]>;
+type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
+mod type_inference {
+    use super::*;
+    use crate::types::{Network, Scalar, TypeRule};
+    #[derive(PartialEq, Eq)]
+    pub(crate) enum TVar {
+        Scalar(NodeIx),
+        Iter(NodeIx),
+        Map { key: NodeIx, val: NodeIx },
+    }
+
+    pub(crate) struct Constraints {
+        network: Network<TypeRule>,
+        ident_map: HashMap<Ident, TVar>,
+        str_node: NodeIx,
+        int_node: NodeIx,
+        float_node: NodeIx,
+    }
+
+    impl Default for Constraints {
+        fn default() -> Constraints {
+            let mut network = Network::<TypeRule>::default();
+            let str_node = network.insert(TypeRule::Const(Scalar::Str), None.into_iter());
+            let int_node = network.insert(TypeRule::Const(Scalar::Int), None.into_iter());
+            let float_node = network.insert(TypeRule::Const(Scalar::Float), None.into_iter());
+            Constraints {
+                network,
+                ident_map: Default::default(),
+                str_node,
+                int_node,
+                float_node,
+            }
+        }
+    }
+
+    impl Constraints {
+        fn get_expr_constraints<'a>(&mut self, expr: &PrimExpr<'a>) -> Result<NodeIx> {
+            // is this what we want? Maybe pass in a target node?
+            unimplemented!()
+        }
+        fn gen_stmt_constraints<'a>(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
+            use PrimStmt::*;
+            match stmt {
+                Print(strs, op) => {
+                    // TODO: anything to do here?
+                    Ok(())
+                }
+                AsgnIndex(map_ident, key, val) => {
+                    let (k, v) = self.get_map(*map_ident)?;
+                    self.insert_rule(k, TypeRule::MapKey(None), Some(key).into_iter())?;
+                    let v_node = self.get_expr_constraints(val)?;
+                    self.network
+                        .update(v, TypeRule::MapVal(None), Some(v_node).into_iter())?;
+                    Ok(())
+                }
+                AsgnVar(ident, exp) => {
+                    let n = self.get_scalar(*ident)?;
+                    let e_n = self.get_expr_constraints(exp)?;
+                    self.network
+                        .update(n, TypeRule::MapVal(None), Some(e_n).into_iter())?;
+                    Ok(())
+                }
+            }
+        }
+        pub(crate) fn get_iter(&mut self, ident: Ident) -> Result<NodeIx /* item */> {
+            use hashbrown::hash_map::Entry;
+            match self.ident_map.entry(ident) {
+                Entry::Occupied(o) => match o.get() {
+                    TVar::Map { key: _, val: _ } => err!(
+                        "Identifier {:?} is used in both map and iterator context",
+                        ident
+                    ),
+                    TVar::Iter(n) => Ok(*n),
+                    TVar::Scalar(_) => err!(
+                        "Identifier {:?} is used in both scalar and iterator context",
+                        ident
+                    ),
+                },
+                Entry::Vacant(v) => {
+                    let item = self.network.insert(TypeRule::Placeholder, None.into_iter());
+                    v.insert(TVar::Iter(item));
+                    Ok(item)
+                }
+            }
+        }
+        pub(crate) fn get_map(
+            &mut self,
+            ident: Ident,
+        ) -> Result<(NodeIx /* key */, NodeIx /* val */)> {
+            use hashbrown::hash_map::Entry;
+            match self.ident_map.entry(ident) {
+                Entry::Occupied(o) => match o.get() {
+                    TVar::Map { key, val } => Ok((*key, *val)),
+                    TVar::Iter(_) =>
+                        err!("found iterator in map context (this indicates a bug in the implementation)"),
+                    TVar::Scalar(_) =>
+                        err!("Identifier {:?} is used in both scalar and map context", ident),
+                },
+                Entry::Vacant(v) => {
+                    let key = self.network.insert(TypeRule::Placeholder, None.into_iter());
+                    let val = self.network.insert(TypeRule::Placeholder, None.into_iter());
+                    v.insert(TVar::Map { key, val });
+                    Ok((key, val))
+                }
+            }
+        }
+
+        pub(crate) fn get_scalar(&mut self, ident: Ident) -> Result<NodeIx> {
+            use hashbrown::hash_map::Entry;
+            match self.ident_map.entry(ident.clone()) {
+                Entry::Occupied(o) => match o.get() {
+                    TVar::Map { key: _, val: _ } =>
+                        err!("identfier {:?} is used elsewhere as a map (insert)", ident),
+                    TVar::Iter(_) =>
+                        err!("found iterator in scalar context (this indicates a bug in the implementation)"),
+                    TVar::Scalar(n) => {
+                        self.network.update(*n, TypeRule::Placeholder, None.into_iter())?;
+                        Ok(*n)
+                    }
+                },
+                Entry::Vacant(v) => {
+                    let n = self.network.insert(TypeRule::Placeholder, None.into_iter());
+                    v.insert(TVar::Scalar(n));
+                    Ok(n)
+                }
+            }
+        }
+        pub(crate) fn insert_rule<'b, 'a: 'b>(
+            &mut self,
+            ident: NodeIx,
+            rule: TypeRule,
+            deps: impl Iterator<Item = &'b PrimVal<'a>>,
+        ) -> Result<()> {
+            use hashbrown::hash_map::Entry;
+            let mut dep_nodes = SmallVec::<NodeIx>::new();
+
+            // We dedup type rules for literals within Option<NodeIx> fields. This helper function
+            // handles the "get or insert" logic for those.
+            fn get_node(
+                node: &mut Option<NodeIx>,
+                network: &mut Network<TypeRule>,
+                rule: &TypeRule,
+            ) -> NodeIx {
+                if let Some(x) = node {
+                    return *x;
+                }
+                let res = network.insert(rule.clone(), None.into_iter());
+                *node = Some(res);
+                res
+            }
+            // Build a vector of NodeIxs from a vector of PrimVals. For literals, we map those to
+            // our special-cased literal nodes. For Vars, first check that the var is not currently
+            // a Map (N.B. no scalar expressions contain maps, at least for now), then either grab
+            // the existing node or insert a scalar Placeholder at that identifier.
+            //
+            //
+            // TODO: fix these rules for when functions are supported.
+            for i in deps {
+                use PrimVal::*;
+                dep_nodes.push(match i {
+                    ILit(_) => self.int_node,
+                    FLit(_) => self.float_node,
+                    StrLit(_) => self.str_node,
+                    Var(id) => self.get_scalar(*id)?,
+                });
+            }
+            self.network.update(ident, rule, dep_nodes.into_iter())?;
+            Ok(())
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub(crate) enum PrimVal<'a> {
     Var(Ident),
-    NumLit(f64),
+    ILit(i64),
+    FLit(f64),
     StrLit(&'a str),
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum PrimExpr<'a> {
     Val(PrimVal<'a>),
-    Phi(V<(NodeIx /* pred */, Ident)>),
+    Phi(SmallVec<(NodeIx /* pred */, Ident)>),
     StrUnop(StrUnop, PrimVal<'a>),
     StrBinop(StrBinop, PrimVal<'a>, PrimVal<'a>),
     NumUnop(NumUnop, PrimVal<'a>),
@@ -48,7 +219,7 @@ pub(crate) enum PrimExpr<'a> {
 
 #[derive(Debug)]
 pub(crate) enum PrimStmt<'a> {
-    Print(V<PrimVal<'a>>, Option<PrimVal<'a>>),
+    Print(SmallVec<PrimVal<'a>>, Option<PrimVal<'a>>),
     AsgnIndex(
         Ident,        /*map*/
         PrimVal<'a>,  /* index */
@@ -57,7 +228,11 @@ pub(crate) enum PrimStmt<'a> {
     AsgnVar(Ident /* var */, PrimExpr<'a>),
 }
 
-// Basic tree-walking used in `Context::rename`
+// only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
+// Maybe also keep an auxiliary map from Var => node in graph, also allow Key(map_ident)
+// Val(map_ident).
+//
+// Build up network. then solve. then use that to insert conversions when producing bytecode.
 
 impl<'a> PrimVal<'a> {
     fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
@@ -129,7 +304,7 @@ pub(crate) struct Context<'b, I> {
     cfg: CFG<'b>,
     entry: NodeIx,
     // Stack of the entry and exit nodes for the loops within which the current statement is nested.
-    loop_ctx: V<(NodeIx, NodeIx)>,
+    loop_ctx: SmallVec<(NodeIx, NodeIx)>,
 
     // Dominance information about `cfg`.
     dt: dom::Tree,
@@ -157,18 +332,22 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             dt: Default::default(),
             df: Default::default(),
         };
+        // convert AST to CFG
         let (start, _) = ctx.standalone_block(stmt)?;
         ctx.entry = start;
+        // SSA conversion: compute dominator tree and dominance frontier.
         let (dt, df) = {
             let di = dom::DomInfo::new(ctx.cfg(), ctx.entry());
             (di.dom_tree(), di.dom_frontier())
         };
         ctx.dt = dt;
         ctx.df = df;
+        // SSA conversion: insert phi functions, and rename variables.
         ctx.insert_phis();
         ctx.rename(ctx.entry());
         Ok(ctx)
     }
+
     pub fn standalone_block<'a>(
         &mut self,
         stmt: &'a Stmt<'a, 'b, I>,
@@ -197,7 +376,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             }
             Print(vs, out) => {
                 debug_assert!(vs.len() > 0);
-                let mut v = V::with_capacity(vs.len());
+                let mut v = SmallVec::with_capacity(vs.len());
                 for i in vs.iter() {
                     v.push(self.convert_val(*i, current_open)?)
                 }
@@ -240,7 +419,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 let cond_val = if let Some(c) = cond {
                     self.convert_val(c, h)?
                 } else {
-                    PrimVal::NumLit(1.0)
+                    PrimVal::ILit(1)
                 };
                 self.cfg.add_edge(h, b_start, Some(cond_val));
                 self.cfg.add_edge(h, f, None);
@@ -321,7 +500,8 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
     {
         use Expr::*;
         Ok(match expr {
-            NumLit(n) => PrimExpr::Val(PrimVal::NumLit(*n)),
+            ILit(n) => PrimExpr::Val(PrimVal::ILit(*n)),
+            FLit(n) => PrimExpr::Val(PrimVal::FLit(*n)),
             StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
             Unop(op, e) => {
                 let v = self.convert_val(e, current_open)?;
@@ -545,7 +725,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         #[derive(Clone)]
         struct RenameStack {
             count: NumTy,
-            stack: V<NumTy>,
+            stack: SmallVec<NumTy>,
         }
 
         impl RenameStack {
@@ -570,7 +750,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         ) {
             // We need to remember which new variables are introduced in this frame so we can
             // remove them when we are done.
-            let mut defs = SmallVec::<[NumTy; 16]>::new();
+            let mut defs = smallvec::SmallVec::<[NumTy; 16]>::new();
 
             // First, go through all the statements and update the variables to the highest
             // subscript (second component in Ident).

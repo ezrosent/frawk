@@ -1,8 +1,9 @@
 #![feature(test)]
+#[macro_use]
+pub mod common;
 pub mod arena;
 pub mod ast;
 pub mod cfg;
-pub mod common;
 pub mod dom;
 pub mod types;
 extern crate elsa;
@@ -20,7 +21,7 @@ fn main() {
         use ast::Stmt::*;
         a.alloc(|| {
             Block(vec![
-                a.alloc(|| Expr(a.alloc(|| Assign(a.alloc(|| Var("i")), a.alloc(|| NumLit(1.0)))))),
+                a.alloc(|| Expr(a.alloc(|| Assign(a.alloc(|| Var("i")), a.alloc(|| ILit(1)))))),
                 a.alloc(|| {
                     Expr(a.alloc(|| {
                         Assign(
@@ -34,7 +35,7 @@ fn main() {
                         a.alloc(|| Var("i")),
                         a.alloc(|| {
                             Expr(a.alloc(|| {
-                                AssignOp(a.alloc(|| Var("i")), Mult, a.alloc(|| NumLit(2.0)))
+                                AssignOp(a.alloc(|| Var("i")), Mult, a.alloc(|| FLit(2.0)))
                             }))
                         }),
                         None,

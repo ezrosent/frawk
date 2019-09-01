@@ -27,7 +27,8 @@ pub(crate) enum StrBinop {
 
 #[derive(Debug)]
 pub(crate) enum Expr<'a, 'b, I> {
-    NumLit(f64),
+    ILit(i64),
+    FLit(f64),
     StrLit(&'b str),
     Unop(Result<NumUnop, StrUnop>, &'a Expr<'a, 'b, I>),
     Binop(

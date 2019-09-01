@@ -1,21 +1,9 @@
 //! Algorithms and types pertaining to type deduction and converion.
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
-use crate::common::{Graph, NodeIx};
-use crate::hashbrown::HashSet;
+use crate::common::{CompileError, Graph, NodeIx, Result};
+use std::hash::Hash;
 type SmallVec<T> = crate::smallvec::SmallVec<[T; 2]>;
-#[derive(Clone, Copy)]
-pub(crate) struct Var(NodeIx);
-pub(crate) struct Target {
-    var: Var,
-    ty: Option<Scalar>,
-}
-
-impl Target {
-    fn from_var(v: Var) -> Self {
-        Target { var: v, ty: None }
-    }
-}
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Scalar {
@@ -29,13 +17,34 @@ pub(crate) struct MapTy {
     val: Option<Scalar>,
 }
 
+/// A propagator is a monotone function that receives "partially done" inputs and produces
+/// "partially done" outputs. This is a very restricted API to simplify the implementation of a
+/// propagator network.
+///
+/// TODO: Link to more information on propagators.
 pub(crate) trait Propagator: Default + Clone {
     type Item;
+    /// While rules (instances of Self) themselves will propgate information in a monotone fashion,
+    /// we may run into cases where we want to change from one rule to another. This too has to be
+    /// "monotone" in the same way.
+    ///
+    /// Using TypeRule as an example, we cannot change a variable from an Int to a Str. But we might
+    /// be able to refine a Placeholder into either one of those. Updating to an operation with
+    /// strictly less information (e.g. ArithOp(..) => Placeholder) has no effect; in this way,
+    /// try_replace behaves like a lub operation.
+    ///
+    /// N.B In a more general propagator implementation, nodes in a network could have different;
+    /// and then rules could just be nodes whose values were functions. It may be worth implementing
+    /// such an abstraction depending on how this implementation grows in complexity.
+    fn try_replace(&mut self, other: Self) -> Option<Self>;
+    /// Ingest new information from `incoming`, produce a new output and indicate if the output has
+    /// been saturated (i.e. regardless of what new inputs it will produce, the output will not
+    /// change).
     fn step(&mut self, incoming: impl Iterator<Item = Self::Item>)
         -> (bool /* done */, Self::Item);
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum TypeRule {
     Placeholder,
     // For literals, and also operators like '/' (which will always coerce to float) or bitwise
@@ -73,6 +82,22 @@ fn apply_binary_rule<T>(
 
 impl Propagator for TypeRule {
     type Item = Option<Scalar>;
+    fn try_replace(&mut self, other: TypeRule) -> Option<TypeRule> {
+        use TypeRule::*;
+        if let Placeholder = self {
+            *self = other;
+            return None;
+        }
+        match (self, other) {
+            (Placeholder, _) => unreachable!(),
+            (ArithOp(Some(_)), ArithOp(None))
+            | (CompareOp(Some(_)), CompareOp(None))
+            | (MapKey(Some(_)), MapKey(None))
+            | (MapVal(Some(_)), MapVal(None))
+            | (_, Placeholder) => None,
+            (_, other) => Some(other),
+        }
+    }
     fn step(
         &mut self,
         incoming: impl Iterator<Item = Option<Scalar>>,
@@ -80,7 +105,7 @@ impl Propagator for TypeRule {
         fn op_helper(o1: &Option<Scalar>, o2: &Option<Scalar>) -> (bool, Option<Scalar>) {
             use Scalar::*;
             match (o1, o2) {
-                // No informmation to propagate
+                // No information to propagate
                 (None, None) => (false, None),
                 (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
                     (true, Some(Float))
@@ -150,11 +175,11 @@ pub(crate) struct Network<P: Propagator> {
     wl: Vec<NodeIx>,
 }
 
-impl<P: Propagator> Network<P>
+impl<P: Propagator + std::fmt::Debug> Network<P>
 where
     P::Item: Eq + Clone + Default,
 {
-    fn insert(&mut self, p: P, deps: impl Iterator<Item = NodeIx>) -> NodeIx {
+    pub(crate) fn insert(&mut self, p: P, deps: impl Iterator<Item = NodeIx>) -> NodeIx {
         let ix = self.g.add_node(Node {
             prop: p,
             item: Default::default(),
@@ -168,8 +193,12 @@ where
         ix
     }
 
-    // TODO: document why this is a sketchy thing to do.
-    fn update(&mut self, ix: NodeIx, p: P, deps: impl Iterator<Item = NodeIx>) {
+    pub(crate) fn update(
+        &mut self,
+        ix: NodeIx,
+        p: P,
+        deps: impl Iterator<Item = NodeIx>,
+    ) -> Result<()> {
         {
             let Node {
                 prop,
@@ -177,15 +206,24 @@ where
                 done: _,
                 in_wl,
             } = self.g.node_weight_mut(ix).unwrap();
-            *prop = p;
+            if let Some(p) = prop.try_replace(p) {
+                // Return a result here if we think this would represent a malformed program, not
+                // just a bug in SSA conversion.
+                return err!(
+                    "internal error: tried to overwrite {:?} rule with {:?}",
+                    prop,
+                    p
+                );
+            }
             *in_wl = true;
         }
         for d in deps {
             self.g.add_edge(d, ix, ());
         }
         self.wl.push(ix);
+        Ok(())
     }
-    fn read(&self, ix: NodeIx) -> &P::Item {
+    pub(crate) fn read(&self, ix: NodeIx) -> &P::Item {
         &self.g.node_weight(ix).unwrap().item
     }
     fn solve(&mut self) {
