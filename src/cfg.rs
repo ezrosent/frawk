@@ -33,9 +33,17 @@ mod type_inference {
         Map { key: NodeIx, val: NodeIx },
     }
 
+    #[derive(PartialEq, Eq, Copy, Clone, Debug)]
+    enum Kind {
+        Scalar,
+        Iter,
+        Map,
+    }
+
     pub(crate) struct Constraints {
         network: Network<TypeRule>,
         ident_map: HashMap<Ident, TVar>,
+        ident_kind: HashMap<Ident, Kind>,
         str_node: NodeIx,
         int_node: NodeIx,
         float_node: NodeIx,
@@ -50,6 +58,7 @@ mod type_inference {
             Constraints {
                 network,
                 ident_map: Default::default(),
+                ident_kind: Default::default(),
                 str_node,
                 int_node,
                 float_node,
@@ -58,9 +67,73 @@ mod type_inference {
     }
 
     impl Constraints {
+        fn assign_kind_ident(&mut self, id: Ident, to: Kind) -> Result<()> {
+            use hashbrown::hash_map::Entry;
+            match self.ident_kind.entry(id) {
+                Entry::Occupied(o) => {
+                    let cur = *o.get();
+                    if cur == to {
+                        Ok(())
+                    } else {
+                        err!(
+                            "identifier {:?} used in conflicting contexts: {:?} and {:?}",
+                            id,
+                            cur,
+                            to
+                        )
+                    }
+                }
+                Entry::Vacant(v) => {
+                    v.insert(to);
+                    Ok(())
+                }
+            }
+        }
+        // fn assign_kind_val(&mut self, stmt: &PrimStmt<'a>, to: Kind) -> Result<()> {
+        // }
+        // fn assign_kind_stmt(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
+        //     use PrimStmt::*;
+        //     match stmt {
+        //         Print(strs, op) => {
+        //         }
+        //     }
+        // }
         fn get_expr_constraints<'a>(&mut self, expr: &PrimExpr<'a>) -> Result<NodeIx> {
-            // is this what we want? Maybe pass in a target node?
-            unimplemented!()
+            // is this what we want? Maybe pass in a target node? Let's try this for now...
+            use PrimExpr::*;
+            match expr {
+                Val(pv) => self.get_val(pv),
+                Phi(preds) => {
+                    // TODO: we may need a separate pass! Need to figure out the kind of variables
+                    // first...
+                    unimplemented!()
+                    // #[derive(Eq, PartialEq)]
+                    // enum VarKind {
+                    //     Unknown,
+                    //     Scalar,
+                    //     Map,
+                    //     Iter,
+                    // }
+                    // let mut deps = SmallVec::new();
+                    // let mut kind = VarKind::Unknown;
+                    // for (_, id) in preds {
+                    //     use hashbrown::hash_map::Entry;
+                    //     match self.ident_map.entry(id) {
+                    //         Entry::Occupied(o) =>
+                    //     }
+                    //     deps.push(self.get_scalar(id)?);
+                    // }
+                    // self.
+                }
+                StrUnop(op, pv) => err!("no string unops supported"),
+                StrBinop(op, o1, o2) => unimplemented!(),
+                NumUnop(op, o) => unimplemented!(),
+                NumBinop(op, o1, o2) => unimplemented!(),
+                Index(map, ix) => unimplemented!(),
+                IterBegin(map) => unimplemented!(),
+                HasNext(iter) => unimplemented!(),
+                Next(iter) => unimplemented!(),
+            }
         }
         fn gen_stmt_constraints<'a>(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
             use PrimStmt::*;
@@ -149,6 +222,16 @@ mod type_inference {
                 }
             }
         }
+
+        fn get_val<'a>(&mut self, v: &PrimVal<'a>) -> Result<NodeIx> {
+            use PrimVal::*;
+            match v {
+                ILit(_) => Ok(self.int_node),
+                FLit(_) => Ok(self.float_node),
+                StrLit(_) => Ok(self.str_node),
+                Var(id) => self.get_scalar(*id),
+            }
+        }
         pub(crate) fn insert_rule<'b, 'a: 'b>(
             &mut self,
             ident: NodeIx,
@@ -180,13 +263,7 @@ mod type_inference {
             //
             // TODO: fix these rules for when functions are supported.
             for i in deps {
-                use PrimVal::*;
-                dep_nodes.push(match i {
-                    ILit(_) => self.int_node,
-                    FLit(_) => self.float_node,
-                    StrLit(_) => self.str_node,
-                    Var(id) => self.get_scalar(*id)?,
-                });
+                dep_nodes.push(self.get_val(i)?);
             }
             self.network.update(ident, rule, dep_nodes.into_iter())?;
             Ok(())
