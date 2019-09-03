@@ -14,5 +14,5 @@ impl std::fmt::Display for CompileError {
 }
 
 macro_rules! err {
-    ($($t:tt),*) => { Err(CompileError(format!($($t),*))) }
+    ($($t:tt),*) => { Err($crate::common::CompileError(format!($($t),*))) }
 }

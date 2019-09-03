@@ -1,8 +1,11 @@
 //! Algorithms and types pertaining to type deduction and converion.
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
-use crate::common::{CompileError, Graph, NodeIx, Result};
+use crate::cfg::{Ident, PrimExpr, PrimStmt, PrimVal};
+use crate::common::{Graph, NodeIx, NumTy, Result};
+use hashbrown::{hash_map::Entry, HashMap};
 use std::hash::Hash;
+
 type SmallVec<T> = crate::smallvec::SmallVec<[T; 2]>;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -274,6 +277,423 @@ where
     }
 }
 
+#[derive(PartialEq, Eq)]
+pub(crate) enum TVar {
+    Scalar(NodeIx),
+    Iter(NodeIx),
+    Map { key: NodeIx, val: NodeIx },
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+enum Kind {
+    Scalar,
+    Iter,
+    Map,
+}
+
+pub(crate) struct Constraints {
+    network: Network<TypeRule>,
+    ident_map: HashMap<Ident, TVar>,
+    // TODO: Remove this.
+    ident_kind: HashMap<Ident, Kind>,
+    str_node: NodeIx,
+    int_node: NodeIx,
+    float_node: NodeIx,
+
+    canonical_ident: HashMap<Ident, NumTy>,
+    uf: petgraph::unionfind::UnionFind<NumTy>,
+    kind_map: HashMap<NumTy, Kind>,
+    max_ident: NumTy,
+}
+
+impl Constraints {
+    fn new(n: usize) -> Constraints {
+        let mut network = Network::<TypeRule>::default();
+        let str_node = network.insert(TypeRule::Const(Scalar::Str), None.into_iter());
+        let int_node = network.insert(TypeRule::Const(Scalar::Int), None.into_iter());
+        let float_node = network.insert(TypeRule::Const(Scalar::Float), None.into_iter());
+        Constraints {
+            network,
+            ident_map: Default::default(),
+            ident_kind: Default::default(),
+            canonical_ident: Default::default(),
+            kind_map: Default::default(),
+            uf: petgraph::unionfind::UnionFind::new(n),
+            max_ident: 0,
+            str_node,
+            int_node,
+            float_node,
+        }
+    }
+
+    fn merge_val<'a>(&mut self, v: &PrimVal<'a>, id: Ident) -> Result<()>{
+        use PrimVal::*;
+        match v {
+            ILit(_) | FLit(_) | StrLit(_) => self.set_kind(id, Kind::Scalar),
+            Var(id2) => self.merge_idents(id, *id2)
+        }
+    }
+
+    fn assert_val_kind<'a>(&mut self, v: &PrimVal<'a>, k: Kind) -> Result<()> {
+        use PrimVal::*;
+        match v {
+            ILit(_) | FLit(_) | StrLit(_) => if let Kind::Scalar = k {
+                Ok(())
+            } else {
+                err!("Scalar literal used in non-scalar context {:?}", k)
+            },
+            Var(id) => self.set_kind(*id, k),
+        }
+    }
+
+    // fn merge_expr<'a>(&mut self, expr: &PrimExpr<'a>, id: Ident) -> Result<()> {
+    //     use PrimExpr::*;
+    //     match expr {
+    //         Val(pv) => self.merge_val(pv, id),
+    //         Phi(preds) => {
+    //             assert!(preds.len() > 0);
+    //             let mut iter = preds.iter();
+    //             let start = iter.next().unwrap().1;
+    //             for (_, id) in iter{
+    //                 self.merge_idents(start, *id)?;
+    //             }
+    //             Ok(())
+    //         },
+    //         StrUnop(op, pv) => err!("no string unops supported"),
+    //         StrBinop(op, o1, o2) => unimplemented!(),
+    //         NumUnop(op, o) => unimplemented!(),
+    //         NumBinop(op, o1, o2) => unimplemented!(),
+    //         Index(map, ix) => unimplemented!(),
+    //         IterBegin(map) => unimplemented!(),
+    //         HasNext(iter) => unimplemented!(),
+    //         Next(iter) => unimplemented!(),
+    //     }
+    // }
+
+    fn assert_expr<'a>(&mut self, expr: &PrimExpr<'a>, k: Kind) -> Result<()> {
+        use PrimExpr::*;
+        match expr {
+            Val(pv) => self.assert_val_kind(pv, k),
+            Phi(preds) => {
+                for (_, pred) in preds.iter() {
+                    self.set_kind(*pred, k)?;
+                }
+                Ok(())
+            },
+            StrUnop(op, pv) => err!("no string unops supported"),
+            StrBinop(_, o1, o2) | NumBinop (_, o1, o2) => {
+                if let Kind::Scalar = k {
+                    self.assert_val_kind(o1, k)?;
+                    self.assert_val_kind(o2, k)
+                } else {
+                    err!("Expected binary operator on strings to be {:?}; it is a scalar", k)
+                }
+            },
+            NumUnop(_, o) => {
+                if let Kind::Scalar = k {
+                    self.assert_val_kind(o, k)
+                } else {
+                    err!("Expected binary operator on strings to be {:?}; it is a scalar", k)
+                }
+            },
+            Index(map, ix) => {
+                if let Kind::Scalar = k {
+                    self.assert_val_kind(map, Kind::Map)?;
+                    self.assert_val_kind(ix, Kind::Scalar)
+                } else {
+                    err!("Map values must be scalars")
+                }
+            }
+            IterBegin(map) => {
+                if let Kind::Iter = k {
+                    self.assert_val_kind(map, Kind::Map)
+                } else {
+                    err!("Internal error: iterator used in {:?} context", k)
+                }
+            }
+            HasNext(iter) => {
+                if let Kind::Scalar = k {
+                    self.assert_val_kind(iter, Kind::Iter)
+                } else {
+                    err!("Internal error: result of HasNext used in {:?} context (should be scalar)", k)
+                }
+            }
+            Next(iter) => {
+                if let Kind::Iter = k {
+                    self.assert_val_kind(iter, Kind::Iter)
+                } else {
+                    err!("Internal error: iterator used in {:?} context", k)
+                }
+            }
+        }
+    }
+
+    fn assign_kinds<'a>(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
+        use PrimStmt::*;
+        match stmt {
+            Print(vs, out) => {
+                for v in vs.iter().chain(out.iter()) {
+                    self.assert_val_kind(v, Kind::Scalar)?;
+                }
+                Ok(())
+            }
+            AsgnIndex(map, k, v) => {
+                self.set_kind(*map, Kind::Map)?;
+                self.assert_val_kind(k, Kind::Scalar)?;
+
+                Ok(())
+            }
+            // TODO: write merge, then apply it here.
+            AsgnVar(id, v) => unimplemented!(),
+        }
+    }
+
+    fn get_canonical(&mut self, id: Ident) -> NumTy {
+        match self.canonical_ident.entry(id) {
+            Entry::Occupied(o) => *o.get(),
+            Entry::Vacant(v) => {
+                let res = self.max_ident;
+                v.insert(res);
+                self.max_ident += 1;
+                res
+            }
+        }
+    }
+
+    fn set_kind(&mut self, id: Ident, k: Kind) -> Result<()> {
+        let c = self.get_canonical(id);
+        let rep = self.uf.find_mut(c);
+        match self.kind_map.entry(rep) {
+            Entry::Occupied(o) => {
+                let cur = o.get();
+                if *cur != k {
+                    return err!(
+                        "Identifier {:?} used in both {:?} and {:?} contexts",
+                        id,
+                        cur,
+                        k
+                    );
+                }
+            }
+            Entry::Vacant(v) => {
+                v.insert(k);
+            }
+        };
+        Ok(())
+    }
+
+    fn merge_idents(&mut self, id1: Ident, id2: Ident) -> Result<()> {
+        // Get canonical identifiers for id1 and id2, then map them to their representative in
+        // the disjoint-set datastructure.
+        let i1 = self.get_canonical(id1);
+        let i2 = self.get_canonical(id2);
+        let c1 = self.uf.find_mut(i1);
+        let c2 = self.uf.find_mut(i2);
+        if self.uf.union(i1, i2) {
+            // We changed the data-structure. First, get the current mappings of the previous
+            // two canonical representatives, then see what the "merged kind" is, and insert it
+            // into the new map if necessary.
+            let k1 = self.kind_map.get(&c1).clone();
+            let k2 = self.kind_map.get(&c2).clone();
+            let merged = match (k1, k2) {
+                (Some(k), None) | (None, Some(k)) => *k,
+                (None, None) => return Ok(()),
+                (Some(k1), Some(k2)) => {
+                    if k1 == k2 {
+                        *k1
+                    } else {
+                        return err!(
+                            "Identifiers {:?} and {:?} have incompatible kinds ({:?} and {:?})",
+                            id1,
+                            id2,
+                            k1,
+                            k2
+                        );
+                    }
+                }
+            };
+            let c = self.uf.find_mut(i1);
+            self.kind_map.insert(c, merged);
+        }
+        Ok(())
+    }
+
+    fn get_kind(&mut self, id: Ident) -> Option<Kind> {
+        let c = self.get_canonical(id);
+        self.kind_map.get(&self.uf.find_mut(c)).map(Clone::clone)
+    }
+
+    fn get_expr_constraints<'a>(&mut self, expr: &PrimExpr<'a>) -> Result<NodeIx> {
+        // is this what we want? Maybe pass in a target node? Let's try this for now...
+        use PrimExpr::*;
+        match expr {
+            Val(pv) => self.get_val(pv),
+            Phi(preds) => {
+                // TODO: we may need a separate pass! Need to figure out the kind of variables
+                // first...
+                unimplemented!()
+                // #[derive(Eq, PartialEq)]
+                // enum VarKind {
+                //     Unknown,
+                //     Scalar,
+                //     Map,
+                //     Iter,
+                // }
+                // let mut deps = SmallVec::new();
+                // let mut kind = VarKind::Unknown;
+                // for (_, id) in preds {
+                //     use hashbrown::hash_map::Entry;
+                //     match self.ident_map.entry(id) {
+                //         Entry::Occupied(o) =>
+                //     }
+                //     deps.push(self.get_scalar(id)?);
+                // }
+                // self.
+            }
+            StrUnop(op, pv) => err!("no string unops supported"),
+            StrBinop(op, o1, o2) => unimplemented!(),
+            NumUnop(op, o) => unimplemented!(),
+            NumBinop(op, o1, o2) => unimplemented!(),
+            Index(map, ix) => unimplemented!(),
+            IterBegin(map) => unimplemented!(),
+            HasNext(iter) => unimplemented!(),
+            Next(iter) => unimplemented!(),
+        }
+    }
+    fn gen_stmt_constraints<'a>(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
+        use PrimStmt::*;
+        match stmt {
+            Print(strs, op) => {
+                // TODO: anything to do here?
+                Ok(())
+            }
+            AsgnIndex(map_ident, key, val) => {
+                let (k, v) = self.get_map(*map_ident)?;
+                self.insert_rule(k, TypeRule::MapKey(None), Some(key).into_iter())?;
+                let v_node = self.get_expr_constraints(val)?;
+                self.network
+                    .update(v, TypeRule::MapVal(None), Some(v_node).into_iter())?;
+                Ok(())
+            }
+            AsgnVar(ident, exp) => {
+                let n = self.get_scalar(*ident)?;
+                let e_n = self.get_expr_constraints(exp)?;
+                self.network
+                    .update(n, TypeRule::MapVal(None), Some(e_n).into_iter())?;
+                Ok(())
+            }
+        }
+    }
+    pub(crate) fn get_iter(&mut self, ident: Ident) -> Result<NodeIx /* item */> {
+        match self.ident_map.entry(ident) {
+            Entry::Occupied(o) => match o.get() {
+                TVar::Map { key: _, val: _ } => err!(
+                    "Identifier {:?} is used in both map and iterator context",
+                    ident
+                ),
+                TVar::Iter(n) => Ok(*n),
+                TVar::Scalar(_) => err!(
+                    "Identifier {:?} is used in both scalar and iterator context",
+                    ident
+                ),
+            },
+            Entry::Vacant(v) => {
+                let item = self.network.insert(TypeRule::Placeholder, None.into_iter());
+                v.insert(TVar::Iter(item));
+                Ok(item)
+            }
+        }
+    }
+    pub(crate) fn get_map(&mut self, ident: Ident) -> Result<(NodeIx /* key */, NodeIx /* val */)> {
+        match self.ident_map.entry(ident) {
+            Entry::Occupied(o) => match o.get() {
+                TVar::Map { key, val } => Ok((*key, *val)),
+                TVar::Iter(_) => err!(
+                    "found iterator in map context (this indicates a bug in the implementation)"
+                ),
+                TVar::Scalar(_) => err!(
+                    "Identifier {:?} is used in both scalar and map context",
+                    ident
+                ),
+            },
+            Entry::Vacant(v) => {
+                let key = self.network.insert(TypeRule::Placeholder, None.into_iter());
+                let val = self.network.insert(TypeRule::Placeholder, None.into_iter());
+                v.insert(TVar::Map { key, val });
+                Ok((key, val))
+            }
+        }
+    }
+
+    pub(crate) fn get_scalar(&mut self, ident: Ident) -> Result<NodeIx> {
+        match self.ident_map.entry(ident.clone()) {
+            Entry::Occupied(o) => match o.get() {
+                TVar::Map { key: _, val: _ } => {
+                    err!("identfier {:?} is used elsewhere as a map (insert)", ident)
+                }
+                TVar::Iter(_) => err!(
+                    "found iterator in scalar context (this indicates a bug in the implementation)"
+                ),
+                TVar::Scalar(n) => {
+                    self.network
+                        .update(*n, TypeRule::Placeholder, None.into_iter())?;
+                    Ok(*n)
+                }
+            },
+            Entry::Vacant(v) => {
+                let n = self.network.insert(TypeRule::Placeholder, None.into_iter());
+                v.insert(TVar::Scalar(n));
+                Ok(n)
+            }
+        }
+    }
+
+    fn get_val<'a>(&mut self, v: &PrimVal<'a>) -> Result<NodeIx> {
+        use PrimVal::*;
+        match v {
+            ILit(_) => Ok(self.int_node),
+            FLit(_) => Ok(self.float_node),
+            StrLit(_) => Ok(self.str_node),
+            Var(id) => self.get_scalar(*id),
+        }
+    }
+    pub(crate) fn insert_rule<'b, 'a: 'b>(
+        &mut self,
+        ident: NodeIx,
+        rule: TypeRule,
+        deps: impl Iterator<Item = &'b PrimVal<'a>>,
+    ) -> Result<()> {
+        let mut dep_nodes = SmallVec::<NodeIx>::new();
+
+        // We dedup type rules for literals within Option<NodeIx> fields. This helper function
+        // handles the "get or insert" logic for those.
+        fn get_node(
+            node: &mut Option<NodeIx>,
+            network: &mut Network<TypeRule>,
+            rule: &TypeRule,
+        ) -> NodeIx {
+            if let Some(x) = node {
+                return *x;
+            }
+            let res = network.insert(rule.clone(), None.into_iter());
+            *node = Some(res);
+            res
+        }
+        // Build a vector of NodeIxs from a vector of PrimVals. For literals, we map those to
+        // our special-cased literal nodes. For Vars, first check that the var is not currently
+        // a Map (N.B. no scalar expressions contain maps, at least for now), then either grab
+        // the existing node or insert a scalar Placeholder at that identifier.
+        //
+        //
+        // TODO: fix these rules for when functions are supported.
+        for i in deps {
+            dep_nodes.push(self.get_val(i)?);
+        }
+        self.network.update(ident, rule, dep_nodes.into_iter())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -309,5 +729,4 @@ mod test {
         assert_eq!(n.read(f2), &Some(Float));
         assert_eq!(n.read(add12), &Some(Float));
     }
-
 }
