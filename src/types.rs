@@ -2,7 +2,7 @@
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
 use crate::cfg::{Ident, PrimExpr, PrimStmt, PrimVal};
-use crate::common::{Graph, NodeIx, NumTy, Result};
+use crate::common::{Either, Graph, NodeIx, NumTy, Result};
 use hashbrown::{hash_map::Entry, HashMap};
 use std::hash::Hash;
 
@@ -326,109 +326,107 @@ impl Constraints {
         }
     }
 
-    fn merge_val<'a>(&mut self, v: &PrimVal<'a>, id: Ident) -> Result<()>{
+    fn merge_val<'a>(&mut self, v: &PrimVal<'a>, id: Ident) -> Result<()> {
         use PrimVal::*;
         match v {
             ILit(_) | FLit(_) | StrLit(_) => self.set_kind(id, Kind::Scalar),
-            Var(id2) => self.merge_idents(id, *id2)
+            Var(id2) => self.merge_idents(id, *id2),
         }
     }
 
     fn assert_val_kind<'a>(&mut self, v: &PrimVal<'a>, k: Kind) -> Result<()> {
         use PrimVal::*;
         match v {
-            ILit(_) | FLit(_) | StrLit(_) => if let Kind::Scalar = k {
-                Ok(())
-            } else {
-                err!("Scalar literal used in non-scalar context {:?}", k)
-            },
+            ILit(_) | FLit(_) | StrLit(_) => {
+                if let Kind::Scalar = k {
+                    Ok(())
+                } else {
+                    err!("Scalar literal used in non-scalar context {:?}", k)
+                }
+            }
             Var(id) => self.set_kind(*id, k),
         }
     }
 
-    // fn merge_expr<'a>(&mut self, expr: &PrimExpr<'a>, id: Ident) -> Result<()> {
-    //     use PrimExpr::*;
-    //     match expr {
-    //         Val(pv) => self.merge_val(pv, id),
-    //         Phi(preds) => {
-    //             assert!(preds.len() > 0);
-    //             let mut iter = preds.iter();
-    //             let start = iter.next().unwrap().1;
-    //             for (_, id) in iter{
-    //                 self.merge_idents(start, *id)?;
-    //             }
-    //             Ok(())
-    //         },
-    //         StrUnop(op, pv) => err!("no string unops supported"),
-    //         StrBinop(op, o1, o2) => unimplemented!(),
-    //         NumUnop(op, o) => unimplemented!(),
-    //         NumBinop(op, o1, o2) => unimplemented!(),
-    //         Index(map, ix) => unimplemented!(),
-    //         IterBegin(map) => unimplemented!(),
-    //         HasNext(iter) => unimplemented!(),
-    //         Next(iter) => unimplemented!(),
-    //     }
-    // }
-
-    fn assert_expr<'a>(&mut self, expr: &PrimExpr<'a>, k: Kind) -> Result<()> {
+    fn merge_expr<'a>(&mut self, expr: &PrimExpr<'a>, with: Either<Kind, Ident>) -> Result<()> {
+        use Either::*;
         use PrimExpr::*;
-        match expr {
-            Val(pv) => self.assert_val_kind(pv, k),
-            Phi(preds) => {
-                for (_, pred) in preds.iter() {
-                    self.set_kind(*pred, k)?;
+        match (expr, &with) {
+            (Val(pv), Left(k)) => self.assert_val_kind(pv, *k),
+            (Val(pv), Right(id)) => self.merge_val(pv, *id),
+            (Phi(preds), e) => {
+                for (_, id) in preds.iter() {
+                    match e {
+                        Left(k) => self.set_kind(*id, *k)?,
+                        Right(inp) => self.merge_idents(*inp, *id)?,
+                    };
                 }
                 Ok(())
-            },
-            StrUnop(op, pv) => err!("no string unops supported"),
-            StrBinop(_, o1, o2) | NumBinop (_, o1, o2) => {
-                if let Kind::Scalar = k {
-                    self.assert_val_kind(o1, k)?;
-                    self.assert_val_kind(o2, k)
-                } else {
-                    err!("Expected binary operator on strings to be {:?}; it is a scalar", k)
-                }
-            },
-            NumUnop(_, o) => {
-                if let Kind::Scalar = k {
-                    self.assert_val_kind(o, k)
-                } else {
-                    err!("Expected binary operator on strings to be {:?}; it is a scalar", k)
-                }
-            },
-            Index(map, ix) => {
-                if let Kind::Scalar = k {
-                    self.assert_val_kind(map, Kind::Map)?;
-                    self.assert_val_kind(ix, Kind::Scalar)
-                } else {
-                    err!("Map values must be scalars")
+            }
+            (StrBinop(_, o1, o2), e) | (NumBinop(_, o1, o2), e) => {
+                self.assert_val_kind(o1, Kind::Scalar)?;
+                self.assert_val_kind(o2, Kind::Scalar)?;
+                match e {
+                    Left(Kind::Scalar) => Ok(()),
+                    Left(k) => err!("result of scalar binary operation used in {:?} context", k),
+                    Right(id) => self.set_kind(*id, Kind::Scalar),
                 }
             }
-            IterBegin(map) => {
-                if let Kind::Iter = k {
-                    self.assert_val_kind(map, Kind::Map)
-                } else {
-                    err!("Internal error: iterator used in {:?} context", k)
+            (StrUnop(_, o), e) | (NumUnop(_, o), e) => {
+                self.assert_val_kind(o, Kind::Scalar)?;
+                match e {
+                    Left(Kind::Scalar) => Ok(()),
+                    Left(k) => err!("result of scalar unary operation used in {:?} context", k),
+                    Right(id) => self.set_kind(*id, Kind::Scalar),
                 }
             }
-            HasNext(iter) => {
-                if let Kind::Scalar = k {
-                    self.assert_val_kind(iter, Kind::Iter)
-                } else {
-                    err!("Internal error: result of HasNext used in {:?} context (should be scalar)", k)
+            (Index(map, ix), e) => {
+                self.assert_val_kind(map, Kind::Map)?;
+                self.assert_val_kind(ix, Kind::Scalar)?;
+                match e {
+                    Left(Kind::Scalar) => Ok(()),
+                    Left(k) => err!("result of map lookup used in {:?} context", k),
+                    Right(id) => self.set_kind(*id, Kind::Scalar),
                 }
             }
-            Next(iter) => {
-                if let Kind::Iter = k {
-                    self.assert_val_kind(iter, Kind::Iter)
-                } else {
-                    err!("Internal error: iterator used in {:?} context", k)
+            (IterBegin(map), e) => {
+                self.assert_val_kind(map, Kind::Map)?;
+                match e {
+                    Left(Kind::Iter) => Ok(()),
+                    Left(k) => err!(
+                        "[internal error] taking iterator in non-map context {:?}",
+                        k
+                    ),
+                    Right(id) => self.set_kind(*id, Kind::Iter),
+                }
+            }
+            (HasNext(iter), e) => {
+                self.assert_val_kind(iter, Kind::Iter)?;
+                match e {
+                    Left(Kind::Scalar) => Ok(()),
+                    Left(k) => err!(
+                        "[internal error] checking next in non-scalar context {:?}",
+                        k
+                    ),
+                    Right(id) => self.set_kind(*id, Kind::Scalar),
+                }
+            }
+            (Next(iter), e) => {
+                self.assert_val_kind(iter, Kind::Iter)?;
+                match e {
+                    Left(Kind::Iter) => Ok(()),
+                    Left(k) => err!(
+                        "[internal error] getting next from interator in non-iterator context {:?}",
+                        k
+                    ),
+                    Right(id) => self.set_kind(*id, Kind::Iter),
                 }
             }
         }
     }
 
     fn assign_kinds<'a>(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
+        use Either::*;
         use PrimStmt::*;
         match stmt {
             Print(vs, out) => {
@@ -440,11 +438,9 @@ impl Constraints {
             AsgnIndex(map, k, v) => {
                 self.set_kind(*map, Kind::Map)?;
                 self.assert_val_kind(k, Kind::Scalar)?;
-
-                Ok(())
+                self.merge_expr(v, Left(Kind::Scalar))
             }
-            // TODO: write merge, then apply it here.
-            AsgnVar(id, v) => unimplemented!(),
+            AsgnVar(id, v) => self.merge_expr(v, Right(*id)),
         }
     }
 
