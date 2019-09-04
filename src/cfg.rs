@@ -10,8 +10,7 @@ use std::collections::VecDeque;
 use std::hash::Hash;
 
 // TODO: nail down iteration order for edges
-// TODO: figure out some testing strategies
-// TODO: add in break and continue
+// TODO: rename context to something more descriptive. Maybe split out some structs.
 
 // consider making this just "by number" and putting branch instructions elsewhere.
 // need to verify the order
