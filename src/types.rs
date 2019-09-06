@@ -1,12 +1,14 @@
 //! Algorithms and types pertaining to type deduction and converion.
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
+use crate::ast;
 use crate::cfg::{Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result};
 use hashbrown::{hash_map::Entry, HashMap};
+use smallvec::smallvec;
 use std::hash::Hash;
 
-type SmallVec<T> = crate::smallvec::SmallVec<[T; 2]>;
+type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Scalar {
@@ -277,11 +279,38 @@ where
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 pub(crate) enum TVar {
     Scalar(NodeIx),
     Iter(NodeIx),
     Map { key: NodeIx, val: NodeIx },
+}
+
+impl TVar {
+    fn scalar(self) -> Result<NodeIx> {
+        use TVar::*;
+        match self {
+            Scalar(ix) => Ok(ix),
+            Iter(_) => err!("expected scalar, got iterator"),
+            Map { key: _, val: _ } => err!("expected scalar, got map"),
+        }
+    }
+    fn map(self) -> Result<(NodeIx, NodeIx)> {
+        use TVar::*;
+        match self {
+            Scalar(_) => err!("expected map, got scalar"),
+            Iter(_) => err!("expected map, got iterator"),
+            Map { key, val } => Ok((key, val)),
+        }
+    }
+    fn iterator(self) -> Result<NodeIx> {
+        use TVar::*;
+        match self {
+            Scalar(_) => err!("expected iterator, got scalar"),
+            Iter(ix) => Ok(ix),
+            Map { key, val } => err!("expected iterator, got scalar"),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
@@ -519,64 +548,138 @@ impl Constraints {
         self.kind_map.get(&self.uf.find_mut(c)).map(Clone::clone)
     }
 
-    fn get_expr_constraints<'a>(&mut self, expr: &PrimExpr<'a>) -> Result<NodeIx> {
+    fn get_expr_constraints<'a>(&mut self, expr: &PrimExpr<'a>) -> Result<TVar> {
         // is this what we want? Maybe pass in a target node? Let's try this for now...
         use PrimExpr::*;
         match expr {
             Val(pv) => self.get_val(pv),
             Phi(preds) => {
-                // TODO: we may need a separate pass! Need to figure out the kind of variables
-                // first...
-                unimplemented!()
-                // #[derive(Eq, PartialEq)]
-                // enum VarKind {
-                //     Unknown,
-                //     Scalar,
-                //     Map,
-                //     Iter,
-                // }
-                // let mut deps = SmallVec::new();
-                // let mut kind = VarKind::Unknown;
-                // for (_, id) in preds {
-                //     use hashbrown::hash_map::Entry;
-                //     match self.ident_map.entry(id) {
-                //         Entry::Occupied(o) =>
-                //     }
-                //     deps.push(self.get_scalar(id)?);
-                // }
-                // self.
+                assert!(preds.len() > 0);
+                let k = self.get_kind(preds[0].1).or(Some(Kind::Scalar)).unwrap();
+                match k {
+                    Kind::Scalar => {
+                        let mut deps = SmallVec::new();
+                        for (_, id) in preds.iter() {
+                            deps.push(self.get_scalar(*id)?);
+                        }
+                        Ok(TVar::Scalar(
+                            self.network
+                                .insert(TypeRule::MapVal(None), deps.into_iter()),
+                        ))
+                    }
+                    Kind::Map => {
+                        let mut ks = SmallVec::new();
+                        let mut vs = SmallVec::new();
+                        for (_, id) in preds.iter() {
+                            let (k, v) = self.get_map(*id)?;
+                            ks.push(k);
+                            vs.push(v);
+                        }
+                        let key = self.network.insert(TypeRule::MapKey(None), ks.into_iter());
+                        let val = self.network.insert(TypeRule::MapVal(None), vs.into_iter());
+                        Ok(TVar::Map { key, val })
+                    }
+                    Kind::Iter => {
+                        // Unlikely that this will be an issue (deps should all have the same
+                        // type), but we do need something here.
+                        let mut deps = SmallVec::new();
+                        for (_, id) in preds.iter() {
+                            deps.push(self.get_scalar(*id)?);
+                        }
+                        Ok(TVar::Iter(
+                            self.network
+                                .insert(TypeRule::MapVal(None), deps.into_iter()),
+                        ))
+                    }
+                }
             }
             StrUnop(op, pv) => err!("no string unops supported"),
-            StrBinop(op, o1, o2) => unimplemented!(),
-            NumUnop(op, o) => unimplemented!(),
-            NumBinop(op, o1, o2) => unimplemented!(),
-            Index(map, ix) => unimplemented!(),
-            IterBegin(map) => unimplemented!(),
-            HasNext(iter) => unimplemented!(),
-            Next(iter) => unimplemented!(),
+            StrBinop(ast::StrBinop::Concat, o1, o2) => Ok(TVar::Scalar(self.str_node)),
+            StrBinop(ast::StrBinop::Match, o1, o2) => Ok(TVar::Scalar(self.int_node)),
+            NumUnop(op, o) => {
+                use ast::NumUnop::*;
+                Ok(TVar::Scalar(match op {
+                    Column => self.str_node,
+                    Not => self.int_node,
+                    Neg | Pos => {
+                        let inp = self.get_val(o)?.scalar()?;
+                        self.network
+                            .insert(TypeRule::ArithOp(None), Some(inp).into_iter())
+                    }
+                }))
+            }
+            NumBinop(op, o1, o2) => {
+                use ast::NumBinop::*;
+                Ok(TVar::Scalar(match op {
+                    Plus | Minus | Mult | Mod => {
+                        let i1 = self.get_val(o1)?.scalar()?;
+                        let i2 = self.get_val(o2)?.scalar()?;
+                        let deps: SmallVec<NodeIx> = smallvec![i1, i2];
+                        self.network
+                            .insert(TypeRule::ArithOp(None), deps.into_iter())
+                    }
+                    Div => self
+                        .network
+                        .insert(TypeRule::Const(Scalar::Float), None.into_iter()),
+                }))
+            }
+            Index(map, ix) => {
+                let (key, val) = self.get_val(map)?.map()?;
+                let ix_node = self.get_scalar_val(ix)?;
+                // We want to add ix_node as a dependency of key
+                self.network
+                    .update(key, TypeRule::Placeholder, Some(ix_node).into_iter())?;
+                // Then we want to yield val, the result of this expression.
+                Ok(TVar::Scalar(val))
+            }
+            IterBegin(map) => {
+                let (key, _) = self.get_val(map)?.map()?;
+                Ok(TVar::Iter(key))
+            }
+            HasNext(iter) => {
+                let _it = self.get_val(iter)?.iterator()?;
+                Ok(TVar::Scalar(self.int_node))
+            }
+            Next(iter) => {
+                let it = self.get_val(iter)?.iterator()?;
+                Ok(TVar::Scalar(it))
+            }
         }
     }
     fn gen_stmt_constraints<'a>(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
         use PrimStmt::*;
         match stmt {
-            Print(strs, op) => {
+            Print(_, _) => {
                 // TODO: anything to do here?
                 Ok(())
             }
             AsgnIndex(map_ident, key, val) => {
                 let (k, v) = self.get_map(*map_ident)?;
                 self.insert_rule(k, TypeRule::MapKey(None), Some(key).into_iter())?;
-                let v_node = self.get_expr_constraints(val)?;
+                let v_node = self.get_expr_constraints(val)?.scalar()?;
                 self.network
                     .update(v, TypeRule::MapVal(None), Some(v_node).into_iter())?;
                 Ok(())
             }
             AsgnVar(ident, exp) => {
-                let n = self.get_scalar(*ident)?;
-                let e_n = self.get_expr_constraints(exp)?;
-                self.network
-                    .update(n, TypeRule::MapVal(None), Some(e_n).into_iter())?;
-                Ok(())
+                let ident_v = self.get_var(*ident)?;
+                let exp_v = self.get_expr_constraints(exp)?;
+                match (ident_v, exp_v) {
+                    (TVar::Iter(i1), TVar::Iter(i2)) | (TVar::Scalar(i1), TVar::Scalar(i2)) => self
+                        .network
+                        .update(i1, TypeRule::MapVal(None), Some(i2).into_iter()),
+                    (TVar::Map { key: k1, val: v1 }, TVar::Map { key: k2, val: v2 }) => {
+                        self.network
+                            .update(k1, TypeRule::MapKey(None), Some(k2).into_iter())?;
+                        self.network
+                            .update(v1, TypeRule::MapVal(None), Some(v2).into_iter())
+                    }
+                    (k1, k2) => err!(
+                        "assigning variables of mismatched kinds: {:?} and {:?}",
+                        k1,
+                        k2
+                    ),
+                }
             }
         }
     }
@@ -600,6 +703,7 @@ impl Constraints {
             }
         }
     }
+
     pub(crate) fn get_map(&mut self, ident: Ident) -> Result<(NodeIx /* key */, NodeIx /* val */)> {
         match self.ident_map.entry(ident) {
             Entry::Occupied(o) => match o.get() {
@@ -644,13 +748,34 @@ impl Constraints {
         }
     }
 
-    fn get_val<'a>(&mut self, v: &PrimVal<'a>) -> Result<NodeIx> {
+    fn get_scalar_val<'a>(&mut self, v: &PrimVal<'a>) -> Result<NodeIx> {
         use PrimVal::*;
         match v {
             ILit(_) => Ok(self.int_node),
             FLit(_) => Ok(self.float_node),
             StrLit(_) => Ok(self.str_node),
             Var(id) => self.get_scalar(*id),
+        }
+    }
+
+    fn get_var(&mut self, id: Ident) -> Result<TVar> {
+        Ok(match self.get_kind(id) {
+            Some(Kind::Scalar) | None => TVar::Scalar(self.get_scalar(id)?),
+            Some(Kind::Map) => {
+                let (key, val) = self.get_map(id)?;
+                TVar::Map { key, val }
+            }
+            Some(Kind::Iter) => TVar::Iter(self.get_iter(id)?),
+        })
+    }
+
+    fn get_val<'a>(&mut self, v: &PrimVal<'a>) -> Result<TVar> {
+        use PrimVal::*;
+        match v {
+            ILit(_) => Ok(TVar::Scalar(self.int_node)),
+            FLit(_) => Ok(TVar::Scalar(self.float_node)),
+            StrLit(_) => Ok(TVar::Scalar(self.str_node)),
+            Var(id) => self.get_var(*id),
         }
     }
     pub(crate) fn insert_rule<'b, 'a: 'b>(
@@ -660,21 +785,6 @@ impl Constraints {
         deps: impl Iterator<Item = &'b PrimVal<'a>>,
     ) -> Result<()> {
         let mut dep_nodes = SmallVec::<NodeIx>::new();
-
-        // We dedup type rules for literals within Option<NodeIx> fields. This helper function
-        // handles the "get or insert" logic for those.
-        fn get_node(
-            node: &mut Option<NodeIx>,
-            network: &mut Network<TypeRule>,
-            rule: &TypeRule,
-        ) -> NodeIx {
-            if let Some(x) = node {
-                return *x;
-            }
-            let res = network.insert(rule.clone(), None.into_iter());
-            *node = Some(res);
-            res
-        }
         // Build a vector of NodeIxs from a vector of PrimVals. For literals, we map those to
         // our special-cased literal nodes. For Vars, first check that the var is not currently
         // a Map (N.B. no scalar expressions contain maps, at least for now), then either grab
@@ -683,7 +793,7 @@ impl Constraints {
         //
         // TODO: fix these rules for when functions are supported.
         for i in deps {
-            dep_nodes.push(self.get_val(i)?);
+            dep_nodes.push(self.get_scalar_val(i)?);
         }
         self.network.update(ident, rule, dep_nodes.into_iter())?;
         Ok(())
