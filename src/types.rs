@@ -323,8 +323,6 @@ enum Kind {
 pub(crate) struct Constraints {
     network: Network<TypeRule>,
     ident_map: HashMap<Ident, TVar>,
-    // TODO: Remove this.
-    ident_kind: HashMap<Ident, Kind>,
     str_node: NodeIx,
     int_node: NodeIx,
     float_node: NodeIx,
@@ -344,7 +342,6 @@ impl Constraints {
         Constraints {
             network,
             ident_map: Default::default(),
-            ident_kind: Default::default(),
             canonical_ident: Default::default(),
             kind_map: Default::default(),
             uf: petgraph::unionfind::UnionFind::new(n),
