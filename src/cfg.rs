@@ -16,9 +16,22 @@ use std::hash::Hash;
 // need to verify the order
 // Use VecDequeue to support things like prepending definitions and phi statements to blocks during
 // SSA conversion.
-type BasicBlock<'a> = VecDeque<PrimStmt<'a>>;
+#[derive(Debug, Default)]
+pub(crate) struct BasicBlock<'a>(pub VecDeque<PrimStmt<'a>>);
+#[derive(Debug, Default)]
+pub(crate) struct Transition<'a>(pub Option<PrimVal<'a>>);
+
+impl<'a> Transition<'a> {
+    fn new(pv: PrimVal<'a>) -> Transition<'a> {
+        Transition(Some(pv))
+    }
+    fn null() -> Transition<'a> {
+        Transition(None)
+    }
+}
+
 // None indicates `else`
-pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Option<PrimVal<'a>>>;
+pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
 pub(crate) type Ident = (NumTy, NumTy);
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
@@ -222,19 +235,20 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 let next = self.cfg.add_node(Default::default());
 
                 // current_open => t_start if the condition holds
-                self.cfg.add_edge(current_open, t_start, Some(c_val));
+                self.cfg
+                    .add_edge(current_open, t_start, Transition::new(c_val));
                 // continue to next after the true case is evaluated
-                self.cfg.add_edge(t_end, next, None);
+                self.cfg.add_edge(t_end, next, Transition::null());
 
                 if let Some(fcase) = fcase {
                     // if an else case is there, compute a standalone block and set up the same
                     // connections as before, this time with a null edge rather than c_val.
                     let (f_start, f_end) = self.standalone_block(fcase)?;
-                    self.cfg.add_edge(current_open, f_start, None);
-                    self.cfg.add_edge(f_end, next, None);
+                    self.cfg.add_edge(current_open, f_start, Transition::null());
+                    self.cfg.add_edge(f_end, next, Transition::null());
                 } else {
                     // otherwise continue directly from current_open.
-                    self.cfg.add_edge(current_open, next, None);
+                    self.cfg.add_edge(current_open, next, Transition::null());
                 }
                 next
             }
@@ -250,15 +264,15 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 } else {
                     PrimVal::ILit(1)
                 };
-                self.cfg.add_edge(h, b_start, Some(cond_val));
-                self.cfg.add_edge(h, f, None);
+                self.cfg.add_edge(h, b_start, Transition::new(cond_val));
+                self.cfg.add_edge(h, f, Transition::null());
                 f
             }
             While(cond, body) => {
                 let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open)?;
                 let cond_val = self.convert_val(cond, h)?;
-                self.cfg.add_edge(h, b_start, Some(cond_val));
-                self.cfg.add_edge(h, f, None);
+                self.cfg.add_edge(h, b_start, Transition::new(cond_val));
+                self.cfg.add_edge(h, f, Transition::null());
                 f
             }
             ForEach(v, array, body) => {
@@ -271,11 +285,12 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 let cond = PrimExpr::HasNext(array_iter.clone());
                 let cond_block = self.cfg.add_node(Default::default());
                 let cond_v = self.to_val(cond, cond_block);
-                self.cfg.add_edge(current_open, cond_block, None);
+                self.cfg
+                    .add_edge(current_open, cond_block, Transition::null());
 
                 // Then add a footer to exit the loop from cond.
                 let footer = self.cfg.add_node(Default::default());
-                self.cfg.add_edge(cond_block, footer, None);
+                self.cfg.add_edge(cond_block, footer, Transition::null());
 
                 self.loop_ctx.push((cond_block, footer));
 
@@ -285,8 +300,9 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 let body_start = self.cfg.add_node(Default::default());
                 self.add_stmt(body_start, update);
                 let body_end = self.convert_stmt(body, body_start)?;
-                self.cfg.add_edge(cond_block, body_start, Some(cond_v));
-                self.cfg.add_edge(body_end, cond_block, None);
+                self.cfg
+                    .add_edge(cond_block, body_start, Transition::new(cond_v));
+                self.cfg.add_edge(body_end, cond_block, Transition::null());
 
                 self.loop_ctx.pop().unwrap();
 
@@ -296,7 +312,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 match self.loop_ctx.pop() {
                     Some((_, footer)) => {
                         // Break statements unconditionally jump to the end of the loop.
-                        self.cfg.add_edge(current_open, footer, None);
+                        self.cfg.add_edge(current_open, footer, Transition::null());
                         current_open
                     }
                     None => {
@@ -308,7 +324,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 match self.loop_ctx.pop() {
                     Some((header, _)) => {
                         // Continue statements unconditionally jump to the top of the loop.
-                        self.cfg.add_edge(current_open, header, None);
+                        self.cfg.add_edge(current_open, header, Transition::null());
                         current_open
                     }
                     None => {
@@ -395,9 +411,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             // Panic here because this marks an internal error. We could move this distinction
             // up to the ast1:: level, but then we would have 4 different variants to handle
             // here.
-            Assign(_, _) | AssignOp(_, _, _) => {
-                return Err(CompileError(format!("{}", "invalid assignment expression")))
-            }
+            Assign(_, _) | AssignOp(_, _, _) => return err!("{}", "invalid assignment expression"),
         })
     }
 
@@ -453,8 +467,8 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         } else {
             self.standalone_block(body)?
         };
-        self.cfg.add_edge(current_open, h, None);
-        self.cfg.add_edge(b_end, h, None);
+        self.cfg.add_edge(current_open, h, Transition::null());
+        self.cfg.add_edge(b_end, h, Transition::null());
         self.loop_ctx.pop().unwrap();
         Ok((h, b_start, b_end, f))
     }
@@ -499,7 +513,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
         if let PrimStmt::AsgnVar(ident, _) = stmt {
             self.record_ident(ident, at);
         }
-        self.cfg.node_weight_mut(at).unwrap().push_back(stmt);
+        self.cfg.node_weight_mut(at).unwrap().0.push_back(stmt);
     }
 
     fn insert_phis(&mut self) {
@@ -542,6 +556,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                         self.cfg
                             .node_weight_mut(d_ix)
                             .expect("node in dominance frontier must be valid")
+                            .0
                             .push_front(stmt);
                         phis.entry(ident).or_insert(HashSet::default()).insert(d_ix);
                     }
@@ -583,10 +598,11 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
 
             // First, go through all the statements and update the variables to the highest
             // subscript (second component in Ident).
-            for stmt in ctx
+            for stmt in &mut ctx
                 .cfg
                 .node_weight_mut(cur)
                 .expect("rename must be passed valid node indices")
+                .0
             {
                 // Note that `replace` is specialized to our use-case in this method. It does not hit
                 // AsgnVar identifiers, and it skips Phi nodes.
@@ -630,8 +646,12 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 .cfg
                 .neighbors_directed(cur, Direction::Outgoing)
                 .detach();
-            while let Some(neigh) = walker.next_node(&ctx.cfg) {
-                for stmt in ctx.cfg.node_weight_mut(neigh).unwrap() {
+            while let Some((edge, neigh)) = walker.next(&ctx.cfg) {
+                if let Some(PrimVal::Var((x, sub))) = &mut ctx.cfg.edge_weight_mut(edge).unwrap().0
+                {
+                    *sub = state[*x as usize].latest();
+                }
+                for stmt in &mut ctx.cfg.node_weight_mut(neigh).unwrap().0 {
                     if let PrimStmt::AsgnVar(_, PrimExpr::Phi(ps)) = stmt {
                         for (pred, (x, sub)) in ps.iter_mut() {
                             if pred == &cur {
