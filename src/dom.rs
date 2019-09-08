@@ -278,6 +278,7 @@ impl NodeInfo {
     }
 }
 const NODEINFO_UNINIT: NumTy = !0;
+
 #[cfg(test)]
 mod test {
     use super::*;

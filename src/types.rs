@@ -308,7 +308,7 @@ impl TVar {
         match self {
             Scalar(_) => err!("expected iterator, got scalar"),
             Iter(ix) => Ok(ix),
-            Map { key, val } => err!("expected iterator, got scalar"),
+            Map { key: _, val: _ } => err!("expected iterator, got map"),
         }
     }
 }
@@ -546,7 +546,6 @@ impl Constraints {
     }
 
     fn get_expr_constraints<'a>(&mut self, expr: &PrimExpr<'a>) -> Result<TVar> {
-        // is this what we want? Maybe pass in a target node? Let's try this for now...
         use PrimExpr::*;
         match expr {
             Val(pv) => self.get_val(pv),
@@ -590,9 +589,9 @@ impl Constraints {
                     }
                 }
             }
-            StrUnop(op, pv) => err!("no string unops supported"),
-            StrBinop(ast::StrBinop::Concat, o1, o2) => Ok(TVar::Scalar(self.str_node)),
-            StrBinop(ast::StrBinop::Match, o1, o2) => Ok(TVar::Scalar(self.int_node)),
+            StrUnop(_op, _pv) => err!("no string unops supported"),
+            StrBinop(ast::StrBinop::Concat, _o1, _o2) => Ok(TVar::Scalar(self.str_node)),
+            StrBinop(ast::StrBinop::Match, _o1, _o2) => Ok(TVar::Scalar(self.int_node)),
             NumUnop(op, o) => {
                 use ast::NumUnop::*;
                 Ok(TVar::Scalar(match op {
