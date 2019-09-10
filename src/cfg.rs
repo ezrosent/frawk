@@ -517,11 +517,12 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
     }
 
     fn insert_phis(&mut self) {
+        use crate::common::WorkList;
         // TODO: do we need defsites and orig after this, or can we deallocate them here?
 
         // phis: the set of basic blocks that must have a phi node for a given variable.
         let mut phis = HashMap::<Ident, HashSet<NodeIx>>::new();
-        let mut worklist = HashSet::new();
+        let mut worklist = WorkList::default();
         // Note, to be cautiouss we could insert Phis for all identifiers.
         // But that would introduce additional nodes for variables that are assigned to only once
         // by construction. Instead we only use named variables. Of course, we this to change we
@@ -534,19 +535,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 continue;
             };
             worklist.extend(defsites.iter().map(|x| *x));
-            while worklist.len() > 0 {
-                // Remove a node from the worklist.
-                // TODO: use a better worklist representation.
-                let node = {
-                    let fst = worklist
-                        .iter()
-                        .next()
-                        .expect("worklist cannot be empty")
-                        .clone();
-                    worklist
-                        .take(&fst)
-                        .expect("worklist must yield elements from the set")
-                };
+            while let Some(node) = worklist.pop() {
                 // For all nodes on the dominance frontier without phi nodes for this identifier,
                 // create a phi node of the appropriate size and insert it at the front of the
                 // block (no renaming).
