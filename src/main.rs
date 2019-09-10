@@ -47,13 +47,12 @@ fn main() {
                     ForEach(
                         "x",
                         a.alloc(|| Var("z")),
-                        a.alloc(|| Print(vec![a.alloc(|| Var("x"))], None)),
+                        a.alloc(|| Print(vec![a.alloc(|| Var("x")), a.alloc(|| Var("i"))], None)),
                     )
                 }),
             ])
         })
     };
-
     let ast2 = cfg::Context::from_stmt(ast1).expect("ast1 must be valid");
     println!("{}", dot::Dot::new(&ast2.cfg()));
 }

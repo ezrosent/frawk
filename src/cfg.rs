@@ -518,9 +518,15 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
 
     fn insert_phis(&mut self) {
         // TODO: do we need defsites and orig after this, or can we deallocate them here?
+
+        // phis: the set of basic blocks that must have a phi node for a given variable.
         let mut phis = HashMap::<Ident, HashSet<NodeIx>>::new();
         let mut worklist = HashSet::new();
-        for ident in (0..self.max).map(|x| (x, 0 as NumTy)) {
+        // Note, to be cautiouss we could insert Phis for all identifiers.
+        // But that would introduce additional nodes for variables that are assigned to only once
+        // by construction. Instead we only use named variables. Of course, we this to change we
+        // would need to fall back on something more conservative.
+        for ident in self.hm.values().map(Clone::clone) {
             // Add all defsites into the worklist.
             let defsites = if let Some(ds) = self.defsites.get(&ident) {
                 ds
@@ -530,6 +536,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             worklist.extend(defsites.iter().map(|x| *x));
             while worklist.len() > 0 {
                 // Remove a node from the worklist.
+                // TODO: use a better worklist representation.
                 let node = {
                     let fst = worklist
                         .iter()
@@ -545,7 +552,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 // block (no renaming).
                 for d in self.df[node.index()].iter() {
                     let d_ix = NodeIx::new(*d as usize);
-                    if phis.get(&ident).map(|s| s.contains(&d_ix)) == Some(true) {
+                    if phis.get(&ident).map(|s| s.contains(&d_ix)) != Some(true) {
                         let phi = PrimExpr::Phi(
                             self.cfg()
                                 .neighbors_directed(d_ix, Direction::Incoming)
