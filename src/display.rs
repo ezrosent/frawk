@@ -64,9 +64,9 @@ impl<'a> Display for PrimExpr<'a> {
                 for (i, (pred, id)) in preds.iter().enumerate() {
                     let is_last = i == preds.len() - 1;
                     if is_last {
-                        write!(f, "n@{}:{}", pred.index(), Wrap(*id))?
+                        write!(f, "<-{}:{}", pred.index(), Wrap(*id))?
                     } else {
-                        write!(f, "n@{}:{}, ", pred.index(), Wrap(*id))?
+                        write!(f, "<-{}:{}, ", pred.index(), Wrap(*id))?
                     }
                 }
                 write!(f, "]")
