@@ -54,5 +54,7 @@ fn main() {
         })
     };
     let ast2 = cfg::Context::from_stmt(ast1).expect("ast1 must be valid");
+    eprintln!("n_idents={}", ast2.num_idents());
+    eprintln!("{:?}", types::get_types(ast2.cfg(), ast2.num_idents()));
     println!("{}", dot::Dot::new(&ast2.cfg()));
 }

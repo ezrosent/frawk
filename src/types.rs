@@ -2,11 +2,10 @@
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
 use crate::ast;
-use crate::cfg::{Ident, PrimExpr, PrimStmt, PrimVal};
+use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result};
 use hashbrown::{hash_map::Entry, HashMap};
 use smallvec::smallvec;
-use std::hash::Hash;
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
@@ -15,11 +14,6 @@ pub(crate) enum Scalar {
     Str,
     Int,
     Float,
-}
-
-pub(crate) struct MapTy {
-    key: Option<Scalar>,
-    val: Option<Scalar>,
 }
 
 /// A propagator is a monotone function that receives "partially done" inputs and produces
@@ -57,7 +51,7 @@ pub(crate) enum TypeRule {
     Const(Scalar),
     // For things like +,% and *
     ArithOp(Option<Scalar>),
-    CompareOp(Option<Scalar>),
+    // CompareOp(Option<Scalar>),
     MapKey(Option<Scalar>),
     MapVal(Option<Scalar>),
 }
@@ -96,7 +90,7 @@ impl Propagator for TypeRule {
         match (self, other) {
             (Placeholder, _) => unreachable!(),
             (ArithOp(Some(_)), ArithOp(None))
-            | (CompareOp(Some(_)), CompareOp(None))
+            // | (CompareOp(Some(_)), CompareOp(None))
             | (MapKey(Some(_)), MapKey(None))
             | (MapVal(Some(_)), MapVal(None))
             | (_, Placeholder) => None,
@@ -127,11 +121,11 @@ impl Propagator for TypeRule {
                 *ty = res;
                 (done, res)
             }
-            CompareOp(ty) => {
-                let (done, res) = apply_binary_rule(*ty, incoming, op_helper);
-                *ty = res;
-                (done, Some(Scalar::Int))
-            }
+            // CompareOp(ty) => {
+            //     let (done, res) = apply_binary_rule(*ty, incoming, op_helper);
+            //     *ty = res;
+            //     (done, Some(Scalar::Int))
+            // }
             MapKey(ty) => {
                 let (done, res) = apply_binary_rule(*ty, incoming, |t1, t2| {
                     use Scalar::*;
@@ -280,10 +274,10 @@ where
 }
 
 #[derive(PartialEq, Eq, Debug)]
-pub(crate) enum TVar {
-    Scalar(NodeIx),
-    Iter(NodeIx),
-    Map { key: NodeIx, val: NodeIx },
+pub(crate) enum TVar<T = NodeIx> {
+    Scalar(T),
+    Iter(T),
+    Map { key: T, val: T },
 }
 
 impl TVar {
@@ -320,6 +314,14 @@ enum Kind {
     Map,
 }
 
+pub(crate) fn get_types<'a>(
+    cfg: &cfg::CFG<'a>,
+    num_idents: usize,
+) -> Result<HashMap<Ident, TVar<Option<Scalar>>>> {
+    let mut cs = Constraints::new(num_idents);
+    cs.build(cfg)
+}
+
 pub(crate) struct Constraints {
     network: Network<TypeRule>,
     ident_map: HashMap<Ident, TVar>,
@@ -350,6 +352,43 @@ impl Constraints {
             int_node,
             float_node,
         }
+    }
+
+    fn build<'a>(&mut self, cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, TVar<Option<Scalar>>>> {
+        let nodes = cfg.raw_nodes();
+
+        // First, build kinds by unification.
+        for bb in nodes {
+            for stmt in bb.weight.0.iter() {
+                self.assign_kinds(stmt)?;
+            }
+        }
+
+        // Then, build propgator network for type inference.
+        for bb in nodes {
+            for stmt in bb.weight.0.iter() {
+                self.gen_stmt_constraints(stmt)?;
+            }
+        }
+        self.network.solve();
+        Ok(self
+            .ident_map
+            .iter()
+            .map(|(k, v)| {
+                use TVar::*;
+                (
+                    *k,
+                    match v {
+                        Iter(i) => Iter(self.network.read(*i).clone()),
+                        Scalar(i) => Scalar(self.network.read(*i).clone()),
+                        Map { key, val } => Map {
+                            key: self.network.read(*key).clone(),
+                            val: self.network.read(*val).clone(),
+                        },
+                    },
+                )
+            })
+            .collect())
     }
 
     fn merge_val<'a>(&mut self, v: &PrimVal<'a>, id: Ident) -> Result<()> {
