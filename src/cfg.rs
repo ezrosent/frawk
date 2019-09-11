@@ -151,13 +151,18 @@ pub(crate) struct Context<'b, I> {
     // Dominance information about `cfg`.
     dt: dom::Tree,
     df: dom::Frontier,
+
+    num_idents: usize,
 }
 
 impl<'b, I> Context<'b, I> {
-    pub fn cfg<'a>(&'a self) -> &'a CFG<'b> {
+    pub(crate) fn cfg<'a>(&'a self) -> &'a CFG<'b> {
         &self.cfg
     }
-    pub fn entry(&self) -> NodeIx {
+    pub(crate) fn num_idents(&self) -> usize {
+        self.num_idents
+    }
+    pub(crate) fn entry(&self) -> NodeIx {
         self.entry
     }
 }
@@ -173,6 +178,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             loop_ctx: Default::default(),
             dt: Default::default(),
             df: Default::default(),
+            num_idents: 0,
         };
         // convert AST to CFG
         let (start, _) = ctx.standalone_block(stmt)?;
@@ -674,5 +680,10 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             self.max as usize
         ];
         rename_recursive(self, cur, &mut state);
+        for s in state {
+            // `s.count` really counts the *extra* identifiers we introduce after (N, 0), so we
+            // need to add an extra.
+            self.num_idents += s.count as usize + 1;
+        }
     }
 }
