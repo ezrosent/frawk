@@ -94,7 +94,13 @@ impl Propagator for TypeRule {
             | (MapKey(Some(_)), MapKey(None))
             | (MapVal(Some(_)), MapVal(None))
             | (_, Placeholder) => None,
-            (_, other) => Some(other),
+            (x, other) => {
+                if x == &other {
+                    None
+                } else {
+                    Some(other)
+                }
+            },
         }
     }
     fn step(
@@ -209,7 +215,7 @@ where
                 // Return a result here if we think this would represent a malformed program, not
                 // just a bug in SSA conversion.
                 return err!(
-                    "internal error: tried to overwrite {:?} rule with {:?}",
+                    "[internal error] tried to overwrite {:?} rule with {:?}",
                     prop,
                     p
                 );
@@ -704,10 +710,16 @@ impl Constraints {
                         .network
                         .update(i1, TypeRule::MapVal(None), Some(i2).into_iter()),
                     (TVar::Map { key: k1, val: v1 }, TVar::Map { key: k2, val: v2 }) => {
+                        // These two get bidirectional constraints, as maps do not get implicit
+                        // conversions.
                         self.network
                             .update(k1, TypeRule::MapKey(None), Some(k2).into_iter())?;
                         self.network
-                            .update(v1, TypeRule::MapVal(None), Some(v2).into_iter())
+                            .update(k2, TypeRule::MapKey(None), Some(k1).into_iter())?;
+                        self.network
+                            .update(v1, TypeRule::MapVal(None), Some(v2).into_iter())?;
+                        self.network
+                            .update(v2, TypeRule::MapVal(None), Some(v1).into_iter())
                     }
                     (k1, k2) => err!(
                         "assigning variables of mismatched kinds: {:?} and {:?}",

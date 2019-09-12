@@ -44,12 +44,32 @@ fn main() {
                     )
                 }),
                 a.alloc(|| {
+                    Expr(a.alloc(|| {
+                        AssignOp(
+                            a.alloc(|| {
+                                a.alloc(|| Index(a.alloc(|| Var("z")), a.alloc(|| FLit(0.0))))
+                            }),
+                            Plus,
+                            a.alloc(|| StrLit("23")),
+                        )
+                    }))
+                }),
+                a.alloc(|| {
                     ForEach(
                         "x",
                         a.alloc(|| Var("z")),
                         a.alloc(|| Print(vec![a.alloc(|| Var("x")), a.alloc(|| Var("i"))], None)),
                     )
                 }),
+                // Creates an error
+                // a.alloc(|| {
+                //     Print(
+                //         vec![
+                //             a.alloc(|| Binop(Ok(Plus), a.alloc(|| Var("z")), a.alloc(|| Var("z"))))
+                //         ],
+                //         None,
+                //     )
+                // }),
             ])
         })
     };
