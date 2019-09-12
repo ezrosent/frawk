@@ -484,7 +484,7 @@ impl Constraints {
                         "[internal error] getting next from interator in non-iterator context {:?}",
                         k
                     ),
-                    Right(id) => self.set_kind(*id, Kind::Iter),
+                    Right(id) => self.set_kind(*id, Kind::Scalar),
                 }
             }
         }
