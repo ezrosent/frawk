@@ -6,9 +6,12 @@ pub(crate) enum NumUnop {
     Pos,    // +
 }
 
-// TODO(ezr) builtins?
+// TODO builtins?
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum StrUnop {}
+
+// TODO unify NumBinop and StrBinop. This will not help with type inference, and we will have
+// separate variants down the line anyway.
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum NumBinop {
