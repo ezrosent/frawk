@@ -1,5 +1,5 @@
 //! Noisey `Display` impls.
-use crate::ast::{NumBinop, NumUnop, StrBinop, StrUnop};
+use crate::ast::{Binop, Unop};
 use crate::cfg::{BasicBlock, Ident, PrimExpr, PrimStmt, PrimVal, Transition};
 use std::fmt::{self, Display, Formatter};
 
@@ -71,10 +71,8 @@ impl<'a> Display for PrimExpr<'a> {
                 }
                 write!(f, "]")
             }
-            StrUnop(u, o) => write!(f, "{}{}", u, o),
-            StrBinop(b, o1, o2) => write!(f, "{} {} {}", o1, b, o2),
-            NumUnop(u, o) => write!(f, "{}{}", u, o),
-            NumBinop(b, o1, o2) => write!(f, "{} {} {}", o1, b, o2),
+            Unop(u, o) => write!(f, "{}{}", u, o),
+            Binop(b, o1, o2) => write!(f, "{} {} {}", o1, b, o2),
             Index(m, v) => write!(f, "{}[{}]", m, v),
             IterBegin(m) => write!(f, "begin({})", m),
             HasNext(i) => write!(f, "hasnext({})", i),
@@ -95,9 +93,9 @@ impl<'a> Display for PrimVal<'a> {
     }
 }
 
-impl Display for NumUnop {
+impl Display for Unop {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use NumUnop::*;
+        use Unop::*;
         write!(
             f,
             "{}",
@@ -111,9 +109,9 @@ impl Display for NumUnop {
     }
 }
 
-impl Display for NumBinop {
+impl Display for Binop {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use NumBinop::*;
+        use Binop::*;
         write!(
             f,
             "{}",
@@ -123,27 +121,9 @@ impl Display for NumBinop {
                 Mult => "*",
                 Div => "/",
                 Mod => "%",
-            }
-        )
-    }
-}
-
-impl Display for StrBinop {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use StrBinop::*;
-        write!(
-            f,
-            "{}",
-            match self {
                 Concat => "<concat>",
                 Match => "~",
             }
         )
-    }
-}
-
-impl Display for StrUnop {
-    fn fmt(&self, _f: &mut Formatter) -> fmt::Result {
-        match *self {}
     }
 }
