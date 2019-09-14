@@ -434,7 +434,7 @@ impl Constraints {
                 }
                 Ok(())
             }
-            (StrBinop(_, o1, o2), e) | (NumBinop(_, o1, o2), e) => {
+            (Binop(_, o1, o2), e) => {
                 self.assert_val_kind(o1, Kind::Scalar)?;
                 self.assert_val_kind(o2, Kind::Scalar)?;
                 match e {
@@ -443,7 +443,7 @@ impl Constraints {
                     Right(id) => self.set_kind(*id, Kind::Scalar),
                 }
             }
-            (StrUnop(_, o), e) | (NumUnop(_, o), e) => {
+            (Unop(_, o), e) => {
                 self.assert_val_kind(o, Kind::Scalar)?;
                 match e {
                     Left(Kind::Scalar) => Ok(()),
@@ -634,11 +634,8 @@ impl Constraints {
                     }
                 }
             }
-            StrUnop(_op, _pv) => err!("no string unops supported"),
-            StrBinop(ast::StrBinop::Concat, _o1, _o2) => Ok(TVar::Scalar(self.str_node)),
-            StrBinop(ast::StrBinop::Match, _o1, _o2) => Ok(TVar::Scalar(self.int_node)),
-            NumUnop(op, o) => {
-                use ast::NumUnop::*;
+            Unop(op, o) => {
+                use ast::Unop::*;
                 Ok(TVar::Scalar(match op {
                     Column => self.str_node,
                     Not => self.int_node,
@@ -649,8 +646,8 @@ impl Constraints {
                     }
                 }))
             }
-            NumBinop(op, o1, o2) => {
-                use ast::NumBinop::*;
+            Binop(op, o1, o2) => {
+                use ast::Binop::*;
                 Ok(TVar::Scalar(match op {
                     Plus | Minus | Mult | Mod => {
                         let i1 = self.get_val(o1)?.scalar()?;
@@ -662,6 +659,8 @@ impl Constraints {
                     Div => self
                         .network
                         .insert(TypeRule::Const(Scalar::Float), None.into_iter()),
+                    Concat => self.str_node,
+                    Match => self.int_node,
                 }))
             }
             Index(map, ix) => {

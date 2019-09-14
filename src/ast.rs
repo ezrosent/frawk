@@ -1,29 +1,21 @@
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum NumUnop {
+pub(crate) enum Unop {
     Column, // $
     Not,    // !
     Neg,    // -
     Pos,    // +
 }
 
-// TODO builtins?
-#[derive(Debug, Copy, Clone)]
-pub(crate) enum StrUnop {}
-
 // TODO unify NumBinop and StrBinop. This will not help with type inference, and we will have
 // separate variants down the line anyway.
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum NumBinop {
+pub(crate) enum Binop {
     Plus,
     Minus,
     Mult,
     Div,
     Mod,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub(crate) enum StrBinop {
     Concat,
     Match,
 }
@@ -33,19 +25,15 @@ pub(crate) enum Expr<'a, 'b, I> {
     ILit(i64),
     FLit(f64),
     StrLit(&'b str),
-    Unop(Result<NumUnop, StrUnop>, &'a Expr<'a, 'b, I>),
-    Binop(
-        Result<NumBinop, StrBinop>,
-        &'a Expr<'a, 'b, I>,
-        &'a Expr<'a, 'b, I>,
-    ),
+    Unop(Unop, &'a Expr<'a, 'b, I>),
+    Binop(Binop, &'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
     Var(I),
     Index(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
     Assign(
         &'a Expr<'a, 'b, I>, /*var or index expression*/
         &'a Expr<'a, 'b, I>,
     ),
-    AssignOp(&'a Expr<'a, 'b, I>, NumBinop, &'a Expr<'a, 'b, I>),
+    AssignOp(&'a Expr<'a, 'b, I>, Binop, &'a Expr<'a, 'b, I>),
 }
 
 #[derive(Debug)]

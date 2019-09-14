@@ -1,4 +1,4 @@
-use crate::ast::{Expr, NumBinop, NumUnop, Stmt, StrBinop, StrUnop};
+use crate::ast::{Binop, Expr, Stmt, Unop};
 use crate::common::{CompileError, Graph, NodeIx, NumTy, Result};
 use crate::dom;
 
@@ -47,10 +47,8 @@ pub(crate) enum PrimVal<'a> {
 pub(crate) enum PrimExpr<'a> {
     Val(PrimVal<'a>),
     Phi(SmallVec<(NodeIx /* pred */, Ident)>),
-    StrUnop(StrUnop, PrimVal<'a>),
-    StrBinop(StrBinop, PrimVal<'a>, PrimVal<'a>),
-    NumUnop(NumUnop, PrimVal<'a>),
-    NumBinop(NumBinop, PrimVal<'a>, PrimVal<'a>),
+    Unop(Unop, PrimVal<'a>),
+    Binop(Binop, PrimVal<'a>, PrimVal<'a>),
     Index(PrimVal<'a>, PrimVal<'a>),
 
     // For iterating over vectors.
@@ -90,13 +88,8 @@ impl<'a> PrimExpr<'a> {
         match self {
             Val(v) => v.replace(update),
             Phi(_) => {}
-            StrUnop(_, v) => v.replace(update),
-            StrBinop(_, v1, v2) => {
-                v1.replace(&mut update);
-                v2.replace(update);
-            }
-            NumUnop(_, v) => v.replace(update),
-            NumBinop(_, v1, v2) => {
+            Unop(_, v) => v.replace(update),
+            Binop(_, v1, v2) => {
                 v1.replace(&mut update);
                 v2.replace(update);
             }
@@ -356,18 +349,12 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
             Unop(op, e) => {
                 let v = self.convert_val(e, current_open)?;
-                match op {
-                    Ok(numop) => PrimExpr::NumUnop(*numop, v),
-                    Err(strop) => PrimExpr::StrUnop(*strop, v),
-                }
+                PrimExpr::Unop(*op, v)
             }
             Binop(op, e1, e2) => {
                 let v1 = self.convert_val(e1, current_open)?;
                 let v2 = self.convert_val(e2, current_open)?;
-                match op {
-                    Ok(numop) => PrimExpr::NumBinop(*numop, v1, v2),
-                    Err(strop) => PrimExpr::StrBinop(*strop, v1, v2),
-                }
+                PrimExpr::Binop(*op, v1, v2)
             }
             Var(id) => {
                 let ident = self.get_identifier(id);
@@ -385,9 +372,10 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 PrimExpr::Val(PrimVal::Var(ident))
             }
             AssignOp(Var(v), op, to) => {
+                // TODO(ezr): do validation here for which ops support assigns
                 let to_v = self.convert_val(to, current_open)?;
                 let ident = self.get_identifier(v);
-                let tmp = PrimExpr::NumBinop(*op, PrimVal::Var(ident), to_v);
+                let tmp = PrimExpr::Binop(*op, PrimVal::Var(ident), to_v);
                 self.add_stmt(current_open, PrimStmt::AsgnVar(ident, tmp));
                 PrimExpr::Val(PrimVal::Var(ident))
             }
@@ -409,7 +397,7 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                         let to_v = slf.convert_val(to, current_open)?;
                         let arr_cell_v =
                             slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), current_open);
-                        Ok(PrimExpr::NumBinop(*op, arr_cell_v, to_v))
+                        Ok(PrimExpr::Binop(*op, arr_cell_v, to_v))
                     },
                     current_open,
                 )

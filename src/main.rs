@@ -18,8 +18,8 @@ use petgraph::dot;
 fn main() {
     let a = arena::Arena::default();
     let ast1: &ast::Stmt<&'static str> = {
+        use ast::Binop::*;
         use ast::Expr::*;
-        use ast::NumBinop::*;
         use ast::Stmt::*;
         a.alloc(|| {
             Block(vec![
@@ -28,7 +28,7 @@ fn main() {
                     Expr(a.alloc(|| {
                         Assign(
                             a.alloc(|| Var("j")),
-                            a.alloc(|| Binop(Ok(Plus), a.alloc(|| Var("i")), a.alloc(|| Var("j")))),
+                            a.alloc(|| Binop(Plus, a.alloc(|| Var("i")), a.alloc(|| Var("j")))),
                         )
                     }))
                 }),
