@@ -127,11 +127,6 @@ impl Propagator for TypeRule {
                 *ty = res;
                 (done, res)
             }
-            // CompareOp(ty) => {
-            //     let (done, res) = apply_binary_rule(*ty, incoming, op_helper);
-            //     *ty = res;
-            //     (done, Some(Scalar::Int))
-            // }
             MapKey(ty) => {
                 let (done, res) = apply_binary_rule(*ty, incoming, |t1, t2| {
                     use Scalar::*;
@@ -661,6 +656,7 @@ impl Constraints {
                         .insert(TypeRule::Const(Scalar::Float), None.into_iter()),
                     Concat => self.str_node,
                     Match => self.int_node,
+                    LT | GT | LTE | GTE | EQ => self.int_node,
                 }))
             }
             Index(map, ix) => {

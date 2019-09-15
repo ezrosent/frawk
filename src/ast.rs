@@ -18,6 +18,11 @@ pub(crate) enum Binop {
     Mod,
     Concat,
     Match,
+    LT,
+    GT,
+    LTE,
+    GTE,
+    EQ,
 }
 
 #[derive(Debug)]

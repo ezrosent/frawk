@@ -606,14 +606,13 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             // The recursion is structured around the dominator tree. That means that normal
             // renaming may not update join points in a graph to the right value. Consider
             //
-            //            A
-            //          x = 1
-            //        /       \
-            //       B         C
-            //  x = x + 1     x = x + 2
-            //        \      /
-            //           D
-            //       x = x + 5
+            //            A (x=1)
+            //          /   \
+            //         /     \
+            //        B (x++) C (x+=2)
+            //         \     /
+            //          \   /
+            //            D (x+=5)
             //
             // With flow pointing downward. The dominator tree looks like
             //
@@ -625,10 +624,10 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             // A: x0 = 1
             // B: x1 = x0 + 1
             // C: x2 = x0 + 2
-            // D: x3 = phi(x0, x0)
+            // D: x3 = phi(x0, x0); x4 = x3 + 5
             //
-            // But of course D must be:
-            // D: x3 = phi(x1, x2)
+            // But of course the phi node is wrong, it should be:
+            // x3 = phi(x1, x2)
             //
             // To fix this, we iterate over any outgoing neighbors and find phi functions that
             // point back to the current node and update the subscript accordingly.
