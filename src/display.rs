@@ -123,6 +123,11 @@ impl Display for Binop {
                 Mod => "%",
                 Concat => "<concat>",
                 Match => "~",
+                LT => "<",
+                GT => ">",
+                LTE => "<=",
+                GTE => ">=",
+                EQ => "==",
             }
         )
     }
