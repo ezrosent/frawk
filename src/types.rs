@@ -53,10 +53,24 @@ mod t2 {
             }
         })
     }
+
+    /// A propagator is a monotone function that receives "partially done" inputs and produces
+    /// "partially done" outputs. This is a very restricted API to simplify the implementation of a
+    /// propagator network.
+    ///
+    /// TODO: Link to more information on propagators.
     trait Propagator {
         type Item;
+        /// Propagator rules can either have a fixed arity, or they can consume an arbitrary number
+        /// of inputs. The inputs to a propagator rule must have the same arity as `arity`, if
+        /// there is one.
         fn arity(&self) -> Option<usize>;
+
+        /// Ingest new information from `incoming`, produce a new output and indicate if the output has
+        /// been saturated (i.e. regardless of what new inputs it will produce, the output will not
+        /// change)
         fn step(&self, incoming: &[Option<Self::Item>]) -> (bool, Option<Self::Item>);
+
         fn inputs(&self, incoming: &[Option<Self::Item>]) -> SmallVec<Option<Self::Item>>;
     }
 
@@ -205,6 +219,32 @@ mod t2 {
                     *active = true;
                     self.worklist.push(neigh)
                 }
+            }
+        }
+        pub(crate) fn read_inputs(&self, id: NodeIx) -> SmallVec<Option<P::Item>> {
+            let Node { deps, rule, .. } = self
+                .graph
+                .node_weight(id)
+                .expect("read must get a valid node index");
+            match rule {
+                Some(r) => {
+                    let inputs: SmallVec<_> = deps
+                        .iter()
+                        // for each dependency
+                        .map(|n| {
+                            // get the Option<Node>
+                            self.graph
+                                .node_weight(*n)
+                                // unwrap it
+                                .expect("node deps must be valid nodes")
+                                // copy out the current `item`
+                                .item
+                                .clone()
+                        })
+                        .collect();
+                    r.inputs(&inputs[..])
+                }
+                None => smallvec![None; deps.len()],
             }
         }
         pub(crate) fn read(&self, id: NodeIx) -> Option<&P::Item> {
