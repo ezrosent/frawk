@@ -16,6 +16,274 @@ pub(crate) enum Scalar {
     Float,
 }
 
+mod t2 {
+    use super::{smallvec, Graph, NodeIx, Result, Scalar, SmallVec};
+    fn fold_option<'a, T: Clone + 'a>(
+        incoming: impl Iterator<Item = &'a T>,
+        f: impl Fn(Option<T>, &T) -> (bool, Option<T>),
+    ) -> (bool, Option<T>) {
+        let mut start = None;
+        let mut done = false;
+        for i in incoming {
+            let (stop, cur) = f(start, i);
+            start = cur;
+            done = stop;
+            if stop {
+                break;
+            }
+        }
+        (done, start)
+    }
+    fn map_key<'a>(incoming: impl Iterator<Item = &'a Scalar>) -> (bool, Option<Scalar>) {
+        fold_option(incoming, |o1, o2| {
+            use Scalar::*;
+            match (o1, *o2) {
+                (Some(Str), _) | (Some(Float), _) | (_, Str) | (_, Float) => (true, Some(Str)),
+                (_, _) => (false, Some(Int)),
+            }
+        })
+    }
+    fn map_val<'a>(incoming: impl Iterator<Item = &'a Scalar>) -> (bool, Option<Scalar>) {
+        fold_option(incoming, |o1, o2| {
+            use Scalar::*;
+            match (o1, *o2) {
+                (Some(Str), _) | (_, Str) => (true, Some(Str)),
+                (Some(Float), _) | (_, Float) => (false, Some(Float)),
+                (Some(Int), _) | (_, Int) => (false, Some(Int)),
+            }
+        })
+    }
+    trait Propagator {
+        type Item;
+        fn arity(&self) -> Option<usize>;
+        fn step(&self, incoming: &[Option<Self::Item>]) -> (bool, Option<Self::Item>);
+        fn inputs(&self, incoming: &[Option<Self::Item>]) -> SmallVec<Option<Self::Item>>;
+    }
+
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    enum Rule {
+        Const(Scalar),
+        ArithOp,
+        CompareOp,
+        MapKey,
+        Val,
+    }
+
+    impl Propagator for Rule {
+        type Item = Scalar;
+        fn arity(&self) -> Option<usize> {
+            use Rule::*;
+            match self {
+                Const(_) => Some(0),
+                CompareOp | ArithOp => Some(2),
+                MapKey | Val => None,
+            }
+        }
+        fn step(&self, incoming: &[Option<Scalar>]) -> (bool, Option<Scalar>) {
+            use Rule::*;
+            let set = incoming.iter().flat_map(|o| o.as_ref().into_iter());
+            match self {
+                Const(s) => (true, Some(*s)),
+                CompareOp => (true, Some(Scalar::Int)),
+                ArithOp => {
+                    use Scalar::*;
+                    match (&incoming[0], &incoming[1]) {
+                        (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
+                            (true, Some(Float))
+                        }
+                        (_, _) => (false, Some(Int)),
+                    }
+                }
+                MapKey => map_key(set),
+                Val => map_val(set),
+            }
+        }
+        fn inputs(&self, incoming: &[Option<Scalar>]) -> SmallVec<Option<Scalar>> {
+            use Rule::*;
+            use Scalar::*;
+            match self {
+                Const(_) => Default::default(),
+                CompareOp => {
+                    let max = match (incoming[0], incoming[1]) {
+                        (Some(Str), _) | (_, Some(Str)) => Some(Str),
+                        (Some(Float), _) | (_, Some(Float)) => Some(Float),
+                        (Some(Int), _) | (_, Some(Int)) => Some(Int),
+                        (None, None) => None,
+                    };
+                    smallvec![max; 2]
+                }
+                ArithOp => match (incoming[0], incoming[1]) {
+                    (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
+                        smallvec![Some(Float); 2]
+                    }
+                    (_, _) => smallvec![Some(Int); 2],
+                },
+                MapKey => {
+                    let set = incoming.iter().flat_map(|o| o.as_ref().into_iter());
+                    let len = incoming.len();
+                    smallvec![map_key(set).1; len]
+                }
+                Val => {
+                    let set = incoming.iter().flat_map(|o| o.as_ref().into_iter());
+                    let len = incoming.len();
+                    smallvec![map_val(set).1; len]
+                }
+            }
+        }
+    }
+
+    type Timestamp = u32;
+    struct Node<P: Propagator> {
+        rule: Option<P>,
+        item: Option<P::Item>,
+        deps: SmallVec<NodeIx>,
+        done: bool,
+        active: bool,
+    }
+    struct Network<P: Propagator> {
+        graph: Graph<Node<P>, ()>,
+        worklist: Vec<NodeIx>,
+    }
+
+    impl<P: Propagator> Default for Network<P> {
+        fn default() -> Network<P> {
+            Network {
+                graph: Default::default(),
+                worklist: Default::default(),
+            }
+        }
+    }
+
+    impl<P: Propagator + Clone + Eq + std::fmt::Debug> Network<P>
+    where
+        P::Item: Clone + Eq,
+    {
+        pub(crate) fn solve(&mut self) {
+            while let Some(id) = self.worklist.pop() {
+                // We have to do some { ... }-ing to avoid taking a mut reference that lives for
+                // the rest of the iteration.
+                let (rule, deps) = {
+                    // Pop off the worklist and then copy rule and deps out of the graph.
+                    let Node {
+                        rule, deps, active, ..
+                    } = self
+                        .graph
+                        .node_weight_mut(id)
+                        .expect("all nodes in worklist must be valid");
+                    *active = false;
+                    (rule.clone(), deps.clone())
+                };
+
+                if rule.is_none() {
+                    continue;
+                }
+
+                // Convert SmallVec<NodeIx> => SmallVec<Option<P::Item>>
+                let read_deps: SmallVec<_> = deps.iter().map(|d| self.read(*d).cloned()).collect();
+                let (done_now, next) = rule.as_ref().unwrap().step(&read_deps[..]);
+                {
+                    let Node { item, done, .. } = self.graph.node_weight_mut(id).unwrap();
+                    *done = done_now;
+                    if &next != item {
+                        *item = next;
+                    } else {
+                        // Don't re-evaluate dependencies if item did not change.
+                        continue;
+                    }
+                }
+
+                // We have a new value; add all nodes that depend on us to the worklist.
+                let mut walker = self
+                    .graph
+                    .neighbors_directed(id, petgraph::Direction::Outgoing)
+                    .detach();
+                while let Some(neigh) = walker.next_node(&self.graph) {
+                    let Node { active, done, .. } = self.graph.node_weight_mut(neigh).unwrap();
+                    if *done || *active {
+                        continue;
+                    }
+                    *active = true;
+                    self.worklist.push(neigh)
+                }
+            }
+        }
+        pub(crate) fn read(&self, id: NodeIx) -> Option<&P::Item> {
+            let Node { item, .. } = self
+                .graph
+                .node_weight(id)
+                .expect("read must get a valid node index");
+            item.as_ref()
+        }
+        pub(crate) fn add_rule(&mut self, rule: Option<P>, deps: &[NodeIx]) -> NodeIx {
+            let res = self.graph.add_node(Node {
+                rule,
+                item: None,
+                deps: deps.iter().cloned().collect(),
+                done: false,
+                active: true,
+            });
+            for d in deps.iter() {
+                self.graph.add_edge(*d, res, ());
+            }
+            self.worklist.push(res);
+            res
+        }
+        pub(crate) fn update_rule(&mut self, id: NodeIx, new_rule: P) -> Result<()> {
+            if let Some(Node {
+                rule, deps, active, ..
+            }) = self.graph.node_weight_mut(id)
+            {
+                if let Some(r) = rule {
+                    if &new_rule != r {
+                        return err!("attempt to replace rule {:?} with {:?}", r, new_rule);
+                    }
+                    if let Some(a) = new_rule.arity() {
+                        if deps.len() != a {
+                            return err!(
+                                "attempt to assign node {:?} to rule {:?} with wrong number of dependencies ({} vs {})",
+                                id, new_rule, deps.len(), a);
+                        }
+                    }
+                    if !*active {
+                        *active = true;
+                        self.worklist.push(id);
+                    }
+                    *rule = Some(new_rule);
+                }
+                Ok(())
+            } else {
+                return err!("invalid node id {:?}", id);
+            }
+        }
+        pub(crate) fn add_deps(
+            &mut self,
+            id: NodeIx,
+            new_deps: impl Iterator<Item = NodeIx>,
+        ) -> Result<()> {
+            if let Some(Node {
+                rule, deps, active, ..
+            }) = self.graph.node_weight_mut(id)
+            {
+                if let Some(a) = rule.as_ref().and_then(Propagator::arity) {
+                    return err!(
+                        "Attempt to add dependencies to rule {:?} with arity {:?}",
+                        rule,
+                        a
+                    );
+                }
+                deps.extend(new_deps);
+                if !*active {
+                    *active = true;
+                    self.worklist.push(id);
+                }
+                Ok(())
+            } else {
+                return err!("invalid node id {:?}", id);
+            }
+        }
+    }
+}
+
 /// A propagator is a monotone function that receives "partially done" inputs and produces
 /// "partially done" outputs. This is a very restricted API to simplify the implementation of a
 /// propagator network.
@@ -200,12 +468,7 @@ where
         deps: impl Iterator<Item = NodeIx>,
     ) -> Result<()> {
         {
-            let Node {
-                prop,
-                item: _,
-                done: _,
-                in_wl,
-            } = self.g.node_weight_mut(ix).unwrap();
+            let Node { prop, in_wl, .. } = self.g.node_weight_mut(ix).unwrap();
             if let Some(p) = prop.try_replace(p) {
                 // Return a result here if we think this would represent a malformed program, not
                 // just a bug in SSA conversion.
@@ -233,10 +496,7 @@ where
             use petgraph::Direction::*;
             let mut p = {
                 let Node {
-                    prop,
-                    item: _,
-                    done,
-                    in_wl,
+                    prop, done, in_wl, ..
                 } = self.g.node_weight_mut(node).unwrap();
                 *in_wl = false;
                 if *done {
@@ -255,10 +515,7 @@ where
             );
             let (done_now, ty) = p.step(incoming.drain());
             let Node {
-                prop,
-                item,
-                done,
-                in_wl: _,
+                prop, item, done, ..
             } = self.g.node_weight_mut(node).unwrap();
             *done = done_now;
             *prop = p;
@@ -287,7 +544,7 @@ impl TVar {
         match self {
             Scalar(ix) => Ok(ix),
             Iter(_) => err!("expected scalar, got iterator"),
-            Map { key: _, val: _ } => err!("expected scalar, got map"),
+            Map { .. } => err!("expected scalar, got map"),
         }
     }
     fn map(self) -> Result<(NodeIx, NodeIx)> {
@@ -303,7 +560,7 @@ impl TVar {
         match self {
             Scalar(_) => err!("expected iterator, got scalar"),
             Iter(ix) => Ok(ix),
-            Map { key: _, val: _ } => err!("expected iterator, got map"),
+            Map { .. } => err!("expected iterator, got map"),
         }
     }
 }
@@ -582,7 +839,7 @@ impl Constraints {
 
     fn get_kind(&mut self, id: Ident) -> Option<Kind> {
         let c = self.get_canonical(id);
-        self.kind_map.get(&self.uf.find_mut(c)).map(Clone::clone)
+        self.kind_map.get(&self.uf.find_mut(c)).cloned()
     }
 
     fn get_expr_constraints<'a>(&mut self, expr: &PrimExpr<'a>) -> Result<TVar> {

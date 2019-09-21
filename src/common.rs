@@ -20,7 +20,7 @@ impl std::fmt::Display for CompileError {
 }
 
 macro_rules! err {
-    ($($t:tt),*) => { Err($crate::common::CompileError(format!($($t),*))) }
+    ($($t:expr),*) => { Err($crate::common::CompileError(format!($($t),*))) }
 }
 
 pub(crate) struct WorkList<T> {
