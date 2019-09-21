@@ -1,4 +1,4 @@
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Unop {
     Column, // $
     Not,    // !
@@ -9,7 +9,7 @@ pub(crate) enum Unop {
 // TODO unify NumBinop and StrBinop. This will not help with type inference, and we will have
 // separate variants down the line anyway.
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Binop {
     Plus,
     Minus,
