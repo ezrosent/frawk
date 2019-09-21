@@ -37,6 +37,7 @@ pub(crate) trait Propagator {
 
 mod prop {
     use super::{smallvec, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
+    use std::fmt::{self, Debug};
     fn fold_option<'a, T: Clone + 'a>(
         incoming: impl Iterator<Item = &'a T>,
         f: impl Fn(Option<T>, &T) -> (bool, Option<T>),
@@ -164,9 +165,27 @@ mod prop {
         active: bool,
     }
 
+    impl<P: Propagator + Debug> Debug for Node<P>
+    where
+        P::Item: Debug,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{:?},{:?}", self.rule, self.item)
+        }
+    }
+
     pub(crate) struct Network<P: Propagator> {
         graph: Graph<Node<P>, ()>,
         worklist: Vec<NodeIx>,
+    }
+
+    impl<P: Propagator + Debug> Debug for Network<P>
+    where
+        P::Item: Debug,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{:?}", petgraph::dot::Dot::new(&self.graph))
+        }
     }
 
     impl<P: Propagator> Default for Network<P> {
@@ -178,9 +197,9 @@ mod prop {
         }
     }
 
-    impl<P: Propagator + Clone + Eq + std::fmt::Debug> Network<P>
+    impl<P: Propagator + Clone + Eq + Debug> Network<P>
     where
-        P::Item: Clone + Eq,
+        P::Item: Clone + Eq + Debug,
     {
         pub(crate) fn solve(&mut self) {
             while let Some(id) = self.worklist.pop() {
@@ -294,22 +313,26 @@ mod prop {
                                 id, new_rule, deps.len(), a);
                         }
                     }
-                    if !*active {
-                        *active = true;
-                        self.worklist.push(id);
-                    }
-                    *rule = Some(new_rule);
                 }
+                if !*active {
+                    *active = true;
+                    self.worklist.push(id);
+                }
+                *rule = Some(new_rule);
                 Ok(())
             } else {
                 return err!("invalid node id {:?}", id);
             }
+        }
+        pub(crate) fn add_dep(&mut self, id: NodeIx, dep: NodeIx) -> Result<()> {
+            self.add_deps(id, Some(dep).into_iter())
         }
         pub(crate) fn add_deps(
             &mut self,
             id: NodeIx,
             new_deps: impl Iterator<Item = NodeIx>,
         ) -> Result<()> {
+            let new_deps: SmallVec<_> = new_deps.collect();
             if let Some(Node {
                 rule, deps, active, ..
             }) = self.graph.node_weight_mut(id)
@@ -321,15 +344,18 @@ mod prop {
                         a
                     );
                 }
-                deps.extend(new_deps);
+                deps.extend(new_deps.iter().cloned());
                 if !*active {
                     *active = true;
                     self.worklist.push(id);
                 }
-                Ok(())
             } else {
                 return err!("invalid node id {:?}", id);
             }
+            for d in new_deps.into_iter() {
+                self.graph.add_edge(d, id, ());
+            }
+            Ok(())
         }
     }
 }
@@ -692,7 +718,7 @@ impl Constraints {
             Unop(op, o) => {
                 use ast::Unop::*;
                 Ok(TVar::Scalar(match op {
-                    // TODO: give these two inputs
+                    // TODO: give these two inputs. Maybe save those for better builtins
                     Column => self.str_node,
                     Not => self.int_node,
                     Neg | Pos => {
@@ -742,29 +768,31 @@ impl Constraints {
         use PrimStmt::*;
         match stmt {
             Print(_, _) => {
-                // TODO: anything to do here?
+                // TODO: add an appropriate rule for print. It has no output but all arguments are
+                // converted to strings.
                 Ok(())
             }
             AsgnIndex(map_ident, key, val) => {
                 let (k, v) = self.get_map(*map_ident)?;
-                self.merge_rule(k, Rule::MapKey, Some(key).into_iter())?;
+                let k_node = self.get_scalar_val(key)?;
+                self.network.add_dep(k, k_node)?;
                 let v_node = self.get_expr_constraints(val)?.scalar()?;
-                self.merge_rule_id(k, Rule::Val, Some(v_node).into_iter())
+                self.network.add_dep(v, v_node)
             }
             AsgnVar(ident, exp) => {
                 let ident_v = self.get_var(*ident)?;
                 let exp_v = self.get_expr_constraints(exp)?;
                 match (ident_v, exp_v) {
                     (TVar::Iter(i1), TVar::Iter(i2)) | (TVar::Scalar(i1), TVar::Scalar(i2)) => {
-                        self.merge_rule_id(i1, Rule::Val, Some(i2).into_iter())
+                        self.network.add_dep(i1, i2)
                     }
                     (TVar::Map { key: k1, val: v1 }, TVar::Map { key: k2, val: v2 }) => {
                         // These two get bidirectional constraints, as maps do not get implicit
                         // conversions.
-                        self.merge_rule_id(k1, Rule::MapKey, Some(k2).into_iter())?;
-                        self.merge_rule_id(k2, Rule::MapKey, Some(k1).into_iter())?;
-                        self.merge_rule_id(v1, Rule::Val, Some(v2).into_iter())?;
-                        self.merge_rule_id(v2, Rule::Val, Some(v1).into_iter())
+                        self.network.add_dep(k1, k2)?;
+                        self.network.add_dep(k2, k1)?;
+                        self.network.add_dep(v1, v2)?;
+                        self.network.add_dep(v2, v2)
                     }
                     (k1, k2) => err!(
                         "assigning variables of mismatched kinds: {:?} and {:?}",
@@ -789,7 +817,7 @@ impl Constraints {
                 ),
             },
             Entry::Vacant(v) => {
-                let item = self.network.add_rule(None, &[]);
+                let item = self.network.add_rule(Some(Rule::Val), &[]);
                 v.insert(TVar::Iter(item));
                 Ok(item)
             }
@@ -809,9 +837,8 @@ impl Constraints {
                 ),
             },
             Entry::Vacant(v) => {
-                // TODO: can we initialize this to Val and then get rid of the merges?
-                let key = self.network.add_rule(None, &[]);
-                let val = self.network.add_rule(None, &[]);
+                let key = self.network.add_rule(Some(Rule::MapKey), &[]);
+                let val = self.network.add_rule(Some(Rule::Val), &[]);
                 v.insert(TVar::Map { key, val });
                 Ok((key, val))
             }
@@ -827,15 +854,10 @@ impl Constraints {
                 TVar::Iter(_) => err!(
                     "found iterator in scalar context (this indicates a bug in the implementation)"
                 ),
-                TVar::Scalar(n) => {
-                    // TODO: what was this doing?
-                    // self.network
-                    //     .update(*n, TypeRule::Placeholder, None.into_iter())?;
-                    Ok(*n)
-                }
+                TVar::Scalar(n) => Ok(*n),
             },
             Entry::Vacant(v) => {
-                let n = self.network.add_rule(None, &[]);
+                let n = self.network.add_rule(Some(Rule::Val), &[]);
                 v.insert(TVar::Scalar(n));
                 Ok(n)
             }
@@ -872,35 +894,6 @@ impl Constraints {
             Var(id) => self.get_var(*id),
         }
     }
-
-    fn merge_rule_id(
-        &mut self,
-        id: NodeIx,
-        rule: Rule,
-        deps: impl Iterator<Item = NodeIx>,
-    ) -> Result<()> {
-        self.network.update_rule(id, rule)?;
-        self.network.add_deps(id, deps)
-    }
-    fn merge_rule<'b, 'a: 'b>(
-        &mut self,
-        id: NodeIx,
-        rule: Rule,
-        deps: impl Iterator<Item = &'b PrimVal<'a>>,
-    ) -> Result<()> {
-        let mut dep_nodes = SmallVec::<NodeIx>::new();
-        // Build a vector of NodeIxs from a vector of PrimVals. For literals, we map those to
-        // our special-cased literal nodes. For Vars, first check that the var is not currently
-        // a Map (N.B. no scalar expressions contain maps, at least for now), then either grab
-        // the existing node or insert a scalar Placeholder at that identifier.
-        //
-        //
-        // TODO: fix these rules for when functions are supported.
-        for i in deps {
-            dep_nodes.push(self.get_scalar_val(i)?);
-        }
-        self.merge_rule_id(id, rule, dep_nodes.into_iter())
-    }
 }
 
 #[cfg(test)]
@@ -923,20 +916,20 @@ mod test {
         assert_eq!(n.read(addi12), Some(&Int));
     }
 
-    // #[test]
-    // fn plus_key_float() {
-    //     let mut n = Network::default();
-    //     use Scalar::*;
-    //     use TypeRule::*;
-    //     let i1 = n.insert(Const(Int), None.into_iter());
-    //     let f1 = n.insert(Placeholder, None.into_iter());
-    //     let add12 = n.insert(ArithOp(None), vec![i1, f1].into_iter());
-    //     let f2 = n.insert(Const(Float), None.into_iter());
-    //     n.update(f1, MapKey(None), vec![add12, f2].into_iter());
-    //     n.solve();
-    //     assert_eq!(n.read(i1), &Some(Int));
-    //     assert_eq!(n.read(f1), &Some(Str));
-    //     assert_eq!(n.read(f2), &Some(Float));
-    //     assert_eq!(n.read(add12), &Some(Float));
-    // }
+    #[test]
+    fn plus_key_float() {
+        let mut n = prop::Network::default();
+        use Rule::*;
+        use Scalar::*;
+        let i1 = n.add_rule(Some(Const(Int)), &[]);
+        let f1 = n.add_rule(Some(MapKey), &[]);
+        let add12 = n.add_rule(Some(ArithOp), &[i1, f1]);
+        let f2 = n.add_rule(Some(Const(Float)), &[]);
+        n.add_deps(f1, vec![add12, f2].into_iter());
+        n.solve();
+        assert_eq!(n.read(i1), Some(&Int));
+        assert_eq!(n.read(f1), Some(&Str));
+        assert_eq!(n.read(f2), Some(&Float));
+        assert_eq!(n.read(add12), Some(&Float));
+    }
 }
