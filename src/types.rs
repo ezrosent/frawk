@@ -1,13 +1,13 @@
 //! Algorithms and types pertaining to type deduction and converion.
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
-use crate::ast;
+use crate::builtins::Builtin;
 use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result};
 use hashbrown::{hash_map::Entry, HashMap};
 use smallvec::smallvec;
 
-type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
+pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Scalar {
@@ -36,7 +36,7 @@ pub(crate) trait Propagator {
 }
 
 mod prop {
-    use super::{smallvec, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
+    use super::{smallvec, Builtin, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
     use std::fmt::{self, Debug};
     fn fold_option<'a, T: Clone + 'a>(
         incoming: impl Iterator<Item = &'a T>,
@@ -77,10 +77,7 @@ mod prop {
     #[derive(Clone, PartialEq, Eq, Debug)]
     pub(crate) enum Rule {
         Const(Scalar),
-        ArithUnop,
-        ArithOp,
-        CompareOp,
-        Div,
+        Builtin(Builtin),
         MapKey,
         Val,
     }
@@ -91,58 +88,25 @@ mod prop {
             use Rule::*;
             match self {
                 Const(_) => Some(0),
-                ArithUnop => Some(1),
-                Div | CompareOp | ArithOp => Some(2),
+                Builtin(b) => b.arity(),
                 MapKey | Val => None,
             }
         }
         fn step(&self, incoming: &[Option<Scalar>]) -> (bool, Option<Scalar>) {
             use Rule::*;
-            use Scalar::*;
             let set = incoming.iter().flat_map(|o| o.as_ref().into_iter());
             match self {
                 Const(s) => (true, Some(*s)),
-                CompareOp => (true, Some(Scalar::Int)),
-                ArithUnop => match &incoming[0] {
-                    Some(Str) | Some(Float) => (true, Some(Float)),
-                    x => (false, *x),
-                },
-                Div => (true, Some(Float)),
-                ArithOp => match (&incoming[0], &incoming[1]) {
-                    (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
-                        (true, Some(Float))
-                    }
-                    (_, _) => (false, Some(Int)),
-                },
+                Builtin(b) => b.step(incoming),
                 MapKey => map_key(set),
                 Val => map_val(set),
             }
         }
         fn inputs(&self, incoming: &[Option<Scalar>]) -> SmallVec<Option<Scalar>> {
             use Rule::*;
-            use Scalar::*;
             match self {
                 Const(_) => Default::default(),
-                Div => smallvec![Some(Float), Some(Float)],
-                ArithUnop => match &incoming[0] {
-                    Some(Str) | Some(Float) => smallvec![Some(Float)],
-                    x => smallvec![*x],
-                },
-                CompareOp => {
-                    let max = match (incoming[0], incoming[1]) {
-                        (Some(Str), _) | (_, Some(Str)) => Some(Str),
-                        (Some(Float), _) | (_, Some(Float)) => Some(Float),
-                        (Some(Int), _) | (_, Some(Int)) => Some(Int),
-                        (None, None) => None,
-                    };
-                    smallvec![max; 2]
-                }
-                ArithOp => match (incoming[0], incoming[1]) {
-                    (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
-                        smallvec![Some(Float); 2]
-                    }
-                    (_, _) => smallvec![Some(Int); 2],
-                },
+                Builtin(b) => b.inputs(incoming),
                 MapKey => {
                     let set = incoming.iter().flat_map(|o| o.as_ref().into_iter());
                     let len = incoming.len();
@@ -716,31 +680,19 @@ impl Constraints {
                 }
             }
             Unop(op, o) => {
-                use ast::Unop::*;
-                Ok(TVar::Scalar(match op {
-                    // TODO: give these two inputs. Maybe save those for better builtins
-                    Column => self.str_node,
-                    Not => self.int_node,
-                    Neg | Pos => {
-                        let inp = self.get_val(o)?.scalar()?;
-                        self.network.add_rule(Some(Rule::ArithUnop), &[inp])
-                    }
-                }))
+                let inp = self.get_val(o)?.scalar()?;
+                let op_node = self
+                    .network
+                    .add_rule(Some(Rule::Builtin(Builtin::Unop(*op))), &[inp]);
+                Ok(TVar::Scalar(op_node))
             }
             Binop(op, o1, o2) => {
-                use ast::Binop::*;
                 let i1 = self.get_val(o1)?.scalar()?;
                 let i2 = self.get_val(o2)?.scalar()?;
-                Ok(TVar::Scalar(match op {
-                    Plus | Minus | Mult | Mod => {
-                        self.network.add_rule(Some(Rule::ArithOp), &[i1, i2])
-                    }
-                    Div => self.network.add_rule(Some(Rule::Div), &[i1, i2]),
-                    // TODO: give these inputs
-                    Concat => self.str_node,
-                    Match => self.int_node,
-                    LT | GT | LTE | GTE | EQ => self.int_node,
-                }))
+                let op_node = self
+                    .network
+                    .add_rule(Some(Rule::Builtin(Builtin::Binop(*op))), &[i1, i2]);
+                Ok(TVar::Scalar(op_node))
             }
             Index(map, ix) => {
                 let (key, val) = self.get_val(map)?.map()?;
@@ -764,6 +716,7 @@ impl Constraints {
             }
         }
     }
+
     fn gen_stmt_constraints<'a>(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
         use PrimStmt::*;
         match stmt {
@@ -899,16 +852,17 @@ impl Constraints {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::ast::Binop;
+    use crate::builtins::Builtin;
 
     #[test]
     fn plus_key_int() {
         let mut n = prop::Network::default();
-        use Rule::*;
-        use Scalar::*;
-        let i1 = n.add_rule(Some(Const(Int)), &[]);
+        use {Binop::*, Scalar::*};
+        let i1 = n.add_rule(Some(Rule::Const(Int)), &[]);
         let i2 = n.add_rule(None, &[]);
-        let addi12 = n.add_rule(Some(ArithOp), &[i1, i2]);
-        assert!(n.update_rule(i2, MapKey).is_ok());
+        let addi12 = n.add_rule(Some(Rule::Builtin(Builtin::Binop(Plus))), &[i1, i2]);
+        assert!(n.update_rule(i2, Rule::MapKey).is_ok());
         assert!(n.add_deps(i2, Some(addi12).into_iter()).is_ok());
         n.solve();
         assert_eq!(n.read(i1), Some(&Int));
@@ -919,12 +873,11 @@ mod test {
     #[test]
     fn plus_key_float() {
         let mut n = prop::Network::default();
-        use Rule::*;
-        use Scalar::*;
-        let i1 = n.add_rule(Some(Const(Int)), &[]);
-        let f1 = n.add_rule(Some(MapKey), &[]);
-        let add12 = n.add_rule(Some(ArithOp), &[i1, f1]);
-        let f2 = n.add_rule(Some(Const(Float)), &[]);
+        use {Binop::*, Scalar::*};
+        let i1 = n.add_rule(Some(Rule::Const(Int)), &[]);
+        let f1 = n.add_rule(Some(Rule::MapKey), &[]);
+        let add12 = n.add_rule(Some(Rule::Builtin(Builtin::Binop(Plus))), &[i1, f1]);
+        let f2 = n.add_rule(Some(Rule::Const(Float)), &[]);
         n.add_deps(f1, vec![add12, f2].into_iter());
         n.solve();
         assert_eq!(n.read(i1), Some(&Int));
