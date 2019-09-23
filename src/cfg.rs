@@ -1,4 +1,5 @@
 use crate::ast::{Binop, Expr, Stmt, Unop};
+use crate::builtins::Builtin;
 use crate::common::{CompileError, Graph, NodeIx, NumTy, Result};
 use crate::dom;
 
@@ -47,11 +48,11 @@ pub(crate) enum PrimVal<'a> {
 pub(crate) enum PrimExpr<'a> {
     Val(PrimVal<'a>),
     Phi(SmallVec<(NodeIx /* pred */, Ident)>),
-    Unop(Unop, PrimVal<'a>),
-    Binop(Binop, PrimVal<'a>, PrimVal<'a>),
+    CallBuiltin(Builtin, SmallVec<PrimVal<'a>>),
     Index(PrimVal<'a>, PrimVal<'a>),
 
     // For iterating over vectors.
+    // TODO: make these builtins
     IterBegin(PrimVal<'a>),
     HasNext(PrimVal<'a>),
     Next(PrimVal<'a>),
@@ -59,7 +60,6 @@ pub(crate) enum PrimExpr<'a> {
 
 #[derive(Debug)]
 pub(crate) enum PrimStmt<'a> {
-    Print(SmallVec<PrimVal<'a>>, Option<PrimVal<'a>>),
     AsgnIndex(
         Ident,        /*map*/
         PrimVal<'a>,  /* index */
@@ -88,10 +88,10 @@ impl<'a> PrimExpr<'a> {
         match self {
             Val(v) => v.replace(update),
             Phi(_) => {}
-            Unop(_, v) => v.replace(update),
-            Binop(_, v1, v2) => {
-                v1.replace(&mut update);
-                v2.replace(update);
+            CallBuiltin(_, args) => {
+                for a in args.iter_mut() {
+                    a.replace(&mut update)
+                }
             }
             Index(v1, v2) => {
                 v1.replace(&mut update);
@@ -108,17 +108,6 @@ impl<'a> PrimStmt<'a> {
     fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
         use PrimStmt::*;
         match self {
-            Print(vs, None) => {
-                for v in vs.iter_mut() {
-                    v.replace(&mut update)
-                }
-            }
-            Print(vs, Some(v)) => {
-                for v in vs.iter_mut() {
-                    v.replace(&mut update)
-                }
-                v.replace(update);
-            }
             AsgnIndex(ident, v, exp) => {
                 *ident = update(*ident);
                 v.replace(&mut update);
@@ -160,12 +149,15 @@ impl<'b, I> Context<'b, I> {
     }
 }
 impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
+    fn unused() -> Ident {
+        (0, 0)
+    }
     pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
         let mut ctx = Context {
             hm: Default::default(),
             defsites: Default::default(),
             orig: Default::default(),
-            max: Default::default(),
+            max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations.
             cfg: Default::default(),
             entry: Default::default(),
             loop_ctx: Default::default(),
@@ -217,16 +209,112 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             }
             Print(vs, out) => {
                 debug_assert!(vs.len() > 0);
-                let mut v = SmallVec::with_capacity(vs.len());
-                for i in vs.iter() {
-                    v.push(self.convert_val(*i, current_open)?)
-                }
                 let out = match out.as_ref() {
-                    Some(x) => Some(self.convert_val(x, current_open)?),
-                    None => None,
+                    Some(x) => self.convert_val(x, current_open)?,
+                    None => PrimVal::StrLit(""),
                 };
-                self.add_stmt(current_open, PrimStmt::Print(v, out));
-                current_open
+                if vs.len() == 0 {
+                    let tmp = self.fresh();
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::AsgnVar(
+                            tmp,
+                            PrimExpr::CallBuiltin(
+                                Builtin::Unop(Unop::Column),
+                                smallvec![PrimVal::ILit(0)],
+                            ),
+                        ),
+                    );
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::AsgnVar(
+                            Self::unused(),
+                            PrimExpr::CallBuiltin(
+                                Builtin::Print,
+                                smallvec![PrimVal::Var(tmp), out],
+                            ),
+                        ),
+                    );
+                    current_open
+                } else if vs.len() == 1 {
+                    let v = self.convert_val(vs[0], current_open)?;
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::AsgnVar(
+                            Self::unused(),
+                            PrimExpr::CallBuiltin(Builtin::Print, smallvec![v, out]),
+                        ),
+                    );
+                    current_open
+                } else {
+                    const EMPTY: PrimVal<'static> = PrimVal::StrLit("");
+                    // TODO: wire in field-separator here when we handle special variables.
+                    const FS: PrimVal<'static> = PrimVal::StrLit(" ");
+
+                    // For each argument in the comma-separated list, concatenate in sequence along
+                    // with the field separator. Doing this now because (1) we intend to make
+                    // concatenation of strings lazy, making this cheap and (2) because it
+                    // simplifies how some of the downstream analysis goes. Depending on how this
+                    // impacts performance we may add support for var-arg printing later on.
+                    //
+                    // (e.g.  how will printf work? Will we disallow dynamically computed printf
+                    // strings? We probably should...)
+                    let mut tmp = self.fresh();
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(tmp, PrimExpr::Val(EMPTY)));
+                    for (i, v) in vs.iter().enumerate() {
+                        let v = self.convert_val(*v, current_open)?;
+                        if i != 0 {
+                            let new_tmp = self.fresh();
+                            self.add_stmt(
+                                current_open,
+                                PrimStmt::AsgnVar(
+                                    new_tmp,
+                                    PrimExpr::CallBuiltin(
+                                        Builtin::Binop(Binop::Concat),
+                                        smallvec![PrimVal::Var(tmp), FS],
+                                    ),
+                                ),
+                            );
+                            tmp = new_tmp;
+                        }
+                        let new_tmp = self.fresh();
+                        self.add_stmt(
+                            current_open,
+                            PrimStmt::AsgnVar(
+                                new_tmp,
+                                PrimExpr::CallBuiltin(
+                                    Builtin::Binop(Binop::Concat),
+                                    smallvec![PrimVal::Var(tmp), v],
+                                ),
+                            ),
+                        );
+                        tmp = new_tmp;
+                    }
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::AsgnVar(
+                            Self::unused(),
+                            PrimExpr::CallBuiltin(
+                                Builtin::Print,
+                                smallvec![PrimVal::Var(tmp), out],
+                            ),
+                        ),
+                    );
+
+                    current_open
+
+                    // let tmp = self.fresh();
+                    // let mut v = SmallVec::with_capacity(vs.len());
+                    // for i in vs.iter() {
+                    //     v.push(self.convert_val(*i, current_open)?)
+                    // }
+                    // let out = match out.as_ref() {
+                    //     Some(x) => Some(self.convert_val(x, current_open)?),
+                    //     None => None,
+                    // };
+                    // self.add_stmt(current_open, PrimStmt::Print(v, out));
+                    // current_open
+                }
             }
             If(cond, tcase, fcase) => {
                 let c_val = self.convert_val(cond, current_open)?;
@@ -349,12 +437,12 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
             StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
             Unop(op, e) => {
                 let v = self.convert_val(e, current_open)?;
-                PrimExpr::Unop(*op, v)
+                PrimExpr::CallBuiltin(Builtin::Unop(*op), smallvec![v])
             }
             Binop(op, e1, e2) => {
                 let v1 = self.convert_val(e1, current_open)?;
                 let v2 = self.convert_val(e2, current_open)?;
-                PrimExpr::Binop(*op, v1, v2)
+                PrimExpr::CallBuiltin(Builtin::Binop(*op), smallvec![v1, v2])
             }
             Var(id) => {
                 let ident = self.get_identifier(id);
@@ -372,10 +460,13 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                 PrimExpr::Val(PrimVal::Var(ident))
             }
             AssignOp(Var(v), op, to) => {
-                // TODO(ezr): do validation here for which ops support assigns
+                // TODO: do validation here for which ops support assigns?
                 let to_v = self.convert_val(to, current_open)?;
                 let ident = self.get_identifier(v);
-                let tmp = PrimExpr::Binop(*op, PrimVal::Var(ident), to_v);
+                let tmp = PrimExpr::CallBuiltin(
+                    Builtin::Binop(*op),
+                    smallvec![PrimVal::Var(ident), to_v],
+                );
                 self.add_stmt(current_open, PrimStmt::AsgnVar(ident, tmp));
                 PrimExpr::Val(PrimVal::Var(ident))
             }
@@ -397,7 +488,10 @@ impl<'b, I: Hash + Eq + Clone + Default> Context<'b, I> {
                         let to_v = slf.convert_val(to, current_open)?;
                         let arr_cell_v =
                             slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), current_open);
-                        Ok(PrimExpr::Binop(*op, arr_cell_v, to_v))
+                        Ok(PrimExpr::CallBuiltin(
+                            Builtin::Binop(*op),
+                            smallvec![arr_cell_v, to_v],
+                        ))
                     },
                     current_open,
                 )

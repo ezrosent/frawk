@@ -1,5 +1,6 @@
 //! Noisey `Display` impls.
 use crate::ast::{Binop, Unop};
+use crate::builtins::Builtin;
 use crate::cfg::{BasicBlock, Ident, PrimExpr, PrimStmt, PrimVal, Transition};
 use std::fmt::{self, Display, Formatter};
 
@@ -33,21 +34,6 @@ impl<'a> Display for PrimStmt<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         use PrimStmt::*;
         match self {
-            Print(os, out) => {
-                write!(f, "print ")?;
-                for (i, o) in os.iter().enumerate() {
-                    let is_last = i == os.len() - 1;
-                    if is_last {
-                        write!(f, "{}", o)?;
-                    } else {
-                        write!(f, "{}, ", o)?;
-                    }
-                }
-                if let Some(out) = out {
-                    write!(f, "> {}", out)?;
-                }
-                Ok(())
-            }
             AsgnIndex(id, pv, pe) => write!(f, "{}[{}] = {}", Wrap(*id), pv, pe),
             AsgnVar(id, pe) => write!(f, "{} = {}", Wrap(*id), pe),
         }
@@ -71,8 +57,18 @@ impl<'a> Display for PrimExpr<'a> {
                 }
                 write!(f, "]")
             }
-            Unop(u, o) => write!(f, "{}{}", u, o),
-            Binop(b, o1, o2) => write!(f, "{} {} {}", o1, b, o2),
+            CallBuiltin(b, os) => {
+                write!(f, "{}(", b)?;
+                for (i, o) in os.iter().enumerate() {
+                    let is_last = i == os.len() - 1;
+                    if is_last {
+                        write!(f, "{}", o)?;
+                    } else {
+                        write!(f, "{}, ", o)?;
+                    }
+                }
+                write!(f, ")")
+            }
             Index(m, v) => write!(f, "{}[{}]", m, v),
             IterBegin(m) => write!(f, "begin({})", m),
             HasNext(i) => write!(f, "hasnext({})", i),
@@ -89,6 +85,18 @@ impl<'a> Display for PrimVal<'a> {
             ILit(n) => write!(f, "{}@int", *n),
             FLit(n) => write!(f, "{}@float", *n),
             StrLit(s) => write!(f, "\"{}\"", s),
+        }
+    }
+}
+
+impl Display for Builtin {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use Builtin::*;
+        match self {
+            Unop(u) => write!(f, "{}", u),
+            Binop(b) => write!(f, "{}", b),
+            Print => write!(f, "{}", "print"),
+            Getline => write!(f, "{}", "getline"),
         }
     }
 }

@@ -15,6 +15,14 @@ pub(crate) enum Scalar {
     Int,
     Float,
 }
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+pub(crate) enum Kind {
+    Scalar,
+    Iter,
+    Map,
+}
+
 /// A propagator is a monotone function that receives "partially done" inputs and produces
 /// "partially done" outputs. This is a very restricted API to simplify the implementation of a
 /// propagator network.
@@ -358,13 +366,6 @@ impl TVar {
     }
 }
 
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
-enum Kind {
-    Scalar,
-    Iter,
-    Map,
-}
-
 pub(crate) fn get_types<'a>(
     cfg: &cfg::CFG<'a>,
     num_idents: usize,
@@ -379,6 +380,7 @@ pub(crate) struct Constraints {
     str_node: NodeIx,
     int_node: NodeIx,
     float_node: NodeIx,
+    nil_node: NodeIx,
 
     canonical_ident: HashMap<Ident, NumTy>,
     uf: petgraph::unionfind::UnionFind<NumTy>,
@@ -391,6 +393,7 @@ use prop::Rule;
 impl Constraints {
     fn new(n: usize) -> Constraints {
         let mut network = prop::Network::<Rule>::default();
+        let nil_node = network.add_rule(None, &[]);
         let str_node = network.add_rule(Some(Rule::Const(Scalar::Str)), &[]);
         let int_node = network.add_rule(Some(Rule::Const(Scalar::Int)), &[]);
         let float_node = network.add_rule(Some(Rule::Const(Scalar::Float)), &[]);
@@ -404,6 +407,7 @@ impl Constraints {
             str_node,
             int_node,
             float_node,
+            nil_node,
         }
     }
 
@@ -467,8 +471,7 @@ impl Constraints {
     }
 
     fn merge_expr<'a>(&mut self, expr: &PrimExpr<'a>, with: Either<Kind, Ident>) -> Result<()> {
-        use Either::*;
-        use PrimExpr::*;
+        use {Either::*, PrimExpr::*};
         match (expr, &with) {
             (Val(pv), Left(k)) => self.assert_val_kind(pv, *k),
             (Val(pv), Right(id)) => self.merge_val(pv, *id),
@@ -481,21 +484,31 @@ impl Constraints {
                 }
                 Ok(())
             }
-            (Binop(_, o1, o2), e) => {
-                self.assert_val_kind(o1, Kind::Scalar)?;
-                self.assert_val_kind(o2, Kind::Scalar)?;
-                match e {
-                    Left(Kind::Scalar) => Ok(()),
-                    Left(k) => err!("result of scalar binary operation used in {:?} context", k),
-                    Right(id) => self.set_kind(*id, Kind::Scalar),
+            (CallBuiltin(b, args), e) => {
+                let arg_ks = b.signature();
+                let ret_k = Kind::Scalar;
+                if args.len() > arg_ks.len() {
+                    return err!(
+                        "Calling builtin {} with {} args; expected {}",
+                        b,
+                        args.len(),
+                        arg_ks.len()
+                    );
                 }
-            }
-            (Unop(_, o), e) => {
-                self.assert_val_kind(o, Kind::Scalar)?;
+                // N.B: Awk lets you pass fewer variables than declared in the function.
+                for (a, k) in args.iter().zip(arg_ks.iter()) {
+                    self.assert_val_kind(a, *k)?;
+                }
                 match e {
-                    Left(Kind::Scalar) => Ok(()),
-                    Left(k) => err!("result of scalar unary operation used in {:?} context", k),
-                    Right(id) => self.set_kind(*id, Kind::Scalar),
+                    Left(k) => {
+                        if *k == ret_k {
+                            Ok(())
+                        } else {
+                            err!("Result of builtin {} used in context of kind {:?}, expected kind {:?}",
+                             b, k, ret_k)
+                        }
+                    }
+                    Right(id) => self.set_kind(*id, ret_k),
                 }
             }
             (Index(map, ix), e) => {
@@ -547,12 +560,6 @@ impl Constraints {
         use Either::*;
         use PrimStmt::*;
         match stmt {
-            Print(vs, out) => {
-                for v in vs.iter().chain(out.iter()) {
-                    self.assert_val_kind(v, Kind::Scalar)?;
-                }
-                Ok(())
-            }
             AsgnIndex(map, k, v) => {
                 self.set_kind(*map, Kind::Map)?;
                 self.assert_val_kind(k, Kind::Scalar)?;
@@ -679,20 +686,37 @@ impl Constraints {
                     }
                 }
             }
-            Unop(op, o) => {
-                let inp = self.get_val(o)?.scalar()?;
-                let op_node = self
-                    .network
-                    .add_rule(Some(Rule::Builtin(Builtin::Unop(*op))), &[inp]);
-                Ok(TVar::Scalar(op_node))
-            }
-            Binop(op, o1, o2) => {
-                let i1 = self.get_val(o1)?.scalar()?;
-                let i2 = self.get_val(o2)?.scalar()?;
-                let op_node = self
-                    .network
-                    .add_rule(Some(Rule::Builtin(Builtin::Binop(*op))), &[i1, i2]);
-                Ok(TVar::Scalar(op_node))
+            CallBuiltin(b, args) => {
+                let mut args = args.clone();
+                let arg_ks = b.signature();
+                // optimize for the all-scalar case; if maps are involved we will just grow the
+                // vector (once, worst-case).
+                let mut deps = SmallVec::with_capacity(args.len());
+                for k in arg_ks.iter() {
+                    match args.pop() {
+                        Some(PrimVal::StrLit(_)) => deps.push(self.str_node),
+                        Some(PrimVal::ILit(_)) => deps.push(self.int_node),
+                        Some(PrimVal::FLit(_)) => deps.push(self.float_node),
+                        Some(PrimVal::Var(id)) => match self.get_var(id)? {
+                            TVar::Scalar(v) | TVar::Iter(v) => deps.push(v),
+                            TVar::Map { key, val } => {
+                                deps.push(key);
+                                deps.push(val)
+                            }
+                        },
+                        None => match k {
+                            Kind::Scalar | Kind::Iter => deps.push(self.nil_node),
+                            Kind::Map => {
+                                deps.push(self.nil_node);
+                                deps.push(self.nil_node);
+                            }
+                        },
+                    }
+                }
+                debug_assert_eq!(deps.len(), arg_ks.len());
+                Ok(TVar::Scalar(
+                    self.network.add_rule(Some(Rule::Builtin(*b)), &deps[..]),
+                ))
             }
             Index(map, ix) => {
                 let (key, val) = self.get_val(map)?.map()?;
@@ -720,11 +744,6 @@ impl Constraints {
     fn gen_stmt_constraints<'a>(&mut self, stmt: &PrimStmt<'a>) -> Result<()> {
         use PrimStmt::*;
         match stmt {
-            Print(_, _) => {
-                // TODO: add an appropriate rule for print. It has no output but all arguments are
-                // converted to strings.
-                Ok(())
-            }
             AsgnIndex(map_ident, key, val) => {
                 let (k, v) = self.get_map(*map_ident)?;
                 let k_node = self.get_scalar_val(key)?;
@@ -878,7 +897,7 @@ mod test {
         let f1 = n.add_rule(Some(Rule::MapKey), &[]);
         let add12 = n.add_rule(Some(Rule::Builtin(Builtin::Binop(Plus))), &[i1, f1]);
         let f2 = n.add_rule(Some(Rule::Const(Float)), &[]);
-        n.add_deps(f1, vec![add12, f2].into_iter());
+        assert!(n.add_deps(f1, vec![add12, f2].into_iter()).is_ok());
         n.solve();
         assert_eq!(n.read(i1), Some(&Int));
         assert_eq!(n.read(f1), Some(&Str));
