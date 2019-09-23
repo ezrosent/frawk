@@ -10,10 +10,6 @@ pub(crate) enum Builtin {
     Getline,
 }
 
-// TODO: need to incode the "kind signature" of different builtins. It may be as simple as
-// returning a (SmallVec<Kind>, Option<Kind>); as I think we will only support builtins with fixed
-// kinds to start.
-
 impl Builtin {
     // All builtins are fixed-arity.
     fn arity_inner(&self) -> usize {

@@ -6,9 +6,6 @@ pub(crate) enum Unop {
     Pos,    // +
 }
 
-// TODO unify NumBinop and StrBinop. This will not help with type inference, and we will have
-// separate variants down the line anyway.
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Binop {
     Plus,
@@ -32,6 +29,8 @@ pub(crate) enum Expr<'a, 'b, I> {
     StrLit(&'b str),
     Unop(Unop, &'a Expr<'a, 'b, I>),
     Binop(Binop, &'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
+    // TODO: add Call(&'b str, SmallVec<&'a Expr>). Have a static map of all builtin function
+    // names. Use that to resolve scopes, etc.
     Var(I),
     Index(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
     Assign(
