@@ -1,6 +1,6 @@
 //! Noisey `Display` impls.
 use crate::ast::{Binop, Unop};
-use crate::builtins::Builtin;
+use crate::builtins::{Function, Variable};
 use crate::cfg::{BasicBlock, Ident, PrimExpr, PrimStmt, PrimVal, Transition};
 use std::fmt::{self, Display, Formatter};
 
@@ -36,6 +36,7 @@ impl<'a> Display for PrimStmt<'a> {
         match self {
             AsgnIndex(id, pv, pe) => write!(f, "{}[{}] = {}", Wrap(*id), pv, pe),
             AsgnVar(id, pe) => write!(f, "{} = {}", Wrap(*id), pe),
+            SetBuiltin(v, pv) => write!(f, "{} = {}", v, pv),
         }
     }
 }
@@ -73,6 +74,7 @@ impl<'a> Display for PrimExpr<'a> {
             IterBegin(m) => write!(f, "begin({})", m),
             HasNext(i) => write!(f, "hasnext({})", i),
             Next(i) => write!(f, "next({})", i),
+            LoadBuiltin(b) => write!(f, "{}", b),
         }
     }
 }
@@ -89,15 +91,34 @@ impl<'a> Display for PrimVal<'a> {
     }
 }
 
-impl Display for Builtin {
+impl Display for Function {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use Builtin::*;
+        use Function::*;
         match self {
             Unop(u) => write!(f, "{}", u),
             Binop(b) => write!(f, "{}", b),
             Print => write!(f, "{}", "print"),
-            Getline => write!(f, "{}", "getline"),
+            Hasline => write!(f, "{}", "hasline"),
+            Nextline => write!(f, "{}", "nextline"),
         }
+    }
+}
+
+impl Display for Variable {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use Variable::*;
+        write!(
+            f,
+            "{}",
+            match self {
+                ARGC => "ARGC",
+                ARGV => "ARGV",
+                FS => "FS",
+                NF => "NF",
+                NR => "NR",
+                FILENAME => "FILENAME",
+            }
+        )
     }
 }
 

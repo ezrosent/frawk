@@ -1,6 +1,7 @@
 #![feature(test)]
 #[macro_use]
 pub mod common;
+
 pub mod arena;
 pub mod ast;
 pub mod builtins;
@@ -10,6 +11,7 @@ pub mod dom;
 pub mod types;
 extern crate elsa;
 extern crate hashbrown;
+extern crate lazy_static;
 extern crate petgraph;
 extern crate smallvec;
 extern crate stable_deref_trait;

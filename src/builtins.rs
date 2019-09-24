@@ -1,21 +1,40 @@
+//! This module contains definitions and metadata for builtin functions.
 use crate::ast;
-use crate::types::{Kind, Propagator, Scalar, SmallVec};
+use crate::types::{Kind, Propagator, Scalar, SmallVec, TVar};
 use smallvec::smallvec;
 
+use std::convert::TryFrom;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Builtin {
+pub(crate) enum Function {
     Unop(ast::Unop),
     Binop(ast::Binop),
     Print,
-    Getline,
+    Hasline,
+    Nextline,
 }
 
-impl Builtin {
+static_map!(
+    FUNCTIONS<&'static str, Function>,
+    ["print", Function::Print]
+);
+
+impl<'a> TryFrom<&'a str> for Function {
+    type Error = (); // error means not found
+    fn try_from(value: &'a str) -> Result<Function, ()> {
+        match FUNCTIONS.get(value) {
+            Some(v) => Ok(*v),
+            None => Err(()),
+        }
+    }
+}
+
+impl Function {
     // All builtins are fixed-arity.
     fn arity_inner(&self) -> usize {
-        use Builtin::*;
+        use Function::*;
         match self {
-            Getline | Unop(_) => 1,
+            Hasline | Nextline | Unop(_) => 1,
             Binop(_) | Print => 2,
         }
     }
@@ -26,7 +45,7 @@ impl Builtin {
     }
 }
 
-impl Propagator for Builtin {
+impl Propagator for Function {
     type Item = Scalar;
     fn arity(&self) -> Option<usize> {
         Some(self.arity_inner())
@@ -34,7 +53,7 @@ impl Propagator for Builtin {
     fn step(&self, incoming: &[Option<Scalar>]) -> (bool, Option<Scalar>) {
         use {
             ast::{Binop::*, Unop::*},
-            Builtin::*,
+            Function::*,
             Scalar::*,
         };
         match self {
@@ -57,13 +76,14 @@ impl Propagator for Builtin {
             }
             Binop(Div) => (true, Some(Float)),
             Print => (true, None),
-            Getline => (true, Some(Str)),
+            Hasline => (true, Some(Int)),
+            Nextline => (true, Some(Str)),
         }
     }
     fn inputs(&self, incoming: &[Option<Scalar>]) -> SmallVec<Option<Scalar>> {
         use {
             ast::{Binop::*, Unop::*},
-            Builtin::*,
+            Function::*,
             Scalar::*,
         };
         match self {
@@ -98,7 +118,51 @@ impl Propagator for Builtin {
             },
             Binop(Div) => smallvec![Some(Float);2],
             Print => smallvec![Some(Str);incoming.len()],
-            Getline => smallvec![Some(Str)],
+            Hasline | Nextline => smallvec![Some(Str)],
         }
     }
 }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Variable {
+    ARGC,
+    ARGV,
+    FS,
+    NF,
+    NR,
+    FILENAME,
+}
+
+impl Variable {
+    pub(crate) fn ty(&self) -> TVar<Scalar> {
+        use Variable::*;
+        match self {
+            ARGC | NF | NR => TVar::Scalar(Scalar::Int),
+            ARGV => TVar::Map {
+                key: Scalar::Int,
+                val: Scalar::Str,
+            },
+            FS | FILENAME => TVar::Scalar(Scalar::Str),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a str> for Variable {
+    type Error = (); // error means not found
+    fn try_from(value: &'a str) -> Result<Variable, ()> {
+        match VARIABLES.get(value) {
+            Some(v) => Ok(*v),
+            None => Err(()),
+        }
+    }
+}
+
+static_map!(
+    VARIABLES<&'static str, Variable>,
+    ["ARGC", Variable::ARGC],
+    ["ARGV", Variable::ARGV],
+    ["FS", Variable::FS],
+    ["NF", Variable::NF],
+    ["NR", Variable::NR],
+    ["FILENAME", Variable::FILENAME]
+);
