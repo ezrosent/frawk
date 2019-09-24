@@ -23,6 +23,20 @@ macro_rules! err {
     ($($t:expr),*) => { Err($crate::common::CompileError(format!($($t),*))) }
 }
 
+macro_rules! static_map {
+    ($name:ident<$kty:ty, $vty:ty>, $([$k:expr, $v:expr]),*) => {
+        $crate::lazy_static::lazy_static! {
+            pub(crate) static ref $name: hashbrown::HashMap<$kty,$vty> = {
+                let mut m = hashbrown::HashMap::new();
+                $(
+                    m.insert($k, $v);
+                )*
+                m
+            };
+        }
+    }
+}
+
 pub(crate) struct WorkList<T> {
     set: HashSet<T>,
     mem: Vec<T>,
@@ -86,5 +100,4 @@ mod tests {
         }
         assert_eq!(get_elems(&mut wl), (0i32..10).collect());
     }
-
 }

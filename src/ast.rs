@@ -1,10 +1,18 @@
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Unop {
-    Column, // $
-    Not,    // !
-    Neg,    // -
-    Pos,    // +
+    Column,
+    Not,
+    Neg,
+    Pos,
 }
+
+static_map!(
+    UNOPS<&'static str, Unop>,
+    ["$", Unop::Column],
+    ["!", Unop::Not],
+    ["-", Unop::Neg],
+    ["+", Unop::Pos]
+);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Binop {
@@ -22,6 +30,22 @@ pub(crate) enum Binop {
     EQ,
 }
 
+static_map!(
+    BINOPS<&'static str, Binop>,
+    ["+", Binop::Plus],
+    ["-", Binop::Minus],
+    ["*", Binop::Mult],
+    ["/", Binop::Div],
+    ["%", Binop::Mod],
+    ["", Binop::Concat], // we may have to handle this one specially
+    ["~", Binop::Match],
+    ["<", Binop::LT],
+    [">", Binop::GT],
+    ["<=", Binop::LTE],
+    [">=", Binop::GTE],
+    ["==", Binop::EQ]
+);
+
 #[derive(Debug)]
 pub(crate) enum Expr<'a, 'b, I> {
     ILit(i64),
@@ -29,6 +53,8 @@ pub(crate) enum Expr<'a, 'b, I> {
     StrLit(&'b str),
     Unop(Unop, &'a Expr<'a, 'b, I>),
     Binop(Binop, &'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
+    // TODO: convert this to I.
+    Call(I, Vec<&'a Expr<'a, 'b, I>>),
     // TODO: add Call(&'b str, SmallVec<&'a Expr>). Have a static map of all builtin function
     // names. Use that to resolve scopes, etc.
     Var(I),
@@ -38,6 +64,11 @@ pub(crate) enum Expr<'a, 'b, I> {
         &'a Expr<'a, 'b, I>,
     ),
     AssignOp(&'a Expr<'a, 'b, I>, Binop, &'a Expr<'a, 'b, I>),
+    Inc {
+        is_inc: bool,
+        is_post: bool,
+        op: I,
+    },
 }
 
 #[derive(Debug)]

@@ -1,7 +1,7 @@
 //! Algorithms and types pertaining to type deduction and converion.
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
-use crate::builtins::Builtin;
+use crate::builtins::Function;
 use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result};
 use hashbrown::{hash_map::Entry, HashMap};
@@ -17,6 +17,7 @@ pub(crate) enum Scalar {
 }
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
+// TODO: migrate Kind to TVar<()> ?
 pub(crate) enum Kind {
     Scalar,
     Iter,
@@ -44,7 +45,7 @@ pub(crate) trait Propagator {
 }
 
 mod prop {
-    use super::{smallvec, Builtin, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
+    use super::{smallvec, Function, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
     use std::fmt::{self, Debug};
     fn fold_option<'a, T: Clone + 'a>(
         incoming: impl Iterator<Item = &'a T>,
@@ -85,7 +86,7 @@ mod prop {
     #[derive(Clone, PartialEq, Eq, Debug)]
     pub(crate) enum Rule {
         Const(Scalar),
-        Builtin(Builtin),
+        Builtin(Function),
         MapKey,
         Val,
     }
@@ -339,8 +340,16 @@ pub(crate) enum TVar<T = NodeIx> {
     Map { key: T, val: T },
 }
 
-impl TVar {
-    fn scalar(self) -> Result<NodeIx> {
+impl<T> TVar<T> {
+    fn kind(&self) -> Kind {
+        use TVar::*;
+        match self {
+            Scalar(_) => Kind::Scalar,
+            Iter(_) => Kind::Iter,
+            Map { .. } => Kind::Map,
+        }
+    }
+    fn scalar(self) -> Result<T> {
         use TVar::*;
         match self {
             Scalar(ix) => Ok(ix),
@@ -348,7 +357,7 @@ impl TVar {
             Map { .. } => err!("expected scalar, got map"),
         }
     }
-    fn map(self) -> Result<(NodeIx, NodeIx)> {
+    fn map(self) -> Result<(T, T)> {
         use TVar::*;
         match self {
             Scalar(_) => err!("expected map, got scalar"),
@@ -356,7 +365,7 @@ impl TVar {
             Map { key, val } => Ok((key, val)),
         }
     }
-    fn iterator(self) -> Result<NodeIx> {
+    fn iterator(self) -> Result<T> {
         use TVar::*;
         match self {
             Scalar(_) => err!("expected iterator, got scalar"),
@@ -553,6 +562,20 @@ impl Constraints {
                     Right(id) => self.set_kind(*id, Kind::Scalar),
                 }
             }
+            (LoadBuiltin(b), Left(k)) => {
+                let b_k = b.ty().kind();
+                if b_k == *k {
+                    Ok(())
+                } else {
+                    err!(
+                        "using builtin {} with kind {:?} in context of {:?}",
+                        b,
+                        b_k,
+                        k
+                    )
+                }
+            }
+            (LoadBuiltin(b), Right(id)) => self.set_kind(*id, b.ty().kind()),
         }
     }
 
@@ -566,6 +589,7 @@ impl Constraints {
                 self.merge_expr(v, Left(Kind::Scalar))
             }
             AsgnVar(id, v) => self.merge_expr(v, Right(*id)),
+            SetBuiltin(var, exp) => self.merge_expr(exp, Left(var.ty().kind())),
         }
     }
 
@@ -738,6 +762,23 @@ impl Constraints {
                 let it = self.get_val(iter)?.iterator()?;
                 Ok(TVar::Scalar(it))
             }
+            LoadBuiltin(b) => Ok(match b.ty() {
+                TVar::Scalar(s) => TVar::Scalar(self.const_node(s)),
+                TVar::Iter(s) => TVar::Iter(self.const_node(s)),
+                TVar::Map { key, val } => TVar::Map {
+                    key: self.const_node(key),
+                    val: self.const_node(val),
+                },
+            }),
+        }
+    }
+
+    fn const_node(&self, scalar: Scalar) -> NodeIx {
+        use Scalar::*;
+        match scalar {
+            Int => self.int_node,
+            Float => self.float_node,
+            Str => self.str_node,
         }
     }
 
@@ -773,6 +814,8 @@ impl Constraints {
                     ),
                 }
             }
+            // Builtins have fixed types, no constraint generation necessary.
+            SetBuiltin(_, _) => Ok(()),
         }
     }
     pub(crate) fn get_iter(&mut self, ident: Ident) -> Result<NodeIx /* item */> {
@@ -872,7 +915,7 @@ impl Constraints {
 mod test {
     use super::*;
     use crate::ast::Binop;
-    use crate::builtins::Builtin;
+    use crate::builtins::Function;
 
     #[test]
     fn plus_key_int() {
@@ -880,7 +923,7 @@ mod test {
         use {Binop::*, Scalar::*};
         let i1 = n.add_rule(Some(Rule::Const(Int)), &[]);
         let i2 = n.add_rule(None, &[]);
-        let addi12 = n.add_rule(Some(Rule::Builtin(Builtin::Binop(Plus))), &[i1, i2]);
+        let addi12 = n.add_rule(Some(Rule::Builtin(Function::Binop(Plus))), &[i1, i2]);
         assert!(n.update_rule(i2, Rule::MapKey).is_ok());
         assert!(n.add_deps(i2, Some(addi12).into_iter()).is_ok());
         n.solve();
@@ -895,7 +938,7 @@ mod test {
         use {Binop::*, Scalar::*};
         let i1 = n.add_rule(Some(Rule::Const(Int)), &[]);
         let f1 = n.add_rule(Some(Rule::MapKey), &[]);
-        let add12 = n.add_rule(Some(Rule::Builtin(Builtin::Binop(Plus))), &[i1, f1]);
+        let add12 = n.add_rule(Some(Rule::Builtin(Function::Binop(Plus))), &[i1, f1]);
         let f2 = n.add_rule(Some(Rule::Const(Float)), &[]);
         assert!(n.add_deps(f1, vec![add12, f2].into_iter()).is_ok());
         n.solve();
