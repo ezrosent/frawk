@@ -12,6 +12,7 @@ pub(crate) enum Function {
     Print,
     Hasline,
     Nextline,
+    Setcol,
 }
 
 static_map!(
@@ -35,7 +36,7 @@ impl Function {
         use Function::*;
         match self {
             Hasline | Nextline | Unop(_) => 1,
-            Binop(_) | Print => 2,
+            Setcol | Binop(_) | Print => 2,
         }
     }
 
@@ -78,6 +79,7 @@ impl Propagator for Function {
             Print => (true, None),
             Hasline => (true, Some(Int)),
             Nextline => (true, Some(Str)),
+            Setcol => (true, Some(Str)),
         }
     }
     fn inputs(&self, incoming: &[Option<Scalar>]) -> SmallVec<Option<Scalar>> {
@@ -119,6 +121,7 @@ impl Propagator for Function {
             Binop(Div) => smallvec![Some(Float);2],
             Print => smallvec![Some(Str);incoming.len()],
             Hasline | Nextline => smallvec![Some(Str)],
+            Setcol => smallvec![Some(Int), Some(Str)],
         }
     }
 }

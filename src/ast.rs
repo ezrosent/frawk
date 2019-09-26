@@ -46,7 +46,7 @@ static_map!(
     ["==", Binop::EQ]
 );
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Expr<'a, 'b, I> {
     ILit(i64),
     FLit(f64),
@@ -67,11 +67,11 @@ pub(crate) enum Expr<'a, 'b, I> {
     Inc {
         is_inc: bool,
         is_post: bool,
-        op: I,
+        x: &'a Expr<'a, 'b, I>,
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Stmt<'a, 'b, I> {
     Expr(&'a Expr<'a, 'b, I>),
     Block(Vec<&'a Stmt<'a, 'b, I>>),

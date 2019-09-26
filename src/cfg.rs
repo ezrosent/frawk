@@ -153,7 +153,7 @@ impl<'b, I> Context<'b, I> {
         self.entry
     }
 }
-impl<'b, I: Hash + Eq + Clone + Default + std::fmt::Display> Context<'b, I>
+impl<'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> Context<'b, I>
 where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
@@ -442,19 +442,17 @@ where
                 PrimExpr::CallBuiltin(builtins::Function::Binop(*op), smallvec![v1, v2])
             }
             Var(id) => {
-                let ident = self.get_identifier(id);
-                PrimExpr::Val(PrimVal::Var(ident))
+                if let Ok(bi) = builtins::Variable::try_from(id.clone()) {
+                    PrimExpr::LoadBuiltin(bi)
+                } else {
+                    let ident = self.get_identifier(id);
+                    PrimExpr::Val(PrimVal::Var(ident))
+                }
             }
             Index(arr, ix) => {
                 let arr_v = self.convert_val(arr, current_open)?;
                 let ix_v = self.convert_val(ix, current_open)?;
                 PrimExpr::Index(arr_v, ix_v)
-            }
-            Assign(Var(v), to) => {
-                let to_e = self.convert_expr(to, current_open)?;
-                let ident = self.get_identifier(v);
-                self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to_e));
-                PrimExpr::Val(PrimVal::Var(ident))
             }
             Call(fname, args) => {
                 let bi = if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
@@ -468,31 +466,35 @@ where
                 }
                 PrimExpr::CallBuiltin(bi, prim_args)
             }
-            AssignOp(Var(v), op, to) => {
-                // TODO: do validation here for which ops support assigns?
-
-                let to_v = self.convert_val(to, current_open)?;
-                if let Ok(b) = builtins::Variable::try_from(v.clone()) {
-                    let tmp1 = self.to_val(PrimExpr::LoadBuiltin(b), current_open);
-                    let tmp2 = PrimExpr::CallBuiltin(
-                        builtins::Function::Binop(*op),
-                        smallvec![tmp1, to_v],
-                    );
-                    self.add_stmt(current_open, PrimStmt::SetBuiltin(b, tmp2));
-                    PrimExpr::LoadBuiltin(b)
-                } else {
-                    let ident = self.get_identifier(v);
-                    let tmp = PrimExpr::CallBuiltin(
-                        builtins::Function::Binop(*op),
-                        smallvec![PrimVal::Var(ident), to_v],
-                    );
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(ident, tmp));
-                    PrimExpr::Val(PrimVal::Var(ident))
-                }
-            }
-
+            // Assign(Var(v), to) => {
+            //     let to_e = self.convert_expr(to, current_open)?;
+            //     let ident = self.get_identifier(v);
+            //     self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to_e));
+            //     PrimExpr::Val(PrimVal::Var(ident))
+            // }
+            // AssignOp(Var(v), op, to) => {
+            //     // let tmp = self.convert_expr(&Binop(*op, &Var(v.clone()), to), current_open);
+            //     let to_v = self.convert_val(to, current_open)?;
+            //     if let Ok(b) = builtins::Variable::try_from(v.clone()) {
+            //         let tmp1 = self.to_val(PrimExpr::LoadBuiltin(b), current_open);
+            //         let tmp2 = PrimExpr::CallBuiltin(
+            //             builtins::Function::Binop(*op),
+            //             smallvec![tmp1, to_v],
+            //         );
+            //         self.add_stmt(current_open, PrimStmt::SetBuiltin(b, tmp2));
+            //         PrimExpr::LoadBuiltin(b)
+            //     } else {
+            //         let ident = self.get_identifier(v);
+            //         let tmp = PrimExpr::CallBuiltin(
+            //             builtins::Function::Binop(*op),
+            //             smallvec![PrimVal::Var(ident), to_v],
+            //         );
+            //         self.add_stmt(current_open, PrimStmt::AsgnVar(ident, tmp));
+            //         PrimExpr::Val(PrimVal::Var(ident))
+            //     }
+            // }
             Assign(Index(arr, ix), to) => {
-                return self.do_assign(
+                return self.do_assign_index(
                     arr,
                     ix,
                     |slf, _, _| slf.convert_expr(to, current_open),
@@ -501,7 +503,7 @@ where
             }
 
             AssignOp(Index(arr, ix), op, to) => {
-                return self.do_assign(
+                return self.do_assign_index(
                     arr,
                     ix,
                     |slf, arr_v, ix_v| {
@@ -516,48 +518,88 @@ where
                     current_open,
                 )
             }
-            // Panic here because this marks an internal error. We could move this distinction
-            // up to the ast1:: level, but then we would have 4 different variants to handle
-            // here.
-            Assign(_, _) | AssignOp(_, _, _) => return err!("{}", "invalid assignment expression"),
-            Inc {
-                is_inc,
-                is_post,
-                op,
-            } => {
-                let ident = self.get_identifier(op);
-                let res = if *is_post {
-                    // We have x(++|--), need to save the last value
-                    let tmp = self.fresh();
-                    self.add_stmt(
-                        current_open,
-                        PrimStmt::AsgnVar(tmp, PrimExpr::Val(PrimVal::Var(ident))),
-                    );
-                    tmp
-                } else {
-                    ident
-                };
-                let op = if *is_inc {
-                    ast::Binop::Plus
-                } else {
-                    ast::Binop::Minus
-                };
-                self.add_stmt(
-                    current_open,
-                    PrimStmt::AsgnVar(
-                        ident,
+            Assign(x, to) => {
+                let to = self.convert_expr(to, current_open)?;
+                return self.do_assign(x, |_| to, current_open);
+            }
+            AssignOp(x, op, to) => {
+                let to_v = self.convert_val(to, current_open)?;
+                return self.do_assign(
+                    x,
+                    |v| {
                         PrimExpr::CallBuiltin(
-                            builtins::Function::Binop(op),
-                            smallvec![PrimVal::Var(ident), PrimVal::ILit(1)],
-                        ),
-                    ),
+                            builtins::Function::Binop(*op),
+                            smallvec![v.clone(), to_v],
+                        )
+                    },
+                    current_open,
                 );
-                PrimExpr::Val(PrimVal::Var(res))
+            }
+            Inc { is_inc, is_post, x } => {
+                match x {
+                    Index(_, _) | Var(_) | Unop(ast::Unop::Column, _) => {}
+                    _ => return err!("invalid operand for increment operation {:?}", x),
+                };
+                // XXX Somewhat lazy; we emit a laod even if it is a post-increment.
+                let pre = self.convert_expr(x, current_open)?;
+                let post = self.convert_expr(
+                    &ast::Expr::AssignOp(
+                        x,
+                        if *is_inc {
+                            ast::Binop::Plus
+                        } else {
+                            ast::Binop::Minus
+                        },
+                        &ast::Expr::ILit(1),
+                    ),
+                    current_open,
+                )?;
+                if *is_post {
+                    post
+                } else {
+                    pre
+                }
             }
         })
     }
-
     fn do_assign<'a>(
+        &mut self,
+        v: &'a Expr<'a, 'b, I>,
+        to: impl FnOnce(&PrimVal<'b>) -> PrimExpr<'b>,
+        current_open: NodeIx,
+    ) -> Result<PrimExpr<'b>> {
+        use ast::Expr::*;
+        match v {
+            Var(i) => Ok(if let Ok(b) = builtins::Variable::try_from(i.clone()) {
+                let res = PrimExpr::LoadBuiltin(b);
+                let res_v = self.to_val(res.clone(), current_open);
+                self.add_stmt(current_open, PrimStmt::SetBuiltin(b, to(&res_v)));
+                res
+            } else {
+                let ident = self.get_identifier(i);
+                let res_v = PrimVal::Var(ident);
+                self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to(&res_v)));
+                PrimExpr::Val(res_v)
+            }),
+            Unop(ast::Unop::Column, n) => {
+                use {ast::Unop::*, builtins::Function};
+                let v = self.convert_val(n, current_open)?;
+                let res = PrimExpr::CallBuiltin(Function::Unop(Column), smallvec![v.clone()]);
+                let res_v = self.to_val(res.clone(), current_open);
+                let to_v = self.to_val(to(&res_v), current_open);
+                self.add_stmt(
+                    current_open,
+                    PrimStmt::AsgnVar(
+                        Self::unused(),
+                        PrimExpr::CallBuiltin(Function::Setcol, smallvec![v, to_v]),
+                    ),
+                );
+                Ok(res)
+            }
+            _ => err!("unsupprted assignment LHS: {:?}", v),
+        }
+    }
+    fn do_assign_index<'a>(
         &mut self,
         arr: &'a Expr<'a, 'b, I>,
         ix: &'a Expr<'a, 'b, I>,
