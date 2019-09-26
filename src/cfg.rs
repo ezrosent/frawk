@@ -466,33 +466,6 @@ where
                 }
                 PrimExpr::CallBuiltin(bi, prim_args)
             }
-            // Assign(Var(v), to) => {
-            //     let to_e = self.convert_expr(to, current_open)?;
-            //     let ident = self.get_identifier(v);
-            //     self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to_e));
-            //     PrimExpr::Val(PrimVal::Var(ident))
-            // }
-            // AssignOp(Var(v), op, to) => {
-            //     // let tmp = self.convert_expr(&Binop(*op, &Var(v.clone()), to), current_open);
-            //     let to_v = self.convert_val(to, current_open)?;
-            //     if let Ok(b) = builtins::Variable::try_from(v.clone()) {
-            //         let tmp1 = self.to_val(PrimExpr::LoadBuiltin(b), current_open);
-            //         let tmp2 = PrimExpr::CallBuiltin(
-            //             builtins::Function::Binop(*op),
-            //             smallvec![tmp1, to_v],
-            //         );
-            //         self.add_stmt(current_open, PrimStmt::SetBuiltin(b, tmp2));
-            //         PrimExpr::LoadBuiltin(b)
-            //     } else {
-            //         let ident = self.get_identifier(v);
-            //         let tmp = PrimExpr::CallBuiltin(
-            //             builtins::Function::Binop(*op),
-            //             smallvec![PrimVal::Var(ident), to_v],
-            //         );
-            //         self.add_stmt(current_open, PrimStmt::AsgnVar(ident, tmp));
-            //         PrimExpr::Val(PrimVal::Var(ident))
-            //     }
-            // }
             Assign(Index(arr, ix), to) => {
                 return self.do_assign_index(
                     arr,
