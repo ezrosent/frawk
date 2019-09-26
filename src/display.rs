@@ -100,6 +100,7 @@ impl Display for Function {
             Print => write!(f, "{}", "print"),
             Hasline => write!(f, "{}", "hasline"),
             Nextline => write!(f, "{}", "nextline"),
+            Setcol => write!(f, "{}", "$="),
         }
     }
 }
