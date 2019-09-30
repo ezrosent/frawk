@@ -8,29 +8,53 @@ mod runtime {
     impl Scalar for Int {}
     impl Scalar for Float {}
     impl<'a> Scalar for Str<'a> {}
+
     #[derive(Clone, Debug)]
-    pub(crate) struct Str<'a> {
-        len: u32,
-        data: Rc<RefCell<StrInner<'a>>>,
+    enum Inner<'a> {
+        Literal(&'a str),
+        Boxed(Rc<str>),
+        Concat(Rc<Branch<'a>>),
     }
 
     #[derive(Clone, Debug)]
-    enum StrInner<'a> {
-        Literal(&'a str),
-        Boxed(String),
-        Concat(Str<'a>, Str<'a>),
+    struct Branch<'a> {
+        len: u32,
+        left: Str<'a>,
+        right: Str<'a>,
+    }
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct Str<'a>(RefCell<Inner<'a>>);
+
+    impl<'a> Str<'a> {
+        fn len_u32(&self) -> u32 {
+            use Inner::*;
+            match &*self.0.borrow() {
+                Literal(s) => conv_len(s.len()),
+                Boxed(s) => conv_len(s.len()),
+                Concat(b) => b.len,
+            }
+        }
+        pub(crate) fn len(&self) -> usize {
+            use Inner::*;
+            match &*self.0.borrow() {
+                Literal(s) => s.len(),
+                Boxed(s) => s.len(),
+                Concat(b) => b.len as usize,
+            }
+        }
     }
 
     impl<'a> PartialEq for Str<'a> {
         fn eq(&self, other: &Str<'a>) -> bool {
-            use StrInner::*;
-            if self.len != other.len {
+            use Inner::*;
+            if self.len() != other.len() {
                 return false;
             }
-            match (&*self.data.borrow(), &*other.data.borrow()) {
+            match (&*self.0.borrow(), &*other.0.borrow()) {
                 (Literal(s1), Literal(s2)) => return s1 == s2,
                 (Boxed(s1), Boxed(s2)) => return s1 == s2,
-                (Literal(r), Boxed(b)) | (Boxed(b), Literal(r)) => return *r == b.as_str(),
+                (Literal(r), Boxed(b)) | (Boxed(b), Literal(r)) => return *r == &**b,
                 (_, _) => {}
             }
             self.force();
@@ -51,51 +75,59 @@ mod runtime {
 
     impl<'a> From<&'a str> for Str<'a> {
         fn from(s: &'a str) -> Str<'a> {
-            Str {
-                len: conv_len(s.len()),
-                data: Rc::new(RefCell::new(StrInner::Literal(s))),
-            }
+            Str(RefCell::new(Inner::Literal(s)))
         }
     }
     impl<'a> From<String> for Str<'a> {
         fn from(s: String) -> Str<'a> {
-            Str {
-                len: conv_len(s.len()),
-                data: Rc::new(RefCell::new(StrInner::Boxed(s))),
-            }
+            Str(RefCell::new(Inner::Boxed(s.into())))
         }
     }
 
     impl<'a> Str<'a> {
-        fn concat(s1: Str<'a>, s2: Str<'a>) -> Self {
-            Str {
-                len: s1.len.saturating_add(s2.len),
-                data: Rc::new(RefCell::new(StrInner::Concat(s1, s2))),
+        pub(crate) fn with_str(&self, f: impl FnOnce(&str)) {
+            self.force();
+            match &*self.0.borrow() {
+                Inner::Literal(l) => f(l),
+                Inner::Boxed(b) => f(&*b),
+                _ => unreachable!(),
             }
+        }
+        pub(crate) fn concat(s1: Str<'a>, s2: Str<'a>) -> Self {
+            Str(RefCell::new(Inner::Concat(Rc::new(Branch {
+                len: s1.len_u32().saturating_add(s2.len_u32()),
+                left: s1,
+                right: s2,
+            }))))
         }
         /// force flattens the string by concatenating all components into a single boxed string.
         fn force(&self) {
-            use StrInner::*;
-            if let Literal(_) | Boxed(_) = &*self.data.borrow() {
+            use Inner::*;
+            if let Literal(_) | Boxed(_) = &*self.0.borrow() {
                 return;
             }
-            let mut cur = self.clone();
-            let mut res = String::with_capacity(self.len as usize);
-            let mut todos = SmallVec::<[Str<'a>; 16]>::new();
+            let guards = elsa::FrozenVec::<Rc<Branch<'a>>>::new();
+            let mut cur: &Str<'a> = self;
+            let mut res = String::with_capacity(self.len());
+            let mut todos = SmallVec::<[&Str<'a>; 16]>::new();
             loop {
                 cur = loop {
-                    match &*cur.data.borrow() {
+                    match &*cur.0.borrow() {
                         Literal(s) => res.push_str(s),
-                        Boxed(s) => res.push_str(s.as_str()),
-                        Concat(s1, s2) => {
-                            todos.push(s2.clone());
-                            break s1.clone();
+                        Boxed(s) => res.push_str(&*s),
+                        Concat(rc) => {
+                            let Branch { left, right, .. } = {
+                                guards.push(rc.clone());
+                                &guards[guards.len() - 1]
+                            };
+                            todos.push(right);
+                            break left;
                         }
                     }
                     if let Some(c) = todos.pop() {
                         break c;
                     }
-                    self.data.replace(Boxed(res));
+                    self.0.replace(Boxed(res.into()));
                     return;
                 };
             }
