@@ -13,7 +13,6 @@ mod runtime {
     enum Inner<'a> {
         Literal(&'a str),
         Boxed(Rc<str>),
-        // TODO: consider making it Branch {...Rc<Str<'a>>...}
         Concat(Rc<Branch<'a>>),
     }
 
