@@ -53,10 +53,7 @@ pub(crate) enum Expr<'a, 'b, I> {
     StrLit(&'b str),
     Unop(Unop, &'a Expr<'a, 'b, I>),
     Binop(Binop, &'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
-    // TODO: convert this to I.
     Call(I, Vec<&'a Expr<'a, 'b, I>>),
-    // TODO: add Call(&'b str, SmallVec<&'a Expr>). Have a static map of all builtin function
-    // names. Use that to resolve scopes, etc.
     Var(I),
     Index(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
     Assign(

@@ -5,6 +5,7 @@ pub mod common;
 pub mod arena;
 pub mod ast;
 pub mod builtins;
+pub mod bytecode;
 pub mod cfg;
 mod display;
 pub mod dom;
