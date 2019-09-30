@@ -13,6 +13,7 @@ mod runtime {
     enum Inner<'a> {
         Literal(&'a str),
         Boxed(Rc<str>),
+        // TODO: consider making it Branch {...Rc<Str<'a>>...}
         Concat(Rc<Branch<'a>>),
     }
 
@@ -106,22 +107,17 @@ mod runtime {
             if let Literal(_) | Boxed(_) = &*self.0.borrow() {
                 return;
             }
-            let guards = elsa::FrozenVec::<Rc<Branch<'a>>>::new();
-            let mut cur: &Str<'a> = self;
+            let mut cur = self.clone();
             let mut res = String::with_capacity(self.len());
-            let mut todos = SmallVec::<[&Str<'a>; 16]>::new();
+            let mut todos = SmallVec::<[Str<'a>; 16]>::new();
             loop {
                 cur = loop {
                     match &*cur.0.borrow() {
                         Literal(s) => res.push_str(s),
                         Boxed(s) => res.push_str(&*s),
                         Concat(rc) => {
-                            let Branch { left, right, .. } = {
-                                guards.push(rc.clone());
-                                &guards[guards.len() - 1]
-                            };
-                            todos.push(right);
-                            break left;
+                            todos.push(rc.right.clone());
+                            break rc.left.clone();
                         }
                     }
                     if let Some(c) = todos.pop() {
@@ -148,6 +144,7 @@ mod runtime {
                 ),
             );
             assert_eq!(s1, s2);
+            assert!(s1 != Str::concat(s1.clone(), s2));
         }
     }
 
@@ -156,17 +153,6 @@ mod runtime {
     pub(crate) type IntMap<V> = hashbrown::HashMap<Int, V>;
     pub(crate) type StrMap<'a, V> = hashbrown::HashMap<Str<'a>, V>;
     pub(crate) struct Iter<S: Scalar>(PhantomData<*const S>);
-
-    // impl<'a> StrInner<'a> {
-    //     fn fill(&self, into: &mut String) {
-    //         use StrInner::*;
-    //         match self {
-    //             Literal(s) => into.push_str(s),
-    //             Boxed(s) => into.push_str(s.as_str()),
-    //             Concat(s1, s2) => { s1.fill(into); s2.fill(into); }
-    //         }
-    //     }
-    // }
 }
 
 use runtime::{Float, Int, Str};
