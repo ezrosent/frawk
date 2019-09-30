@@ -13,11 +13,13 @@ pub(crate) enum Function {
     Hasline,
     Nextline,
     Setcol,
+    Split,
 }
 
 static_map!(
     FUNCTIONS<&'static str, Function>,
-    ["print", Function::Print]
+    ["print", Function::Print],
+    ["split", Function::Split]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -37,12 +39,16 @@ impl Function {
         match self {
             Hasline | Nextline | Unop(_) => 1,
             Setcol | Binop(_) | Print => 2,
+            Split => 4, // 3?
         }
     }
 
     // Return kind is alway scalar. AWK lets you just assign into a provided map.
     pub(crate) fn signature(&self) -> SmallVec<Kind> {
-        smallvec![Kind::Scalar; self.arity_inner()]
+        match self {
+            Function::Split => smallvec![Kind::Scalar, Kind::Map, Kind::Scalar],
+            _ => smallvec![Kind::Scalar; self.arity_inner()],
+        }
     }
 }
 
@@ -80,6 +86,7 @@ impl Propagator for Function {
             Hasline => (true, Some(Int)),
             Nextline => (true, Some(Str)),
             Setcol => (true, Some(Str)),
+            Split => (true, Some(Int)),
         }
     }
     fn inputs(&self, incoming: &[Option<Scalar>]) -> SmallVec<Option<Scalar>> {
@@ -122,6 +129,10 @@ impl Propagator for Function {
             Print => smallvec![Some(Str);incoming.len()],
             Hasline | Nextline => smallvec![Some(Str)],
             Setcol => smallvec![Some(Int), Some(Str)],
+            Split => match (&incoming[1],&incoming[2]) {
+                (Some(Int), _) |  (None, _) => smallvec![Some(Str), Some(Int), Some(Str), Some(Str)],
+                (_, _) => smallvec![Some(Str), Some(Str), Some(Str), Some(Str)],
+            },
         }
     }
 }
