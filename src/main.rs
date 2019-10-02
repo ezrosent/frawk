@@ -14,6 +14,7 @@ extern crate elsa;
 extern crate hashbrown;
 extern crate lazy_static;
 extern crate petgraph;
+extern crate regex;
 extern crate smallvec;
 extern crate stable_deref_trait;
 
