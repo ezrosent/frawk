@@ -200,6 +200,10 @@ mod runtime {
     }
 
     pub(crate) struct Registry<T> {
+        // TODO(ezr): we could potentially increase spead here if we did pointer equality.
+        // We could be fine having duplicates for Regex. We could also also intern strings
+        // as we go by swapping out one Rc for another as we encounter them. That would keep the
+        // fast path fast, but we would have to make sure we weren't keeping any Refs alive.
         cached: HashMap<Rc<str>, T>,
     }
     impl<T> Default for Registry<T> {
