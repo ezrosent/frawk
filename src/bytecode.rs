@@ -1,7 +1,12 @@
 use std::marker::PhantomData;
 mod runtime {
+    use crate::common::Result;
+    use hashbrown::HashMap;
+    use regex::Regex;
     use smallvec::SmallVec;
-    use std::cell::RefCell;
+    use std::cell::{Ref, RefCell};
+    use std::fs::File;
+    use std::io::{self, BufRead, BufReader};
     use std::marker::PhantomData;
     use std::rc::Rc;
     pub(crate) trait Scalar {}
@@ -85,7 +90,15 @@ mod runtime {
     }
 
     impl<'a> Str<'a> {
-        pub(crate) fn with_str(&self, f: impl FnOnce(&str)) {
+        pub(crate) fn clone_str(&self) -> Rc<str> {
+            self.force();
+            match &*self.0.borrow() {
+                Inner::Literal(l) => (*l).into(),
+                Inner::Boxed(b) => b.clone(),
+                _ => unreachable!(),
+            }
+        }
+        pub(crate) fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
             self.force();
             match &*self.0.borrow() {
                 Inner::Literal(l) => f(l),
@@ -147,10 +160,90 @@ mod runtime {
         }
     }
 
+    #[derive(Default)]
+    pub(crate) struct RegexCache(Registry<Regex>);
+
+    impl RegexCache {
+        pub(crate) fn match_regex(&mut self, pat: &Str, s: &Str) -> Result<bool> {
+            self.0.get(
+                pat,
+                |s| match Regex::new(s) {
+                    Ok(r) => Ok(r),
+                    Err(e) => err!("{}", e),
+                },
+                |re| s.with_str(|raw| re.is_match(raw)),
+            )
+        }
+    }
+
+    #[derive(Default)]
+    pub(crate) struct FileRead(Registry<io::BufReader<File>>);
+
+    impl FileRead {
+        pub(crate) fn get_line(
+            &mut self,
+            pat: &Str,
+            into: &mut String,
+        ) -> Result<bool /* false = EOF */> {
+            self.0.get_fallible(
+                pat,
+                |s| match File::open(s) {
+                    Ok(f) => Ok(BufReader::new(f)),
+                    Err(e) => err!("failed to open file: {}", e),
+                },
+                |reader| match reader.read_line(into) {
+                    Ok(n) => Ok(n > 0),
+                    Err(e) => err!("{}", e),
+                },
+            )
+        }
+    }
+
+    pub(crate) struct Registry<T> {
+        cached: HashMap<Rc<str>, T>,
+    }
+    impl<T> Default for Registry<T> {
+        fn default() -> Self {
+            Registry {
+                cached: Default::default(),
+            }
+        }
+    }
+
+    impl<T> Registry<T> {
+        fn get<R>(
+            &mut self,
+            s: &Str,
+            new: impl FnMut(&str) -> Result<T>,
+            getter: impl FnOnce(&mut T) -> R,
+        ) -> Result<R> {
+            self.get_fallible(s, new, |t| Ok(getter(t)))
+        }
+        fn get_fallible<R>(
+            &mut self,
+            s: &Str,
+            mut new: impl FnMut(&str) -> Result<T>,
+            getter: impl FnOnce(&mut T) -> Result<R>,
+        ) -> Result<R> {
+            use hashbrown::hash_map::Entry;
+            let k_str = s.clone_str();
+            match self.cached.entry(k_str) {
+                Entry::Occupied(mut o) => getter(o.get_mut()),
+                Entry::Vacant(v) => {
+                    let raw_str = &*v.key();
+                    let mut val = new(raw_str)?;
+                    let res = getter(&mut val);
+                    v.insert(val);
+                    res
+                }
+            }
+        }
+    }
+
     pub(crate) type Int = i64;
     pub(crate) type Float = f64;
-    pub(crate) type IntMap<V> = hashbrown::HashMap<Int, V>;
-    pub(crate) type StrMap<'a, V> = hashbrown::HashMap<Str<'a>, V>;
+    pub(crate) type IntMap<V> = HashMap<Int, V>;
+    pub(crate) type StrMap<'a, V> = HashMap<Str<'a>, V>;
     pub(crate) struct Iter<S: Scalar>(PhantomData<*const S>);
 }
 

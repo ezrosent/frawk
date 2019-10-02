@@ -129,8 +129,8 @@ impl Propagator for Function {
             Print => smallvec![Some(Str);incoming.len()],
             Hasline | Nextline => smallvec![Some(Str)],
             Setcol => smallvec![Some(Int), Some(Str)],
-            Split => match (&incoming[1],&incoming[2]) {
-                (Some(Int), _) |  (None, _) => smallvec![Some(Str), Some(Int), Some(Str), Some(Str)],
+            Split => match (&incoming[1], &incoming[2]) {
+                (Some(Int), _) | (None, _) => smallvec![Some(Str), Some(Int), Some(Str), Some(Str)],
                 (_, _) => smallvec![Some(Str), Some(Str), Some(Str), Some(Str)],
             },
         }
