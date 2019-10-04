@@ -200,7 +200,8 @@ mod runtime {
     }
 
     pub(crate) struct Registry<T> {
-        // TODO(ezr): we could potentially increase spead here if we did pointer equality.
+        // TODO(ezr): we could potentially increase speed here if we did pointer equality (and
+        // length) for lookups.
         // We could be fine having duplicates for Regex. We could also also intern strings
         // as we go by swapping out one Rc for another as we encounter them. That would keep the
         // fast path fast, but we would have to make sure we weren't keeping any Refs alive.
@@ -244,6 +245,63 @@ mod runtime {
         }
     }
 
+    pub(crate) trait Convert<S, T> {
+        fn convert(s: S) -> T;
+    }
+
+    pub(crate) struct _Carrier;
+
+    impl Convert<Float, Int> for _Carrier {
+        fn convert(f: Float) -> Int {
+            f as Int
+        }
+    }
+    impl Convert<Int, Float> for _Carrier {
+        fn convert(i: Int) -> Float {
+            i as Float
+        }
+    }
+    impl<'a> Convert<Int, Str<'a>> for _Carrier {
+        fn convert(i: Int) -> Str<'a> {
+            format!("{}", i).into()
+        }
+    }
+    impl<'a> Convert<Float, Str<'a>> for _Carrier {
+        fn convert(f: Float) -> Str<'a> {
+            let mut buffer = ryu::Buffer::new();
+            let printed = buffer.format(f);
+            let p_str: String = printed.into();
+            p_str.into()
+        }
+    }
+    impl<'a> Convert<Str<'a>, Float> for _Carrier {
+        fn convert(s: Str<'a>) -> Float {
+            s.with_str(crate::strton::strtod)
+        }
+    }
+    impl<'a> Convert<Str<'a>, Int> for _Carrier {
+        fn convert(s: Str<'a>) -> Int {
+            s.with_str(crate::strton::strtoi)
+        }
+    }
+    impl<'b, 'a> Convert<&'b Str<'a>, Float> for _Carrier {
+        fn convert(s: &'b Str<'a>) -> Float {
+            s.with_str(crate::strton::strtod)
+        }
+    }
+    impl<'b, 'a> Convert<&'b Str<'a>, Int> for _Carrier {
+        fn convert(s: &'b Str<'a>) -> Int {
+            s.with_str(crate::strton::strtoi)
+        }
+    }
+
+    pub(crate) fn convert<S, T>(s: S) -> T
+    where
+        _Carrier: Convert<S, T>,
+    {
+        _Carrier::convert(s)
+    }
+
     pub(crate) type Int = i64;
     pub(crate) type Float = f64;
     pub(crate) type IntMap<V> = HashMap<Int, V>;
@@ -264,19 +322,19 @@ pub(crate) struct Reg<T>(u32, PhantomData<*const T>);
 // TODO: we will want a macro of some kind to eliminate some boilerplate. Play around with it some,
 // but with a restricted set of instructions.
 // TODO: implement runtime.
-//   * Strings (on the heap for now?)
-//   * Regexes (use rust syntax for now)
-//   * Printf (skip for now?, see if we can use libc?)
-//   * Files
-//      - Current plan:
-//          - have a Bufreader in main thread: reads until current line separator, then calls
-//            split for field separator and sets $0. (That's in the bytecode).
-//          - Build up map from file name to output file ID. Send on channel to background thread
-//            with file ID and payload. (but if we send the files over a channel, can we avoid
-//            excessive allocations? I suppose allocations are the least of our worries if we are
-//            also going to be writing output)
-//   * Conversions:
-//      - Current plan: do pass with regex, then use simdjson (or stdlib). Benchmark with both.
+//   [x] * Strings (on the heap for now?)
+//   [x] * Regexes (use rust syntax for now)
+//   [ ] * Printf (skip for now?, see if we can use libc?)
+//   [x] * Files
+//          - Current plan:
+//              - have a Bufreader in main thread: reads until current line separator, then calls
+//                split for field separator and sets $0. (That's in the bytecode).
+//              - Build up map from file name to output file ID. Send on channel to background thread
+//                with file ID and payload. (but if we send the files over a channel, can we avoid
+//                excessive allocations? I suppose allocations are the least of our worries if we are
+//                also going to be writing output)
+//   [ ] * Conversions:
+//          - Current plan: do pass with regex, then use simdjson (or stdlib). Benchmark with both.
 
 pub(crate) enum Instr<'a> {
     // By default, instructions have destination first, and src(s) second.

@@ -149,8 +149,8 @@ impl<'outer> Arena<'outer> {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
     use super::*;
+    extern crate test;
     use test::{black_box, Bencher};
 
     #[test]
@@ -327,5 +327,4 @@ mod tests {
             i += 1;
         })
     }
-
 }

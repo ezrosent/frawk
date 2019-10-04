@@ -1,7 +1,6 @@
 #![feature(test)]
 #[macro_use]
 pub mod common;
-
 pub mod arena;
 pub mod ast;
 pub mod builtins;
@@ -9,16 +8,25 @@ pub mod bytecode;
 pub mod cfg;
 mod display;
 pub mod dom;
+pub mod strton;
 pub mod types;
 extern crate elsa;
 extern crate hashbrown;
+extern crate jemallocator;
 extern crate lazy_static;
+extern crate libc;
 extern crate petgraph;
 extern crate regex;
+extern crate ryu;
+extern crate simd_json;
 extern crate smallvec;
 extern crate stable_deref_trait;
 
 use petgraph::dot;
+
+// TODO: put jemalloc behind a feature flag
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
     let a = arena::Arena::default();
