@@ -1,12 +1,17 @@
 use std::marker::PhantomData;
 
-use crate::runtime::{Float, Int, Str};
+use crate::runtime::{self, Float, Int, Str};
 
 #[derive(Copy, Clone)]
 pub(crate) struct Label(u32);
 
-#[derive(Copy, Clone)]
 pub(crate) struct Reg<T>(u32, PhantomData<*const T>);
+impl<T> Clone for Reg<T> {
+    fn clone(&self) -> Reg<T> {
+        Reg(self.0, PhantomData)
+    }
+}
+impl<T> Copy for Reg<T> {}
 
 // TODO: figure out if we need nulls, and hence unions. That's another refactor, but not a hard
 // one. Maybe look at MLSub for inspiration as well? (we wont need it to start)
@@ -148,6 +153,7 @@ impl<T> Reg<T> {
 }
 
 pub(crate) struct Interp<'a> {
+    instrs: Vec<Instr<'a>>,
     floats: Vec<Float>,
     ints: Vec<Int>,
     strs: Vec<Str<'a>>,
@@ -164,6 +170,79 @@ pub(crate) struct Interp<'a> {
     iters_int: Vec<runtime::Iter<Int>>,
     iters_float: Vec<runtime::Iter<Float>>,
     iters_str: Vec<runtime::Iter<Str<'a>>>,
+}
+
+impl<'a> Interp<'a> {
+    pub(crate) fn run(&mut self) {
+        use Instr::*;
+        let mut cur = 0;
+        'outer: loop {
+            // must end with Halt
+            debug_assert!(cur < self.instrs.len());
+            cur = loop {
+                match unsafe { self.instrs.get_unchecked(cur) } {
+                    StoreConstStr(sr, s) => {
+                        let sr = *sr;
+                        *self.get_mut(sr) = s.clone()
+                    }
+                    StoreConstInt(ir, i) => {
+                        let ir = *ir;
+                        *self.get_mut(ir) = *i
+                    }
+                    StoreConstFloat(fr, f) => {
+                        let fr = *fr;
+                        *self.get_mut(fr) = *f
+                    }
+
+                    IntToStr(sr, ir) => {
+                        let s = runtime::convert::<_, Str>(*self.get(*ir));
+                        let sr = *sr;
+                        *self.get_mut(sr) = s;
+                    }
+                    FloatToStr(sr, fr) => {
+                        let s = runtime::convert::<_, Str>(*self.get(*fr));
+                        let sr = *sr;
+                        *self.get_mut(sr) = s;
+                    }
+                    StrToInt(ir, sr) => {
+                        let i = runtime::convert::<_, Int>(self.get(*sr));
+                        let ir = *ir;
+                        *self.get_mut(ir) = i;
+                    }
+                    StrToFloat(fr, sr) => {
+                        let f = runtime::convert::<_, Float>(self.get(*sr));
+                        let fr = *fr;
+                        *self.get_mut(fr) = f;
+                    }
+                    FloatToInt(ir, fr) => {
+                        let i = runtime::convert::<_, Int>(*self.get(*fr));
+                        let ir = *ir;
+                        *self.get_mut(ir) = i;
+                    }
+                    IntToFloat(fr, ir) => {
+                        let f = runtime::convert::<_, Float>(*self.get(*ir));
+                        let fr = *fr;
+                        *self.get_mut(fr) = f;
+                    }
+
+                    AddInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l + r;
+                    }
+                    AddFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l + r;
+                    }
+                    _ => unimplemented!(),
+                };
+                break cur + 1;
+            };
+        }
+    }
 }
 
 trait Get<T> {
