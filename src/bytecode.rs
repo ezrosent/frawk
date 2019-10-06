@@ -158,7 +158,12 @@ pub(crate) struct Interp<'a> {
     ints: Vec<Int>,
     strs: Vec<Str<'a>>,
 
-    // TODO: should these be smallvec<[T; 32]>?
+    regexes: runtime::RegexCache,
+    write_files: runtime::FileWrite,
+    read_files: runtime::FileRead,
+
+    // TODO: should these be smallvec<[T; 32]>? We never add registers, so could we allocate one
+    // contiguous region ahead of time?
     maps_int_float: Vec<runtime::IntMap<Float>>,
     maps_int_int: Vec<runtime::IntMap<Int>>,
     maps_int_str: Vec<runtime::IntMap<Str<'a>>>,
@@ -236,6 +241,179 @@ impl<'a> Interp<'a> {
                         let l = *self.get(*l);
                         let r = *self.get(*r);
                         *self.get_mut(res) = l + r;
+                    }
+                    MulInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l * r;
+                    }
+                    MulFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l * r;
+                    }
+                    MinusInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l - r;
+                    }
+                    MinusFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l - r;
+                    }
+                    ModInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l % r;
+                    }
+                    ModFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l % r;
+                    }
+                    DivInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l) as Float;
+                        let r = *self.get(*r) as Float;
+                        *self.get_mut(res) = l / r;
+                    }
+                    DivFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l / r;
+                    }
+                    Not(res, ir) => {
+                        let res = *res;
+                        let i = *self.get(*ir);
+                        *self.get_mut(res) = (i != 0) as Int;
+                    }
+                    NegInt(res, ir) => {
+                        let res = *res;
+                        let i = *self.get(*ir);
+                        *self.get_mut(res) = -i;
+                    }
+                    NegFloat(res, fr) => {
+                        let res = *res;
+                        let f = *self.get(*fr);
+                        *self.get_mut(res) = -f;
+                    }
+                    Concat(res, l, r) => {
+                        let res = *res;
+                        let l = self.get(*l).clone();
+                        let r = self.get(*r).clone();
+                        *self.get_mut(res) = Str::concat(l, r);
+                    }
+                    Match(res, l, r) => {
+                        let res = *res;
+                        // TODO(ezr): these clones are unnecessary, but we need them so long as
+                        // `get` is a method.
+                        let l = self.get(*l).clone();
+                        let pat = self.get(*r).clone();
+                        match self.regexes.match_regex(&pat, &l) {
+                            Ok(matched) => *self.get_mut(res) = matched as Int,
+                            Err(e) => {
+                                eprintln!("failed to create regex: {}", e);
+                                break 'outer;
+                            }
+                        }
+                    }
+                    LTFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l < r) as Int;
+                    }
+                    LTInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l < r) as Int;
+                    }
+                    LTStr(res, l, r) => {
+                        let res = *res;
+                        let l = self.get(*l);
+                        let r = self.get(*r);
+                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l < r)) as Int;
+                    }
+                    GTFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l > r) as Int;
+                    }
+                    GTInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l > r) as Int;
+                    }
+                    GTStr(res, l, r) => {
+                        let res = *res;
+                        let l = self.get(*l);
+                        let r = self.get(*r);
+                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l > r)) as Int;
+                    }
+                    LTEFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l <= r) as Int;
+                    }
+                    LTEInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l <= r) as Int;
+                    }
+                    LTEStr(res, l, r) => {
+                        let res = *res;
+                        let l = self.get(*l);
+                        let r = self.get(*r);
+                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l <= r)) as Int;
+                    }
+                    GTEFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l >= r) as Int;
+                    }
+                    GTEInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l >= r) as Int;
+                    }
+                    GTEStr(res, l, r) => {
+                        let res = *res;
+                        let l = self.get(*l);
+                        let r = self.get(*r);
+                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l >= r)) as Int;
+                    }
+                    EQFloat(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l == r) as Int;
+                    }
+                    EQInt(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = (l == r) as Int;
+                    }
+                    EQStr(res, l, r) => {
+                        let res = *res;
+                        let l = self.get(*l);
+                        let r = self.get(*r);
+                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l == r)) as Int;
                     }
                     _ => unimplemented!(),
                 };
