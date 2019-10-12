@@ -31,6 +31,23 @@ impl<T> Copy for Reg<T> {}
 //                also going to be writing output)
 //   [x] * Conversions:
 //          - Current plan: do pass with regex, then use simdjson (or stdlib). Benchmark with both.
+//   [ ] * HashMaps:
+//          - For now, wrap hashbrown, but add in explicit handling for iteration to allow
+//            insertions: wrap in refcell (needed anyway): add potential for stack of
+//            modifications. (complex)
+//          - Alternative: just clone the keys ahead of time. (issue: deletion? it actually looks
+//            like gawk and mawk do this; deleting the key has it still show up in the iterator)
+//          - Alternative: use and "ordmap" where keys actually index into a slice, etc...
+//          - Decision: clone for now, but look at doing an optimization allowing for faster
+//            iteration when there are no map accesses within the loop (also look at what others
+//            are doing).
+//   [ ] * Line Splitting:
+//          - Define trait for splitting lines, one that does splitting in larger batches, one that
+//          does it line by line. Choose which one it is based on program behavior (do you set FS
+//          after BEGIN?)
+//          - Perhaps make this an enum and just add a Freeze instruction or
+//          somethign?
+//          - This may require adding instructions (ReadLineAndSplit?).
 
 pub(crate) enum Instr<'a> {
     // By default, instructions have destination first, and src(s) second.
@@ -137,6 +154,9 @@ pub(crate) enum Instr<'a> {
     ),
     StoreStrFloat(Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>, Reg<Float>),
 
+    // Special variables
+    // (think about how we will optimize this for ones that only set this in BEGIN or not at all)
+
     // Control
     JmpIf(Reg<Int>, Label),
     Jmp(Label),
@@ -154,9 +174,11 @@ impl<T> Reg<T> {
 
 pub(crate) struct Interp<'a> {
     instrs: Vec<Instr<'a>>,
+
     floats: Vec<Float>,
     ints: Vec<Int>,
     strs: Vec<Str<'a>>,
+    vars: runtime::Variables<'a>,
 
     regexes: runtime::RegexCache,
     write_files: runtime::FileWrite,

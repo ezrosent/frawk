@@ -7,10 +7,22 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::marker::PhantomData;
 use std::rc::Rc;
+
+pub mod strton;
+
 pub(crate) trait Scalar {}
 impl Scalar for Int {}
 impl Scalar for Float {}
 impl<'a> Scalar for Str<'a> {}
+
+pub(crate) struct Variables<'a> {
+    pub argc: Int,
+    pub argv: Vec<Str<'a>>,
+    pub fs: Str<'a>,
+    pub nf: Int,
+    pub nr: Int,
+    pub filename: Str<'a>,
+}
 
 #[derive(Clone, Debug)]
 enum Inner<'a> {
@@ -305,22 +317,22 @@ impl<'a> Convert<Float, Str<'a>> for _Carrier {
 }
 impl<'a> Convert<Str<'a>, Float> for _Carrier {
     fn convert(s: Str<'a>) -> Float {
-        s.with_str(crate::strton::strtod)
+        s.with_str(strton::strtod)
     }
 }
 impl<'a> Convert<Str<'a>, Int> for _Carrier {
     fn convert(s: Str<'a>) -> Int {
-        s.with_str(crate::strton::strtoi)
+        s.with_str(strton::strtoi)
     }
 }
 impl<'b, 'a> Convert<&'b Str<'a>, Float> for _Carrier {
     fn convert(s: &'b Str<'a>) -> Float {
-        s.with_str(crate::strton::strtod)
+        s.with_str(strton::strtod)
     }
 }
 impl<'b, 'a> Convert<&'b Str<'a>, Int> for _Carrier {
     fn convert(s: &'b Str<'a>) -> Int {
-        s.with_str(crate::strton::strtoi)
+        s.with_str(strton::strtoi)
     }
 }
 
