@@ -9,7 +9,6 @@ pub mod cfg;
 mod display;
 pub mod dom;
 pub mod runtime;
-pub mod strton;
 pub mod types;
 extern crate elsa;
 extern crate hashbrown;
