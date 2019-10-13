@@ -41,21 +41,23 @@ fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
                 bs = &bs[0..bs.len() - i];
             }
 
+            let mut chunks = 0;
+            const CHUNK_SIZE: usize = 1024;
             let valid = unsafe {
                 // See comments in [is_utf8] for the strategy here re: fast paths.
                 if bs.len() >= 32 && x86::validate_ascii(&bs[0..32]) {
-                    const CHUNK_SIZE: usize = 1024;
                     while bs.len() >= CHUNK_SIZE {
                         if !x86::validate_ascii(&bs[..CHUNK_SIZE]) {
                             break;
                         }
                         bs = &bs[CHUNK_SIZE..];
+                        chunks += 1;
                     }
                 }
                 x86::validate_utf8(bs)
             };
             if valid {
-                Some(bs.len())
+                Some(chunks * CHUNK_SIZE + bs.len())
             } else {
                 None
             }
