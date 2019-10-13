@@ -2,19 +2,118 @@
 /// and over 3x faster when validating non-ASCII UTF-8.
 ///
 /// TODO add full support for parsing strings and handling partial parses.
+use std::str;
 
-pub(crate) fn is_utf8(bs: &[u8]) -> bool {
+pub(crate) fn parse_utf8(mut bs: &[u8]) -> Option<&str> {
+    if is_utf8(bs) {
+        Some(unsafe { str::from_utf8_unchecked(bs) })
+    } else {
+        None
+    }
+}
+fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        #[inline]
+        fn is_char_boundary(b: u8) -> bool {
+            // Test if `b` is a character boundary, taken from the
+            // str::is_char_boundary implementation in standard library.
+            (b as i8) >= -0x40
+        }
+        if is_x86_feature_detected!("sse2") {
+            // The SIMD implementation does not keep track of when a string becomes invalid. That's
+            // important here because `bs` could just be the prefix of a longer valid UTF8 string.
+            // To allow for this we walk backwards through `bs` to see if there's a potential
+            // incomplete character.
+            let mut i = 0;
+            for b in bs.iter().rev() {
+                i += 1;
+                if is_char_boundary(*b) {
+                    break;
+                }
+                if i == 4 {
+                    // We should have seen a char boundary after 4
+                    // bytes, regardless of any clipping.
+                    return None;
+                }
+            }
+            if i > 0 && str::from_utf8(&bs[bs.len() - i..]).is_err() {
+                bs = &bs[0..bs.len() - i];
+            }
+
+            let valid = unsafe {
+                // See comments in [is_utf8] for the strategy here re: fast paths.
+                if bs.len() >= 32 && x86::validate_ascii(&bs[0..32]) {
+                    const CHUNK_SIZE: usize = 1024;
+                    while bs.len() >= CHUNK_SIZE {
+                        if !x86::validate_ascii(&bs[..CHUNK_SIZE]) {
+                            break;
+                        }
+                        bs = &bs[CHUNK_SIZE..];
+                    }
+                }
+                x86::validate_utf8(bs)
+            };
+            if valid {
+                Some(bs.len())
+            } else {
+                None
+            }
+        } else {
+            validate_utf8_fallback(bs)
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        validate_utf8_fallback(bs)
+    }
+}
+
+pub(crate) fn parse_utf8_clipped(mut bs: &[u8]) -> Option<&str> {
+    validate_utf8_clipped(bs).map(|off| unsafe { str::from_utf8_unchecked(&bs[..off]) })
+}
+
+fn validate_utf8_fallback(bs: &[u8]) -> Option<usize> {
+    match str::from_utf8(bs) {
+        Ok(res) => Some(res.len()),
+        Err(error) => {
+            let last_valid = error.valid_up_to();
+            if bs.len() - last_valid > 3 {
+                None
+            } else {
+                Some(last_valid)
+            }
+        }
+    }
+}
+
+fn parse_utf8_fallback(bs: &[u8]) -> Option<&str> {
+    validate_utf8_fallback(bs).map(|off| unsafe { str::from_utf8_unchecked(&bs[..off]) })
+}
+
+pub(crate) fn is_utf8(mut bs: &[u8]) -> bool {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         if is_x86_feature_detected!("sse2") {
             unsafe {
+                // We do a top-level fast path to speed up sequences with large all-ASCII prefixes
+                // (in particular 100%-ASCII sequences), falling back to slower UTF8 validation if
+                // ASCII validation fails. UTF8 validation itself has an ASCII fast path, so
+                // sequences that are almost all ASCII will still see a relative speed-up.
                 if bs.len() >= 32 && x86::validate_ascii(&bs[0..32]) {
-                    return x86::validate_ascii(&bs[32..]) || x86::validate_utf8(&bs[32..]);
+                    const CHUNK_SIZE: usize = 1024;
+                    while bs.len() >= CHUNK_SIZE {
+                        if !x86::validate_ascii(&bs[..CHUNK_SIZE]) {
+                            break;
+                        }
+                        bs = &bs[CHUNK_SIZE..];
+                    }
                 }
                 x86::validate_utf8(bs)
             }
         } else {
-            std::str::from_utf8(bs).is_ok()
+            str::from_utf8(bs).is_ok()
         }
     }
 
@@ -24,30 +123,73 @@ pub(crate) fn is_utf8(bs: &[u8]) -> bool {
     }
 }
 
+#[cfg(test)]
 mod tests {
     extern crate test;
     use lazy_static::lazy_static;
     use test::{black_box, Bencher};
 
-    // TODO: get rid of this
-    const GENJI: &'static str = include!("genji.txt");
+    const LEN: usize = 50_000;
+
     lazy_static! {
-        static ref BAD_ASCII: String = (0..GENJI.len()).map(|x| (x % 128) as u8 as char).collect();
+        static ref ASCII: String = (0..LEN).map(|x| (x % 128) as u8 as char).collect();
+        static ref UTF8: String = String::from_utf8(bytes(LEN, 1.0)).unwrap();
     }
     #[test]
+    fn test_partial() {
+        let mut bs: Vec<_> = UTF8.as_bytes().iter().cloned().collect();
+        let l = bs.len();
+        let full = super::parse_utf8_clipped(&bs[..]).expect("full");
+        assert_eq!(UTF8.as_str(), full);
+        let partial = super::parse_utf8_clipped(&bs[..l - 1]).expect("partial (1)");
+        let partial_fallback = super::parse_utf8_fallback(&bs[..l - 1]).expect("partial (2)");
+        assert_eq!(partial, partial_fallback);
+    }
+
+    #[test]
     fn genji_valid() {
-        assert!(std::str::from_utf8(GENJI.as_bytes()).is_ok());
-        assert!(super::is_utf8(GENJI.as_bytes()));
+        assert!(std::str::from_utf8(UTF8.as_bytes()).is_ok());
+        assert!(super::is_utf8(UTF8.as_bytes()));
+        // Corrupt it some
+        let mut bs: Vec<_> = UTF8.as_bytes().iter().cloned().collect();
+        let l = bs.len();
+        assert!(std::str::from_utf8(&bs[..l - 1]).is_err());
+        assert!(!super::is_utf8(&bs[..l - 1]));
+        bs[l / 2] = 255;
+        bs[l / 3] = 255;
+        assert!(!super::is_utf8(&bs[..]));
+        assert!(std::str::from_utf8(&bs[..]).is_err());
     }
     #[test]
     fn ascii_valid() {
-        assert!(std::str::from_utf8(BAD_ASCII.as_bytes()).is_ok());
-        assert!(super::is_utf8(BAD_ASCII.as_bytes()));
+        assert!(std::str::from_utf8(ASCII.as_bytes()).is_ok());
+        assert!(super::is_utf8(ASCII.as_bytes()));
+    }
+
+    fn bytes(n: usize, utf8_pct: f64) -> Vec<u8> {
+        let mut res = Vec::with_capacity(n);
+        use rand::distributions::{Distribution, Uniform};
+        let ascii = Uniform::new_inclusive(0u8, 127u8);
+        let between = Uniform::new_inclusive(0.0, 1.0);
+        let mut rng = rand::thread_rng();
+        for _ in 0..n {
+            if between.sample(&mut rng) <= utf8_pct {
+                let c = rand::random::<char>();
+                let ix = res.len();
+                for _ in 0..c.len_utf8() {
+                    res.push(0);
+                }
+                c.encode_utf8(&mut res[ix..]);
+            } else {
+                res.push(ascii.sample(&mut rng))
+            }
+        }
+        res
     }
 
     #[bench]
     fn parse_ascii_stdlib(b: &mut Bencher) {
-        let bs = BAD_ASCII.as_bytes();
+        let bs = ASCII.as_bytes();
         b.iter(|| {
             black_box(std::str::from_utf8(bs).is_ok());
         })
@@ -55,25 +197,73 @@ mod tests {
 
     #[bench]
     fn parse_ascii_simd(b: &mut Bencher) {
-        let bs = BAD_ASCII.as_bytes();
+        let bs = ASCII.as_bytes();
         b.iter(|| {
             black_box(super::is_utf8(bs));
         })
     }
 
     #[bench]
-    fn parse_genji_stdlib(b: &mut Bencher) {
-        let bs = GENJI.as_bytes();
+    fn parse_100_utf8_simd(b: &mut Bencher) {
+        let bs = bytes(LEN, 1.0);
         b.iter(|| {
-            black_box(std::str::from_utf8(bs).is_ok());
+            black_box(super::is_utf8(&bs[..]));
         })
     }
 
     #[bench]
-    fn parse_genji_simd(b: &mut Bencher) {
-        let bs = GENJI.as_bytes();
+    fn parse_100_utf8_stdlib(b: &mut Bencher) {
+        let bs = bytes(LEN, 1.0);
         b.iter(|| {
-            black_box(super::is_utf8(bs));
+            black_box(std::str::from_utf8(&bs[..]).is_ok());
+        })
+    }
+
+    #[bench]
+    fn parse_50_utf8_simd(b: &mut Bencher) {
+        let bs = bytes(LEN, 0.5);
+        b.iter(|| {
+            black_box(super::is_utf8(&bs[..]));
+        })
+    }
+
+    #[bench]
+    fn parse_50_utf8_stdlib(b: &mut Bencher) {
+        let bs = bytes(LEN, 0.5);
+        b.iter(|| {
+            black_box(std::str::from_utf8(&bs[..]).is_ok());
+        })
+    }
+
+    #[bench]
+    fn parse_10_utf8_simd(b: &mut Bencher) {
+        let bs = bytes(LEN, 0.1);
+        b.iter(|| {
+            black_box(super::is_utf8(&bs[..]));
+        })
+    }
+
+    #[bench]
+    fn parse_10_utf8_stdlib(b: &mut Bencher) {
+        let bs = bytes(LEN, 0.1);
+        b.iter(|| {
+            black_box(std::str::from_utf8(&bs[..]).is_ok());
+        })
+    }
+
+    #[bench]
+    fn parse_1_utf8_simd(b: &mut Bencher) {
+        let bs = bytes(LEN, 0.01);
+        b.iter(|| {
+            black_box(super::is_utf8(&bs[..]));
+        })
+    }
+
+    #[bench]
+    fn parse_1_utf8_stdlib(b: &mut Bencher) {
+        let bs = bytes(LEN, 0.01);
+        b.iter(|| {
+            black_box(std::str::from_utf8(&bs[..]).is_ok());
         })
     }
 }
@@ -101,7 +291,7 @@ mod x86 {
         *has_error = _mm_or_si128(
             *has_error,
             // There's no _mm_set1_epu8, so we do the nested as business here.
-            _mm_subs_epu8(current_bytes, _mm_set1_epi8((0xf4 as u8) as i8)),
+            _mm_subs_epu8(current_bytes, _mm_set1_epi8(0xf4u8 as i8)),
         );
     }
 
@@ -191,15 +381,15 @@ mod x86 {
         // followed by a byte larger than 0x8f. We check for both of these by computing masks for
         // which bytes are 0xED(F4), and then ensuring all following indexes where this mask is
         // true are less than 0x9F(8F).
-        let mask_ed = _mm_cmpeq_epi8(off1_current_bytes, _mm_set1_epi8(0xED as u8 as i8));
-        let mask_f4 = _mm_cmpeq_epi8(off1_current_bytes, _mm_set1_epi8(0xF4 as u8 as i8));
+        let mask_ed = _mm_cmpeq_epi8(off1_current_bytes, _mm_set1_epi8(0xEDu8 as i8));
+        let mask_f4 = _mm_cmpeq_epi8(off1_current_bytes, _mm_set1_epi8(0xF4u8 as i8));
 
         let bad_follow_ed = _mm_and_si128(
-            _mm_cmpgt_epi8(current_bytes, _mm_set1_epi8(0x9F as u8 as i8)),
+            _mm_cmpgt_epi8(current_bytes, _mm_set1_epi8(0x9Fu8 as i8)),
             mask_ed,
         );
         let bad_follow_f4 = _mm_and_si128(
-            _mm_cmpgt_epi8(current_bytes, _mm_set1_epi8(0x8F as u8 as i8)),
+            _mm_cmpgt_epi8(current_bytes, _mm_set1_epi8(0x8Fu8 as i8)),
             mask_f4,
         );
 
@@ -214,7 +404,7 @@ mod x86 {
         previous_hibits: __m128i,
         has_error: &mut __m128i,
     ) {
-        // This function checks a few more constraints on byte ranges.
+        // This function checks a few more constraints on byte values.
         // * 0xC0 and 0xC1 are banned
         // * When a byte value is 0xE0, the next byte must be larger than 0xA0.
         // * When a byte value is 0xF0, the next byte must be at least 0x90.
@@ -253,11 +443,11 @@ mod x86 {
                 MIN,
                 MIN,
                 MIN,
-                0xC2 as u8 as i8,
+                0xC2u8 as i8,
                 // D has no constraints
                 MIN,
-                0xE1 as u8 as i8,
-                0xF1 as u8 as i8,
+                0xE1u8 as i8,
+                0xF1u8 as i8,
             ),
             off1_hibits,
         );
@@ -282,8 +472,8 @@ mod x86 {
                 MIN,
                 MAX,
                 MAX,
-                0xA0 as u8 as i8,
-                0x90 as u8 as i8,
+                0xA0u8 as i8,
+                0x90u8 as i8,
             ),
             off1_hibits,
         );
@@ -292,7 +482,8 @@ mod x86 {
         *has_error = _mm_or_si128(*has_error, _mm_and_si128(initial_under, second_under));
     }
 
-    struct processed_utf8_bytes {
+    #[derive(Copy, Clone)]
+    struct ProcessedUTF8Bytes {
         rawbytes: __m128i,
         high_nibbles: __m128i,
         carried_continuations: __m128i,
@@ -301,9 +492,25 @@ mod x86 {
     #[inline]
     unsafe fn check_utf8_bytes(
         current_bytes: __m128i,
-        previous: &processed_utf8_bytes,
+        previous: &ProcessedUTF8Bytes,
         has_error: &mut __m128i,
-    ) -> processed_utf8_bytes {
+    ) -> ProcessedUTF8Bytes {
+        if _mm_testz_si128(current_bytes, _mm_set1_epi8(0x80u8 as i8)) != 0 {
+            // This vector is all ASCII. Let's check to make sure there aren't any stray
+            // continuations that went unfinished, and then reuse previous.
+            //
+            // The overhead of performing this check seems minimal (a few %) for data that is all
+            // non-ASCII, but the gains are substantial for almost-all-ASCII inputs. For data that
+            // is 100% ASCII there is additional short-circuiting done at the top level.
+            *has_error = _mm_or_si128(
+                _mm_cmpgt_epi8(
+                    previous.carried_continuations,
+                    _mm_setr_epi8(9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 1),
+                ),
+                *has_error,
+            );
+            return *previous;
+        }
         // We just want to shift all bytes right by 4, but there is no _mm_srli_epi8, so we emulate
         // it by shifting the 16-bit integers right and masking off the low nibble.
         let high_nibbles = _mm_and_si128(_mm_srli_epi16(current_bytes, 4), _mm_set1_epi8(0x0F));
@@ -321,7 +528,7 @@ mod x86 {
             previous.high_nibbles,
             has_error,
         );
-        processed_utf8_bytes {
+        ProcessedUTF8Bytes {
             rawbytes: current_bytes,
             high_nibbles,
             carried_continuations,
@@ -334,7 +541,7 @@ mod x86 {
         let base = src.as_ptr();
         let len = src.len() as isize;
         let mut has_error = _mm_setzero_si128();
-        let mut previous = processed_utf8_bytes {
+        let mut previous = ProcessedUTF8Bytes {
             rawbytes: _mm_setzero_si128(),
             high_nibbles: _mm_setzero_si128(),
             carried_continuations: _mm_setzero_si128(),
