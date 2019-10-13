@@ -9,6 +9,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 pub mod strton;
+pub mod utf8;
 
 pub(crate) trait Scalar {}
 impl Scalar for Int {}
