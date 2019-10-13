@@ -16,6 +16,7 @@ extern crate jemallocator;
 extern crate lazy_static;
 extern crate libc;
 extern crate petgraph;
+extern crate rand;
 extern crate regex;
 extern crate ryu;
 extern crate simd_json;
