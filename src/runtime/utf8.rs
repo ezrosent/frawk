@@ -380,6 +380,8 @@ mod x86 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[target_feature(enable = "sse2")]
     pub(crate) unsafe fn validate_ascii(src: &[u8]) -> bool {
+        // ASCII is much simpler to validate. This code simply ORs together all
+        // of the bytes and checks if the MSB ever gets set.
         let base = src.as_ptr();
         let len = src.len() as isize;
         let mut has_error = _mm_setzero_si128();
