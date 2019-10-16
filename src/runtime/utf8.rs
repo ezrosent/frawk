@@ -1,5 +1,7 @@
 /// SIMD-accelerated UTF8 validation. A good clip faster in the ASCII fast-path,
-/// and over 3x faster when validating non-ASCII UTF-8.
+/// and over 3x faster when validating non-ASCII UTF-8. Only x86 is supported for now, with
+/// fallback to the standard libary string conversion routines if SSE2 is unavailable.
+// TODO: support AVX2 or neon?
 use std::str;
 
 pub(crate) fn parse_utf8(mut bs: &[u8]) -> Option<&str> {
@@ -9,6 +11,7 @@ pub(crate) fn parse_utf8(mut bs: &[u8]) -> Option<&str> {
         None
     }
 }
+
 fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -133,9 +136,10 @@ mod tests {
     const LEN: usize = 50_000;
 
     lazy_static! {
-        static ref ASCII: String = (0..LEN).map(|x| (x % 128) as u8 as char).collect();
+        static ref ASCII: String = String::from_utf8(bytes(LEN, 0.0)).unwrap();
         static ref UTF8: String = String::from_utf8(bytes(LEN, 1.0)).unwrap();
     }
+
     #[test]
     fn test_partial() {
         let mut bs: Vec<_> = UTF8.as_bytes().iter().cloned().collect();
@@ -174,7 +178,7 @@ mod tests {
         let between = Uniform::new_inclusive(0.0, 1.0);
         let mut rng = rand::thread_rng();
         for _ in 0..n {
-            if between.sample(&mut rng) <= utf8_pct {
+            if between.sample(&mut rng) < utf8_pct {
                 let c = rand::random::<char>();
                 let ix = res.len();
                 for _ in 0..c.len_utf8() {
