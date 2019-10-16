@@ -6,7 +6,6 @@
 /// without internal references to non-'static members.
 use smallvec::SmallVec;
 use std::iter::FromIterator;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 pub(crate) struct Shared<B: ?Sized, T: ?Sized> {
@@ -36,12 +35,14 @@ impl<B: ?Sized + 'static, T: ?Sized + 'static> Shared<B, T> {
     pub(crate) fn get(&self) -> &T {
         unsafe { &*self.trans }
     }
+
     pub(crate) fn extend<R: ?Sized + 'static>(&self, f: impl FnOnce(&T) -> &R) -> Shared<B, R> {
         Shared {
             base: self.base.clone(),
             trans: f(self.get()) as *const R,
         }
     }
+
     pub(crate) fn extend_slice<R: ?Sized + 'static>(
         &self,
         f: impl FnOnce(&T) -> SmallVec<[&R; 8]>,
@@ -68,12 +69,14 @@ impl<B: ?Sized, T: ?Sized> Clone for SharedSlice<B, T> {
 }
 
 impl<B: ?Sized + 'static, T: ?Sized + 'static> SharedSlice<B, T> {
-    pub(crate) fn iter(&self) -> impl Iterator<Item=&T> {
-        self.trans.iter().map(|x| unsafe {&**x})
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+        self.trans.iter().map(|x| unsafe { &**x })
     }
+
     pub(crate) fn get(&self, i: usize) -> Option<&T> {
         self.trans.get(i).map(|x| unsafe { &**x })
     }
+
     pub(crate) fn get_shared(&self, i: usize) -> Option<Shared<B, T>> {
         self.trans.get(i).map(|x| Shared {
             base: self.base.clone(),

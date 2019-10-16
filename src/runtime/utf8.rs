@@ -152,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn genji_valid() {
+    fn utf8_valid() {
         assert!(std::str::from_utf8(UTF8.as_bytes()).is_ok());
         assert!(super::is_utf8(UTF8.as_bytes()));
         // Corrupt it some
