@@ -2,12 +2,13 @@ use crate::common::Result;
 use hashbrown::HashMap;
 use regex::Regex;
 use smallvec::SmallVec;
-use std::cell::{Ref, RefCell};
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+pub mod shared;
 pub mod strton;
 pub mod utf8;
 
