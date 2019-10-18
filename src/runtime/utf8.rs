@@ -18,14 +18,16 @@ fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
         #[inline]
         fn is_char_boundary(b: u8) -> bool {
             // Test if `b` is a character boundary, taken from the
-            // str::is_char_boundary implementation in standard library.
+            // str::is_char_boundary implementation in the standard
+            // library.
             (b as i8) >= -0x40
         }
         if is_x86_feature_detected!("sse2") {
-            // The SIMD implementation does not keep track of when a string becomes invalid. That's
-            // important here because `bs` could just be the prefix of a longer valid UTF8 string.
-            // To allow for this we walk backwards through `bs` to see if there's a potential
-            // incomplete character.
+            // The SIMD implementation does not keep track of when a
+            // string becomes invalid. That's important here because
+            // `bs` could just be the prefix of a longer valid UTF8
+            // string.  To allow for this we walk backwards through `bs`
+            // to see if there's a potential incomplete character.
             let mut i = 0;
             for b in bs.iter().rev() {
                 i += 1;
@@ -46,7 +48,8 @@ fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
             let mut chunks = 0;
             const CHUNK_SIZE: usize = 1024;
             let valid = unsafe {
-                // See comments in [is_utf8] for the strategy here re: fast paths.
+                // See comments in [is_utf8] for the strategy here re:
+                // fast paths.
                 if bs.len() >= 32 && x86::validate_ascii(&bs[0..32]) {
                     while bs.len() >= CHUNK_SIZE {
                         if !x86::validate_ascii(&bs[..CHUNK_SIZE]) {

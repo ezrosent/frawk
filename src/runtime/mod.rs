@@ -9,8 +9,11 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 pub mod shared;
+pub mod splitter;
 pub mod strton;
 pub mod utf8;
+
+use shared::Shared;
 
 pub(crate) trait Scalar {}
 impl Scalar for Int {}
@@ -29,6 +32,7 @@ pub(crate) struct Variables<'a> {
 #[derive(Clone, Debug)]
 enum Inner<'a> {
     Literal(&'a str),
+    Line(Shared<[u8], str>),
     Boxed(Rc<str>),
     Concat(Rc<Branch<'a>>),
 }
@@ -49,6 +53,7 @@ impl<'a> Str<'a> {
         match &*self.0.borrow() {
             Literal(s) => conv_len(s.len()),
             Boxed(s) => conv_len(s.len()),
+            Line(s) => conv_len(s.get().len()),
             Concat(b) => b.len,
         }
     }
@@ -57,6 +62,7 @@ impl<'a> Str<'a> {
         match &*self.0.borrow() {
             Literal(s) => s.len(),
             Boxed(s) => s.len(),
+            Line(s) => s.get().len(),
             Concat(b) => b.len as usize,
         }
     }
@@ -68,15 +74,7 @@ impl<'a> PartialEq for Str<'a> {
         if self.len() != other.len() {
             return false;
         }
-        match (&*self.0.borrow(), &*other.0.borrow()) {
-            (Literal(s1), Literal(s2)) => return s1 == s2,
-            (Boxed(s1), Boxed(s2)) => return s1 == s2,
-            (Literal(r), Boxed(b)) | (Boxed(b), Literal(r)) => return *r == &**b,
-            (_, _) => {}
-        }
-        self.force();
-        other.force();
-        self == other
+        self.with_str(|s1| other.with_str(|s2| s1 == s2))
     }
 }
 
@@ -107,6 +105,7 @@ impl<'a> Str<'a> {
         match &*self.0.borrow() {
             Inner::Literal(l) => (*l).into(),
             Inner::Boxed(b) => b.clone(),
+            Inner::Line(l) => l.get().into(),
             _ => unreachable!(),
         }
     }
@@ -115,6 +114,7 @@ impl<'a> Str<'a> {
         match &*self.0.borrow() {
             Inner::Literal(l) => f(l),
             Inner::Boxed(b) => f(&*b),
+            Inner::Line(l) => f(l.get()),
             _ => unreachable!(),
         }
     }
@@ -139,6 +139,7 @@ impl<'a> Str<'a> {
                 match &*cur.0.borrow() {
                     Literal(s) => res.push_str(s),
                     Boxed(s) => res.push_str(&*s),
+                    Line(s) => res.push_str(s.get()),
                     Concat(rc) => {
                         todos.push(rc.right.clone());
                         break rc.left.clone();
