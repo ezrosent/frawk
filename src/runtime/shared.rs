@@ -5,12 +5,29 @@
 /// not been successful, and the project currently only requires types
 /// without internal references to non-'static members.
 use smallvec::SmallVec;
+use std::fmt;
 use std::iter::FromIterator;
 use std::rc::Rc;
+use std::any::Any;
 
 pub(crate) struct Shared<B: ?Sized, T: ?Sized> {
     base: Rc<B>,
     trans: *const T,
+}
+
+impl<B: 'static + ?Sized, T: 'static + ?Sized> fmt::Debug for Shared<B, T>
+where
+    B: fmt::Debug,
+    T: fmt::Debug,
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "Shared {{ base: {:?}, trans: {:?} }}",
+            &*self.base,
+            self.get()
+        )
+    }
 }
 
 impl<B: ?Sized, T: ?Sized> Clone for Shared<B, T> {
@@ -42,6 +59,19 @@ impl<B: ?Sized + 'static, T: ?Sized + 'static> Shared<B, T> {
             trans: f(self.get()) as *const R,
         }
     }
+    pub(crate) fn extend_opt<R: ?Sized + 'static>(
+        &self,
+        f: impl FnOnce(&T) -> Option<&R>,
+    ) -> Option<Shared<B, R>> {
+        Some(Shared {
+            base: self.base.clone(),
+            trans: if let Some(r) = f(self.get()) {
+                r as *const R
+            } else {
+                return None;
+            },
+        })
+    }
 
     pub(crate) fn extend_slice<R: ?Sized + 'static>(
         &self,
@@ -69,6 +99,9 @@ impl<B: ?Sized, T: ?Sized> Clone for SharedSlice<B, T> {
 }
 
 impl<B: ?Sized + 'static, T: ?Sized + 'static> SharedSlice<B, T> {
+    pub(crate) fn len(&self) -> usize {
+        self.trans.len()
+    }
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
         self.trans.iter().map(|x| unsafe { &**x })
     }
