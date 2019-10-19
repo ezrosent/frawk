@@ -35,11 +35,67 @@ impl<T: ?Sized> Clone for Shared<T> {
     }
 }
 
+// Using some unstable standard library features to avoid constructing
+// an intermediate vector when making a slice.
+
+pub(crate) trait IterRefFn<'a, A: 'a + ?Sized, B: 'a + ?Sized> {
+    type I: Iterator<Item = &'a B>;
+    fn invoke(self, a: &'a A) -> Self::I;
+}
+
+/*
+impl<'a, A: 'a + ?Sized, B: 'a + ?Sized, F, I> IterRefFn<'a, A, B> for F
+where
+    I: Iterator<Item = &'a B>,
+    F: std::ops::FnOnce<&'a A, Output = I>,
+{
+    type I = I;
+    fn invoke(self, a: &'a A) -> I {
+        self.call_once(a)
+    }
+}
+// NOTE passing |s| s.split(" ") does not compile. Nor does:
+// fn split_str<'a>(s: &'a str) -> impl Iterator<Item=&'a str> {
+//   s.split(" ")
+// }
+// Neither of them actually seem to implement this. If we do this
+// sort of custom-fn-trait hackery though, I think we can get rid of
+// the unstable features.
+*/
+
+impl<T: ?Sized + 'static> Shared<T> {
+    pub(crate) fn extend_slice_iter<R: ?Sized + 'static>(
+        &self,
+        f: impl for<'a> IterRefFn<'a, T, R>,
+    ) -> SharedSlice<R> {
+        SharedSlice {
+            base: self.base.clone(),
+            trans: Rc::from_iter(f.invoke(self.get()).map(|x| x as *const R)),
+        }
+    }
+}
+
+fn _test() {
+    let s: Box<str> = "hi there".into();
+    let s0: Shared<str> = s.into();
+    #[derive(Copy, Clone)]
+    struct Split;
+    impl<'a> IterRefFn<'a, str, str> for Split {
+        type I = std::str::Split<'a, &'a str>;
+        fn invoke(self, a: &'a str) -> Self::I {
+            a.split(" ")
+        }
+    }
+
+    let s1: SharedSlice<str> = s0.extend_slice_iter(Split);
+}
+
 // What are the options here?
 // 1. put everything under a Box (Rc<Box<str>>). It's annoying and slightly less efficient in that
 //    we do an extra allocation, but at least we won't pay for the indirection.
-// 2. pay for the extra type parameter
-// 3.
+// 2. pay for the extra type parameter (TODO: look into this if the
+// allocations get too strenuous; we could tweak the reading API to build an Rc<str> from the data
+// directly and then have a Shared<str,str> be the only relevant type)
 impl<T: ?Sized + 'static> From<Box<T>> for Shared<T> {
     fn from(b: Box<T>) -> Self {
         let trans = &*b as *const T;
@@ -80,6 +136,8 @@ impl<T: ?Sized + 'static> Shared<T> {
         Some(Shared { base, trans })
     }
 
+    // TODO: we may just need to have an iterator over Shared<R>. can we do that without an extra
+    // allocation?
     pub(crate) fn extend_slice<R: ?Sized + 'static>(
         &self,
         f: impl FnOnce(&T) -> SmallVec<[&R; 8]>,
@@ -111,6 +169,10 @@ impl<T: ?Sized + 'static> SharedSlice<T> {
     }
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
         self.trans.iter().map(|x| unsafe { &**x })
+    }
+    pub(crate) fn iter_shared(&self) -> impl Iterator<Item = Shared<T>> + '_{
+        let base = self.base.clone();
+        self.trans.iter().map(move |x| Shared { base: base.clone(), trans: *x })
     }
     pub(crate) fn unpack(&self) -> SmallVec<[Shared<T>; 4]> {
         self.trans

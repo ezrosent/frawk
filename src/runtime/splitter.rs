@@ -1,4 +1,4 @@
-use super::shared::{Shared, SharedSlice};
+use super::shared::{IterRefFn, Shared, SharedSlice};
 use super::utf8::{parse_utf8, parse_utf8_clipped};
 use super::{Inner, Str};
 use crate::common::Result;
@@ -20,7 +20,7 @@ trait Line<'a> {
 }
 trait Splitter<'a> {
     type Line: Line<'a>;
-    fn get_line<R: Read>(&mut self, r: &mut Reader<R>) -> Self::Line;
+    fn get_line<R: Read>(&mut self, r: &mut Reader<R>) -> Result<Option<Self::Line>>;
 }
 
 const CHUNK_SIZE: usize = 4 << 10;
@@ -119,29 +119,37 @@ impl<R: Read> FileBuffer<R> {
         })
     }
 }
+// TODO: Rework this logic to work line by line
+//      * Reader just holds onto (shrinking) current buffer. Hands out `Shared`s
+//      * "Cursor" (rename "Splitter") just hands out Lines as normal, but instead of batching
+//        splits internally it just reads off of the top and stores a Str that holds a (delimited)
+//        reference into the buffer.
+//      * No need for caching or anything: pass the regexes into split (XXX this raises issues for
+//      split).
 
-// Cursor (holding onto current offset) with (eager) regex registry
-// (kept as LRU cache).
-//
-//
-// * Regex splitting logic can happen at the level of a vector of Shared<[u8],str>
-//   - Split each element.
-//   - Ask for a slice (Str? for concat) of all elements up to a given offset
-// * Splitter points to a shared (mutable) vector of strings with an
-//   advance method that keeps an offset in the current string and pops
-//   it off if need be. Whenever a read happens that requires a farther
-//   offset, we read the next chunk.
 
-struct RegexCursor {
-    re: Regex,
-    // offset into file where current strings start
-    start: usize,
+struct RegexCursor<'a> {
+    line_re: Regex,
+    col_re: Rc<Regex>,
+    // prefix to append to the next line
+    partial: Str<'a>,
     // splits
-    splits: Vec<SharedSlice<str>>,
+    splits: Vec<Str<'a>>,
+}
+
+impl<'a> RegexCursor<'a> {
+    pub(crate) fn new(line: Regex, column: Regex) -> RegexCursor<'a> {
+        RegexCursor {
+            line_re: line,
+            col_re: Rc::new(column),
+            partial: "".into(),
+            splits: Default::default(),
+        }
+    }
 }
 
 struct RegexLine<'a> {
-    pat: Regex,
+    pat: Rc<Regex>,
     text: Str<'a>,
 }
 
@@ -150,19 +158,96 @@ impl<'a> Line<'a> for RegexLine<'a> {
         self.text.clone()
     }
     fn columns(&self, v: &mut Vec<Str<'a>>) {
-        match &*self.text.0.borrow() {
-            Inner::Line(s) => unimplemented!(),
-            x => unimplemented!(), // s.with_str(|s| for s in self.pat.split(x)
-        }
+        self.text.split(&*self.pat, |s| v.push(s))
     }
 }
 
-// impl<'a> Splitter<'a> for RegexCursor {
-//     type Line = Str<'a>;
-//     fn get_line<R: Read>(&mut self, r: &mut Reader<R>) -> Self::Line {
-//         unimplemented!()
-//     }
-// }
+impl<'a> Splitter<'a> for RegexCursor<'a> {
+    type Line = RegexLine<'a>;
+    fn get_line<R: Read>(&mut self, r: &mut Reader<R>) -> Result<Option<Self::Line>> {
+        // This method is pretty complicated, largely because it has to
+        // handle lines that cross chunk boundaries.
+        //
+        // In the (hopefully) common case, we have already pre-split
+        // some lines and we can just hand one of them out.
+        if let Some(s) = self.splits.pop() {
+            debug_assert!(self.partial.with_str(|s| s == ""));
+            return Ok(Some(RegexLine {
+                pat: self.col_re.clone(),
+                text: s,
+            }));
+        }
+
+        // Some helpers for the slow path. This is an IterRefFn that
+        // wraps Regex::split for use with splitting a Shared<str> into
+        // lines. See the comments on IterRefFn if you're curious about
+        // why the extra struct is necessary.
+        #[derive(Copy, Clone)]
+        struct RSplit<'a>(&'a Regex);
+        impl<'a, 'b> IterRefFn<'b, str, str> for RSplit<'a> {
+            type I = regex::Split<'a, 'b>;
+            #[inline]
+            fn invoke(self, s: &'b str) -> Self::I {
+                self.0.split(s)
+            }
+        }
+        // Helper function for extracting self.partial and replacing it
+        // with the empty string. This would be nicer as a method, but
+        // that defeats the NLL borrow checker in some uses, so we'll
+        // settle for this.
+        fn replace<'a>(s: &mut Str<'a>) -> Str<'a> {
+            std::mem::replace(s, "".into())
+        }
+
+        let splitter = RSplit(&self.line_re);
+        let s = if let Some(s) = r.get_next_buf()? {
+            s
+        } else {
+            // EOF
+            return Ok(None);
+        };
+
+        // Hopefully there was at least one line in the buffer we just
+        // read, but if not we will have to keep reading buffers and
+        // appending them to self.partial until we reach a line break,
+        // or an EOF.
+        let mut slc = s.extend_slice_iter(splitter);
+        while slc.len() == 1 {
+            let prefix = replace(&mut self.partial);
+            self.partial = Str::concat(prefix, slc.get_shared(0).unwrap().into());
+            match r.get_next_buf()? {
+                Some(s) => {
+                    slc = s.extend_slice_iter(splitter);
+                }
+                None => {
+                    return Ok(Some(RegexLine {
+                        pat: self.col_re.clone(),
+                        text: replace(&mut self.partial),
+                    }))
+                }
+            }
+        }
+
+        // Process the split output and push it onto
+        // self.splits. "Process" here means prepend self.partial to the
+        // first string, and assign the last element to partial.
+        let len = slc.len();
+        assert!(len > 1);
+        for (i, s) in slc.iter_shared().enumerate() {
+            if i == 0 {
+                // first
+                let prefix = replace(&mut self.partial);
+                self.splits.push(Str::concat(prefix.into(), s.into()));
+            } else if i == len - 1 && s.get() != "" {
+                // last
+                self.partial = s.into();
+            } else {
+                self.splits.push(s.into());
+            }
+        }
+        self.get_line(r)
+    }
+}
 
 mod test {
     // need to benchmark batched splitting vs. regular splitting to get a feel for things.
@@ -177,7 +262,60 @@ mod test {
     }
 
     #[bench]
-    fn bench_split_by_line(b: &mut Bencher) {
+    fn bench_find_iter(b: &mut Bencher) {
+        let bs = STR.as_str();
+        let line = &*LINE;
+        let space = &*SPACE;
+        b.iter(|| {
+            let mut lstart = 0;
+            let mut cstart = 0;
+            while lstart < bs.len() {
+                let (start, end) = match line.find_at(bs, lstart) {
+                    Some(m) => (m.start(), m.end()),
+                    None => (bs.len(), bs.len()),
+                };
+                while cstart < start {
+                    if let Some(m) = space.find_at(bs, cstart) {
+                        black_box(m.as_str());
+                        cstart = m.end();
+                    } else {
+                        break;
+                    }
+                }
+                lstart = end;
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_find_iter_u8(b: &mut Bencher) {
+        use regex::bytes;
+        let bs = STR.as_bytes();
+        let line = bytes::Regex::new("\n").unwrap();
+        let space = bytes::Regex::new(" ").unwrap();
+        b.iter(|| {
+            let mut lstart = 0;
+            let mut cstart = 0;
+            while lstart < bs.len() {
+                let (start, end) = match line.find_at(bs, lstart) {
+                    Some(m) => (m.start(), m.end()),
+                    None => (bs.len(), bs.len()),
+                };
+                while cstart < start {
+                    if let Some(m) = space.find_at(bs, cstart) {
+                        black_box(m.as_bytes());
+                        cstart = m.end();
+                    } else {
+                        break;
+                    }
+                }
+                lstart = end;
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_split_batched(b: &mut Bencher) {
         let bs = STR.as_str();
         let line = &*LINE;
         let space = &*SPACE;
@@ -192,7 +330,23 @@ mod test {
     }
 
     #[bench]
-    fn bench_split_batched(b: &mut Bencher) {
+    fn bench_split_batched_u8(b: &mut Bencher) {
+        use regex::bytes;
+        let bs = STR.as_bytes();
+        let line = bytes::Regex::new("\n").unwrap();
+        let space = bytes::Regex::new(" ").unwrap();
+        b.iter(|| {
+            for s in line.split(bs) {
+                black_box(s);
+            }
+            for s in space.split(bs) {
+                black_box(s);
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_split_by_line(b: &mut Bencher) {
         let bs = STR.as_str();
         let line = &*LINE;
         let space = &*SPACE;
