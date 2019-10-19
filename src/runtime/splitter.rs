@@ -1,6 +1,6 @@
 use super::shared::{Shared, SharedSlice};
 use super::utf8::{parse_utf8, parse_utf8_clipped};
-use super::{Str, Inner};
+use super::{Inner, Str};
 use crate::common::Result;
 
 use regex::Regex;
@@ -62,7 +62,7 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
 }
 
 impl<R: Read> Reader<R> {
-    fn get_next_buf(&mut self) -> Result<Option<Shared<[u8], str>>> {
+    fn get_next_buf(&mut self) -> Result<Option<Shared<str>>> {
         if self.done {
             return Ok(None);
         }
@@ -76,7 +76,7 @@ impl<R: Read> Reader<R> {
             self.done = true;
             data.truncate(bytes_read);
         }
-        let bytes = Shared::<[u8], [u8]>::from(Rc::from(data));
+        let bytes = Shared::<[u8]>::from(Box::from(data));
         let utf8 = {
             let opt = if self.done {
                 bytes.extend_opt(|bs| parse_utf8(bs))
@@ -100,7 +100,7 @@ impl<R: Read> Reader<R> {
 // pass an &mut to RegexCursor, read until we get more than one, or else a split
 // advance gets called on FileBuffer and RegexCursor
 struct FileBuffer<R> {
-    pub contents: Vec<Shared<[u8], str>>,
+    pub contents: Vec<Shared<str>>,
     reader: Reader<R>,
 }
 
@@ -137,7 +137,7 @@ struct RegexCursor {
     // offset into file where current strings start
     start: usize,
     // splits
-    splits: Vec<SharedSlice<[u8], str>>,
+    splits: Vec<SharedSlice<str>>,
 }
 
 struct RegexLine<'a> {
@@ -146,7 +146,9 @@ struct RegexLine<'a> {
 }
 
 impl<'a> Line<'a> for RegexLine<'a> {
-    fn text(&self) -> Str<'a> { self.text.clone() }
+    fn text(&self) -> Str<'a> {
+        self.text.clone()
+    }
     fn columns(&self, v: &mut Vec<Str<'a>>) {
         match &*self.text.0.borrow() {
             Inner::Line(s) => unimplemented!(),
@@ -161,8 +163,6 @@ impl<'a> Line<'a> for RegexLine<'a> {
 //         unimplemented!()
 //     }
 // }
-
-
 
 mod test {
     // need to benchmark batched splitting vs. regular splitting to get a feel for things.
