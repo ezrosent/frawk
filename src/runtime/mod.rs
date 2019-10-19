@@ -32,7 +32,7 @@ pub(crate) struct Variables<'a> {
 #[derive(Clone, Debug)]
 enum Inner<'a> {
     Literal(&'a str),
-    Line(Shared<[u8], str>),
+    Line(Shared<str>),
     Boxed(Rc<str>),
     Concat(Rc<Branch<'a>>),
 }
@@ -64,6 +64,36 @@ impl<'a> Str<'a> {
             Boxed(s) => s.len(),
             Line(s) => s.get().len(),
             Concat(b) => b.len as usize,
+        }
+    }
+    /// We implement split here directly rather than just use with_str
+    /// and split because it allows the runtime to share memory across
+    /// different strings. Splitting a literal yields references
+    /// into that literal. Splitting a boxed string or a line uses
+    /// the SharedSlice functionality to yield references into those
+    /// strings, while also pinning their reference count.
+    pub(crate) fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>)) {
+        self.force();
+        use Inner::*;
+        let mut line = |s: &Shared<str>| {
+            for s in s
+                .extend_slice(|s| pat.split(s).collect())
+                .unpack()
+                .into_iter()
+                .map(|s| Str(RefCell::new(Inner::Line(s))))
+            {
+                push(s)
+            }
+        };
+        match &*self.0.borrow() {
+            Literal(s) => {
+                for s in pat.split(s).map(|s| Str(RefCell::new(Inner::Literal(s)))) {
+                    push(s)
+                }
+            }
+            Boxed(s) => line(&Shared::from(s.clone())),
+            Line(s) => line(s),
+            Concat(_) => unreachable!(),
         }
     }
 }
@@ -106,7 +136,7 @@ impl<'a> Str<'a> {
             Inner::Literal(l) => (*l).into(),
             Inner::Boxed(b) => b.clone(),
             Inner::Line(l) => l.get().into(),
-            _ => unreachable!(),
+            Inner::Concat(_) => unreachable!(),
         }
     }
     pub(crate) fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
@@ -115,7 +145,7 @@ impl<'a> Str<'a> {
             Inner::Literal(l) => f(l),
             Inner::Boxed(b) => f(&*b),
             Inner::Line(l) => f(l.get()),
-            _ => unreachable!(),
+            Inner::Concat(_) => unreachable!(),
         }
     }
     pub(crate) fn concat(s1: Str<'a>, s2: Str<'a>) -> Self {
