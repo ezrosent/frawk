@@ -129,6 +129,12 @@ impl<'a> From<String> for Str<'a> {
     }
 }
 
+impl<'a> From<Shared<str>> for Str<'a> {
+    fn from(s: Shared<str>) -> Str<'a> {
+        Str(RefCell::new(Inner::Line(s)))
+    }
+}
+
 impl<'a> Str<'a> {
     pub(crate) fn clone_str(&self) -> Rc<str> {
         self.force();
