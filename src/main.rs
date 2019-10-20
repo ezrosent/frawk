@@ -1,4 +1,6 @@
 #![feature(test)]
+#![feature(unboxed_closures)]
+#![feature(fn_traits)]
 #[macro_use]
 pub mod common;
 pub mod arena;

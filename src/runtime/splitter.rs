@@ -127,7 +127,6 @@ impl<R: Read> FileBuffer<R> {
 //      * No need for caching or anything: pass the regexes into split (XXX this raises issues for
 //      split).
 
-
 struct RegexCursor<'a> {
     line_re: Regex,
     col_re: Rc<Regex>,
@@ -249,6 +248,7 @@ impl<'a> Splitter<'a> for RegexCursor<'a> {
     }
 }
 
+#[cfg(test)]
 mod test {
     // need to benchmark batched splitting vs. regular splitting to get a feel for things.
     extern crate test;

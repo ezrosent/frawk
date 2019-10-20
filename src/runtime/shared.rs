@@ -43,7 +43,12 @@ pub(crate) trait IterRefFn<'a, A: 'a + ?Sized, B: 'a + ?Sized> {
     fn invoke(self, a: &'a A) -> Self::I;
 }
 
-/*
+pub(crate) trait Bb<'a, A: 'a + ?Sized, B: 'a + ?Sized>:
+    FnOnce(&'a A) -> <Self as Bb<'a, A, B>>::I
+{
+    type I: Iterator<Item = &'a B> + 'a;
+}
+
 impl<'a, A: 'a + ?Sized, B: 'a + ?Sized, F, I> IterRefFn<'a, A, B> for F
 where
     I: Iterator<Item = &'a B>,
@@ -54,6 +59,7 @@ where
         self.call_once(a)
     }
 }
+
 // NOTE passing |s| s.split(" ") does not compile. Nor does:
 // fn split_str<'a>(s: &'a str) -> impl Iterator<Item=&'a str> {
 //   s.split(" ")
@@ -61,7 +67,6 @@ where
 // Neither of them actually seem to implement this. If we do this
 // sort of custom-fn-trait hackery though, I think we can get rid of
 // the unstable features.
-*/
 
 impl<T: ?Sized + 'static> Shared<T> {
     pub(crate) fn extend_slice_iter<R: ?Sized + 'static>(
@@ -71,6 +76,15 @@ impl<T: ?Sized + 'static> Shared<T> {
         SharedSlice {
             base: self.base.clone(),
             trans: Rc::from_iter(f.invoke(self.get()).map(|x| x as *const R)),
+        }
+    }
+    pub(crate) fn extend_slice_bb<R: ?Sized + 'static>(
+        &self,
+        f: impl for<'a> Bb<'a, T, R>,
+    ) -> SharedSlice<R> {
+        SharedSlice {
+            base: self.base.clone(),
+            trans: Rc::from_iter(f(self.get()).map(|x| x as *const R)),
         }
     }
 }
@@ -86,8 +100,11 @@ fn _test() {
             a.split(" ")
         }
     }
-
+    fn split_str<'a>(s: &'a str) -> std::str::Split<'a, &'a str> {
+        s.split(" ")
+    }
     let s1: SharedSlice<str> = s0.extend_slice_iter(Split);
+    // let s2: SharedSlice<str> = s0.extend_slice_bb(split_str);
 }
 
 // What are the options here?
@@ -170,9 +187,12 @@ impl<T: ?Sized + 'static> SharedSlice<T> {
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
         self.trans.iter().map(|x| unsafe { &**x })
     }
-    pub(crate) fn iter_shared(&self) -> impl Iterator<Item = Shared<T>> + '_{
+    pub(crate) fn iter_shared(&self) -> impl Iterator<Item = Shared<T>> + '_ {
         let base = self.base.clone();
-        self.trans.iter().map(move |x| Shared { base: base.clone(), trans: *x })
+        self.trans.iter().map(move |x| Shared {
+            base: base.clone(),
+            trans: *x,
+        })
     }
     pub(crate) fn unpack(&self) -> SmallVec<[Shared<T>; 4]> {
         self.trans
