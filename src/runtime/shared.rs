@@ -43,30 +43,12 @@ pub(crate) trait IterRefFn<'a, A: 'a + ?Sized, B: 'a + ?Sized> {
     fn invoke(self, a: &'a A) -> Self::I;
 }
 
-pub(crate) trait Bb<'a, A: 'a + ?Sized, B: 'a + ?Sized>:
-    FnOnce(&'a A) -> <Self as Bb<'a, A, B>>::I
-{
-    type I: Iterator<Item = &'a B> + 'a;
-}
-
-impl<'a, A: 'a + ?Sized, B: 'a + ?Sized, F, I> IterRefFn<'a, A, B> for F
-where
-    I: Iterator<Item = &'a B>,
-    F: std::ops::FnOnce<&'a A, Output = I>,
-{
-    type I = I;
-    fn invoke(self, a: &'a A) -> I {
-        self.call_once(a)
+impl<'a, 'b> IterRefFn<'a, str, str> for &'b regex::Regex {
+    type I = regex::Split<'b, 'a>;
+    fn invoke(self, a: &'a str) -> Self::I {
+        self.split(a)
     }
 }
-
-// NOTE passing |s| s.split(" ") does not compile. Nor does:
-// fn split_str<'a>(s: &'a str) -> impl Iterator<Item=&'a str> {
-//   s.split(" ")
-// }
-// Neither of them actually seem to implement this. If we do this
-// sort of custom-fn-trait hackery though, I think we can get rid of
-// the unstable features.
 
 impl<T: ?Sized + 'static> Shared<T> {
     pub(crate) fn extend_slice_iter<R: ?Sized + 'static>(
@@ -78,41 +60,19 @@ impl<T: ?Sized + 'static> Shared<T> {
             trans: Rc::from_iter(f.invoke(self.get()).map(|x| x as *const R)),
         }
     }
-    pub(crate) fn extend_slice_bb<R: ?Sized + 'static>(
-        &self,
-        f: impl for<'a> Bb<'a, T, R>,
-    ) -> SharedSlice<R> {
-        SharedSlice {
-            base: self.base.clone(),
-            trans: Rc::from_iter(f(self.get()).map(|x| x as *const R)),
-        }
+
+    pub(crate) fn shared_iter<'b, R: ?Sized + 'static>(
+        &'b self,
+        f: impl for<'a> IterRefFn<'a, T, R> + 'b,
+    ) -> impl Iterator<Item = Shared<R>> + '_ {
+        let base = self.base.clone();
+        f.invoke(self.get()).map(move |x| Shared {
+            base: base.clone(),
+            trans: x as *const R,
+        })
     }
 }
 
-fn _test() {
-    let s: Box<str> = "hi there".into();
-    let s0: Shared<str> = s.into();
-    #[derive(Copy, Clone)]
-    struct Split;
-    impl<'a> IterRefFn<'a, str, str> for Split {
-        type I = std::str::Split<'a, &'a str>;
-        fn invoke(self, a: &'a str) -> Self::I {
-            a.split(" ")
-        }
-    }
-    fn split_str<'a>(s: &'a str) -> std::str::Split<'a, &'a str> {
-        s.split(" ")
-    }
-    let s1: SharedSlice<str> = s0.extend_slice_iter(Split);
-    // let s2: SharedSlice<str> = s0.extend_slice_bb(split_str);
-}
-
-// What are the options here?
-// 1. put everything under a Box (Rc<Box<str>>). It's annoying and slightly less efficient in that
-//    we do an extra allocation, but at least we won't pay for the indirection.
-// 2. pay for the extra type parameter (TODO: look into this if the
-// allocations get too strenuous; we could tweak the reading API to build an Rc<str> from the data
-// directly and then have a Shared<str,str> be the only relevant type)
 impl<T: ?Sized + 'static> From<Box<T>> for Shared<T> {
     fn from(b: Box<T>) -> Self {
         let trans = &*b as *const T;
@@ -140,6 +100,7 @@ impl<T: ?Sized + 'static> Shared<T> {
             trans: f(self.get()) as *const R,
         }
     }
+
     pub(crate) fn extend_opt<R: ?Sized + 'static>(
         &self,
         f: impl FnOnce(&T) -> Option<&R>,
@@ -151,18 +112,6 @@ impl<T: ?Sized + 'static> Shared<T> {
         };
         let base = self.base.clone();
         Some(Shared { base, trans })
-    }
-
-    // TODO: we may just need to have an iterator over Shared<R>. can we do that without an extra
-    // allocation?
-    pub(crate) fn extend_slice<R: ?Sized + 'static>(
-        &self,
-        f: impl FnOnce(&T) -> SmallVec<[&R; 8]>,
-    ) -> SharedSlice<R> {
-        SharedSlice {
-            base: self.base.clone(),
-            trans: Rc::from_iter(f(self.get()).into_iter().map(|x| x as *const R)),
-        }
     }
 }
 
@@ -193,15 +142,6 @@ impl<T: ?Sized + 'static> SharedSlice<T> {
             base: base.clone(),
             trans: *x,
         })
-    }
-    pub(crate) fn unpack(&self) -> SmallVec<[Shared<T>; 4]> {
-        self.trans
-            .iter()
-            .map(|x| Shared {
-                base: self.base.clone(),
-                trans: *x,
-            })
-            .collect()
     }
 
     pub(crate) fn get(&self, i: usize) -> Option<&T> {
@@ -264,7 +204,8 @@ mod test {
     fn string_split() {
         let x: Box<str> = "hello there".into();
         let y: Shared<str> = x.into();
-        let z: SharedSlice<str> = y.extend_slice(|x| x.split(" ").into_iter().collect());
-        assert_eq!(z.get(0), Some("hello"));
+        let re = regex::Regex::new(" ").unwrap();
+        let mut z_iter = y.shared_iter(&re);
+        assert_eq!("hello", z_iter.next().unwrap().get());
     }
 }
