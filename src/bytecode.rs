@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+use crate::builtins::Variable;
 use crate::runtime::{self, Float, Int, Str};
 
 #[derive(Copy, Clone)]
@@ -41,13 +42,15 @@ impl<T> Copy for Reg<T> {}
 //          - Decision: clone for now, but look at doing an optimization allowing for faster
 //            iteration when there are no map accesses within the loop (also look at what others
 //            are doing).
-//   [ ] * Line Splitting:
+//   [x] * Line Splitting:
 //          - Define trait for splitting lines, one that does splitting in larger batches, one that
 //          does it line by line. Choose which one it is based on program behavior (do you set FS
 //          after BEGIN?)
 //          - Perhaps make this an enum and just add a Freeze instruction or
 //          somethign?
 //          - This may require adding instructions (ReadLineAndSplit?).
+// Next: (1) finish interpreter (2) implement translator (3) implement parser (4) add
+// functions/union type.
 
 pub(crate) enum Instr<'a> {
     // By default, instructions have destination first, and src(s) second.
@@ -117,6 +120,9 @@ pub(crate) enum Instr<'a> {
         Reg<Str<'a>>,
     ),
 
+    // Print (TODO add more printing functions).
+    Print(Reg<Str<'a>> /*text*/, Reg<Str<'a>> /*output*/),
+
     // Map operations
     LookupIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>, Reg<Int>),
     LookupIntStr(Reg<Str<'a>>, Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
@@ -155,7 +161,12 @@ pub(crate) enum Instr<'a> {
     StoreStrFloat(Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>, Reg<Float>),
 
     // Special variables
-    // (think about how we will optimize this for ones that only set this in BEGIN or not at all)
+    LoadVarStr(Reg<Str<'a>>, Variable),
+    StoreVarStr(Variable, Reg<Str<'a>>),
+    LoadVarInt(Reg<Int>, Variable),
+    StoreVarInt(Variable, Reg<Int>),
+    LoadVarIntMap(Reg<runtime::IntMap<Str<'a>>>, Variable),
+    StoreVarIntMap(Variable, Reg<runtime::IntMap<Str<'a>>>),
 
     // Control
     JmpIf(Reg<Int>, Label),
@@ -435,7 +446,7 @@ impl<'a> Interp<'a> {
                         let res = *res;
                         let l = self.get(*l);
                         let r = self.get(*r);
-                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l == r)) as Int;
+                        *self.get_mut(res) = (l == r) as Int;
                     }
                     _ => unimplemented!(),
                 };

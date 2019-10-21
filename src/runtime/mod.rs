@@ -59,6 +59,8 @@ impl<'a> Str<'a> {
     }
     pub(crate) fn len(&self) -> usize {
         use Inner::*;
+        // XXX for now, this will return u32::max for large strings. That should be fine, but if it
+        // becomes an issue, we can call force before taking the length.
         match &*self.0.borrow() {
             Literal(s) => s.len(),
             Boxed(s) => s.len(),
@@ -70,24 +72,23 @@ impl<'a> Str<'a> {
     /// and split because it allows the runtime to share memory across
     /// different strings. Splitting a literal yields references
     /// into that literal. Splitting a boxed string or a line uses
-    /// the SharedSlice functionality to yield references into those
-    /// strings, while also pinning their reference count.
+    /// the Shared functionality to yield references into those
+    /// strings, while also incrementing the reference count of the original string.
     pub(crate) fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>)) {
         self.force();
         use Inner::*;
         let mut line = |s: &Shared<str>| {
             for s in s
-                .extend_slice(|s| pat.split(s).collect())
-                .unpack()
-                .into_iter()
-                .map(|s| Str(RefCell::new(Inner::Line(s))))
+                // This uses the `IterRefFn` implementation for `&Regex`
+                .shared_iter(pat)
+                .map(|s| Str(RefCell::new(Line(s))))
             {
                 push(s)
             }
         };
         match &*self.0.borrow() {
             Literal(s) => {
-                for s in pat.split(s).map(|s| Str(RefCell::new(Inner::Literal(s)))) {
+                for s in pat.split(s).map(|s| Str(RefCell::new(Literal(s)))) {
                     push(s)
                 }
             }
@@ -100,13 +101,13 @@ impl<'a> Str<'a> {
 
 impl<'a> PartialEq for Str<'a> {
     fn eq(&self, other: &Str<'a>) -> bool {
-        use Inner::*;
-        if self.len() != other.len() {
+        if self.len_u32() != other.len_u32() {
             return false;
         }
         self.with_str(|s1| other.with_str(|s2| s1 == s2))
     }
 }
+impl<'a> Eq for Str<'a> {}
 
 fn conv_len(l: usize) -> u32 {
     if l > (u32::max_value() as usize) {
@@ -115,8 +116,6 @@ fn conv_len(l: usize) -> u32 {
         l as u32
     }
 }
-
-impl<'a> Eq for Str<'a> {}
 
 impl<'a> From<&'a str> for Str<'a> {
     fn from(s: &'a str) -> Str<'a> {
