@@ -1,7 +1,8 @@
 use std::marker::PhantomData;
 
 use crate::builtins::Variable;
-use crate::runtime::{self, Float, Int, Str};
+use crate::common::Result;
+use crate::runtime::{self, Float, Int, LazyVec, Str};
 
 #[derive(Copy, Clone)]
 pub(crate) struct Label(u32);
@@ -191,6 +192,8 @@ pub(crate) struct Interp<'a> {
     strs: Vec<Str<'a>>,
     vars: runtime::Variables<'a>,
 
+    line: Str<'a>,
+    split_line: LazyVec<Str<'a>>,
     regexes: runtime::RegexCache,
     write_files: runtime::FileWrite,
     read_files: runtime::FileRead,
@@ -211,7 +214,7 @@ pub(crate) struct Interp<'a> {
 }
 
 impl<'a> Interp<'a> {
-    pub(crate) fn run(&mut self) {
+    pub(crate) fn run(&mut self) -> Result<()> {
         use Instr::*;
         let mut cur = 0;
         'outer: loop {
@@ -350,13 +353,7 @@ impl<'a> Interp<'a> {
                         // `get` is a method.
                         let l = self.get(*l).clone();
                         let pat = self.get(*r).clone();
-                        match self.regexes.match_regex(&pat, &l) {
-                            Ok(matched) => *self.get_mut(res) = matched as Int,
-                            Err(e) => {
-                                eprintln!("failed to create regex: {}", e);
-                                break 'outer;
-                            }
-                        }
+                        *self.get_mut(res) = self.regexes.match_regex(&pat, &l)? as Int;
                     }
                     LTFloat(res, l, r) => {
                         let res = *res;
@@ -448,6 +445,52 @@ impl<'a> Interp<'a> {
                         let r = self.get(*r);
                         *self.get_mut(res) = (l == r) as Int;
                     }
+                    SetColumn(dst, src) => {
+                        let col = *self.get(*dst);
+                        if col < 0 {
+                            return err!("attempt to access field {}", col);
+                        }
+                        if col == 0 {
+                            self.split_line.clear();
+                            self.line = self.get(*src).clone();
+                            break cur + 1;
+                        }
+                        if self.split_line.len() == 0 {
+                            self.regexes.split_regex(
+                                &self.vars.fs,
+                                &self.line,
+                                &mut self.split_line,
+                            )?;
+                        }
+                        self.split_line
+                            .insert(col as usize - 1, self.get(*src).clone());
+                    }
+                    GetColumn(dst, src) => {
+                        let col = *self.get(*src);
+                        let dst = *dst;
+                        if col < 0 {
+                            return err!("attempt to access field {}", col);
+                        }
+                        if col == 0 {
+                            let line = self.line.clone();
+                            *self.get_mut(dst) = line;
+                            break cur + 1;
+                        }
+                        if self.split_line.len() == 0 {
+                            self.regexes.split_regex(
+                                &self.vars.fs,
+                                &self.line,
+                                &mut self.split_line,
+                            )?;
+                        }
+                        let res = self
+                            .split_line
+                            .get(col as usize - 1)
+                            .cloned()
+                            .unwrap_or_else(Default::default);
+                        *self.get_mut(dst) = res;
+                    }
+                    Halt => break 'outer Ok(()),
                     _ => unimplemented!(),
                 };
                 break cur + 1;

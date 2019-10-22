@@ -10,6 +10,58 @@ pub(crate) enum Either<L, R> {
     Right(R),
 }
 
+macro_rules! for_either {
+    ($e:expr, |$id:ident| $body:expr) => {{
+        match $e {
+            crate::common::Either::Left($id) => $body,
+            crate::common::Either::Right($id) => $body,
+        }
+    }};
+}
+
+impl<L, R, T> Iterator for Either<L, R>
+where
+    L: Iterator<Item = T>,
+    R: Iterator<Item = T>,
+{
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        for_either!(self, |x| x.next())
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        for_either!(self, |x| x.size_hint())
+    }
+    fn count(self) -> usize {
+        for_either!(self, |x| x.count())
+    }
+}
+
+pub(crate) struct IntoIter<L, R>(pub Either<L, R>);
+
+impl<L, R, T> IntoIterator for IntoIter<L, R>
+where
+    L: IntoIterator<Item = T>,
+    R: IntoIterator<Item = T>,
+{
+    type Item = T;
+    type IntoIter = Either<L::IntoIter, R::IntoIter>;
+    fn into_iter(self) -> Self::IntoIter {
+        match self.0 {
+            Either::Left(l) => Either::Left(l.into_iter()),
+            Either::Right(r) => Either::Right(r.into_iter()),
+        }
+    }
+}
+impl<L, R, T> Either<L, R>
+where
+    L: IntoIterator<Item = T>,
+    R: IntoIterator<Item = T>,
+{
+    pub(crate) fn into_iter(self) -> impl Iterator<Item = T> {
+        IntoIter(self).into_iter()
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CompileError(pub String);
 
