@@ -122,7 +122,11 @@ pub(crate) enum Instr<'a> {
     ),
 
     // Print (TODO add more printing functions).
-    Print(Reg<Str<'a>> /*text*/, Reg<Str<'a>> /*output*/),
+    Print(
+        Reg<Str<'a>>, /*text*/
+        Reg<Str<'a>>, /*output*/
+        bool,         /*append*/
+    ),
 
     // Map operations
     LookupIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>, Reg<Int>),
@@ -486,11 +490,122 @@ impl<'a> Interp<'a> {
                         let res = self
                             .split_line
                             .get(col as usize - 1)
-                            .cloned()
                             .unwrap_or_else(Default::default);
                         *self.get_mut(dst) = res;
                     }
-                    SplitInt(flds, to_split, arr, pat) => unimplemented!(),
+                    SplitInt(flds, to_split, arr, pat) => {
+                        // Index manually here to defeat the borrow checker.
+                        // TODO(ezr): do this everywhere? get is nice, but clones everywhere could
+                        // be expensive.
+                        let to_split = index(&self.strs, to_split);
+                        let arr = index(&self.maps_int_str, arr);
+                        let pat = index(&self.strs, pat);
+                        let old_len = arr.len();
+                        self.regexes.split_regex_intmap(&pat, &to_split, &arr)?;
+                        let res = (arr.len() - old_len) as i64;
+                        let flds = *flds;
+                        *self.get_mut(flds) = res;
+                    }
+                    SplitStr(flds, to_split, arr, pat) => {
+                        // Very similar to above
+                        let to_split = index(&self.strs, to_split);
+                        let arr = index(&self.maps_str_str, arr);
+                        let pat = index(&self.strs, pat);
+                        let old_len = arr.len();
+                        self.regexes.split_regex_strmap(&pat, &to_split, &arr)?;
+                        let res = (arr.len() - old_len) as i64;
+                        let flds = *flds;
+                        *self.get_mut(flds) = res;
+                    }
+                    Print(txt, out, append) => {
+                        let txt = index(&self.strs, txt);
+                        let out = index(&self.strs, out);
+                        self.write_files.write_str(out, txt, *append)?;
+                    }
+                    LookupIntInt(res, arr, k) => {
+                        let arr = index(&self.maps_int_int, arr);
+                        let k = index(&self.ints, k);
+                        let v = arr.get(k).unwrap_or(0);
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    LookupIntStr(res, arr, k) => {
+                        let arr = index(&self.maps_int_str, arr);
+                        let k = index(&self.ints, k);
+                        let v = arr.get(k).unwrap_or_else(Default::default);
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    LookupIntFloat(res, arr, k) => {
+                        let arr = index(&self.maps_int_float, arr);
+                        let k = index(&self.ints, k);
+                        let v = arr.get(k).unwrap_or(0.0);
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    LookupStrInt(res, arr, k) => {
+                        let arr = index(&self.maps_str_int, arr);
+                        let k = index(&self.strs, k);
+                        let v = arr.get(k).unwrap_or(0);
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    LookupStrStr(res, arr, k) => {
+                        let arr = index(&self.maps_str_str, arr);
+                        let k = index(&self.strs, k);
+                        let v = arr.get(k).unwrap_or_else(Default::default);
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    LookupStrFloat(res, arr, k) => {
+                        let arr = index(&self.maps_str_float, arr);
+                        let k = index(&self.strs, k);
+                        let v = arr.get(k).unwrap_or(0.0);
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    ContainsIntInt(res, arr, k) => {
+                        let arr = index(&self.maps_int_int, arr);
+                        let k = index(&self.ints, k);
+                        let v = arr.get(k).is_some() as i64;
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    ContainsIntStr(res, arr, k) => {
+                        let arr = index(&self.maps_int_str, arr);
+                        let k = index(&self.ints, k);
+                        let v = arr.get(k).is_some() as i64;
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    ContainsIntFloat(res, arr, k) => {
+                        let arr = index(&self.maps_int_float, arr);
+                        let k = index(&self.ints, k);
+                        let v = arr.get(k).is_some() as i64;
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    ContainsStrInt(res, arr, k) => {
+                        let arr = index(&self.maps_str_int, arr);
+                        let k = index(&self.strs, k);
+                        let v = arr.get(k).is_some() as i64;
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    ContainsStrStr(res, arr, k) => {
+                        let arr = index(&self.maps_str_str, arr);
+                        let k = index(&self.strs, k);
+                        let v = arr.get(k).is_some() as i64;
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
+                    ContainsStrFloat(res, arr, k) => {
+                        let arr = index(&self.maps_str_float, arr);
+                        let k = index(&self.strs, k);
+                        let v = arr.get(k).is_some() as i64;
+                        let res = *res;
+                        *self.get_mut(res) = v;
+                    }
                     Halt => break 'outer Ok(()),
                     _ => unimplemented!(),
                 };
@@ -505,15 +620,24 @@ trait Get<T> {
     fn get_mut(&mut self, r: Reg<T>) -> &mut T;
 }
 
+#[inline]
+fn index<'a, T>(v: &'a Vec<T>, reg: &Reg<T>) -> &'a T {
+    &v[reg.index()]
+}
+#[inline]
+fn index_mut<'a, T>(v: &'a mut Vec<T>, reg: &Reg<T>) -> &'a mut T {
+    &mut v[reg.index()]
+}
+
 macro_rules! impl_get {
     ($t:ty, $fld:ident) => {
         // TODO(ezr): test, then benchmark with get_unchecked()
         impl<'a> Get<$t> for Interp<'a> {
             fn get(&self, r: Reg<$t>) -> &$t {
-                &self.$fld[r.index()]
+                index(&self.$fld, &r)
             }
             fn get_mut(&mut self, r: Reg<$t>) -> &mut $t {
-                &mut self.$fld[r.index()]
+                index_mut(&mut self.$fld, &r)
             }
         }
     };
