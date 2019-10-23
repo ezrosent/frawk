@@ -223,8 +223,9 @@ impl<'a> Interp<'a> {
         let mut cur = 0;
         'outer: loop {
             // must end with Halt
-            debug_assert!(cur < self.instrs.len());
             cur = loop {
+                debug_assert!(cur < self.instrs.len());
+                // TODO get rid of get() in favor of index().
                 match unsafe { self.instrs.get_unchecked(cur) } {
                     StoreConstStr(sr, s) => {
                         let sr = *sr;
