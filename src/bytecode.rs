@@ -225,7 +225,7 @@ impl<'a> Interp<'a> {
             // must end with Halt
             cur = loop {
                 debug_assert!(cur < self.instrs.len());
-                // TODO get rid of get() in favor of index().
+                // TODO get rid of get() in favor of index(), at least for non int/float types.
                 match unsafe { self.instrs.get_unchecked(cur) } {
                     StoreConstStr(sr, s) => {
                         let sr = *sr;
