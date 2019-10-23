@@ -490,6 +490,7 @@ impl<'a> Interp<'a> {
                             .unwrap_or_else(Default::default);
                         *self.get_mut(dst) = res;
                     }
+                    SplitInt(flds, to_split, arr, pat) => unimplemented!(),
                     Halt => break 'outer Ok(()),
                     _ => unimplemented!(),
                 };
