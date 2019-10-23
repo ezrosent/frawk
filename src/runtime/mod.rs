@@ -1,8 +1,11 @@
 use crate::common::{Either, Result};
 use hashbrown::HashMap;
 use regex::Regex;
+use std::cell::RefCell;
 use std::fs::File;
+use std::hash::Hash;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -14,8 +17,8 @@ pub mod utf8;
 
 pub(crate) use str_impl::Str;
 
-use shared::Shared;
-
+// TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
+// specialize the IntMap implementation.
 pub(crate) type LazyVec<T> = Either<Vec<T>, IntMap<T>>;
 
 impl<T> LazyVec<T> {
@@ -25,22 +28,24 @@ impl<T> LazyVec<T> {
                 v.clear();
                 return;
             }
-            Either::Right(m) => Either::Left(Default::default()),
+            Either::Right(_) => Either::Left(Default::default()),
         }
     }
     pub(crate) fn len(&self) -> usize {
         for_either!(self, |x| x.len())
     }
-    pub(crate) fn get(&self, ix: usize) -> Option<&T> {
+    // pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+    //     match self {
+    //         Either::Left(v) => Either::Left(v.iter()),
+    //         Either::Right(m) => Either::Right(m.values()),
+    //     }
+    // }
+}
+impl<T: Clone> LazyVec<T> {
+    pub(crate) fn get(&self, ix: usize) -> Option<T> {
         match self {
-            Either::Left(v) => v.get(ix),
+            Either::Left(v) => v.get(ix).cloned(),
             Either::Right(m) => m.get(&(ix as i64)),
-        }
-    }
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        match self {
-            Either::Left(v) => Either::Left(v.iter()),
-            Either::Right(m) => Either::Right(m.values()),
         }
     }
 }
@@ -118,6 +123,39 @@ impl RegexCache {
         self.with_regex(pat, |re| s.split(re, |s| v.push(s)))?;
         Ok(())
     }
+
+    pub(crate) fn split_regex_intmap<'a>(
+        &mut self,
+        pat: &Str<'a>,
+        s: &Str<'a>,
+        m: &IntMap<Str<'a>>,
+    ) -> Result<()> {
+        let mut i = 0i64;
+        self.with_regex(pat, |re| {
+            s.split(re, |s| {
+                m.insert(i, s);
+                i += 1;
+            })
+        })?;
+        Ok(())
+    }
+
+    pub(crate) fn split_regex_strmap<'a>(
+        &mut self,
+        pat: &Str<'a>,
+        s: &Str<'a>,
+        m: &StrMap<'a, Str<'a>>,
+    ) -> Result<()> {
+        let mut i = 0i64;
+        self.with_regex(pat, |re| {
+            s.split(re, |s| {
+                m.insert(convert::<i64, Str<'_>>(i), s);
+                i += 1;
+            })
+        })?;
+        Ok(())
+    }
+
     pub(crate) fn match_regex(&mut self, pat: &Str, s: &Str) -> Result<bool> {
         self.with_regex(pat, |re| s.with_str(|s| re.is_match(s)))
     }
@@ -280,8 +318,36 @@ where
     _Carrier::convert(s)
 }
 
+// AWK arrays are inherently shared and mutable, so we have to do this, even if it is a code smell.
+pub(crate) struct SharedMap<K, V>(Rc<RefCell<HashMap<K, V>>>);
+
+impl<K: Hash + Eq, V> SharedMap<K, V> {
+    pub(crate) fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
+    pub(crate) fn insert(&self, k: K, v: V) {
+        self.0.borrow_mut().insert(k, v);
+    }
+}
+impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
+    pub(crate) fn get(&self, k: &K) -> Option<V> {
+        self.0.borrow().get(k).cloned()
+    }
+}
+
+impl<K: Hash + Eq, V> FromIterator<(K, V)> for SharedMap<K, V> {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (K, V)>,
+    {
+        SharedMap(Rc::new(RefCell::new(
+            iter.into_iter().collect::<HashMap<K, V>>(),
+        )))
+    }
+}
+
 pub(crate) type Int = i64;
 pub(crate) type Float = f64;
-pub(crate) type IntMap<V> = HashMap<Int, V>;
-pub(crate) type StrMap<'a, V> = HashMap<Str<'a>, V>;
+pub(crate) type IntMap<V> = SharedMap<Int, V>;
+pub(crate) type StrMap<'a, V> = SharedMap<Str<'a>, V>;
 pub(crate) struct Iter<S: Scalar>(PhantomData<*const S>);

@@ -2,6 +2,7 @@ use super::shared::Shared;
 use regex::Regex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
+use std::hash::{Hash,Hasher};
 use std::rc::Rc;
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,12 @@ pub(crate) struct Str<'a>(RefCell<Inner<'a>>);
 impl<'a> Default for Str<'a> {
     fn default() -> Str<'a> {
         Str(RefCell::new(Inner::Literal("")))
+    }
+}
+
+impl<'a> Hash for Str<'a> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.with_str(|s| s.hash(state))
     }
 }
 
