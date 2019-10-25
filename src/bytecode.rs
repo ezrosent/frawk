@@ -154,6 +154,10 @@ pub(crate) enum Instr<'a> {
         Reg<runtime::StrMap<'a, Str<'a>>>,
     ),
     IterBeginStrFloat(Reg<runtime::Iter<Str<'a>>>, Reg<runtime::StrMap<'a, Float>>),
+    IterHasNextInt(Reg<Int>, Reg<runtime::Iter<Int>>),
+    IterHasNextStr(Reg<Int>, Reg<runtime::Iter<Str<'a>>>),
+    IterGetNextInt(Reg<Int>, Reg<runtime::Iter<Int>>),
+    IterGetNextStr(Reg<Str<'a>>, Reg<runtime::Iter<Str<'a>>>),
     StoreIntInt(Reg<runtime::IntMap<Int>>, Reg<Int>, Reg<Int>),
     StoreIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<Int>, Reg<Str<'a>>),
     StoreIntFloat(Reg<runtime::IntMap<Float>>, Reg<Int>, Reg<Float>),
@@ -225,7 +229,7 @@ impl<'a> Interp<'a> {
             // must end with Halt
             cur = loop {
                 debug_assert!(cur < self.instrs.len());
-                // TODO get rid of get() in favor of index(), at least for non int/float types.
+                use Variable::*;
                 match unsafe { self.instrs.get_unchecked(cur) } {
                     StoreConstStr(sr, s) => {
                         let sr = *sr;
@@ -354,10 +358,8 @@ impl<'a> Interp<'a> {
                     }
                     Match(res, l, r) => {
                         let res = *res;
-                        // TODO(ezr): these clones are unnecessary, but we need them so long as
-                        // `get` is a method.
-                        let l = self.get(*l).clone();
-                        let pat = self.get(*r).clone();
+                        let l = index(&self.strs, l);
+                        let pat = index(&self.strs, r);
                         *self.get_mut(res) = self.regexes.match_regex(&pat, &l)? as Int;
                     }
                     LTFloat(res, l, r) => {
@@ -496,8 +498,6 @@ impl<'a> Interp<'a> {
                     }
                     SplitInt(flds, to_split, arr, pat) => {
                         // Index manually here to defeat the borrow checker.
-                        // TODO(ezr): do this everywhere? get is nice, but clones everywhere could
-                        // be expensive.
                         let to_split = index(&self.strs, to_split);
                         let arr = index(&self.maps_int_str, arr);
                         let pat = index(&self.strs, pat);
@@ -607,8 +607,162 @@ impl<'a> Interp<'a> {
                         let res = *res;
                         *self.get_mut(res) = v;
                     }
+                    StoreIntInt(arr, k, v) => {
+                        let arr = index(&self.maps_int_int, arr);
+                        let k = index(&self.ints, k).clone();
+                        let v = index(&self.ints, v).clone();
+                        arr.insert(k, v);
+                    }
+                    StoreIntFloat(arr, k, v) => {
+                        let arr = index(&self.maps_int_float, arr);
+                        let k = index(&self.ints, k).clone();
+                        let v = index(&self.floats, v).clone();
+                        arr.insert(k, v);
+                    }
+                    StoreIntStr(arr, k, v) => {
+                        let arr = index(&self.maps_int_str, arr);
+                        let k = index(&self.ints, k).clone();
+                        let v = index(&self.strs, v).clone();
+                        arr.insert(k, v);
+                    }
+                    StoreStrInt(arr, k, v) => {
+                        let arr = index(&self.maps_str_int, arr);
+                        let k = index(&self.strs, k).clone();
+                        let v = index(&self.ints, v).clone();
+                        arr.insert(k, v);
+                    }
+                    StoreStrFloat(arr, k, v) => {
+                        let arr = index(&self.maps_str_float, arr);
+                        let k = index(&self.strs, k).clone();
+                        let v = index(&self.floats, v).clone();
+                        arr.insert(k, v);
+                    }
+                    StoreStrStr(arr, k, v) => {
+                        let arr = index(&self.maps_str_str, arr);
+                        let k = index(&self.strs, k).clone();
+                        let v = index(&self.strs, v).clone();
+                        arr.insert(k, v);
+                    }
+                    LoadVarStr(dst, var) => {
+                        let s = match var {
+                            FS => self.vars.fs.clone(),
+                            FILENAME => self.vars.filename.clone(),
+                            ARGC | ARGV | NF | NR => unreachable!(),
+                        };
+                        let dst = *dst;
+                        *self.get_mut(dst) = s;
+                    }
+                    StoreVarStr(var, src) => {
+                        let src = *src;
+                        let s = self.get(src).clone();
+                        match var {
+                            FS => self.vars.fs = s,
+                            FILENAME => self.vars.filename = s,
+                            ARGC | ARGV | NF | NR => unreachable!(),
+                        };
+                    }
+                    LoadVarInt(dst, var) => {
+                        let i = match var {
+                            ARGC => self.vars.argc,
+                            NF => self.vars.nf,
+                            NR => self.vars.nr,
+                            FS | FILENAME | ARGV => unreachable!(),
+                        };
+                        let dst = *dst;
+                        *self.get_mut(dst) = i;
+                    }
+                    StoreVarInt(var, src) => {
+                        let src = *src;
+                        let s = *self.get(src);
+                        match var {
+                            ARGC => self.vars.argc = s,
+                            NF => self.vars.nf = s,
+                            NR => self.vars.nr = s,
+                            FS | FILENAME | ARGV => unreachable!(),
+                        };
+                    }
+                    LoadVarIntMap(dst, var) => {
+                        let arr = match var {
+                            ARGV => self.vars.argv.clone(),
+                            ARGC | NF | NR | FS | FILENAME => unreachable!(),
+                        };
+                        let dst = *dst;
+                        *self.get_mut(dst) = arr;
+                    }
+                    StoreVarIntMap(var, src) => {
+                        let src = *src;
+                        let s = self.get(src).clone();
+                        match var {
+                            ARGV => self.vars.argv = s,
+                            ARGC | NF | NR | FS | FILENAME => unreachable!(),
+                        };
+                    }
+                    IterBeginIntInt(dst, arr) => {
+                        let arr = *arr;
+                        let iter = self.get(arr).to_iter();
+                        let dst = *dst;
+                        *self.get_mut(dst) = iter;
+                    }
+                    IterBeginIntFloat(dst, arr) => {
+                        let arr = *arr;
+                        let iter = self.get(arr).to_iter();
+                        let dst = *dst;
+                        *self.get_mut(dst) = iter;
+                    }
+                    IterBeginIntStr(dst, arr) => {
+                        let arr = *arr;
+                        let iter = self.get(arr).to_iter();
+                        let dst = *dst;
+                        *self.get_mut(dst) = iter;
+                    }
+                    IterBeginStrInt(dst, arr) => {
+                        let arr = *arr;
+                        let iter = self.get(arr).to_iter();
+                        let dst = *dst;
+                        *self.get_mut(dst) = iter;
+                    }
+                    IterBeginStrFloat(dst, arr) => {
+                        let arr = *arr;
+                        let iter = self.get(arr).to_iter();
+                        let dst = *dst;
+                        *self.get_mut(dst) = iter;
+                    }
+                    IterBeginStrStr(dst, arr) => {
+                        let arr = *arr;
+                        let iter = self.get(arr).to_iter();
+                        let dst = *dst;
+                        *self.get_mut(dst) = iter;
+                    }
+                    IterHasNextInt(dst, iter) => {
+                        let res = self.get(*iter).has_next() as Int;
+                        let dst = *dst;
+                        *self.get_mut(dst) = res;
+                    }
+                    IterHasNextStr(dst, iter) => {
+                        let res = self.get(*iter).has_next() as Int;
+                        let dst = *dst;
+                        *self.get_mut(dst) = res;
+                    }
+                    IterGetNextInt(dst, iter) => {
+                        let res = unsafe { self.get(*iter).get_next().clone() };
+                        let dst = *dst;
+                        *self.get_mut(dst) = res;
+                    }
+                    IterGetNextStr(dst, iter) => {
+                        let res = unsafe { self.get(*iter).get_next().clone() };
+                        let dst = *dst;
+                        *self.get_mut(dst) = res;
+                    }
+                    JmpIf(cond, lbl) => {
+                        let cond = *cond;
+                        if *self.get(cond) != 0 {
+                            break lbl.0 as usize;
+                        }
+                    }
+                    Jmp(lbl) => {
+                        break lbl.0 as usize;
+                    }
                     Halt => break 'outer Ok(()),
-                    _ => unimplemented!(),
                 };
                 break cur + 1;
             };

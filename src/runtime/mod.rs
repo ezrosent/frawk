@@ -1,7 +1,7 @@
 use crate::common::{Either, Result};
 use hashbrown::HashMap;
 use regex::Regex;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -34,13 +34,8 @@ impl<T> LazyVec<T> {
     pub(crate) fn len(&self) -> usize {
         for_either!(self, |x| x.len())
     }
-    // pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-    //     match self {
-    //         Either::Left(v) => Either::Left(v.iter()),
-    //         Either::Right(m) => Either::Right(m.values()),
-    //     }
-    // }
 }
+
 impl<T: Clone> LazyVec<T> {
     pub(crate) fn get(&self, ix: usize) -> Option<T> {
         match self {
@@ -93,7 +88,7 @@ impl<'a> Scalar for Str<'a> {}
 
 pub(crate) struct Variables<'a> {
     pub argc: Int,
-    pub argv: Vec<Str<'a>>,
+    pub argv: IntMap<Str<'a>>,
     pub fs: Str<'a>,
     pub nf: Int,
     pub nr: Int,
@@ -321,6 +316,12 @@ where
 // AWK arrays are inherently shared and mutable, so we have to do this, even if it is a code smell.
 pub(crate) struct SharedMap<K, V>(Rc<RefCell<HashMap<K, V>>>);
 
+impl<K, V> Clone for SharedMap<K, V> {
+    fn clone(&self) -> Self {
+        SharedMap(self.0.clone())
+    }
+}
+
 impl<K: Hash + Eq, V> SharedMap<K, V> {
     pub(crate) fn len(&self) -> usize {
         self.0.borrow().len()
@@ -332,6 +333,11 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     pub(crate) fn get(&self, k: &K) -> Option<V> {
         self.0.borrow().get(k).cloned()
+    }
+}
+impl<K: Hash + Eq + Clone, V> SharedMap<K, V> {
+    pub(crate) fn to_iter(&self) -> Iter<K> {
+        self.0.borrow().keys().cloned().collect()
     }
 }
 
@@ -350,4 +356,40 @@ pub(crate) type Int = i64;
 pub(crate) type Float = f64;
 pub(crate) type IntMap<V> = SharedMap<Int, V>;
 pub(crate) type StrMap<'a, V> = SharedMap<Str<'a>, V>;
-pub(crate) struct Iter<S: Scalar>(PhantomData<*const S>);
+pub(crate) struct Iter<S> {
+    cur: Cell<usize>,
+    items: Vec<S>,
+}
+
+impl<S> Default for Iter<S> {
+    fn default() -> Iter<S> {
+        None.into_iter().collect()
+    }
+}
+
+impl<S> FromIterator<S> for Iter<S> {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = S>,
+    {
+        Iter {
+            cur: Cell::new(0),
+            items: Vec::from_iter(iter),
+        }
+    }
+}
+
+impl<S> Iter<S> {
+    #[inline]
+    pub(crate) fn has_next(&self) -> bool {
+        self.cur.get() < self.items.len()
+    }
+    #[inline]
+    pub(crate) unsafe fn get_next(&self) -> &S {
+        debug_assert!(self.has_next());
+        let cur = self.cur.get();
+        let res = self.items.get_unchecked(cur);
+        self.cur.set(cur + 1);
+        res
+    }
+}
