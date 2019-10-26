@@ -2,7 +2,7 @@ use super::shared::Shared;
 use regex::Regex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
-use std::hash::{Hash,Hasher};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 #[derive(Clone, Debug)]
