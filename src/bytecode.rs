@@ -243,7 +243,6 @@ impl<'a> Interp<'a> {
                         let fr = *fr;
                         *self.get_mut(fr) = *f
                     }
-
                     IntToStr(sr, ir) => {
                         let s = runtime::convert::<_, Str>(*self.get(*ir));
                         let sr = *sr;
@@ -274,7 +273,6 @@ impl<'a> Interp<'a> {
                         let fr = *fr;
                         *self.get_mut(fr) = f;
                     }
-
                     AddInt(res, l, r) => {
                         let res = *res;
                         let l = *self.get(*l);
