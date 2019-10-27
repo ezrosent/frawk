@@ -112,6 +112,7 @@ pub(crate) enum Instr<'a> {
     ModFloat(Reg<Float>, Reg<Float>, Reg<Float>),
     ModInt(Reg<Int>, Reg<Int>, Reg<Int>),
     Not(Reg<Int>, Reg<Int>),
+    // TODO need NotStr
     NegInt(Reg<Int>, Reg<Int>),
     NegFloat(Reg<Float>, Reg<Float>),
 
