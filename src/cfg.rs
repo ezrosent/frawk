@@ -34,7 +34,7 @@ impl<'a> Transition<'a> {
 // None indicates `else`
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
 pub(crate) type Ident = (NumTy, NumTy);
-type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
+pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
 #[derive(Debug, Clone)]
 pub(crate) enum PrimVal<'a> {
