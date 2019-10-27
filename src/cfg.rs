@@ -11,7 +11,6 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-// TODO: nail down iteration order for edges
 // TODO: rename context to something more descriptive. Maybe split out some structs.
 
 // consider making this just "by number" and putting branch instructions elsewhere.

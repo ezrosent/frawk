@@ -4,10 +4,22 @@ use crate::builtins::Variable;
 use crate::common::Result;
 use crate::runtime::{self, Float, Int, LazyVec, Str};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct Label(u32);
 
+impl From<u32> for Label {
+    fn from(u: u32) -> Label {
+        Label(u)
+    }
+}
+
 pub(crate) struct Reg<T>(u32, PhantomData<*const T>);
+
+impl<T> From<u32> for Reg<T> {
+    fn from(u: u32) -> Reg<T> {
+        Reg(u, PhantomData)
+    }
+}
 impl<T> Clone for Reg<T> {
     fn clone(&self) -> Reg<T> {
         Reg(self.0, PhantomData)
@@ -66,6 +78,27 @@ pub(crate) enum Instr<'a> {
     FloatToInt(Reg<Int>, Reg<Float>),
     IntToFloat(Reg<Float>, Reg<Int>),
     StrToFloat(Reg<Float>, Reg<Str<'a>>),
+
+    // Assignment
+    MovInt(Reg<Int>, Reg<Int>),
+    MovFloat(Reg<Float>, Reg<Float>),
+    MovStr(Reg<Str<'a>>, Reg<Str<'a>>),
+
+    MovMapIntInt(Reg<runtime::IntMap<Int>>, Reg<runtime::IntMap<Int>>),
+    MovMapIntFloat(Reg<runtime::IntMap<Float>>, Reg<runtime::IntMap<Float>>),
+    MovMapIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<runtime::IntMap<Str<'a>>>),
+
+    MovMapStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<runtime::StrMap<'a, Int>>),
+    MovMapStrFloat(
+        Reg<runtime::StrMap<'a, Float>>,
+        Reg<runtime::StrMap<'a, Float>>,
+    ),
+    MovMapStrStr(
+        Reg<runtime::StrMap<'a, Str<'a>>>,
+        Reg<runtime::StrMap<'a, Str<'a>>>,
+    ),
+    // Note, for now we do not support iterator moves. Iterators own their own copy of an array,
+    // and there is no reason we should be emitting movs for them.
 
     // Math
     AddInt(Reg<Int>, Reg<Int>, Reg<Int>),
@@ -217,7 +250,6 @@ pub(crate) struct Interp<'a> {
     maps_str_str: Vec<runtime::StrMap<'a, Str<'a>>>,
 
     iters_int: Vec<runtime::Iter<Int>>,
-    iters_float: Vec<runtime::Iter<Float>>,
     iters_str: Vec<runtime::Iter<Str<'a>>>,
 }
 
@@ -751,6 +783,60 @@ impl<'a> Interp<'a> {
                         let dst = *dst;
                         *self.get_mut(dst) = res;
                     }
+                    MovInt(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
+                    MovFloat(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
+                    MovStr(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
+                    MovMapIntInt(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
+                    MovMapIntFloat(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
+                    MovMapIntStr(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
+                    MovMapStrInt(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
+                    MovMapStrFloat(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
+                    MovMapStrStr(dst, src) => {
+                        let src = *src;
+                        let src_contents = self.get(src).clone();
+                        let dst = *dst;
+                        *self.get_mut(dst) = src_contents;
+                    }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;
                         if *self.get(cond) != 0 {
@@ -807,4 +893,3 @@ impl_get!(runtime::StrMap<'a, Int>, maps_str_int);
 impl_get!(runtime::StrMap<'a, Str<'a>>, maps_str_str);
 impl_get!(runtime::Iter<Int>, iters_int);
 impl_get!(runtime::Iter<Str<'a>>, iters_str);
-impl_get!(runtime::Iter<Float>, iters_float);
