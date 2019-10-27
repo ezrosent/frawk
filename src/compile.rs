@@ -2,6 +2,7 @@ use std::borrow::Borrow;
 
 use hashbrown::{hash_map::Entry, HashMap};
 
+use crate::builtins::{self, Variable};
 use crate::bytecode::{Instr, Interp};
 use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::Result;
@@ -32,6 +33,46 @@ impl Ty {
             None => Ty::Str,
         }
     }
+    fn of_var(v: Variable) -> Ty {
+        use Variable::*;
+        match v {
+            ARGC | FS | FILENAME => Ty::Str,
+            NF | NR => Ty::Int,
+            ARGV => Ty::MapIntStr,
+        }
+    }
+
+    fn iter(self) -> Result<Ty> {
+        use Ty::*;
+        match self {
+            IterInt => Ok(Int),
+            IterStr => Ok(Str),
+            Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+            | MapStrStr => err!("attempt to get element of non-iterator type: {:?}", self),
+        }
+    }
+
+    fn key(self) -> Result<Ty> {
+        use Ty::*;
+        match self {
+            MapIntInt | MapIntFloat | MapIntStr => Ok(Int),
+            MapStrInt | MapStrFloat | MapStrStr => Ok(Str),
+            Int | Float | Str | IterInt | IterStr => {
+                err!("attempt to get key of non-map type: {:?}", self)
+            }
+        }
+    }
+    fn val(self) -> Result<Ty> {
+        use Ty::*;
+        match self {
+            MapStrInt | MapIntInt => Ok(Int),
+            MapStrFloat | MapIntFloat => Ok(Float),
+            MapStrStr | MapIntStr => Ok(Str),
+            Int | Float | Str | IterInt | IterStr => {
+                err!("attempt to get val of non-map type: {:?}", self)
+            }
+        }
+    }
 }
 
 impl<Q: Borrow<TVar<Option<Scalar>>>> From<Q> for Ty {
@@ -59,7 +100,7 @@ impl<Q: Borrow<TVar<Option<Scalar>>>> From<Q> for Ty {
 const NUM_TYPES: usize = Ty::IterStr as usize + 1;
 
 struct Generator {
-    registers: HashMap<Ident, (Ty, u32)>,
+    registers: HashMap<Ident, (u32, Ty)>,
     reg_counts: [u32; NUM_TYPES],
     jmps: Vec<usize>,
     bb_to_instr: Vec<usize>,
@@ -77,7 +118,7 @@ macro_rules! reg_of_ty {
 }
 
 impl Generator {
-    fn reg_of_ident(&mut self, id: &Ident) -> (Ty, u32) {
+    fn reg_of_ident(&mut self, id: &Ident) -> (u32, Ty) {
         match self.registers.entry(*id) {
             Entry::Occupied(o) => o.get().clone(),
             Entry::Vacant(v) => {
@@ -87,8 +128,8 @@ impl Generator {
                     .expect("identifiers must be given types")
                     .into();
                 let reg = reg_of_ty!(self, ty);
-                v.insert((ty, reg));
-                (ty, reg)
+                v.insert((reg, ty));
+                (reg, ty)
             }
         }
     }
@@ -116,8 +157,32 @@ impl<'a> Instrs<'a> {
         };
         Ok(self.0.push(res))
     }
+
+    fn get_reg(&mut self, gen: &mut Generator, v: &PrimVal<'a>) -> Result<(u32, Ty)> {
+        match v {
+            PrimVal::ILit(i) => {
+                let nreg = reg_of_ty!(gen, Ty::Int);
+                self.push(Instr::StoreConstInt(nreg.into(), *i));
+                Ok((nreg, Ty::Int))
+            }
+            PrimVal::FLit(f) => {
+                let nreg = reg_of_ty!(gen, Ty::Float);
+                self.push(Instr::StoreConstFloat(nreg.into(), *f));
+                Ok((nreg, Ty::Float))
+            }
+            PrimVal::StrLit(s) => {
+                let nreg = reg_of_ty!(gen, Ty::Str);
+                self.push(Instr::StoreConstStr(nreg.into(), (*s).into()));
+                Ok((nreg, Ty::Str))
+            }
+            PrimVal::Var(v) => Ok(gen.reg_of_ident(v)),
+        }
+    }
     fn convert(&mut self, dst_reg: u32, dst_ty: Ty, src_reg: u32, src_ty: Ty) -> Result<()> {
         use Ty::*;
+        if dst_reg == src_reg && dst_ty == src_ty {
+            return Ok(());
+        }
         let res = match (dst_ty, src_ty) {
             (Float, Int) => Instr::IntToFloat(dst_reg.into(), src_reg.into()),
             (Str, Int) => Instr::IntToStr(dst_reg.into(), src_reg.into()),
@@ -147,6 +212,113 @@ impl<'a> Instrs<'a> {
 
         Ok(self.0.push(res))
     }
+    fn store(
+        &mut self,
+        gen: &mut Generator,
+        dst_reg: u32,
+        dst_ty: Ty,
+        src: &PrimVal<'a>,
+    ) -> Result<()> {
+        match src {
+            PrimVal::Var(id2) => {
+                let (src_reg, src_ty) = gen.reg_of_ident(id2);
+                self.convert(dst_reg, dst_ty, src_reg, src_ty)?;
+            }
+            PrimVal::ILit(i) => {
+                if dst_ty == Ty::Int {
+                    self.push(Instr::StoreConstInt(dst_reg.into(), *i));
+                } else {
+                    let ir = reg_of_ty!(gen, Ty::Int);
+                    self.push(Instr::StoreConstInt(ir.into(), *i));
+                    self.convert(dst_reg, dst_ty, ir, Ty::Int)?;
+                }
+            }
+            PrimVal::FLit(f) => {
+                if dst_ty == Ty::Float {
+                    self.push(Instr::StoreConstFloat(dst_reg.into(), *f));
+                } else {
+                    let ir = reg_of_ty!(gen, Ty::Float);
+                    self.push(Instr::StoreConstFloat(ir.into(), *f));
+                    self.convert(dst_reg, dst_ty, ir, Ty::Float)?;
+                }
+            }
+            PrimVal::StrLit(s) => {
+                if dst_ty == Ty::Str {
+                    self.push(Instr::StoreConstStr(dst_reg.into(), (*s).into()));
+                } else {
+                    let ir = reg_of_ty!(gen, Ty::Str);
+                    self.push(Instr::StoreConstStr(ir.into(), (*s).into()));
+                    self.convert(dst_reg, dst_ty, ir, Ty::Str)?;
+                }
+            }
+        };
+        Ok(())
+    }
+    fn load_map(
+        &mut self,
+        gen: &mut Generator,
+        dst_reg: u32,
+        dst_ty: Ty,
+        arr_reg: u32,
+        arr_ty: Ty,
+        key: &PrimVal<'a>,
+    ) -> Result<()> {
+        // Convert `key` if necessary.
+        let target_ty = arr_ty.key()?;
+        let (mut key_reg, key_ty) = self.get_reg(gen, key)?;
+        if target_ty != key_ty {
+            let inter = reg_of_ty!(gen, target_ty);
+            self.convert(inter, target_ty, key_reg, key_ty)?;
+            key_reg = inter;
+        }
+
+        // Determine if we will need to convert the result when storing the variable.
+        let arr_val_ty = arr_ty.val()?;
+        let load_reg = if dst_ty == arr_val_ty {
+            dst_reg
+        } else {
+            reg_of_ty!(gen, arr_val_ty)
+        };
+
+        // Emit the corresponding instruction.
+        use Ty::*;
+        self.push(match arr_ty {
+            MapIntInt => Instr::LookupIntInt(load_reg.into(), arr_reg.into(), key_reg.into()),
+            MapIntFloat => Instr::LookupIntFloat(load_reg.into(), arr_reg.into(), key_reg.into()),
+            MapIntStr => Instr::LookupIntStr(load_reg.into(), arr_reg.into(), key_reg.into()),
+            MapStrInt => Instr::LookupStrInt(load_reg.into(), arr_reg.into(), key_reg.into()),
+            MapStrFloat => Instr::LookupStrFloat(load_reg.into(), arr_reg.into(), key_reg.into()),
+            MapStrStr => Instr::LookupStrStr(load_reg.into(), arr_reg.into(), key_reg.into()),
+            Int | Float | Str | IterInt | IterStr => {
+                return err!("[load_map] expected map type, found {:?}", arr_ty)
+            }
+        });
+        // Convert the result: note that if we had load_reg == dst_reg, then this is a noop.
+        self.convert(dst_reg, dst_ty, load_reg, arr_val_ty)
+    }
+    fn builtin(
+        &mut self,
+        gen: &mut Generator,
+        dst_reg: u32,
+        dst_ty: Ty,
+        bf: &builtins::Function,
+        args: &cfg::SmallVec<PrimVal<'a>>,
+    ) -> Result<()> {
+        use crate::ast::{Binop::*, Unop::*};
+        use builtins::Function::*;
+
+        match bf {
+            Unop(u) => unimplemented!(),
+            Binop(b) => unimplemented!(),
+            Print => unimplemented!(),
+            Hasline => unimplemented!(),
+            Nextline => unimplemented!(),
+            Setcol => unimplemented!(),
+            Split => unimplemented!(),
+        };
+        unimplemented!()
+    }
+
     fn push(&mut self, i: Instr<'a>) {
         self.0.push(i)
     }
@@ -179,58 +351,117 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
     // analog to the existing enum + type.
     for n in ctx.cfg().raw_nodes() {
         for stmt in n.weight.0.iter() {
-            use cfg::{PrimExpr::*, PrimStmt::*, PrimVal::*};
+            // use cfg::{PrimExpr::*, PrimStmt::*, PrimVal::*};
             match stmt {
                 PrimStmt::AsgnIndex(arr, pv, pe) => unimplemented!(),
                 PrimStmt::AsgnVar(id, pe) => {
-                    let (dst_ty, dst_reg) = gen.reg_of_ident(id);
+                    let (dst_reg, dst_ty) = gen.reg_of_ident(id);
                     match pe {
-                        PrimExpr::Val(v) => match v {
-                            PrimVal::Var(id2) => {
-                                let (src_ty, src_reg) = gen.reg_of_ident(id2);
-                                instrs.convert(dst_reg, dst_ty, src_reg, src_ty)?;
-                            }
-                            PrimVal::ILit(i) => {
-                                if dst_ty == Ty::Int {
-                                    instrs.push(Instr::StoreConstInt(dst_reg.into(), *i));
-                                } else {
-                                    let ir = reg_of_ty!(&mut gen, Ty::Int);
-                                    instrs.push(Instr::StoreConstInt(ir.into(), *i));
-                                    instrs.convert(dst_reg, dst_ty, ir, Ty::Int)?;
-                                }
-                            }
-                            PrimVal::FLit(f) => {
-                                if dst_ty == Ty::Float {
-                                    instrs.push(Instr::StoreConstFloat(dst_reg.into(), *f));
-                                } else {
-                                    let ir = reg_of_ty!(&mut gen, Ty::Float);
-                                    instrs.push(Instr::StoreConstFloat(ir.into(), *f));
-                                    instrs.convert(dst_reg, dst_ty, ir, Ty::Float)?;
-                                }
-                            }
-                            PrimVal::StrLit(s) => {
-                                if dst_ty == Ty::Str {
-                                    instrs.push(Instr::StoreConstStr(dst_reg.into(), (*s).into()));
-                                } else {
-                                    let ir = reg_of_ty!(&mut gen, Ty::Str);
-                                    instrs.push(Instr::StoreConstStr(ir.into(), (*s).into()));
-                                    instrs.convert(dst_reg, dst_ty, ir, Ty::Str)?;
-                                }
-                            }
-                        },
+                        PrimExpr::Val(v) => instrs.store(&mut gen, dst_reg, dst_ty, v)?,
+                        // Phi functions are handled elsewhere
                         PrimExpr::Phi(_) => {}
                         PrimExpr::CallBuiltin(bf, vs) => unimplemented!(),
-                        PrimExpr::Index(arr, k) => unimplemented!(),
-                        PrimExpr::IterBegin(pv) => unimplemented!(),
-                        PrimExpr::HasNext(pv) => unimplemented!(),
-                        PrimExpr::Next(pv) => unimplemented!(),
-                        PrimExpr::LoadBuiltin(bv) => unimplemented!(),
+                        PrimExpr::Index(arr, k) => {
+                            let (arr_reg, arr_ty) = if let PrimVal::Var(arr_id) = arr {
+                                gen.reg_of_ident(arr_id)
+                            } else {
+                                return err!("attempt to index into scalar literal: {}", arr);
+                            };
+                            instrs.load_map(&mut gen, dst_reg, dst_ty, arr_reg, arr_ty, k)?;
+                        }
+                        PrimExpr::IterBegin(pv) => {
+                            let (arr_reg, arr_ty) = instrs.get_reg(&mut gen, pv)?;
+                            if dst_ty.iter()? != arr_ty.key()? {
+                                return err!(
+                                    "illegal iterator assignment {:?} = begin({:?})",
+                                    dst_ty,
+                                    arr_ty
+                                );
+                            }
+                            instrs.push(match arr_ty {
+                                Ty::MapIntInt => {
+                                    Instr::IterBeginIntInt(dst_reg.into(), arr_reg.into())
+                                }
+                                Ty::MapIntFloat => {
+                                    Instr::IterBeginIntFloat(dst_reg.into(), arr_reg.into())
+                                }
+                                Ty::MapIntStr => {
+                                    Instr::IterBeginIntStr(dst_reg.into(), arr_reg.into())
+                                }
+                                Ty::MapStrInt => {
+                                    Instr::IterBeginStrInt(dst_reg.into(), arr_reg.into())
+                                }
+                                Ty::MapStrFloat => {
+                                    Instr::IterBeginStrFloat(dst_reg.into(), arr_reg.into())
+                                }
+                                Ty::MapStrStr => {
+                                    Instr::IterBeginStrStr(dst_reg.into(), arr_reg.into())
+                                }
+                                Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
+                                    // covered by the error check above
+                                    unreachable!()
+                                }
+                            });
+                        }
+                        PrimExpr::HasNext(pv) => {
+                            let target_reg = if dst_ty == Ty::Int {
+                                dst_reg
+                            } else {
+                                reg_of_ty!(&mut gen, Ty::Int)
+                            };
+                            let (iter_reg, iter_ty) = instrs.get_reg(&mut gen, pv)?;
+                            instrs.push(match iter_ty.iter()? {
+                                Ty::Int => {
+                                    Instr::IterHasNextInt(target_reg.into(), iter_reg.into())
+                                }
+                                Ty::Str => {
+                                    Instr::IterHasNextStr(target_reg.into(), iter_reg.into())
+                                }
+                                _ => unreachable!(),
+                            });
+                            instrs.convert(dst_reg, dst_ty, target_reg, Ty::Int)?
+                        }
+                        PrimExpr::Next(pv) => {
+                            let (iter_reg, iter_ty) = instrs.get_reg(&mut gen, pv)?;
+                            let elt_ty = iter_ty.iter()?;
+                            let target_reg = if dst_ty == elt_ty {
+                                dst_reg
+                            } else {
+                                reg_of_ty!(&mut gen, elt_ty)
+                            };
+                            instrs.push(match elt_ty {
+                                Ty::Int => {
+                                    Instr::IterGetNextInt(target_reg.into(), iter_reg.into())
+                                }
+                                Ty::Str => {
+                                    Instr::IterGetNextStr(target_reg.into(), iter_reg.into())
+                                }
+                                _ => unreachable!(),
+                            });
+                            instrs.convert(dst_reg, dst_ty, target_reg, elt_ty)?
+                        }
+                        PrimExpr::LoadBuiltin(bv) => {
+                            let target_ty = Ty::of_var(*bv);
+                            let target_reg = if target_ty == dst_ty {
+                                dst_reg
+                            } else {
+                                reg_of_ty!(&mut gen, target_ty)
+                            };
+                            instrs.push(match target_ty {
+                                Ty::Str => Instr::LoadVarStr(target_reg.into(), *bv),
+                                Ty::Int => Instr::LoadVarInt(target_reg.into(), *bv),
+                                Ty::MapIntStr => Instr::LoadVarIntMap(target_reg.into(), *bv),
+                                _ => unreachable!(),
+                            });
+                            instrs.convert(dst_reg, dst_ty, target_reg, target_ty)?
+                        }
                     }
                 }
                 PrimStmt::SetBuiltin(v, pe) => unimplemented!(),
             };
         }
         // TODO: handle phis
+        // TODO: handle branches
     }
 
     unimplemented!()
