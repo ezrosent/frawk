@@ -44,7 +44,7 @@ thread_local! {
 }
 
 impl<R: Read> Reader<R> {
-    fn new(r: R, chunk_size: usize) -> Result<Self> {
+    pub(crate) fn new(r: R, chunk_size: usize) -> Result<Self> {
         let mut res = Reader {
             inner: r,
             prefix: Default::default(),
@@ -55,10 +55,13 @@ impl<R: Read> Reader<R> {
         res.advance(0)?;
         Ok(res)
     }
-    fn read_line<'a>(&mut self, pat: &Regex) -> Result<Option<Str<'a>>> {
+    pub(crate) fn is_eof(&self) -> bool {
+        self.get().len() == 0 && self.done
+    }
+    pub(crate) fn read_line<'a>(&mut self, pat: &Regex) -> Result<Str<'a>> {
         let mut prefix: Str = "".into();
-        if self.get().len() == 0 && self.done {
-            return Ok(None);
+        if self.is_eof() {
+            return Ok("".into());
         }
         loop {
             // Why this map invocation? Match objects hold a reference to the substring, which
@@ -71,18 +74,18 @@ impl<R: Read> Reader<R> {
                     // That seems okay, but we could find out that it actually isn't, in which case
                     // we would want some more complicated error handling here.
                     self.advance(end)?;
-                    return Ok(Some(if prefix.with_str(|s| s.len() > 0) {
+                    return Ok(if prefix.with_str(|s| s.len() > 0) {
                         Str::concat(prefix, res.into())
                     } else {
                         res.into()
-                    }));
+                    });
                 }
                 None => {
                     let cur: Str = self.cur.clone().into();
                     self.advance(self.get().len())?;
                     if self.done {
                         // All done! Just return the rest of the buffer.
-                        return Ok(Some(cur.into()));
+                        return Ok(cur.into());
                     }
                     prefix = Str::concat(prefix, cur.into());
                 }

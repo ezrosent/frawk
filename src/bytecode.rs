@@ -140,6 +140,10 @@ pub(crate) enum Instr<'a> {
     SetColumn(Reg<Int> /* dst column */, Reg<Str<'a>>),
     GetColumn(Reg<Str<'a>>, Reg<Int>),
 
+    // Lines
+    HasLine(Reg<Int>, Reg<Str<'a>>),
+    NextLine(Reg<Str<'a>>, Reg<Str<'a>>),
+
     // Split
     SplitInt(
         Reg<Int>,
@@ -676,6 +680,7 @@ impl<'a> Interp<'a> {
                     LoadVarStr(dst, var) => {
                         let s = match var {
                             FS => self.vars.fs.clone(),
+                            RS => self.vars.rs.clone(),
                             FILENAME => self.vars.filename.clone(),
                             ARGC | ARGV | NF | NR => unreachable!(),
                         };
@@ -687,6 +692,7 @@ impl<'a> Interp<'a> {
                         let s = self.get(src).clone();
                         match var {
                             FS => self.vars.fs = s,
+                            RS => self.vars.rs = s,
                             FILENAME => self.vars.filename = s,
                             ARGC | ARGV | NF | NR => unreachable!(),
                         };
@@ -696,7 +702,7 @@ impl<'a> Interp<'a> {
                             ARGC => self.vars.argc,
                             NF => self.vars.nf,
                             NR => self.vars.nr,
-                            FS | FILENAME | ARGV => unreachable!(),
+                            FS | RS | FILENAME | ARGV => unreachable!(),
                         };
                         let dst = *dst;
                         *self.get_mut(dst) = i;
@@ -708,13 +714,13 @@ impl<'a> Interp<'a> {
                             ARGC => self.vars.argc = s,
                             NF => self.vars.nf = s,
                             NR => self.vars.nr = s,
-                            FS | FILENAME | ARGV => unreachable!(),
+                            FS | RS | FILENAME | ARGV => unreachable!(),
                         };
                     }
                     LoadVarIntMap(dst, var) => {
                         let arr = match var {
                             ARGV => self.vars.argv.clone(),
-                            ARGC | NF | NR | FS | FILENAME => unreachable!(),
+                            ARGC | NF | NR | FS | RS | FILENAME => unreachable!(),
                         };
                         let dst = *dst;
                         *self.get_mut(dst) = arr;
@@ -724,7 +730,7 @@ impl<'a> Interp<'a> {
                         let s = self.get(src).clone();
                         match var {
                             ARGV => self.vars.argv = s,
-                            ARGC | NF | NR | FS | FILENAME => unreachable!(),
+                            ARGC | NF | NR | FS | RS | FILENAME => unreachable!(),
                         };
                     }
                     IterBeginIntInt(dst, arr) => {
@@ -836,6 +842,26 @@ impl<'a> Interp<'a> {
                         let src_contents = self.get(src).clone();
                         let dst = *dst;
                         *self.get_mut(dst) = src_contents;
+                    }
+                    // TODO add error logging for these errors perhaps?
+                    HasLine(dst, file) => {
+                        let dst = *dst;
+                        let file = index(&self.strs, file);
+                        match self.read_files.has_line(file) {
+                            Ok(b) => *self.get_mut(dst) = b as Int,
+                            Err(_) => *self.get_mut(dst) = 0,
+                        };
+                    }
+                    NextLine(dst, file) => {
+                        let dst = *dst;
+                        let file = index(&self.strs, file);
+                        match self
+                            .regexes
+                            .get_line(file, &self.vars.fs, &mut self.read_files)
+                        {
+                            Ok(l) => *self.get_mut(dst) = l,
+                            Err(_) => *self.get_mut(dst) = "".into(),
+                        };
                     }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;

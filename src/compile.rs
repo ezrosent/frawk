@@ -36,7 +36,7 @@ impl Ty {
     fn of_var(v: Variable) -> Ty {
         use Variable::*;
         match v {
-            ARGC | FS | FILENAME => Ty::Str,
+            ARGC | FS | RS | FILENAME => Ty::Str,
             NF | NR => Ty::Int,
             ARGV => Ty::MapIntStr,
         }

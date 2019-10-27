@@ -1,7 +1,7 @@
 use crate::common::{Either, Result};
 use hashbrown::HashMap;
 use regex::Regex;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -81,15 +81,11 @@ impl<T: Default> LazyVec<T> {
     }
 }
 
-pub(crate) trait Scalar {}
-impl Scalar for Int {}
-impl Scalar for Float {}
-impl<'a> Scalar for Str<'a> {}
-
 pub(crate) struct Variables<'a> {
     pub argc: Int,
     pub argv: IntMap<Str<'a>>,
     pub fs: Str<'a>,
+    pub rs: Str<'a>,
     pub nf: Int,
     pub nr: Int,
     pub filename: Str<'a>,
@@ -99,7 +95,7 @@ pub(crate) struct Variables<'a> {
 pub(crate) struct RegexCache(Registry<Regex>);
 
 impl RegexCache {
-    fn with_regex<T>(&mut self, pat: &Str, mut f: impl FnMut(&Regex) -> T) -> Result<T> {
+    pub(crate) fn with_regex<T>(&mut self, pat: &Str, mut f: impl FnMut(&Regex) -> T) -> Result<T> {
         self.0.get(
             pat,
             |s| match Regex::new(s) {
@@ -107,6 +103,21 @@ impl RegexCache {
                 Err(e) => err!("{}", e),
             },
             |x| f(x),
+        )
+    }
+    pub(crate) fn get_line<'a>(
+        &mut self,
+        file: &Str<'a>,
+        pat: &Str<'a>,
+        reg: &mut FileRead,
+    ) -> Result<Str<'a>> {
+        self.0.get_fallible(
+            pat,
+            |s| match Regex::new(s) {
+                Ok(r) => Ok(r),
+                Err(e) => err!("{}", e),
+            },
+            |re| reg.get_line(file, re),
         )
     }
     pub(crate) fn split_regex<'a>(
@@ -187,25 +198,30 @@ impl FileWrite {
     }
 }
 
+const CHUNK_SIZE: usize = 2 << 10;
+
 #[derive(Default)]
-pub(crate) struct FileRead(Registry<io::BufReader<File>>);
+pub(crate) struct FileRead(Registry<splitter::Reader<File>>);
 
 impl FileRead {
-    pub(crate) fn get_line(
+    pub(crate) fn get_line<'a>(&mut self, path: &Str<'a>, pat: &Regex) -> Result<Str<'a>> {
+        self.with_file(path, |reader| reader.read_line(pat))
+    }
+    pub(crate) fn has_line<'a>(&mut self, path: &Str<'a>) -> Result<bool> {
+        self.with_file(path, |reader| Ok(reader.is_eof()))
+    }
+    fn with_file<'a, R>(
         &mut self,
-        path: &Str,
-        into: &mut String,
-    ) -> Result<bool /* false = EOF */> {
+        path: &Str<'a>,
+        mut f: impl FnMut(&mut splitter::Reader<File>) -> Result<R>,
+    ) -> Result<R> {
         self.0.get_fallible(
             path,
             |s| match File::open(s) {
-                Ok(f) => Ok(BufReader::new(f)),
+                Ok(f) => Ok(splitter::Reader::new(f, CHUNK_SIZE)?),
                 Err(e) => err!("failed to open file '{}': {}", s, e),
             },
-            |reader| match reader.read_line(into) {
-                Ok(n) => Ok(n > 0),
-                Err(e) => err!("{}", e),
-            },
+            f,
         )
     }
 }
