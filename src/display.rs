@@ -116,6 +116,7 @@ impl Display for Variable {
                 ARGC => "ARGC",
                 ARGV => "ARGV",
                 FS => "FS",
+                RS => "RS",
                 NF => "NF",
                 NR => "NR",
                 FILENAME => "FILENAME",

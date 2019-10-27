@@ -142,6 +142,7 @@ pub(crate) enum Variable {
     ARGC,
     ARGV,
     FS,
+    RS,
     NF,
     NR,
     FILENAME,
@@ -156,7 +157,7 @@ impl Variable {
                 key: Scalar::Int,
                 val: Scalar::Str,
             },
-            FS | FILENAME => TVar::Scalar(Scalar::Str),
+            FS | RS | FILENAME => TVar::Scalar(Scalar::Str),
         }
     }
 }
@@ -176,6 +177,7 @@ static_map!(
     ["ARGC", Variable::ARGC],
     ["ARGV", Variable::ARGV],
     ["FS", Variable::FS],
+    ["RS", Variable::RS],
     ["NF", Variable::NF],
     ["NR", Variable::NR],
     ["FILENAME", Variable::FILENAME]
