@@ -714,7 +714,7 @@ impl Constraints {
                 let mut args = args.clone();
                 let arg_ks = b.signature();
                 // optimize for the all-scalar case; if maps are involved we will just grow the
-                // vector (once, worst-case).
+                // vector.
                 let mut deps = SmallVec::with_capacity(args.len());
                 for k in arg_ks.iter() {
                     match args.pop() {
