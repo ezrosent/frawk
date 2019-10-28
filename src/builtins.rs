@@ -158,52 +158,6 @@ impl Propagator for Function {
             Split => (true, Some(Int)),
         }
     }
-    fn inputs(&self, incoming: &[Option<Scalar>]) -> SmallVec<Option<Scalar>> {
-        use {
-            ast::{Binop::*, Unop::*},
-            Function::*,
-            Scalar::*,
-        };
-        match self {
-            Unop(Neg) | Unop(Pos) => match &incoming[0] {
-                Some(Str) | Some(Float) => smallvec![Some(Float)],
-                x => smallvec![*x],
-            },
-            Unop(Column) => smallvec![Some(Int)],
-            Binop(Concat) | Binop(Match) => smallvec![Some(Str); 2],
-            // Not doesn't unconditionally convert to integers before negating it. Nonempty strings
-            // are considered "truthy". Floating point numbers are converted beforehand:
-            //    !5 == !1 == 0
-            //    !0 == 1
-            //    !"hi" == 0
-            //    !(0.25) == 1
-            Unop(Not) => smallvec![match &incoming[0] {
-                None | Some(Float) => Some(Int),
-                other => *other,
-            }],
-            Binop(EQ) => match (incoming[0], incoming[1]) {
-                (Some(Str), _) | (_, Some(Str)) => smallvec![Some(Str); 2],
-                (Some(Float), _) | (_, Some(Float)) => smallvec![Some(Float); 2],
-                (Some(Int), _) | (_, Some(Int)) => smallvec![Some(Int); 2],
-                (None, None) => smallvec![None; 2],
-            },
-            Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE) | Binop(Plus) | Binop(Minus)
-            | Binop(Mod) | Binop(Mult) => match (incoming[0], incoming[1]) {
-                (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
-                    smallvec![Some(Float); 2]
-                }
-                (_, _) => smallvec![Some(Int); 2],
-            },
-            Binop(Div) => smallvec![Some(Float);2],
-            Print => smallvec![Some(Str);incoming.len()],
-            Hasline | Nextline => smallvec![Some(Str)],
-            Setcol => smallvec![Some(Int), Some(Str)],
-            Split => match (&incoming[1], &incoming[2]) {
-                (Some(Int), _) | (None, _) => smallvec![Some(Str), Some(Int), Some(Str), Some(Str)],
-                (_, _) => smallvec![Some(Str), Some(Str), Some(Str), Some(Str)],
-            },
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

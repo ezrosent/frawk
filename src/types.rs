@@ -40,8 +40,6 @@ pub(crate) trait Propagator {
     /// been saturated (i.e. regardless of what new inputs it will produce, the output will not
     /// change)
     fn step(&self, incoming: &[Option<Self::Item>]) -> (bool, Option<Self::Item>);
-
-    fn inputs(&self, incoming: &[Option<Self::Item>]) -> SmallVec<Option<Self::Item>>;
 }
 
 mod prop {
@@ -109,23 +107,6 @@ mod prop {
                 Builtin(b) => b.step(incoming),
                 MapKey => map_key(set),
                 Val => map_val(set),
-            }
-        }
-        fn inputs(&self, incoming: &[Option<Scalar>]) -> SmallVec<Option<Scalar>> {
-            use Rule::*;
-            match self {
-                Const(_) => Default::default(),
-                Builtin(b) => b.inputs(incoming),
-                MapKey => {
-                    let set = incoming.iter().flat_map(|o| o.as_ref().into_iter());
-                    let len = incoming.len();
-                    smallvec![map_key(set).1; len]
-                }
-                Val => {
-                    let set = incoming.iter().flat_map(|o| o.as_ref().into_iter());
-                    let len = incoming.len();
-                    smallvec![map_val(set).1; len]
-                }
             }
         }
     }
@@ -221,32 +202,6 @@ mod prop {
                     *active = true;
                     self.worklist.push(neigh)
                 }
-            }
-        }
-        pub(crate) fn read_inputs(&self, id: NodeIx) -> SmallVec<Option<P::Item>> {
-            let Node { deps, rule, .. } = self
-                .graph
-                .node_weight(id)
-                .expect("read must get a valid node index");
-            match rule {
-                Some(r) => {
-                    let inputs: SmallVec<_> = deps
-                        .iter()
-                        // for each dependency
-                        .map(|n| {
-                            // get the Option<Node>
-                            self.graph
-                                .node_weight(*n)
-                                // unwrap it
-                                .expect("node deps must be valid nodes")
-                                // copy out the current `item`
-                                .item
-                                .clone()
-                        })
-                        .collect();
-                    r.inputs(&inputs[..])
-                }
-                None => smallvec![None; deps.len()],
             }
         }
         pub(crate) fn read(&self, id: NodeIx) -> Option<&P::Item> {
