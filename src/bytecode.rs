@@ -112,6 +112,7 @@ pub(crate) enum Instr<'a> {
     ModFloat(Reg<Float>, Reg<Float>, Reg<Float>),
     ModInt(Reg<Int>, Reg<Int>, Reg<Int>),
     Not(Reg<Int>, Reg<Int>),
+    NotStr(Reg<Int>, Reg<Str<'a>>),
     // TODO need NotStr
     NegInt(Reg<Int>, Reg<Int>),
     NegFloat(Reg<Float>, Reg<Float>),
@@ -374,6 +375,12 @@ impl<'a> Interp<'a> {
                         let res = *res;
                         let i = *self.get(*ir);
                         *self.get_mut(res) = (i != 0) as Int;
+                    }
+                    NotStr(res, sr) => {
+                        let res = *res;
+                        let sr = *sr;
+                        let is_empty = self.get(sr).with_str(|s| s.len() == 0);
+                        *self.get_mut(res) = is_empty as Int;
                     }
                     NegInt(res, ir) => {
                         let res = *res;

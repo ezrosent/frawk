@@ -44,7 +44,7 @@ impl Function {
             Split => 4, // 3?
         }
     }
-    pub(crate) fn input_ty(
+    pub(crate) fn type_sig(
         &self,
         incoming: &[compile::Ty],
     ) -> Result<(SmallVec<compile::Ty>, compile::Ty)> {
@@ -126,6 +126,7 @@ impl Propagator for Function {
     fn arity(&self) -> Option<usize> {
         Some(self.fixed_arity())
     }
+    // TODO unify more of this with `input_ty`
     fn step(&self, incoming: &[Option<Scalar>]) -> (bool, Option<Scalar>) {
         use {
             ast::{Binop::*, Unop::*},
