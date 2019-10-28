@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 
 use hashbrown::{hash_map::Entry, HashMap};
+use smallvec::smallvec;
 
 use crate::builtins::{self, Variable};
 use crate::bytecode::{Instr, Interp};
@@ -9,7 +10,7 @@ use crate::common::Result;
 use crate::types::{get_types, Scalar, TVar};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum Ty {
+pub(crate) enum Ty {
     Int = 0,
     Float = 1,
     Str = 2,
@@ -307,8 +308,41 @@ impl<'a> Instrs<'a> {
         use crate::ast::{Binop::*, Unop::*};
         use builtins::Function::*;
 
+        // Compile the argument values
+        let mut args_regs = cfg::SmallVec::with_capacity(args.len());
+        let mut args_tys = cfg::SmallVec::with_capacity(args.len());
+        for arg in args.iter() {
+            let (reg, ty) = self.get_reg(gen, arg)?;
+            args_regs.push(reg);
+            args_tys.push(ty);
+        }
+
+        // Now, perform any necessary conversions if input types do not match the argument types.
+        let mut conv_regs: cfg::SmallVec<_> = smallvec![0u32; args.len()];
+        let (conv_tys, res) = bf.input_ty(&args_tys[..])?;
+
+        for (areg, (aty, (creg, cty))) in args_regs.iter().cloned().zip(
+            args_tys
+                .iter()
+                .cloned()
+                .zip(conv_regs.iter_mut().zip(conv_tys.iter().cloned())),
+        ) {
+            if aty == cty {
+                *creg = areg;
+            } else {
+                let reg = reg_of_ty!(gen, cty);
+                self.convert(reg, cty, areg, aty)?;
+                *creg = reg;
+            }
+        }
+
+        // Need output register.
+
         match bf {
-            Unop(u) => unimplemented!(),
+            Unop(Column) => unimplemented!(),
+            Unop(Not) => unimplemented!(),
+            Unop(Neg) => unimplemented!(),
+            Unop(Pos) => unimplemented!(),
             Binop(b) => unimplemented!(),
             Print => unimplemented!(),
             Hasline => unimplemented!(),
