@@ -319,7 +319,7 @@ impl<'a> Instrs<'a> {
 
         // Now, perform any necessary conversions if input types do not match the argument types.
         let mut conv_regs: cfg::SmallVec<_> = smallvec![0u32; args.len()];
-        let (conv_tys, res) = bf.input_ty(&args_tys[..])?;
+        let (conv_tys, res_ty) = bf.type_sig(&args_tys[..])?;
 
         for (areg, (aty, (creg, cty))) in args_regs.iter().cloned().zip(
             args_tys
@@ -336,11 +336,22 @@ impl<'a> Instrs<'a> {
             }
         }
 
+        let res_reg = if dst_ty == res_ty {
+            reg_of_ty!(gen, res_ty)
+        } else {
+            dst_reg
+        };
+
         // Need output register.
 
         match bf {
-            Unop(Column) => unimplemented!(),
-            Unop(Not) => unimplemented!(),
+            Unop(Column) => self.push(Instr::SetColumn(res_reg.into(), conv_regs[0].into())),
+            Unop(Not) => self.push(if conv_tys[0] == Ty::Str {
+                Instr::NotStr(res_reg.into(), conv_regs[0].into())
+            } else {
+                debug_assert_eq!(conv_tys[0], Ty::Int);
+                Instr::Not(res_reg.into(), conv_regs[0].into())
+            }),
             Unop(Neg) => unimplemented!(),
             Unop(Pos) => unimplemented!(),
             Binop(b) => unimplemented!(),
@@ -350,7 +361,7 @@ impl<'a> Instrs<'a> {
             Setcol => unimplemented!(),
             Split => unimplemented!(),
         };
-        unimplemented!()
+        self.convert(dst_reg, dst_ty, res_reg, res_ty)
     }
 
     fn push(&mut self, i: Instr<'a>) {
