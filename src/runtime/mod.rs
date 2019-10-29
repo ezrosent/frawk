@@ -167,11 +167,30 @@ impl RegexCache {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct FileWrite(Registry<io::BufWriter<File>>);
+pub(crate) struct FileWrite {
+    files: Registry<io::BufWriter<File>>,
+    stdout: io::BufWriter<io::Stdout>,
+}
+
+impl Default for FileWrite {
+    fn default() -> FileWrite {
+        FileWrite {
+            files: Default::default(),
+            stdout: io::BufWriter::new(io::stdout()),
+        }
+    }
+}
+
 impl FileWrite {
+    pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
+        if let Err(e) = s.with_str(|s| self.stdout.write_all(s.as_bytes())) {
+            err!("failed to write to stdout (stdout closed?): {}", e)
+        } else {
+            Ok(())
+        }
+    }
     pub(crate) fn write_str(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
-        self.0.get_fallible(
+        self.files.get_fallible(
             path,
             |s| match std::fs::OpenOptions::new()
                 .write(true)
