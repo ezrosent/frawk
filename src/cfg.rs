@@ -216,9 +216,11 @@ where
                 current_open
             }
             Print(vs, out) => {
+                // TODO Change of plans, keep this desugaring, but add builtin calls for printing to
+                // stdout vs to a file, where the file also has the append bit.
                 debug_assert!(vs.len() > 0);
                 let out = match out.as_ref() {
-                    Some(x) => self.convert_val(x, current_open)?,
+                    Some((x, _append)) => self.convert_val(x, current_open)?,
                     None => PrimVal::StrLit(""),
                 };
                 if vs.len() == 0 {
