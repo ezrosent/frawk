@@ -138,8 +138,6 @@ impl Propagator for Function {
                 Some(Str) | Some(Float) => (true, Some(Float)),
                 x => (false, *x),
             },
-            // TODO: Column should get desugared before making CFG? We can desugar it when
-            // building bytecode as well, though.
             Unop(Column) | Binop(Concat) => (true, Some(Str)),
             Unop(Not) | Binop(Match) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
             | Binop(EQ) => (true, Some(Int)),
