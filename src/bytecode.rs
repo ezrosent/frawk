@@ -105,8 +105,7 @@ pub(crate) enum Instr<'a> {
     AddFloat(Reg<Float>, Reg<Float>, Reg<Float>),
     MulFloat(Reg<Float>, Reg<Float>, Reg<Float>),
     MulInt(Reg<Int>, Reg<Int>, Reg<Int>),
-    DivFloat(Reg<Float>, Reg<Float>, Reg<Float>),
-    DivInt(Reg<Float>, Reg<Int>, Reg<Int>),
+    Div(Reg<Float>, Reg<Float>, Reg<Float>),
     MinusFloat(Reg<Float>, Reg<Float>, Reg<Float>),
     MinusInt(Reg<Int>, Reg<Int>, Reg<Int>),
     ModFloat(Reg<Float>, Reg<Float>, Reg<Float>),
@@ -359,13 +358,7 @@ impl<'a> Interp<'a> {
                         let r = *self.get(*r);
                         *self.get_mut(res) = l % r;
                     }
-                    DivInt(res, l, r) => {
-                        let res = *res;
-                        let l = *self.get(*l) as Float;
-                        let r = *self.get(*r) as Float;
-                        *self.get_mut(res) = l / r;
-                    }
-                    DivFloat(res, l, r) => {
+                    Div(res, l, r) => {
                         let res = *res;
                         let l = *self.get(*l);
                         let r = *self.get(*r);
