@@ -318,7 +318,7 @@ impl<'a> Instrs<'a> {
         }
 
         // Now, perform any necessary conversions if input types do not match the argument types.
-        let mut conv_regs: cfg::SmallVec<_> = smallvec![0u32; args.len()];
+        let mut conv_regs: cfg::SmallVec<_> = smallvec![!0u32; args.len()];
         let (conv_tys, res_ty) = bf.type_sig(&args_tys[..])?;
 
         for (areg, (aty, (creg, cty))) in args_regs.iter().cloned().zip(
@@ -342,7 +342,17 @@ impl<'a> Instrs<'a> {
             dst_reg
         };
 
-        // Need output register.
+        // Helper macro for generating code for binary operators
+        macro_rules! gen_op {
+            ($op:tt, $( [$ty:tt, $inst:tt]),* ) => {
+                match conv_tys[0] {
+                    $( Ty::$ty => self.push(Instr::$inst(res_reg.into(),
+                                        conv_regs[0].into(),
+                                        conv_regs[1].into())), )*
+                    _ => return err!("unexpected operands for {}", stringify!($op)),
+                }
+            }
+        };
 
         match bf {
             Unop(Column) => self.push(Instr::SetColumn(res_reg.into(), conv_regs[0].into())),
@@ -352,14 +362,47 @@ impl<'a> Instrs<'a> {
                 debug_assert_eq!(conv_tys[0], Ty::Int);
                 Instr::Not(res_reg.into(), conv_regs[0].into())
             }),
-            Unop(Neg) => unimplemented!(),
-            Unop(Pos) => unimplemented!(),
-            Binop(b) => unimplemented!(),
+            Unop(Neg) => self.push(if conv_tys[0] == Ty::Float {
+                Instr::NegFloat(res_reg.into(), conv_regs[0].into())
+            } else {
+                Instr::NegInt(res_reg.into(), conv_regs[0].into())
+            }),
+            Unop(Pos) => self.mov(res_reg, conv_regs[0], conv_tys[0])?,
+            Binop(Plus) => gen_op!(Plus, [Float, AddFloat], [Int, AddInt]),
+            Binop(Minus) => gen_op!(Minus, [Float, MinusFloat], [Int, MinusInt]),
+            Binop(Mult) => gen_op!(Minus, [Float, MulFloat], [Int, MulInt]),
+            Binop(Div) => gen_op!(Div, [Float, Div]),
+            Binop(Mod) => gen_op!(Mod, [Float, ModFloat], [Int, ModInt]),
+            Binop(Concat) => gen_op!(Concat, [Str, Concat]),
+            Binop(Match) => gen_op!(Match, [Str, Match]),
+            Binop(LT) => gen_op!(LT, [Float, LTFloat], [Int, LTInt], [Str, LTStr]),
+            Binop(GT) => gen_op!(GT, [Float, GTFloat], [Int, GTInt], [Str, GTStr]),
+            Binop(LTE) => gen_op!(LTE, [Float, LTEFloat], [Int, LTEInt], [Str, LTEStr]),
+            Binop(GTE) => gen_op!(GTE, [Float, GTEFloat], [Int, GTEInt], [Str, GTEStr]),
+            Binop(EQ) => gen_op!(EQ, [Float, EQFloat], [Int, EQInt], [Str, EQStr]),
+            Hasline => self.push(Instr::HasLine(res_reg.into(), conv_regs[0].into())),
+            Nextline => self.push(Instr::NextLine(res_reg.into(), conv_regs[0].into())),
+            Setcol => self.push(Instr::SetColumn(conv_regs[0].into(), conv_regs[1].into())),
+            Split => self.push(if conv_tys[2] == Ty::MapIntStr {
+                Instr::SplitInt(
+                    res_reg.into(),
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                    conv_regs[2].into(),
+                )
+            } else {
+                Instr::SplitStr(
+                    res_reg.into(),
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                    conv_regs[2].into(),
+                )
+            }),
+            // This one has nontrivial desugaring
+            // TODO: fix the API for print. Add appending to ast, then add Vector (not smallvec) to
+            // Print instruction; it's common enough that we want to be able to batch the concats
+            // together.
             Print => unimplemented!(),
-            Hasline => unimplemented!(),
-            Nextline => unimplemented!(),
-            Setcol => unimplemented!(),
-            Split => unimplemented!(),
         };
         self.convert(dst_reg, dst_ty, res_reg, res_ty)
     }

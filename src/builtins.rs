@@ -155,7 +155,7 @@ impl Propagator for Function {
             Print => (true, None),
             Hasline => (true, Some(Int)),
             Nextline => (true, Some(Str)),
-            Setcol => (true, Some(Str)),
+            Setcol => (true, Some(Int)), // no result
             Split => (true, Some(Int)),
         }
     }
