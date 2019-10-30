@@ -6,7 +6,7 @@ use smallvec::smallvec;
 use crate::builtins::{self, Variable};
 use crate::bytecode::{Instr, Interp};
 use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
-use crate::common::Result;
+use crate::common::{NodeIx, Result};
 use crate::types::{get_types, Scalar, TVar};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -119,6 +119,8 @@ macro_rules! reg_of_ty {
 }
 
 impl Generator {
+    // Get the register associated with a given identifier and assign a new one if it does not yet
+    // have one.
     fn reg_of_ident(&mut self, id: &Ident) -> (u32, Ty) {
         match self.registers.entry(*id) {
             Entry::Occupied(o) => o.get().clone(),
@@ -139,6 +141,7 @@ impl Generator {
 struct Instrs<'a>(Vec<Instr<'a>>);
 
 impl<'a> Instrs<'a> {
+    // Move src into dst at type Ty.
     fn mov(&mut self, dst_reg: u32, src_reg: u32, ty: Ty) -> Result<()> {
         use Ty::*;
         let res = match ty {
@@ -159,6 +162,8 @@ impl<'a> Instrs<'a> {
         Ok(self.0.push(res))
     }
 
+    // Get the register associated with a value. For identifiers this has the same semantics as
+    // reg_of_ident. For literals, a new register of the appropriate type is allocated.
     fn get_reg(&mut self, gen: &mut Generator, v: &PrimVal<'a>) -> Result<(u32, Ty)> {
         match v {
             PrimVal::ILit(i) => {
@@ -179,6 +184,9 @@ impl<'a> Instrs<'a> {
             PrimVal::Var(v) => Ok(gen.reg_of_ident(v)),
         }
     }
+
+    // Convert src into dst. If the types match this is just a move. If both the types and the
+    // registers match this is a noop.
     fn convert(&mut self, dst_reg: u32, dst_ty: Ty, src_reg: u32, src_ty: Ty) -> Result<()> {
         use Ty::*;
         if dst_reg == src_reg && dst_ty == src_ty {
@@ -213,6 +221,8 @@ impl<'a> Instrs<'a> {
 
         Ok(self.0.push(res))
     }
+
+    // Store values into a register at a given type, converting if necessary.
     fn store(
         &mut self,
         gen: &mut Generator,
@@ -255,6 +265,8 @@ impl<'a> Instrs<'a> {
         };
         Ok(())
     }
+
+    // Generate bytecode for map lookups.
     fn load_map(
         &mut self,
         gen: &mut Generator,
@@ -509,6 +521,9 @@ impl<'a> Instrs<'a> {
     fn push(&mut self, i: Instr<'a>) {
         self.0.push(i)
     }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp<'a>> {
@@ -536,7 +551,8 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
     //
     // The actual instruction translation _should_ be pretty easy it ought to be a pretty direct
     // analog to the existing enum + type.
-    for n in ctx.cfg().raw_nodes() {
+    for (i, n) in ctx.cfg().raw_nodes().iter().enumerate() {
+        gen.bb_to_instr[i] = instrs.len();
         for stmt in n.weight.0.iter() {
             // use cfg::{PrimExpr::*, PrimStmt::*, PrimVal::*};
             match stmt {
@@ -586,9 +602,69 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
                 }
             };
         }
-        // TODO: handle phis
-        // TODO: handle branches
+
+        // petgraph does not seem to have a convenience function for getting edge indexes from a
+        // node. This does that.
+        let ix = NodeIx::new(i);
+        let mut branches: cfg::SmallVec<_> = Default::default();
+        use petgraph::Direction;
+        let e = ctx.cfg().first_edge(ix, Direction::Outgoing);
+        if let Some(e) = e {
+            branches.push(e);
+            while let Some(next) = ctx.cfg().next_edge(e, Direction::Outgoing) {
+                branches.push(next);
+            }
+        }
+        // petgraph gives us edges back in reverse order.
+        branches.reverse();
+
+        // Replace Phi functions in successors with assignments at this point in the stream.
+        // TODO: is it sufficient to do all assignments here? or can it only happen for the branch
+        // we are actually going to take?
+        for n in ctx.cfg().neighbors(NodeIx::new(i)) {
+            let weight = ctx.cfg().node_weight(n).unwrap();
+            for stmt in weight.0.iter() {
+                if let PrimStmt::AsgnVar(id, PrimExpr::Phi(preds)) = stmt {
+                    let mut found = false;
+                    for (pred, src) in preds.iter() {
+                        if pred == &n {
+                            found = true;
+                            // now do the assignment
+                            let (dst_reg, dst_ty) = gen.reg_of_ident(id);
+                            let (src_reg, src_ty) = gen.reg_of_ident(src);
+                            instrs.convert(dst_reg, dst_ty, src_reg, src_ty)?;
+                        }
+                    }
+                    if !found {
+                        return err!("malformed phi node");
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Insert code for the branches at the end of this basic block. At first, labels just
+        // indicate the basic block in the CFG. They are re-mapped at the end of execution.
+        for b in branches.iter().cloned() {
+            let next = ctx.cfg().edge_endpoints(b).unwrap().1;
+            match &ctx.cfg().edge_weight(b).unwrap().0 {
+                Some(v) => {
+                    let (reg, ty) = instrs.get_reg(&mut gen, v)?;
+                    if ty != Ty::Int {
+                        return err!("invalid type for branch: {:?}: {:?}", v, ty);
+                    }
+                    instrs.push(Instr::JmpIf(reg.into(), next.index().into()));
+                }
+                None => instrs.push(Instr::Jmp(next.index().into())),
+            }
+        }
     }
+
+    // TODO rewrite jmps
+    // TODO create an interp struct (just initialize vectors, fill the rest in with defaults).
+    // TODO break up this function into smaller components, audit the expects() in early code.
+    // TODO add halt (do we have an exit node? Should we add one? Maybe put it in the IR?)
 
     unimplemented!()
 }
