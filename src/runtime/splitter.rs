@@ -144,6 +144,7 @@ impl<R: Read> Reader<R> {
     }
 }
 
+#[cfg(test)]
 mod test {
     // need to benchmark batched splitting vs. regular splitting to get a feel for things.
     extern crate test;
@@ -164,7 +165,8 @@ mod test {
         let c = Cursor::new(bs.clone());
         let mut rdr = super::Reader::new(c, 1 << 9).unwrap();
         let mut lines = Vec::new();
-        while let Some(line) = rdr.read_line(&*LINE).expect("error reading") {
+        while !rdr.is_eof() {
+            let line = rdr.read_line(&*LINE).expect("error reading");
             lines.push(line);
         }
         let mut expected: Vec<_> = LINE.split(bs.as_str()).map(|x| Str::from(x)).collect();

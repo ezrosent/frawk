@@ -98,6 +98,7 @@ impl Display for Function {
             Unop(u) => write!(f, "{}", u),
             Binop(b) => write!(f, "{}", b),
             Print => write!(f, "{}", "print"),
+            PrintStdout => write!(f, "{}", "print(stdout)"),
             Hasline => write!(f, "{}", "hasline"),
             Nextline => write!(f, "{}", "nextline"),
             Setcol => write!(f, "{}", "$="),

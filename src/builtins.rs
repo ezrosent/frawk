@@ -12,6 +12,7 @@ pub(crate) enum Function {
     Unop(ast::Unop),
     Binop(ast::Binop),
     Print,
+    PrintStdout,
     Hasline,
     Nextline,
     Setcol,
@@ -39,14 +40,15 @@ impl Function {
     pub(crate) fn fixed_arity(&self) -> usize {
         use Function::*;
         match self {
-            Hasline | Nextline | Unop(_) => 1,
-            Setcol | Binop(_) | Print => 2,
-            Split => 4, // 3?
+            Hasline | Nextline | PrintStdout | Unop(_) => 1,
+            Setcol | Binop(_) => 2,
+            Print | Split => 3,
         }
     }
     pub(crate) fn type_sig(
         &self,
         incoming: &[compile::Ty],
+        // TODO make the return type optional?
     ) -> Result<(SmallVec<compile::Ty>, compile::Ty)> {
         use {
             ast::{Binop::*, Unop::*},
@@ -96,7 +98,8 @@ impl Function {
                 }
             }
             Binop(Div) => (smallvec![Float;2], Float),
-            Print => (smallvec![Str; incoming.len()], Int),
+            Print => (smallvec![Str, Str, Int], Int),
+            PrintStdout => (smallvec![Str], Int),
             Nextline => (smallvec![Str], Str),
             Hasline => (smallvec![Str], Int),
             // irrelevant return type
@@ -151,6 +154,7 @@ impl Propagator for Function {
             }
             Binop(Div) => (true, Some(Float)),
             Print => (true, None),
+            PrintStdout => (true, None),
             Hasline => (true, Some(Int)),
             Nextline => (true, Some(Str)),
             Setcol => (true, Some(Int)), // no result

@@ -139,6 +139,8 @@ pub(crate) struct Context<'b, I> {
     df: dom::Frontier,
 
     num_idents: usize,
+    // variable that holds the FS variable, if needed
+    tmp_fs: Option<Ident>,
 }
 
 impl<'b, I> Context<'b, I> {
@@ -157,6 +159,15 @@ where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
 {
+    fn field_sep(&mut self) -> Ident {
+        if let Some(id) = self.tmp_fs {
+            id
+        } else {
+            let n = self.fresh();
+            self.tmp_fs = Some(n);
+            n
+        }
+    }
     fn unused() -> Ident {
         (0, 0)
     }
@@ -172,6 +183,7 @@ where
             dt: Default::default(),
             df: Default::default(),
             num_idents: 0,
+            tmp_fs: None,
         };
         // convert AST to CFG
         let (start, _) = ctx.standalone_block(stmt)?;
@@ -216,12 +228,24 @@ where
                 current_open
             }
             Print(vs, out) => {
-                // TODO Change of plans, keep this desugaring, but add builtin calls for printing to
-                // stdout vs to a file, where the file also has the append bit.
                 debug_assert!(vs.len() > 0);
-                let out = match out.as_ref() {
-                    Some((x, _append)) => self.convert_val(x, current_open)?,
-                    None => PrimVal::StrLit(""),
+                let out = if let Some((o, append)) = out {
+                    let e = self.convert_val(o, current_open)?;
+                    Some((e, append))
+                } else {
+                    None
+                };
+                let print = {
+                    |v| {
+                        if let Some((o, append)) = out {
+                            PrimExpr::CallBuiltin(
+                                builtins::Function::Print,
+                                smallvec![v, o.clone(), PrimVal::ILit(*append as i64)],
+                            )
+                        } else {
+                            PrimExpr::CallBuiltin(builtins::Function::PrintStdout, smallvec![v])
+                        }
+                    }
                 };
                 if vs.len() == 0 {
                     let tmp = self.fresh();
@@ -237,35 +261,34 @@ where
                     );
                     self.add_stmt(
                         current_open,
-                        PrimStmt::AsgnVar(
-                            Self::unused(),
-                            PrimExpr::CallBuiltin(
-                                builtins::Function::Print,
-                                smallvec![PrimVal::Var(tmp), out],
-                            ),
-                        ),
+                        PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
                     );
                     current_open
                 } else if vs.len() == 1 {
                     let v = self.convert_val(vs[0], current_open)?;
-                    self.add_stmt(
-                        current_open,
-                        PrimStmt::AsgnVar(
-                            Self::unused(),
-                            PrimExpr::CallBuiltin(builtins::Function::Print, smallvec![v, out]),
-                        ),
-                    );
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)));
                     current_open
                 } else {
                     const EMPTY: PrimVal<'static> = PrimVal::StrLit("");
-                    // TODO: wire in field-separator here when we handle special variables.
-                    const FS: PrimVal<'static> = PrimVal::StrLit(" ");
+
+                    // Assign the field separator to a local variable.
+                    let fs = {
+                        let fs = self.field_sep();
+                        self.add_stmt(
+                            current_open,
+                            PrimStmt::AsgnVar(
+                                fs.clone(),
+                                PrimExpr::LoadBuiltin(builtins::Variable::FS),
+                            ),
+                        );
+                        PrimVal::Var(fs)
+                    };
 
                     // For each argument in the comma-separated list, concatenate in sequence along
-                    // with the field separator. Doing this now because (1) we intend to make
-                    // concatenation of strings lazy, making this cheap and (2) because it
-                    // simplifies how some of the downstream analysis goes. Depending on how this
-                    // impacts performance we may add support for var-arg printing later on.
+                    // with the field separator. Doing this now because (1) concatenation of
+                    // strings lazy, making this cheap and (2) because it simplifies how some of
+                    // the downstream analysis goes. Depending on how this impacts performance we
+                    // may add support for var-arg printing later on.
                     //
                     // (e.g.  how will printf work? Will we disallow dynamically computed printf
                     // strings? We probably should...)
@@ -281,7 +304,7 @@ where
                                     new_tmp,
                                     PrimExpr::CallBuiltin(
                                         builtins::Function::Binop(Binop::Concat),
-                                        smallvec![PrimVal::Var(tmp), FS],
+                                        smallvec![PrimVal::Var(tmp), fs.clone()],
                                     ),
                                 ),
                             );
@@ -302,13 +325,7 @@ where
                     }
                     self.add_stmt(
                         current_open,
-                        PrimStmt::AsgnVar(
-                            Self::unused(),
-                            PrimExpr::CallBuiltin(
-                                builtins::Function::Print,
-                                smallvec![PrimVal::Var(tmp), out],
-                            ),
-                        ),
+                        PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
                     );
 
                     current_open
