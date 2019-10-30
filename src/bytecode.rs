@@ -13,6 +13,12 @@ impl From<u32> for Label {
     }
 }
 
+impl From<usize> for Label {
+    fn from(u: usize) -> Label {
+        Label(u as u32)
+    }
+}
+
 pub(crate) struct Reg<T>(u32, PhantomData<*const T>);
 
 impl<T> From<u32> for Reg<T> {
