@@ -398,13 +398,112 @@ impl<'a> Instrs<'a> {
                     conv_regs[2].into(),
                 )
             }),
-            // This one has nontrivial desugaring
-            // TODO: fix the API for print. Add appending to ast, then add Vector (not smallvec) to
-            // Print instruction; it's common enough that we want to be able to batch the concats
-            // together.
-            Print => unimplemented!(),
+            Print => {
+                // XXX this imports a specific assumption on how the PrimStmt is generated, we may
+                // want to make the bool parameter to Print dynamic.
+                if let cfg::PrimVal::ILit(i) = &args[2] {
+                    self.push(Instr::Print(
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                        *i != 0,
+                    ))
+                } else {
+                    return err!("must pass constant append parameter to print");
+                }
+            }
+            PrintStdout => self.push(Instr::PrintStdout(conv_regs[0].into())),
         };
         self.convert(dst_reg, dst_ty, res_reg, res_ty)
+    }
+
+    fn expr(
+        &mut self,
+        gen: &mut Generator,
+        dst_reg: u32,
+        dst_ty: Ty,
+        exp: &cfg::PrimExpr<'a>,
+    ) -> Result<()> {
+        match exp {
+            PrimExpr::Val(v) => self.store(gen, dst_reg, dst_ty, v)?,
+            // Phi functions are handled elsewhere
+            PrimExpr::Phi(_) => {}
+            PrimExpr::CallBuiltin(bf, vs) => self.builtin(gen, dst_reg, dst_ty, bf, vs)?,
+            PrimExpr::Index(arr, k) => {
+                let (arr_reg, arr_ty) = if let PrimVal::Var(arr_id) = arr {
+                    gen.reg_of_ident(arr_id)
+                } else {
+                    return err!("attempt to index into scalar literal: {}", arr);
+                };
+                self.load_map(gen, dst_reg, dst_ty, arr_reg, arr_ty, k)?;
+            }
+            PrimExpr::IterBegin(pv) => {
+                let (arr_reg, arr_ty) = self.get_reg(gen, pv)?;
+                if dst_ty.iter()? != arr_ty.key()? {
+                    return err!(
+                        "illegal iterator assignment {:?} = begin({:?})",
+                        dst_ty,
+                        arr_ty
+                    );
+                }
+                self.push(match arr_ty {
+                    Ty::MapIntInt => Instr::IterBeginIntInt(dst_reg.into(), arr_reg.into()),
+                    Ty::MapIntFloat => Instr::IterBeginIntFloat(dst_reg.into(), arr_reg.into()),
+                    Ty::MapIntStr => Instr::IterBeginIntStr(dst_reg.into(), arr_reg.into()),
+                    Ty::MapStrInt => Instr::IterBeginStrInt(dst_reg.into(), arr_reg.into()),
+                    Ty::MapStrFloat => Instr::IterBeginStrFloat(dst_reg.into(), arr_reg.into()),
+                    Ty::MapStrStr => Instr::IterBeginStrStr(dst_reg.into(), arr_reg.into()),
+                    Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
+                        // covered by the error check above
+                        unreachable!()
+                    }
+                });
+            }
+            PrimExpr::HasNext(pv) => {
+                let target_reg = if dst_ty == Ty::Int {
+                    dst_reg
+                } else {
+                    reg_of_ty!(gen, Ty::Int)
+                };
+                let (iter_reg, iter_ty) = self.get_reg(gen, pv)?;
+                self.push(match iter_ty.iter()? {
+                    Ty::Int => Instr::IterHasNextInt(target_reg.into(), iter_reg.into()),
+                    Ty::Str => Instr::IterHasNextStr(target_reg.into(), iter_reg.into()),
+                    _ => unreachable!(),
+                });
+                self.convert(dst_reg, dst_ty, target_reg, Ty::Int)?
+            }
+            PrimExpr::Next(pv) => {
+                let (iter_reg, iter_ty) = self.get_reg(gen, pv)?;
+                let elt_ty = iter_ty.iter()?;
+                let target_reg = if dst_ty == elt_ty {
+                    dst_reg
+                } else {
+                    reg_of_ty!(gen, elt_ty)
+                };
+                self.push(match elt_ty {
+                    Ty::Int => Instr::IterGetNextInt(target_reg.into(), iter_reg.into()),
+                    Ty::Str => Instr::IterGetNextStr(target_reg.into(), iter_reg.into()),
+                    _ => unreachable!(),
+                });
+                self.convert(dst_reg, dst_ty, target_reg, elt_ty)?
+            }
+            PrimExpr::LoadBuiltin(bv) => {
+                let target_ty = Ty::of_var(*bv);
+                let target_reg = if target_ty == dst_ty {
+                    dst_reg
+                } else {
+                    reg_of_ty!(gen, target_ty)
+                };
+                self.push(match target_ty {
+                    Ty::Str => Instr::LoadVarStr(target_reg.into(), *bv),
+                    Ty::Int => Instr::LoadVarInt(target_reg.into(), *bv),
+                    Ty::MapIntStr => Instr::LoadVarIntMap(target_reg.into(), *bv),
+                    _ => unreachable!(),
+                });
+                self.convert(dst_reg, dst_ty, target_reg, target_ty)?
+            }
+        };
+        Ok(())
     }
 
     fn push(&mut self, i: Instr<'a>) {
@@ -441,111 +540,50 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
         for stmt in n.weight.0.iter() {
             // use cfg::{PrimExpr::*, PrimStmt::*, PrimVal::*};
             match stmt {
-                PrimStmt::AsgnIndex(arr, pv, pe) => unimplemented!(),
+                PrimStmt::AsgnIndex(arr, pv, pe) => {
+                    let (a_reg, a_ty) = gen.reg_of_ident(arr);
+                    let (k_reg, _k_ty) = instrs.get_reg(&mut gen, pv)?;
+                    debug_assert_eq!(a_ty.key()?, _k_ty);
+                    let v_ty = a_ty.val()?;
+                    let v_reg = reg_of_ty!(&mut gen, v_ty);
+                    instrs.expr(&mut gen, v_reg, v_ty, pe)?;
+                    use Ty::*;
+                    instrs.push(match a_ty {
+                        MapIntInt => Instr::StoreIntInt(a_reg.into(), k_reg.into(), v_reg.into()),
+                        MapIntFloat => {
+                            Instr::StoreIntFloat(a_reg.into(), k_reg.into(), v_reg.into())
+                        }
+                        MapIntStr => Instr::StoreIntStr(a_reg.into(), k_reg.into(), v_reg.into()),
+                        MapStrInt => Instr::StoreStrInt(a_reg.into(), k_reg.into(), v_reg.into()),
+                        MapStrFloat => {
+                            Instr::StoreStrFloat(a_reg.into(), k_reg.into(), v_reg.into())
+                        }
+                        MapStrStr => Instr::StoreStrStr(a_reg.into(), k_reg.into(), v_reg.into()),
+                        Int | Float | Str | IterInt | IterStr => {
+                            return err!(
+                                "in stmt {:?} computed type is non-map type {:?}",
+                                stmt,
+                                a_ty
+                            )
+                        }
+                    });
+                }
                 PrimStmt::AsgnVar(id, pe) => {
                     let (dst_reg, dst_ty) = gen.reg_of_ident(id);
-                    match pe {
-                        PrimExpr::Val(v) => instrs.store(&mut gen, dst_reg, dst_ty, v)?,
-                        // Phi functions are handled elsewhere
-                        PrimExpr::Phi(_) => {}
-                        PrimExpr::CallBuiltin(bf, vs) => unimplemented!(),
-                        PrimExpr::Index(arr, k) => {
-                            let (arr_reg, arr_ty) = if let PrimVal::Var(arr_id) = arr {
-                                gen.reg_of_ident(arr_id)
-                            } else {
-                                return err!("attempt to index into scalar literal: {}", arr);
-                            };
-                            instrs.load_map(&mut gen, dst_reg, dst_ty, arr_reg, arr_ty, k)?;
-                        }
-                        PrimExpr::IterBegin(pv) => {
-                            let (arr_reg, arr_ty) = instrs.get_reg(&mut gen, pv)?;
-                            if dst_ty.iter()? != arr_ty.key()? {
-                                return err!(
-                                    "illegal iterator assignment {:?} = begin({:?})",
-                                    dst_ty,
-                                    arr_ty
-                                );
-                            }
-                            instrs.push(match arr_ty {
-                                Ty::MapIntInt => {
-                                    Instr::IterBeginIntInt(dst_reg.into(), arr_reg.into())
-                                }
-                                Ty::MapIntFloat => {
-                                    Instr::IterBeginIntFloat(dst_reg.into(), arr_reg.into())
-                                }
-                                Ty::MapIntStr => {
-                                    Instr::IterBeginIntStr(dst_reg.into(), arr_reg.into())
-                                }
-                                Ty::MapStrInt => {
-                                    Instr::IterBeginStrInt(dst_reg.into(), arr_reg.into())
-                                }
-                                Ty::MapStrFloat => {
-                                    Instr::IterBeginStrFloat(dst_reg.into(), arr_reg.into())
-                                }
-                                Ty::MapStrStr => {
-                                    Instr::IterBeginStrStr(dst_reg.into(), arr_reg.into())
-                                }
-                                Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
-                                    // covered by the error check above
-                                    unreachable!()
-                                }
-                            });
-                        }
-                        PrimExpr::HasNext(pv) => {
-                            let target_reg = if dst_ty == Ty::Int {
-                                dst_reg
-                            } else {
-                                reg_of_ty!(&mut gen, Ty::Int)
-                            };
-                            let (iter_reg, iter_ty) = instrs.get_reg(&mut gen, pv)?;
-                            instrs.push(match iter_ty.iter()? {
-                                Ty::Int => {
-                                    Instr::IterHasNextInt(target_reg.into(), iter_reg.into())
-                                }
-                                Ty::Str => {
-                                    Instr::IterHasNextStr(target_reg.into(), iter_reg.into())
-                                }
-                                _ => unreachable!(),
-                            });
-                            instrs.convert(dst_reg, dst_ty, target_reg, Ty::Int)?
-                        }
-                        PrimExpr::Next(pv) => {
-                            let (iter_reg, iter_ty) = instrs.get_reg(&mut gen, pv)?;
-                            let elt_ty = iter_ty.iter()?;
-                            let target_reg = if dst_ty == elt_ty {
-                                dst_reg
-                            } else {
-                                reg_of_ty!(&mut gen, elt_ty)
-                            };
-                            instrs.push(match elt_ty {
-                                Ty::Int => {
-                                    Instr::IterGetNextInt(target_reg.into(), iter_reg.into())
-                                }
-                                Ty::Str => {
-                                    Instr::IterGetNextStr(target_reg.into(), iter_reg.into())
-                                }
-                                _ => unreachable!(),
-                            });
-                            instrs.convert(dst_reg, dst_ty, target_reg, elt_ty)?
-                        }
-                        PrimExpr::LoadBuiltin(bv) => {
-                            let target_ty = Ty::of_var(*bv);
-                            let target_reg = if target_ty == dst_ty {
-                                dst_reg
-                            } else {
-                                reg_of_ty!(&mut gen, target_ty)
-                            };
-                            instrs.push(match target_ty {
-                                Ty::Str => Instr::LoadVarStr(target_reg.into(), *bv),
-                                Ty::Int => Instr::LoadVarInt(target_reg.into(), *bv),
-                                Ty::MapIntStr => Instr::LoadVarIntMap(target_reg.into(), *bv),
-                                _ => unreachable!(),
-                            });
-                            instrs.convert(dst_reg, dst_ty, target_reg, target_ty)?
-                        }
-                    }
+                    instrs.expr(&mut gen, dst_reg, dst_ty, pe)?;
                 }
-                PrimStmt::SetBuiltin(v, pe) => unimplemented!(),
+                PrimStmt::SetBuiltin(v, pe) => {
+                    let ty = Ty::of_var(*v);
+                    let reg = reg_of_ty!(&mut gen, ty);
+                    instrs.expr(&mut gen, reg, ty, pe)?;
+                    use Ty::*;
+                    instrs.push(match ty {
+                        Str => Instr::StoreVarStr(*v, reg.into()),
+                        MapIntStr => Instr::StoreVarIntMap(*v, reg.into()),
+                        Int => Instr::StoreVarInt(*v, reg.into()),
+                        _ => return err!("unexpected type for variable {} : {:?}", v, ty),
+                    });
+                }
             };
         }
         // TODO: handle phis

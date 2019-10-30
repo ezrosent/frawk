@@ -158,7 +158,7 @@ pub(crate) enum Instr<'a> {
         Reg<runtime::StrMap<'a, Str<'a>>>,
         Reg<Str<'a>>,
     ),
-
+    PrintStdout(Reg<Str<'a>> /*text*/),
     // Print (TODO add more printing functions).
     Print(
         Reg<Str<'a>>, /*text*/
@@ -552,6 +552,10 @@ impl<'a> Interp<'a> {
                         let res = (arr.len() - old_len) as i64;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
+                    }
+                    PrintStdout(txt) => {
+                        let txt = index(&self.strs, txt);
+                        self.write_files.write_str_stdout(txt)?;
                     }
                     Print(txt, out, append) => {
                         let txt = index(&self.strs, txt);

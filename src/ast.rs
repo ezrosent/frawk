@@ -73,7 +73,10 @@ pub(crate) enum Stmt<'a, 'b, I> {
     Expr(&'a Expr<'a, 'b, I>),
     Block(Vec<&'a Stmt<'a, 'b, I>>),
     // of course, Print can have 0 arguments. But let's handle that up the stack.
-    Print(Vec<&'a Expr<'a, 'b, I>>, Option<(&'a Expr<'a, 'b, I>, bool /*append*/)>),
+    Print(
+        Vec<&'a Expr<'a, 'b, I>>,
+        Option<(&'a Expr<'a, 'b, I>, bool /*append*/)>,
+    ),
     If(
         &'a Expr<'a, 'b, I>,
         &'a Stmt<'a, 'b, I>,
