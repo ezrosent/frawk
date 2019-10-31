@@ -96,8 +96,16 @@ fn main() {
         eprintln!("EDGE {}", e.weight());
     }
     eprintln!("n_idents={}", ast2.num_idents());
-    eprintln!("{:?}", types::get_types(ast2.cfg(), ast2.num_idents()));
+    for (k, v) in types::get_types(ast2.cfg(), ast2.num_idents())
+        .expect("types!")
+        .iter()
+    {
+        eprintln!("{:?} : {:?}", k, v);
+    }
     println!("{}", dot::Dot::new(&ast2.cfg()));
-    // let bcode = compile::bytecode(&ast2).expect("error in compilation!");
-    // eprintln!("{:?}", bcode.instrs());
+    let bcode = compile::bytecode(&ast2).expect("error in compilation!");
+    eprintln!("INSTRS:");
+    for (i, inst) in bcode.instrs().iter().enumerate() {
+        eprintln!("\t[{:2}] {:?}", i, inst);
+    }
 }

@@ -233,10 +233,6 @@ impl<'a> Instrs<'a> {
         match src {
             PrimVal::Var(id2) => {
                 let (src_reg, src_ty) = gen.reg_of_ident(id2);
-                eprintln!(
-                    "storing {:?} ({:?}, {:?}) into ({:?}, {:?}), regs={:?}",
-                    id2, src_reg, src_ty, dst_reg, dst_ty, gen.registers
-                );
                 self.convert(dst_reg, dst_ty, src_reg, src_ty)?;
             }
             PrimVal::ILit(i) => {
@@ -422,12 +418,16 @@ impl<'a> Instrs<'a> {
                         conv_regs[0].into(),
                         conv_regs[1].into(),
                         *i != 0,
-                    ))
+                    ));
+                    return Ok(());
                 } else {
                     return err!("must pass constant append parameter to print");
                 }
             }
-            PrintStdout => self.push(Instr::PrintStdout(conv_regs[0].into())),
+            PrintStdout => {
+                self.push(Instr::PrintStdout(conv_regs[0].into()));
+                return Ok(());
+            }
         };
         self.convert(dst_reg, dst_ty, res_reg, res_ty)
     }
@@ -525,8 +525,13 @@ impl<'a> Instrs<'a> {
         match stmt {
             PrimStmt::AsgnIndex(arr, pv, pe) => {
                 let (a_reg, a_ty) = gen.reg_of_ident(arr);
-                let (k_reg, _k_ty) = self.get_reg(gen, pv)?;
-                debug_assert_eq!(a_ty.key()?, _k_ty);
+                let (mut k_reg, k_ty) = self.get_reg(gen, pv)?;
+                let a_key_ty = a_ty.key()?;
+                if k_ty != a_key_ty {
+                    let conv_reg = reg_of_ty!(gen, a_key_ty);
+                    self.convert(conv_reg, a_key_ty, k_reg, k_ty)?;
+                    k_reg = conv_reg;
+                }
                 let v_ty = a_ty.val()?;
                 let v_reg = reg_of_ty!(gen, v_ty);
                 self.expr(gen, v_reg, v_ty, pe)?;
