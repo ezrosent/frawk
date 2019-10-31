@@ -4,7 +4,7 @@ use hashbrown::{hash_map::Entry, HashMap};
 use smallvec::smallvec;
 
 use crate::builtins::{self, Variable};
-use crate::bytecode::{Instr, Interp};
+use crate::bytecode::{self, Instr, Interp};
 use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{NodeIx, Result};
 use crate::types::{get_types, Scalar, TVar};
@@ -517,12 +517,60 @@ impl<'a> Instrs<'a> {
         };
         Ok(())
     }
+    fn stmt(&mut self, gen: &mut Generator, stmt: &cfg::PrimStmt<'a>) -> Result<()> {
+        match stmt {
+            PrimStmt::AsgnIndex(arr, pv, pe) => {
+                let (a_reg, a_ty) = gen.reg_of_ident(arr);
+                let (k_reg, _k_ty) = self.get_reg(gen, pv)?;
+                debug_assert_eq!(a_ty.key()?, _k_ty);
+                let v_ty = a_ty.val()?;
+                let v_reg = reg_of_ty!(gen, v_ty);
+                self.expr(gen, v_reg, v_ty, pe)?;
+                use Ty::*;
+                self.push(match a_ty {
+                    MapIntInt => Instr::StoreIntInt(a_reg.into(), k_reg.into(), v_reg.into()),
+                    MapIntFloat => Instr::StoreIntFloat(a_reg.into(), k_reg.into(), v_reg.into()),
+                    MapIntStr => Instr::StoreIntStr(a_reg.into(), k_reg.into(), v_reg.into()),
+                    MapStrInt => Instr::StoreStrInt(a_reg.into(), k_reg.into(), v_reg.into()),
+                    MapStrFloat => Instr::StoreStrFloat(a_reg.into(), k_reg.into(), v_reg.into()),
+                    MapStrStr => Instr::StoreStrStr(a_reg.into(), k_reg.into(), v_reg.into()),
+                    Int | Float | Str | IterInt | IterStr => {
+                        return err!(
+                            "in stmt {:?} computed type is non-map type {:?}",
+                            stmt,
+                            a_ty
+                        )
+                    }
+                });
+            }
+            PrimStmt::AsgnVar(id, pe) => {
+                let (dst_reg, dst_ty) = gen.reg_of_ident(id);
+                self.expr(gen, dst_reg, dst_ty, pe)?;
+            }
+            PrimStmt::SetBuiltin(v, pe) => {
+                let ty = Ty::of_var(*v);
+                let reg = reg_of_ty!(gen, ty);
+                self.expr(gen, reg, ty, pe)?;
+                use Ty::*;
+                self.push(match ty {
+                    Str => Instr::StoreVarStr(*v, reg.into()),
+                    MapIntStr => Instr::StoreVarIntMap(*v, reg.into()),
+                    Int => Instr::StoreVarInt(*v, reg.into()),
+                    _ => return err!("unexpected type for variable {} : {:?}", v, ty),
+                });
+            }
+        };
+        Ok(())
+    }
 
     fn push(&mut self, i: Instr<'a>) {
         self.0.push(i)
     }
     fn len(&self) -> usize {
         self.0.len()
+    }
+    fn into_vec(self) -> Vec<Instr<'a>> {
+        self.0
     }
 }
 
@@ -554,57 +602,11 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
     for (i, n) in ctx.cfg().raw_nodes().iter().enumerate() {
         gen.bb_to_instr[i] = instrs.len();
         for stmt in n.weight.0.iter() {
-            // use cfg::{PrimExpr::*, PrimStmt::*, PrimVal::*};
-            match stmt {
-                PrimStmt::AsgnIndex(arr, pv, pe) => {
-                    let (a_reg, a_ty) = gen.reg_of_ident(arr);
-                    let (k_reg, _k_ty) = instrs.get_reg(&mut gen, pv)?;
-                    debug_assert_eq!(a_ty.key()?, _k_ty);
-                    let v_ty = a_ty.val()?;
-                    let v_reg = reg_of_ty!(&mut gen, v_ty);
-                    instrs.expr(&mut gen, v_reg, v_ty, pe)?;
-                    use Ty::*;
-                    instrs.push(match a_ty {
-                        MapIntInt => Instr::StoreIntInt(a_reg.into(), k_reg.into(), v_reg.into()),
-                        MapIntFloat => {
-                            Instr::StoreIntFloat(a_reg.into(), k_reg.into(), v_reg.into())
-                        }
-                        MapIntStr => Instr::StoreIntStr(a_reg.into(), k_reg.into(), v_reg.into()),
-                        MapStrInt => Instr::StoreStrInt(a_reg.into(), k_reg.into(), v_reg.into()),
-                        MapStrFloat => {
-                            Instr::StoreStrFloat(a_reg.into(), k_reg.into(), v_reg.into())
-                        }
-                        MapStrStr => Instr::StoreStrStr(a_reg.into(), k_reg.into(), v_reg.into()),
-                        Int | Float | Str | IterInt | IterStr => {
-                            return err!(
-                                "in stmt {:?} computed type is non-map type {:?}",
-                                stmt,
-                                a_ty
-                            )
-                        }
-                    });
-                }
-                PrimStmt::AsgnVar(id, pe) => {
-                    let (dst_reg, dst_ty) = gen.reg_of_ident(id);
-                    instrs.expr(&mut gen, dst_reg, dst_ty, pe)?;
-                }
-                PrimStmt::SetBuiltin(v, pe) => {
-                    let ty = Ty::of_var(*v);
-                    let reg = reg_of_ty!(&mut gen, ty);
-                    instrs.expr(&mut gen, reg, ty, pe)?;
-                    use Ty::*;
-                    instrs.push(match ty {
-                        Str => Instr::StoreVarStr(*v, reg.into()),
-                        MapIntStr => Instr::StoreVarIntMap(*v, reg.into()),
-                        Int => Instr::StoreVarInt(*v, reg.into()),
-                        _ => return err!("unexpected type for variable {} : {:?}", v, ty),
-                    });
-                }
-            };
+            instrs.stmt(&mut gen, stmt)?;
         }
 
-        // petgraph does not seem to have a convenience function for getting edge indexes from a
-        // node. This does that.
+        // Petgraph does not seem to have a convenience function for getting edge indexes from a
+        // node, but we can use a low-level API to do it.
         let ix = NodeIx::new(i);
         let mut branches: cfg::SmallVec<_> = Default::default();
         use petgraph::Direction;
@@ -615,12 +617,16 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
                 branches.push(next);
             }
         }
-        // petgraph gives us edges back in reverse order.
+
+        // Petgraph gives us edges back in reverse order.
         branches.reverse();
 
         // Replace Phi functions in successors with assignments at this point in the stream.
-        // TODO: is it sufficient to do all assignments here? or can it only happen for the branch
-        // we are actually going to take?
+        //
+        // XXX is it sufficient to do all assignments here? or can it only happen for the branch
+        // we are actually going to take? It seems like the answer is yes, because one must first
+        // go through another block that assigns to the node again before actually reading the
+        // variable.
         for n in ctx.cfg().neighbors(NodeIx::new(i)) {
             let weight = ctx.cfg().node_weight(n).unwrap();
             for stmt in weight.0.iter() {
@@ -646,6 +652,7 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
 
         // Insert code for the branches at the end of this basic block. At first, labels just
         // indicate the basic block in the CFG. They are re-mapped at the end of execution.
+        let mut is_end = true;
         for b in branches.iter().cloned() {
             let next = ctx.cfg().edge_endpoints(b).unwrap().1;
             match &ctx.cfg().edge_weight(b).unwrap().0 {
@@ -656,15 +663,27 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
                     }
                     instrs.push(Instr::JmpIf(reg.into(), next.index().into()));
                 }
-                None => instrs.push(Instr::Jmp(next.index().into())),
+                None => {
+                    is_end = true;
+                    instrs.push(Instr::Jmp(next.index().into()))
+                }
             }
+        }
+        if is_end {
+            instrs.push(Instr::Halt);
         }
     }
 
-    // TODO rewrite jmps
-    // TODO create an interp struct (just initialize vectors, fill the rest in with defaults).
-    // TODO break up this function into smaller components, audit the expects() in early code.
-    // TODO add halt (do we have an exit node? Should we add one? Maybe put it in the IR?)
+    // Rewrite jumps to point to proper offsets.
+    for inst in instrs.0.iter_mut() {
+        match inst {
+            Instr::Jmp(bytecode::Label(l)) => *l = gen.bb_to_instr[*l as usize] as u32,
+            Instr::JmpIf(_, bytecode::Label(l)) => *l = gen.bb_to_instr[*l as usize] as u32,
+            _ => {}
+        }
+    }
 
-    unimplemented!()
+    Ok(Interp::new(instrs.0, |ty| {
+        gen.reg_counts[ty as usize] as usize
+    }))
 }
