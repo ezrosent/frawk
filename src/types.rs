@@ -760,7 +760,7 @@ impl Constraints {
                         self.network.add_dep(k1, k2)?;
                         self.network.add_dep(k2, k1)?;
                         self.network.add_dep(v1, v2)?;
-                        self.network.add_dep(v2, v2)
+                        self.network.add_dep(v2, v1)
                     }
                     (k1, k2) => err!(
                         "assigning variables of mismatched kinds: {:?} and {:?}",

@@ -390,9 +390,9 @@ where
                 self.cfg
                     .add_edge(current_open, cond_block, Transition::null());
 
-                // Then add a footer to exit the loop from cond.
+                // Then add a footer to exit the loop from cond. We will add the edge after adding
+                // the edge into the loop body, as order matters.
                 let footer = self.cfg.add_node(Default::default());
-                self.cfg.add_edge(cond_block, footer, Transition::null());
 
                 self.loop_ctx.push((cond_block, footer));
 
@@ -404,6 +404,7 @@ where
                 let body_end = self.convert_stmt(body, body_start)?;
                 self.cfg
                     .add_edge(cond_block, body_start, Transition::new(cond_v));
+                self.cfg.add_edge(cond_block, footer, Transition::null());
                 self.cfg.add_edge(body_end, cond_block, Transition::null());
 
                 self.loop_ctx.pop().unwrap();
