@@ -44,6 +44,12 @@ impl<T: Clone> LazyVec<T> {
         }
     }
 }
+impl<T> LazyVec<T> {
+    pub(crate) fn new() -> LazyVec<T> {
+        Either::Left(Default::default())
+    }
+}
+
 impl<T: Default> LazyVec<T> {
     pub(crate) fn push(&mut self, t: T) {
         self.insert(self.len(), t)
@@ -81,6 +87,7 @@ impl<T: Default> LazyVec<T> {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct Variables<'a> {
     pub argc: Int,
     pub argv: IntMap<Str<'a>>,
@@ -350,6 +357,12 @@ where
 
 // AWK arrays are inherently shared and mutable, so we have to do this, even if it is a code smell.
 pub(crate) struct SharedMap<K, V>(Rc<RefCell<HashMap<K, V>>>);
+
+impl<K, V> Default for SharedMap<K, V> {
+    fn default() -> SharedMap<K, V> {
+        SharedMap(Rc::new(RefCell::new(Default::default())))
+    }
+}
 
 impl<K, V> Clone for SharedMap<K, V> {
     fn clone(&self) -> Self {

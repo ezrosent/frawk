@@ -2,10 +2,11 @@ use std::marker::PhantomData;
 
 use crate::builtins::Variable;
 use crate::common::Result;
+use crate::compile;
 use crate::runtime::{self, Float, Int, LazyVec, Str};
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
-pub(crate) struct Label(u32);
+pub(crate) struct Label(pub u32);
 
 impl From<u32> for Label {
     fn from(u: u32) -> Label {
@@ -264,7 +265,41 @@ pub(crate) struct Interp<'a> {
     iters_str: Vec<runtime::Iter<Str<'a>>>,
 }
 
+fn default_of<T: Default>(n: usize) -> Vec<T> {
+    let mut res = Vec::new();
+    res.resize_with(n, Default::default);
+    res
+}
+
 impl<'a> Interp<'a> {
+    pub(crate) fn new(instrs: Vec<Instr<'a>>, regs: impl Fn(compile::Ty) -> usize) -> Interp<'a> {
+        use compile::Ty::*;
+        Interp {
+            instrs,
+
+            floats: default_of(regs(Float)),
+            ints: default_of(regs(Int)),
+            strs: default_of(regs(Str)),
+            vars: Default::default(),
+
+            line: "".into(),
+            split_line: LazyVec::new(),
+            regexes: Default::default(),
+            write_files: Default::default(),
+            read_files: Default::default(),
+
+            maps_int_float: default_of(regs(MapIntFloat)),
+            maps_int_int: default_of(regs(MapIntInt)),
+            maps_int_str: default_of(regs(MapIntStr)),
+
+            maps_str_float: default_of(regs(MapStrFloat)),
+            maps_str_int: default_of(regs(MapStrInt)),
+            maps_str_str: default_of(regs(MapStrStr)),
+
+            iters_int: default_of(regs(IterInt)),
+            iters_str: default_of(regs(IterStr)),
+        }
+    }
     pub(crate) fn run(&mut self) -> Result<()> {
         use Instr::*;
         let mut cur = 0;
