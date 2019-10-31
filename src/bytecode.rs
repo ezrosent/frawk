@@ -8,6 +8,12 @@ use crate::runtime::{self, Float, Int, LazyVec, Str};
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct Label(pub u32);
 
+impl std::fmt::Debug for Label {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(fmt, "@{}", self.0)
+    }
+}
+
 impl From<u32> for Label {
     fn from(u: u32) -> Label {
         Label(u)
@@ -21,6 +27,12 @@ impl From<usize> for Label {
 }
 
 pub(crate) struct Reg<T>(u32, PhantomData<*const T>);
+
+impl<T> std::fmt::Debug for Reg<T> {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(fmt, "<{}>", self.0)
+    }
+}
 
 impl<T> From<u32> for Reg<T> {
     fn from(u: u32) -> Reg<T> {
@@ -72,6 +84,7 @@ impl<T> Copy for Reg<T> {}
 // Next: (1) finish interpreter (2) implement translator (3) implement parser (4) add
 // functions/union type.
 
+#[derive(Debug)]
 pub(crate) enum Instr<'a> {
     // By default, instructions have destination first, and src(s) second.
     StoreConstStr(Reg<Str<'a>>, Str<'a>),
@@ -229,9 +242,6 @@ pub(crate) enum Instr<'a> {
 }
 
 impl<T> Reg<T> {
-    pub(crate) fn new(i: u32) -> Self {
-        Reg(i, PhantomData)
-    }
     fn index(&self) -> usize {
         self.0 as usize
     }
@@ -272,6 +282,9 @@ fn default_of<T: Default>(n: usize) -> Vec<T> {
 }
 
 impl<'a> Interp<'a> {
+    pub(crate) fn instrs(&self) -> &Vec<Instr<'a>> {
+        &self.instrs
+    }
     pub(crate) fn new(instrs: Vec<Instr<'a>>, regs: impl Fn(compile::Ty) -> usize) -> Interp<'a> {
         use compile::Ty::*;
         Interp {

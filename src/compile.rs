@@ -233,6 +233,10 @@ impl<'a> Instrs<'a> {
         match src {
             PrimVal::Var(id2) => {
                 let (src_reg, src_ty) = gen.reg_of_ident(id2);
+                eprintln!(
+                    "storing {:?} ({:?}, {:?}) into ({:?}, {:?}), regs={:?}",
+                    id2, src_reg, src_ty, dst_reg, dst_ty, gen.registers
+                );
                 self.convert(dst_reg, dst_ty, src_reg, src_ty)?;
             }
             PrimVal::ILit(i) => {
@@ -367,7 +371,7 @@ impl<'a> Instrs<'a> {
         };
 
         match bf {
-            Unop(Column) => self.push(Instr::SetColumn(res_reg.into(), conv_regs[0].into())),
+            Unop(Column) => self.push(Instr::GetColumn(res_reg.into(), conv_regs[0].into())),
             Unop(Not) => self.push(if conv_tys[0] == Ty::Str {
                 Instr::NotStr(res_reg.into(), conv_regs[0].into())
             } else {
@@ -580,7 +584,7 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
         registers: Default::default(),
         reg_counts: [0u32; NUM_TYPES],
         jmps: Default::default(),
-        bb_to_instr: Default::default(),
+        bb_to_instr: vec![0; ctx.cfg().node_count()],
         ts: get_types(ctx.cfg(), ctx.num_idents())?,
     };
 
@@ -611,10 +615,11 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
         let mut branches: cfg::SmallVec<_> = Default::default();
         use petgraph::Direction;
         let e = ctx.cfg().first_edge(ix, Direction::Outgoing);
-        if let Some(e) = e {
+        if let Some(mut e) = e {
             branches.push(e);
             while let Some(next) = ctx.cfg().next_edge(e, Direction::Outgoing) {
                 branches.push(next);
+                e = next
             }
         }
 
@@ -627,13 +632,16 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
         // we are actually going to take? It seems like the answer is yes, because one must first
         // go through another block that assigns to the node again before actually reading the
         // variable.
-        for n in ctx.cfg().neighbors(NodeIx::new(i)) {
+        for n in ctx
+            .cfg()
+            .neighbors_directed(NodeIx::new(i), Direction::Outgoing)
+        {
             let weight = ctx.cfg().node_weight(n).unwrap();
             for stmt in weight.0.iter() {
                 if let PrimStmt::AsgnVar(id, PrimExpr::Phi(preds)) = stmt {
                     let mut found = false;
                     for (pred, src) in preds.iter() {
-                        if pred == &n {
+                        if pred.index() == i {
                             found = true;
                             // now do the assignment
                             let (dst_reg, dst_ty) = gen.reg_of_ident(id);
@@ -642,7 +650,7 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
                         }
                     }
                     if !found {
-                        return err!("malformed phi node");
+                        return err!("malformed phi node: preds={:?} cur={:?}", &preds[..], i);
                     }
                 } else {
                     break;
@@ -661,10 +669,12 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
                     if ty != Ty::Int {
                         return err!("invalid type for branch: {:?}: {:?}", v, ty);
                     }
+                    gen.jmps.push(instrs.len());
                     instrs.push(Instr::JmpIf(reg.into(), next.index().into()));
                 }
                 None => {
-                    is_end = true;
+                    is_end = false;
+                    gen.jmps.push(instrs.len());
                     instrs.push(Instr::Jmp(next.index().into()))
                 }
             }
@@ -675,15 +685,15 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
     }
 
     // Rewrite jumps to point to proper offsets.
-    for inst in instrs.0.iter_mut() {
-        match inst {
+    for jmp in gen.jmps.iter().cloned() {
+        match &mut instrs.0[jmp] {
             Instr::Jmp(bytecode::Label(l)) => *l = gen.bb_to_instr[*l as usize] as u32,
             Instr::JmpIf(_, bytecode::Label(l)) => *l = gen.bb_to_instr[*l as usize] as u32,
-            _ => {}
+            _ => unreachable!(),
         }
     }
 
-    Ok(Interp::new(instrs.0, |ty| {
+    Ok(Interp::new(instrs.into_vec(), |ty| {
         gen.reg_counts[ty as usize] as usize
     }))
 }
