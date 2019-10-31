@@ -98,4 +98,6 @@ fn main() {
     eprintln!("n_idents={}", ast2.num_idents());
     eprintln!("{:?}", types::get_types(ast2.cfg(), ast2.num_idents()));
     println!("{}", dot::Dot::new(&ast2.cfg()));
+    // let bcode = compile::bytecode(&ast2).expect("error in compilation!");
+    // eprintln!("{:?}", bcode.instrs());
 }
