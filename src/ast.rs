@@ -30,6 +30,16 @@ pub(crate) enum Binop {
     EQ,
 }
 
+// TODO add notion of pattern and action, which are desugared into a Vec<Stmt>
+// TODO add "getline" desugaring
+// TODO add c-style do-while loop
+// TODO add pattern desugaring
+// TODO add "length" -- works on strings and arrays.
+// TODO add support for "next"; just continue to the toplevel loop?
+// TODO add "delete"
+// TODO add "in" -- maybe not an operator, just a builtin
+// TODO add UDFs
+
 static_map!(
     BINOPS<&'static str, Binop>,
     ["+", Binop::Plus],

@@ -75,7 +75,16 @@ fn main() {
                     ForEach(
                         "x",
                         a.alloc(|| Var("z")),
-                        a.alloc(|| Print(vec![a.alloc(|| Var("x")), a.alloc(|| Var("i"))], None)),
+                        a.alloc(|| {
+                            Print(
+                                vec![
+                                    a.alloc(|| Var("x")),
+                                    a.alloc(|| StrLit(" SEP ")),
+                                    a.alloc(|| Var("i")),
+                                ],
+                                None,
+                            )
+                        }),
                     )
                 }),
                 // Creates an error
@@ -103,9 +112,11 @@ fn main() {
         eprintln!("{:?} : {:?}", k, v);
     }
     println!("{}", dot::Dot::new(&ast2.cfg()));
-    let bcode = compile::bytecode(&ast2).expect("error in compilation!");
+    let mut bcode = compile::bytecode(&ast2).expect("error in compilation!");
     eprintln!("INSTRS:");
     for (i, inst) in bcode.instrs().iter().enumerate() {
         eprintln!("\t[{:2}] {:?}", i, inst);
     }
+
+    bcode.run().expect("error interpreting");
 }
