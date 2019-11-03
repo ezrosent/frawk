@@ -1,3 +1,7 @@
+use crate::arena::Arena;
+use crate::builtins::Function;
+use crate::common::Either;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Unop {
     Column,
@@ -15,9 +19,58 @@ static_map!(
 );
 
 pub(crate) struct Prog<'a, 'b, I> {
-    begin: Option<Stmt<'a, 'b, I>>,
-    end: Option<Stmt<'a, 'b, I>>,
-    pats: Vec<(Option<Expr<'a, 'b, I>>, Option<Stmt<'a, 'b, I>>)>,
+    begin: Option<&'a Stmt<'a, 'b, I>>,
+    end: Option<&'a Stmt<'a, 'b, I>>,
+    pats: Vec<(Option<&'a Expr<'a, 'b, I>>, Option<&'a Stmt<'a, 'b, I>>)>,
+}
+
+impl<'a, 'b, I> Prog<'a, 'b, I> {
+    fn desugar<'outer>(&self, arena: &'a Arena<'outer>) -> Stmt<'a, 'b, I> {
+        use {self::Binop::*, self::Expr::*, Stmt::*};
+        let mut res = vec![];
+
+        if let Some(begin) = self.begin {
+            res.push(begin);
+        }
+
+        // Desugar patterns into if statements, with the usual desugaring for an empty action.
+        let mut inner = vec![];
+        for (pat, body) in self.pats.iter() {
+            let body = if let Some(body) = body {
+                body
+            } else {
+                arena.alloc(|| Print(vec![], None))
+            };
+            if let Some(pat) = pat {
+                inner.push(arena.alloc(|| If(pat, body, None)));
+            } else {
+                inner.push(body);
+            }
+        }
+
+        // Wrap the whole thing in a while((getline) > 0) { } statement.
+        res.push(arena.alloc(move || {
+            While(
+                arena.alloc(|| {
+                    Binop(
+                        GT,
+                        arena.alloc(|| Getline {
+                            into: None,
+                            from: None,
+                        }),
+                        arena.alloc(|| ILit(0)),
+                    )
+                }),
+                arena.alloc(move || Block(inner)),
+            )
+        }));
+
+        if let Some(end) = self.end {
+            res.push(end);
+        }
+
+        Stmt::Block(res)
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -36,11 +89,19 @@ pub(crate) enum Binop {
     EQ,
 }
 
-// TODO add notion of pattern and action, which are desugared into a Vec<Stmt>
-// TODO add "getline" desugaring
-// TODO add c-style do-while loop
 // TODO add pattern desugaring
-// TODO add "length" -- works on strings and arrays.
+//   * if (/pat/) => if ($0 ~ /pat/)
+//   * otherwise, treat it as a string (parsed differently of course).
+// TODO refactor "stdin" to be any default Reader. This will help a lot with testing in process. It
+// is also something that awk lets you do.
+//
+// Once we havea done this, it's time to add a parser. That will let us clean out a lot of bugs and
+// get a more robust test suite as well.
+//
+// TODO add "length" -- works on strings and arrays, along with desugaring for length() =>
+// length($0)
+//   * for polymorphism, just exempt it from kind inference, and just generate separate
+//   instructions
 // TODO add support for "next"; just continue to the toplevel loop?
 // TODO add "delete"
 // TODO add "in" -- maybe not an operator, just a builtin
@@ -69,7 +130,7 @@ pub(crate) enum Expr<'a, 'b, I> {
     StrLit(&'b str),
     Unop(Unop, &'a Expr<'a, 'b, I>),
     Binop(Binop, &'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
-    Call(I, Vec<&'a Expr<'a, 'b, I>>),
+    Call(Either<I, Function>, Vec<&'a Expr<'a, 'b, I>>),
     Var(I),
     Index(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
     Assign(
@@ -108,6 +169,7 @@ pub(crate) enum Stmt<'a, 'b, I> {
         Option<&'a Stmt<'a, 'b, I>>,
         &'a Stmt<'a, 'b, I>,
     ),
+    DoWhile(&'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
     While(&'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
     ForEach(I, &'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
     Break,

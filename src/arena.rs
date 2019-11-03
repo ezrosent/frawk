@@ -53,11 +53,15 @@ impl Chunk {
         Some(self.get_raw(start) as *mut T)
     }
 
-    fn alloc<T>(&self, f: &impl Fn() -> T) -> Option<&T> {
+    fn alloc<T, F: FnOnce() -> T>(&self, f: F) -> Result<&T, F> {
         unsafe {
-            let start = self.alloc_inner::<T>(1)?;
-            ptr::write(start, f());
-            Some(&*start)
+            match self.alloc_inner::<T>(1) {
+                Some(start) => {
+                    ptr::write(start, f());
+                    Ok(&*start)
+                }
+                None => Err(f),
+            }
         }
     }
 }
@@ -118,31 +122,35 @@ impl<'outer> Arena<'outer> {
 
     // TODO(ezr): implement alloc_many method for collection of our choice (smallvec?)
 
-    pub fn alloc<T: 'outer>(&self, f: impl Fn() -> T) -> &T {
-        if let Some(r) = self.head().alloc(&f) {
-            if mem::needs_drop::<T>() {
-                // Close over a *mut u8 instead of a *mut T. Why? Without this the borrow checker
-                // complains that we are moving a T (with lifetime : 'outer) into a Box (wwith
-                // lifetime 'static). We ensure that the Box's contents will be dropped within
-                // 'outer, so casting away this information is safe.
-                let rr = r as *const _ as *mut u8;
-                self.drops.push(Box::new(move || unsafe {
-                    ptr::drop_in_place(rr as *mut T)
-                }));
+    pub fn alloc<T: 'outer>(&self, f: impl FnOnce() -> T) -> &T {
+        match self.head().alloc(f) {
+            Ok(r) => {
+                if mem::needs_drop::<T>() {
+                    // Close over a *mut u8 instead of a *mut T. Why? Without this the borrow checker
+                    // complains that we are moving a T (with lifetime : 'outer) into a Box (wwith
+                    // lifetime 'static). We ensure that the Box's contents will be dropped within
+                    // 'outer, so casting away this information is safe.
+                    let rr = r as *const _ as *mut u8;
+                    self.drops.push(Box::new(move || unsafe {
+                        ptr::drop_in_place(rr as *mut T)
+                    }));
+                }
+                return r;
             }
-            return r;
-        }
-        if mem::size_of::<T>() >= CHUNK_SIZE / 2 {
-            let b = Box::new(f());
-            let p = Box::into_raw(b);
-            let r = p as *mut u8;
-            self.drops.push(Box::new(move || unsafe {
-                mem::drop(Box::from_raw(r as *mut T))
-            }));
-            unsafe { &*(p as *const T) }
-        } else {
-            self.data.push(ChunkPtr::default());
-            self.alloc(f)
+            Err(f) => {
+                if mem::size_of::<T>() >= CHUNK_SIZE / 2 {
+                    let b = Box::new(f());
+                    let p = Box::into_raw(b);
+                    let r = p as *mut u8;
+                    self.drops.push(Box::new(move || unsafe {
+                        mem::drop(Box::from_raw(r as *mut T))
+                    }));
+                    unsafe { &*(p as *const T) }
+                } else {
+                    self.data.push(ChunkPtr::default());
+                    self.alloc(f)
+                }
+            }
         }
     }
 }
