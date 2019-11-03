@@ -392,8 +392,10 @@ impl<'a> Instrs<'a> {
             Binop(LTE) => gen_op!(LTE, [Float, LTEFloat], [Int, LTEInt], [Str, LTEStr]),
             Binop(GTE) => gen_op!(GTE, [Float, GTEFloat], [Int, GTEInt], [Str, GTEStr]),
             Binop(EQ) => gen_op!(EQ, [Float, EQFloat], [Int, EQInt], [Str, EQStr]),
-            Hasline => self.push(Instr::HasLine(res_reg.into(), conv_regs[0].into())),
+            ReadErr => self.push(Instr::ReadErr(res_reg.into(), conv_regs[0].into())),
             Nextline => self.push(Instr::NextLine(res_reg.into(), conv_regs[0].into())),
+            ReadErrStdin => self.push(Instr::ReadErrStdin(res_reg.into())),
+            NextlineStdin => self.push(Instr::NextLineStdin(res_reg.into())),
             Setcol => self.push(Instr::SetColumn(conv_regs[0].into(), conv_regs[1].into())),
             Split => self.push(if conv_tys[2] == Ty::MapIntStr {
                 Instr::SplitInt(

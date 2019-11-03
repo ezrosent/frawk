@@ -99,8 +99,10 @@ impl Display for Function {
             Binop(b) => write!(f, "{}", b),
             Print => write!(f, "{}", "print"),
             PrintStdout => write!(f, "{}", "print(stdout)"),
-            Hasline => write!(f, "{}", "hasline"),
+            ReadErr => write!(f, "{}", "hasline"),
             Nextline => write!(f, "{}", "nextline"),
+            ReadErrStdin => write!(f, "{}", "hasline(stdin)"),
+            NextlineStdin => write!(f, "{}", "nextline(stdin)"),
             Setcol => write!(f, "{}", "$="),
             Split => write!(f, "{}", "split"),
         }

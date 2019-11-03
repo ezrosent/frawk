@@ -1,12 +1,11 @@
 use crate::common::{Either, Result};
 use hashbrown::HashMap;
 use regex::Regex;
-use std::cell::{Cell, Ref, RefCell};
+use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::iter::FromIterator;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 pub mod shared;
@@ -127,6 +126,20 @@ impl RegexCache {
             |re| reg.get_line(file, re),
         )
     }
+    pub(crate) fn get_line_stdin<'a>(
+        &mut self,
+        pat: &Str<'a>,
+        reg: &mut FileRead,
+    ) -> Result<Str<'a>> {
+        self.0.get(
+            pat,
+            |s| match Regex::new(s) {
+                Ok(r) => Ok(r),
+                Err(e) => err!("{}", e),
+            },
+            |re| reg.get_line_stdin(re),
+        )
+    }
     pub(crate) fn split_regex<'a>(
         &mut self,
         pat: &Str<'a>,
@@ -226,22 +239,45 @@ impl FileWrite {
 
 const CHUNK_SIZE: usize = 2 << 10;
 
-#[derive(Default)]
-pub(crate) struct FileRead(Registry<splitter::Reader<File>>);
+pub(crate) struct FileRead {
+    files: Registry<splitter::Reader<File>>,
+    stdin: Option<splitter::Reader<std::io::Stdin>>,
+}
+
+impl Default for FileRead {
+    fn default() -> FileRead {
+        FileRead {
+            files: Default::default(),
+            stdin: splitter::Reader::new(std::io::stdin(), CHUNK_SIZE).ok(),
+        }
+    }
+}
 
 impl FileRead {
-    pub(crate) fn get_line<'a>(&mut self, path: &Str<'a>, pat: &Regex) -> Result<Str<'a>> {
-        self.with_file(path, |reader| reader.read_line(pat))
+    pub(crate) fn get_line_stdin<'a>(&mut self, pat: &Regex) -> Str<'a> {
+        match &mut self.stdin {
+            Some(s) => s.read_line(pat),
+            None => "".into(),
+        }
     }
-    pub(crate) fn has_line<'a>(&mut self, path: &Str<'a>) -> Result<bool> {
-        self.with_file(path, |reader| Ok(reader.is_eof()))
+    pub(crate) fn read_err_stdin<'a>(&mut self) -> Int {
+        self.stdin
+            .as_ref()
+            .map(|s| s.read_state())
+            .unwrap_or(splitter::ReaderState::EOF as Int)
+    }
+    pub(crate) fn get_line<'a>(&mut self, path: &Str<'a>, pat: &Regex) -> Result<Str<'a>> {
+        self.with_file(path, |reader| Ok(reader.read_line(pat)))
+    }
+    pub(crate) fn read_err<'a>(&mut self, path: &Str<'a>) -> Result<Int> {
+        self.with_file(path, |reader| Ok(reader.read_state()))
     }
     fn with_file<'a, R>(
         &mut self,
         path: &Str<'a>,
-        mut f: impl FnMut(&mut splitter::Reader<File>) -> Result<R>,
+        f: impl FnMut(&mut splitter::Reader<File>) -> Result<R>,
     ) -> Result<R> {
-        self.0.get_fallible(
+        self.files.get_fallible(
             path,
             |s| match File::open(s) {
                 Ok(f) => Ok(splitter::Reader::new(f, CHUNK_SIZE)?),

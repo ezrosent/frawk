@@ -13,8 +13,10 @@ pub(crate) enum Function {
     Binop(ast::Binop),
     Print,
     PrintStdout,
-    Hasline,
+    ReadErr,
     Nextline,
+    ReadErrStdin,
+    NextlineStdin,
     Setcol,
     Split,
 }
@@ -40,7 +42,8 @@ impl Function {
     pub(crate) fn fixed_arity(&self) -> usize {
         use Function::*;
         match self {
-            Hasline | Nextline | PrintStdout | Unop(_) => 1,
+            ReadErrStdin | NextlineStdin => 0,
+            ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Setcol | Binop(_) => 2,
             Print | Split => 3,
         }
@@ -101,7 +104,9 @@ impl Function {
             Print => (smallvec![Str, Str, Int], Int),
             PrintStdout => (smallvec![Str], Int),
             Nextline => (smallvec![Str], Str),
-            Hasline => (smallvec![Str], Int),
+            ReadErr => (smallvec![Str], Int),
+            NextlineStdin => (smallvec![], Str),
+            ReadErrStdin => (smallvec![], Int),
             // irrelevant return type
             Setcol => (smallvec![Int, Str], Int),
             // Split's second input can be a map of either type
@@ -155,8 +160,8 @@ impl Propagator for Function {
             Binop(Div) => (true, Some(Float)),
             Print => (true, None),
             PrintStdout => (true, None),
-            Hasline => (true, Some(Int)),
-            Nextline => (true, Some(Str)),
+            ReadErr | ReadErrStdin => (true, Some(Int)),
+            Nextline | NextlineStdin => (true, Some(Str)),
             Setcol => (true, Some(Int)), // no result
             Split => (true, Some(Int)),
         }
