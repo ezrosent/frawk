@@ -1,6 +1,6 @@
 use crate::ast::{self, Binop, Expr, Stmt, Unop};
 use crate::builtins;
-use crate::common::{CompileError, Graph, NodeIx, NumTy, Result};
+use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result};
 use crate::dom;
 
 use hashbrown::{HashMap, HashSet};
@@ -121,6 +121,14 @@ impl<'a> PrimStmt<'a> {
             AsgnVar(_, e) => e.replace(update),
             SetBuiltin(_, e) => e.replace(update),
         }
+    }
+}
+
+fn valid_lhs<'a, 'b, I>(e: &ast::Expr<'a, 'b, I>) -> bool {
+    use ast::Expr::*;
+    match e {
+        Index(_, _) | Var(_) | Unop(ast::Unop::Column, _) => true,
+        _ => false,
     }
 }
 
@@ -360,7 +368,8 @@ where
                 } else {
                     current_open
                 };
-                let (h, b_start, _b_end, f) = self.make_loop(body, update.clone(), init_end)?;
+                let (h, b_start, _b_end, f) =
+                    self.make_loop(body, update.clone(), init_end, false)?;
                 let cond_val = if let Some(c) = cond {
                     self.convert_val(c, h)?
                 } else {
@@ -371,7 +380,14 @@ where
                 f
             }
             While(cond, body) => {
-                let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open)?;
+                let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, false)?;
+                let cond_val = self.convert_val(cond, h)?;
+                self.cfg.add_edge(h, b_start, Transition::new(cond_val));
+                self.cfg.add_edge(h, f, Transition::null());
+                f
+            }
+            DoWhile(cond, body) => {
+                let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, true)?;
                 let cond_val = self.convert_val(cond, h)?;
                 self.cfg.add_edge(h, b_start, Transition::new(cond_val));
                 self.cfg.add_edge(h, f, Transition::null());
@@ -474,10 +490,15 @@ where
                 PrimExpr::Index(arr_v, ix_v)
             }
             Call(fname, args) => {
-                let bi = if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
-                    bi
-                } else {
-                    return err!("Call to unknown function \"{}\"", fname);
+                let bi = match fname {
+                    Either::Left(fname) => {
+                        if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
+                            bi
+                        } else {
+                            return err!("Call to unknown function \"{}\"", fname);
+                        }
+                    }
+                    Either::Right(bi) => *bi,
                 };
                 let mut prim_args = SmallVec::with_capacity(args.len());
                 for a in args.iter() {
@@ -528,9 +549,8 @@ where
                 );
             }
             Inc { is_inc, is_post, x } => {
-                match x {
-                    Index(_, _) | Var(_) | Unop(ast::Unop::Column, _) => {}
-                    _ => return err!("invalid operand for increment operation {:?}", x),
+                if !valid_lhs(x) {
+                    return err!("invalid operand for increment operation {:?}", x);
                 };
                 // XXX Somewhat lazy; we emit a laod even if it is a post-increment.
                 let pre = self.convert_expr(x, current_open)?;
@@ -553,11 +573,51 @@ where
                 }
             }
             Getline { from, into } => {
-                unimplemented!()
-                // let desugar_from = if let Some(from) = from {
-                // } else {
-                //     // TODO need stdin
-                // };
+                // Another use of non-structural recursion for desugaring. Here we desugar:
+                //   getline var < file
+                // to
+                //   var = nextline(file)
+                //   readerr(file)
+                // And we fill in various other pieces of sugar as well. Informally:
+                //  getline < file => getline $0 < file
+                //  getline var => getline var < stdin
+                //  getline => getline $0
+                use builtins::Function::{Nextline, NextlineStdin, ReadErr, ReadErrStdin};
+                match (from, into) {
+                    (from, None /* $0 */) => self.convert_expr(
+                        &ast::Expr::Getline {
+                            from: from.clone(),
+                            into: Some(&Unop(ast::Unop::Column, &ast::Expr::ILit(0))),
+                        },
+                        current_open,
+                    ),
+                    (Some(from), Some(into)) => {
+                        self.convert_expr(
+                            &ast::Expr::Assign(
+                                into,
+                                &ast::Expr::Call(Either::Right(Nextline), vec![from]),
+                            ),
+                            current_open,
+                        )?;
+                        self.convert_expr(
+                            &ast::Expr::Call(Either::Right(ReadErr), vec![from]),
+                            current_open,
+                        )
+                    }
+                    (None /*stdin*/, Some(into)) => {
+                        self.convert_expr(
+                            &ast::Expr::Assign(
+                                into,
+                                &ast::Expr::Call(Either::Right(NextlineStdin), vec![]),
+                            ),
+                            current_open,
+                        )?;
+                        self.convert_expr(
+                            &ast::Expr::Call(Either::Right(ReadErrStdin), vec![]),
+                            current_open,
+                        )
+                    }
+                }?
             }
         })
     }
@@ -627,22 +687,24 @@ where
         let e = self.convert_expr(expr, current_open)?;
         Ok(self.to_val(e, current_open))
     }
-
     fn make_loop<'a>(
         &mut self,
         body: &'a Stmt<'a, 'b, I>,
         update: Option<&'a Stmt<'a, 'b, I>>,
         current_open: NodeIx,
+        is_do: bool,
     ) -> Result<(
-        NodeIx, /* header */
-        NodeIx, /* body header */
-        NodeIx, /* body footer */
-        NodeIx, /* footer = next open */
+        NodeIx, // header
+        NodeIx, // body header
+        NodeIx, // body footer
+        NodeIx, // footer = next open
     )> {
-        // Create header, body, and footer nodes.
+        // Create header and footer nodes.
         let h = self.cfg.add_node(Default::default());
         let f = self.cfg.add_node(Default::default());
         self.loop_ctx.push((h, f));
+
+        // The body is a standalone graph.
         let (b_start, b_end) = if let Some(u) = update {
             let (start, mid) = self.standalone_block(body)?;
             let end = self.convert_stmt(u, mid)?;
@@ -650,7 +712,20 @@ where
         } else {
             self.standalone_block(body)?
         };
-        self.cfg.add_edge(current_open, h, Transition::null());
+
+        // do-while loops start by running the loop body.
+        // The last few edges here are added after make_loop returns to convert_stmt.
+        if is_do {
+            // Current => Body => Header => Body => Footer
+            //                      ^       |
+            //                      ^--------
+            self.cfg.add_edge(current_open, b_start, Transition::null());
+        } else {
+            // Current => Header => Body => Footer
+            //             ^         |
+            //             ^---------
+            self.cfg.add_edge(current_open, h, Transition::null());
+        }
         self.cfg.add_edge(b_end, h, Transition::null());
         self.loop_ctx.pop().unwrap();
         Ok((h, b_start, b_end, f))
