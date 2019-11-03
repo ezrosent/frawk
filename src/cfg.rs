@@ -552,6 +552,13 @@ where
                     pre
                 }
             }
+            Getline { from, into } => {
+                unimplemented!()
+                // let desugar_from = if let Some(from) = from {
+                // } else {
+                //     // TODO need stdin
+                // };
+            }
         })
     }
     fn do_assign<'a>(

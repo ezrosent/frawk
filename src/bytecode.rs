@@ -162,8 +162,12 @@ pub(crate) enum Instr<'a> {
     GetColumn(Reg<Str<'a>>, Reg<Int>),
 
     // Lines
-    HasLine(Reg<Int>, Reg<Str<'a>>),
+    // perhaps we need
+    // Getline(Reg<Int> /* -1,0,1 */ , Reg<Str<'a>> /* output line */, Reg<Str<'a>> /* input file */)
+    ReadErr(Reg<Int>, Reg<Str<'a>>),
     NextLine(Reg<Str<'a>>, Reg<Str<'a>>),
+    ReadErrStdin(Reg<Int>),
+    NextLineStdin(Reg<Str<'a>>),
 
     // Split
     SplitInt(
@@ -903,13 +907,11 @@ impl<'a> Interp<'a> {
                         *self.get_mut(dst) = src_contents;
                     }
                     // TODO add error logging for these errors perhaps?
-                    HasLine(dst, file) => {
+                    ReadErr(dst, file) => {
                         let dst = *dst;
                         let file = index(&self.strs, file);
-                        match self.read_files.has_line(file) {
-                            Ok(b) => *self.get_mut(dst) = b as Int,
-                            Err(_) => *self.get_mut(dst) = 0,
-                        };
+                        let res = self.read_files.read_err(file)?;
+                        *self.get_mut(dst) = res;
                     }
                     NextLine(dst, file) => {
                         let dst = *dst;
@@ -921,6 +923,18 @@ impl<'a> Interp<'a> {
                             Ok(l) => *self.get_mut(dst) = l,
                             Err(_) => *self.get_mut(dst) = "".into(),
                         };
+                    }
+                    ReadErrStdin(dst) => {
+                        let dst = *dst;
+                        let res = self.read_files.read_err_stdin();
+                        *self.get_mut(dst) = res;
+                    }
+                    NextLineStdin(dst) => {
+                        let dst = *dst;
+                        let res = self
+                            .regexes
+                            .get_line_stdin(&self.vars.fs, &mut self.read_files)?;
+                        *self.get_mut(dst) = res;
                     }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;

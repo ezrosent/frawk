@@ -14,6 +14,12 @@ static_map!(
     ["+", Unop::Pos]
 );
 
+pub(crate) struct Prog<'a, 'b, I> {
+    begin: Option<Stmt<'a, 'b, I>>,
+    end: Option<Stmt<'a, 'b, I>>,
+    pats: Vec<(Option<Expr<'a, 'b, I>>, Option<Stmt<'a, 'b, I>>)>,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Binop {
     Plus,
@@ -75,6 +81,10 @@ pub(crate) enum Expr<'a, 'b, I> {
         is_inc: bool,
         is_post: bool,
         x: &'a Expr<'a, 'b, I>,
+    },
+    Getline {
+        into: Option<&'a Expr<'a, 'b, I>>,
+        from: Option<&'a Expr<'a, 'b, I>>,
     },
 }
 

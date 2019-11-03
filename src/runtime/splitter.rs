@@ -8,12 +8,20 @@ use smallvec::SmallVec;
 
 use std::io::{ErrorKind, Read};
 
+#[repr(i64)]
+#[derive(PartialEq, Eq, Copy, Clone)]
+pub(crate) enum ReaderState {
+    ERROR = -1,
+    EOF = 0,
+    OK = 1,
+}
+
 pub(crate) struct Reader<R> {
     inner: R,
     prefix: SmallVec<[u8; 8]>,
     cur: Shared<str>,
     chunk_size: usize,
-    done: bool,
+    state: ReaderState,
 }
 
 fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
@@ -50,18 +58,32 @@ impl<R: Read> Reader<R> {
             prefix: Default::default(),
             cur: EMPTY.with(Clone::clone),
             chunk_size,
-            done: false,
+            state: ReaderState::OK,
         };
         res.advance(0)?;
         Ok(res)
     }
-    pub(crate) fn is_eof(&self) -> bool {
-        self.get().len() == 0 && self.done
+    pub(crate) fn read_state(&self) -> i64 {
+        self.state as i64
     }
-    pub(crate) fn read_line<'a>(&mut self, pat: &Regex) -> Result<Str<'a>> {
+    pub(crate) fn is_eof(&self) -> bool {
+        self.get().len() == 0 && self.state == ReaderState::EOF
+    }
+    pub(crate) fn read_line<'a>(&mut self, pat: &Regex) -> Str<'a> {
+        macro_rules! handle_err {
+            ($e:expr) => {
+                if let Ok(e) = $e {
+                    e
+                } else {
+                    self.state = ReaderState::ERROR;
+                    return "".into();
+                }
+            };
+        }
+        self.state = ReaderState::OK;
         let mut prefix: Str = "".into();
         if self.is_eof() {
-            return Ok("".into());
+            return "".into();
         }
         loop {
             // Why this map invocation? Match objects hold a reference to the substring, which
@@ -73,19 +95,19 @@ impl<R: Read> Reader<R> {
                     // NOTE if we get a read error here, then we will stop one line early.
                     // That seems okay, but we could find out that it actually isn't, in which case
                     // we would want some more complicated error handling here.
-                    self.advance(end)?;
-                    return Ok(if prefix.with_str(|s| s.len() > 0) {
+                    handle_err!(self.advance(end));
+                    return if prefix.with_str(|s| s.len() > 0) {
                         Str::concat(prefix, res.into())
                     } else {
                         res.into()
-                    });
+                    };
                 }
                 None => {
                     let cur: Str = self.cur.clone().into();
-                    self.advance(self.get().len())?;
-                    if self.done {
+                    handle_err!(self.advance(self.get().len()));
+                    if self.is_eof() {
                         // All done! Just return the rest of the buffer.
-                        return Ok(cur.into());
+                        return cur.into();
                     }
                     prefix = Str::concat(prefix, cur.into());
                 }
@@ -101,7 +123,7 @@ impl<R: Read> Reader<R> {
             self.cur = self.cur.extend(|s| &s[n..]);
             return Ok(());
         }
-        if self.done {
+        if self.is_eof() {
             self.cur = EMPTY.with(Clone::clone);
             return Ok(());
         }
@@ -139,7 +161,9 @@ impl<R: Read> Reader<R> {
         if !done && ulen != bytes_read {
             self.prefix.extend_from_slice(&bytes.get()[ulen..]);
         }
-        self.done = done;
+        if done {
+            self.state = ReaderState::EOF;
+        }
         Ok(utf8)
     }
 }
@@ -166,7 +190,8 @@ mod test {
         let mut rdr = super::Reader::new(c, 1 << 9).unwrap();
         let mut lines = Vec::new();
         while !rdr.is_eof() {
-            let line = rdr.read_line(&*LINE).expect("error reading");
+            let line = rdr.read_line(&*LINE);
+            assert!(rdr.read_state() != -1);
             lines.push(line);
         }
         let mut expected: Vec<_> = LINE.split(bs.as_str()).map(|x| Str::from(x)).collect();
