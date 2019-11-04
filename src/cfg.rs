@@ -162,6 +162,11 @@ impl<'b, I> Context<'b, I> {
         self.entry
     }
 }
+
+pub(crate) fn is_unused(i: Ident) -> bool {
+    i.0 == 0
+}
+
 impl<'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> Context<'b, I>
 where
     builtins::Variable: TryFrom<I>,
@@ -340,7 +345,13 @@ where
                 }
             }
             If(cond, tcase, fcase) => {
-                let c_val = self.convert_val(cond, current_open)?;
+                let c_val = if let ast::Expr::PatLit(_) = cond {
+                    // For conditionals, pattern literals become matches against $0.
+                    use ast::{Binop::*, Expr::*, Unop::*};
+                    self.convert_val(&Binop(Match, &Unop(Column, &ILit(0)), cond), current_open)?
+                } else {
+                    self.convert_val(cond, current_open)?
+                };
                 let (t_start, t_end) = self.standalone_block(tcase)?;
                 let next = self.cfg.add_node(Default::default());
 
@@ -466,7 +477,7 @@ where
         Ok(match expr {
             ILit(n) => PrimExpr::Val(PrimVal::ILit(*n)),
             FLit(n) => PrimExpr::Val(PrimVal::FLit(*n)),
-            StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
+            PatLit(s) | StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
             Unop(op, e) => {
                 let v = self.convert_val(e, current_open)?;
                 PrimExpr::CallBuiltin(builtins::Function::Unop(*op), smallvec![v])
@@ -781,10 +792,10 @@ where
         // phis: the set of basic blocks that must have a phi node for a given variable.
         let mut phis = HashMap::<Ident, HashSet<NodeIx>>::new();
         let mut worklist = WorkList::default();
-        // Note, to be cautiouss we could insert Phis for all identifiers.
-        // But that would introduce additional nodes for variables that are assigned to only once
-        // by construction. Instead we only use named variables. Of course, we this to change we
-        // would need to fall back on something more conservative.
+        // Note, to be cautious we could insert Phis for all identifiers.  But that would introduce
+        // additional nodes for variables that are assigned to only once by construction. Instead
+        // we only use named variables. Of course, were this to change we would need to fall back
+        // on something more conservative.
         for ident in self.hm.values().map(Clone::clone) {
             // Add all defsites into the worklist.
             let defsites = if let Some(ds) = self.defsites.get(&ident) {
