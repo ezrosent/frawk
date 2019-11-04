@@ -139,6 +139,7 @@ pub(crate) enum Instr<'a> {
     // String processing
     Concat(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Str<'a>>),
     Match(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
+    LenStr(Reg<Int>, Reg<Str<'a>>),
 
     // Comparison
     LTFloat(Reg<Int>, Reg<Float>, Reg<Float>),
@@ -454,6 +455,14 @@ impl<'a> Interp<'a> {
                         let l = index(&self.strs, l);
                         let pat = index(&self.strs, r);
                         *self.get_mut(res) = self.regexes.match_regex(&pat, &l)? as Int;
+                    }
+                    LenStr(res, s) => {
+                        let res = *res;
+                        let s = *s;
+                        // TODO consider doing a with_str here or enforce elsewhere that strings
+                        // cannot exceed u32::max.
+                        let len = self.get(s).len();
+                        *self.get_mut(res) = len as Int;
                     }
                     LTFloat(res, l, r) => {
                         let res = *res;

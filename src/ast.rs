@@ -89,7 +89,6 @@ pub(crate) enum Binop {
     EQ,
 }
 
-// TODO audit how we handle "if". I think strings will need special handling.
 // TODO refactor "stdin" to be any default Reader. This will help a lot with testing in process. It
 // is also something that awk lets you do.
 //
