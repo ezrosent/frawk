@@ -89,9 +89,7 @@ pub(crate) enum Binop {
     EQ,
 }
 
-// TODO add pattern desugaring
-//   * if (/pat/) => if ($0 ~ /pat/)
-//   * otherwise, treat it as a string (parsed differently of course).
+// TODO audit how we handle "if". I think strings will need special handling.
 // TODO refactor "stdin" to be any default Reader. This will help a lot with testing in process. It
 // is also something that awk lets you do.
 //
@@ -128,6 +126,7 @@ pub(crate) enum Expr<'a, 'b, I> {
     ILit(i64),
     FLit(f64),
     StrLit(&'b str),
+    PatLit(&'b str),
     Unop(Unop, &'a Expr<'a, 'b, I>),
     Binop(Binop, &'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
     Call(Either<I, Function>, Vec<&'a Expr<'a, 'b, I>>),

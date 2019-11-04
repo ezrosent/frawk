@@ -5,7 +5,7 @@ use smallvec::smallvec;
 
 use crate::builtins::{self, Variable};
 use crate::bytecode::{self, Instr, Interp};
-use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
+use crate::cfg::{self, is_unused, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{NodeIx, Result};
 use crate::types::{get_types, Scalar, TVar};
 
@@ -122,6 +122,11 @@ impl Generator {
     // Get the register associated with a given identifier and assign a new one if it does not yet
     // have one.
     fn reg_of_ident(&mut self, id: &Ident) -> (u32, Ty) {
+        if is_unused(*id) {
+            // We should not actually store into the "unused" identifier.
+            // TODO: remove this once there's better test coverage and we use more unsafe code.
+            return (!0, Ty::Int);
+        }
         match self.registers.entry(*id) {
             Entry::Occupied(o) => o.get().clone(),
             Entry::Vacant(v) => {
