@@ -677,10 +677,22 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
             let next = ctx.cfg().edge_endpoints(b).unwrap().1;
             match &ctx.cfg().edge_weight(b).unwrap().0 {
                 Some(v) => {
-                    let (reg, ty) = instrs.get_reg(&mut gen, v)?;
-                    if ty != Ty::Int {
-                        return err!("invalid type for branch: {:?}: {:?}", v, ty);
+                    let (mut reg, ty) = instrs.get_reg(&mut gen, v)?;
+                    match ty {
+                        Ty::Int => {}
+                        Ty::Float => {
+                            let dst = reg_of_ty!(&mut gen, Ty::Int);
+                            instrs.convert(dst, Ty::Int, reg, Ty::Float)?;
+                            reg = dst;
+                        }
+                        Ty::Str => {
+                            let dst = reg_of_ty!(&mut gen, Ty::Int);
+                            instrs.push(Instr::LenStr(dst.into(), reg.into()));
+                            reg = dst;
+                        }
+                        _ => return err!("invalid type for branch: {:?}: {:?}", v, ty),
                     }
+
                     gen.jmps.push(instrs.len());
                     instrs.push(Instr::JmpIf(reg.into(), next.index().into()));
                 }
