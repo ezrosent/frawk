@@ -35,9 +35,7 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 fn main() {
     let a = arena::Arena::default();
     let ast1: &ast::Stmt<&'static str> = {
-        use ast::Binop::*;
-        use ast::Expr::*;
-        use ast::Stmt::*;
+        use ast::{Binop::*,Expr::*,Stmt::*};
         a.alloc(|| {
             Block(vec![
                 a.alloc(|| Expr(a.alloc(|| Assign(a.alloc(|| Var("i")), a.alloc(|| ILit(1)))))),
@@ -112,7 +110,7 @@ fn main() {
         eprintln!("{:?} : {:?}", k, v);
     }
     println!("{}", dot::Dot::new(&ast2.cfg()));
-    let mut bcode = compile::bytecode(&ast2).expect("error in compilation!");
+    let mut bcode = compile::bytecode(&ast2, std::io::stdin()).expect("error in compilation!");
     eprintln!("INSTRS:");
     for (i, inst) in bcode.instrs().iter().enumerate() {
         eprintln!("\t[{:2}] {:?}", i, inst);

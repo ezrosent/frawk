@@ -590,7 +590,10 @@ impl<'a> Instrs<'a> {
     }
 }
 
-pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp<'a>> {
+pub(crate) fn bytecode<'a, 'b>(
+    ctx: &cfg::Context<'a, &'b str>,
+    rdr: impl std::io::Read + 'static,
+) -> Result<Interp<'a>> {
     let mut instrs: Instrs<'a> = Instrs(Vec::new());
     let mut gen = Generator {
         registers: Default::default(),
@@ -600,21 +603,6 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
         ts: get_types(ctx.cfg(), ctx.num_idents())?,
     };
 
-    // * We want a mapping from identifier -> register of its specific type.
-    //   That can be a HashMap<Ident, (type, u32)>.
-    // * To compute registers, we want a HashMap<type, u32>  (or we could use a vector and
-    //   coerce these to numbers? YES)
-    // * Upon getting to the end of a basic block B, traverse all neighbors, read prefix until it
-    //   doesn't have a phi. For each phi block that reads x = [... B : y ...], append a stmt x=y to
-    //   the instruction stream.
-    // * Edges are handled in order (need to check! -- it's reverse order..) as jmp/jmpif statements.
-    // * Have a vector keeping track of indexes of Jmp and JmpIf nodes in output stream. They start
-    //   off with the node index for the basic block. As we start basic blocks, add a new entry to
-    //   a vector keeping track of the start index. Once the stream is done, iterate over all
-    //   Jmp/JmpIf nodes and replace the index with the right one.
-    //
-    // The actual instruction translation _should_ be pretty easy it ought to be a pretty direct
-    // analog to the existing enum + type.
     for (i, n) in ctx.cfg().raw_nodes().iter().enumerate() {
         gen.bb_to_instr[i] = instrs.len();
         for stmt in n.weight.0.iter() {
@@ -640,10 +628,9 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
 
         // Replace Phi functions in successors with assignments at this point in the stream.
         //
-        // XXX is it sufficient to do all assignments here? or can it only happen for the branch
-        // we are actually going to take? It seems like the answer is yes, because one must first
-        // go through another block that assigns to the node again before actually reading the
-        // variable.
+        // NB Why is it sufficient to do all assignments here? Shouldn't we limit code gen to  the
+        // branch we are actually going to take? No, because one must first go through another
+        // block that assigns to the node again before actually reading the variable.
         for n in ctx
             .cfg()
             .neighbors_directed(NodeIx::new(i), Direction::Outgoing)
@@ -717,7 +704,9 @@ pub(crate) fn bytecode<'a, 'b>(ctx: &cfg::Context<'a, &'b str>) -> Result<Interp
         }
     }
 
-    Ok(Interp::new(instrs.into_vec(), |ty| {
-        gen.reg_counts[ty as usize] as usize
-    }))
+    Ok(Interp::new(
+        instrs.into_vec(),
+        |ty| gen.reg_counts[ty as usize] as usize,
+        rdr,
+    ))
 }
