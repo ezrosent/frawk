@@ -241,19 +241,17 @@ const CHUNK_SIZE: usize = 2 << 10;
 
 pub(crate) struct FileRead {
     files: Registry<splitter::Reader<File>>,
-    stdin: Option<splitter::Reader<std::io::Stdin>>,
-}
-
-impl Default for FileRead {
-    fn default() -> FileRead {
-        FileRead {
-            files: Default::default(),
-            stdin: splitter::Reader::new(std::io::stdin(), CHUNK_SIZE).ok(),
-        }
-    }
+    stdin: Option<splitter::Reader<Box<dyn io::Read>>>,
 }
 
 impl FileRead {
+    pub(crate) fn new(r: impl io::Read + 'static) -> FileRead {
+        let d: Box<dyn io::Read> = Box::new(r);
+        FileRead {
+            files: Default::default(),
+            stdin: splitter::Reader::new(d, CHUNK_SIZE).ok(),
+        }
+    }
     pub(crate) fn get_line_stdin<'a>(&mut self, pat: &Regex) -> Str<'a> {
         match &mut self.stdin {
             Some(s) => s.read_line(pat),

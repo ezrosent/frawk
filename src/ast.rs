@@ -89,10 +89,7 @@ pub(crate) enum Binop {
     EQ,
 }
 
-// TODO refactor "stdin" to be any default Reader. This will help a lot with testing in process. It
-// is also something that awk lets you do.
-//
-// Once we havea done this, it's time to add a parser. That will let us clean out a lot of bugs and
+// Once we have done this, it's time to add a parser. That will let us clean out a lot of bugs and
 // get a more robust test suite as well.
 //
 // TODO add "length" -- works on strings and arrays, along with desugaring for length() =>

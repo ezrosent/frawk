@@ -290,7 +290,11 @@ impl<'a> Interp<'a> {
     pub(crate) fn instrs(&self) -> &Vec<Instr<'a>> {
         &self.instrs
     }
-    pub(crate) fn new(instrs: Vec<Instr<'a>>, regs: impl Fn(compile::Ty) -> usize) -> Interp<'a> {
+    pub(crate) fn new(
+        instrs: Vec<Instr<'a>>,
+        regs: impl Fn(compile::Ty) -> usize,
+        stdin: impl std::io::Read + 'static,
+    ) -> Interp<'a> {
         use compile::Ty::*;
         Interp {
             instrs,
@@ -304,7 +308,7 @@ impl<'a> Interp<'a> {
             split_line: LazyVec::new(),
             regexes: Default::default(),
             write_files: Default::default(),
-            read_files: Default::default(),
+            read_files: runtime::FileRead::new(stdin),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
