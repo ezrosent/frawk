@@ -1,0 +1,19 @@
+use crate::{
+  arena::Arena,
+  ast::{Expr, Stmt},
+  runtime::{Int, Float},
+};
+grammar<'a, 'outer>(arena: &'a Arena<'outer>);
+
+pub(crate) Expr: &'a Expr<'a,'a, &'a str> = {
+  INum => arena.alloc_v(Expr::ILit(<>)),
+  FNum => arena.alloc_v(Expr::FLit(<>)),
+}
+
+// TODO: add alloc_str() to Arena
+// TODO: implement string literal parsing
+// TODO: implement pattern parsing
+// TODO: parse the rest of the grammar
+
+INum: Int = <s:r"-?[0-9]+"> => s.parse().unwrap();
+FNum: Float = <s:r"[-+]?\d*\.\d+([eE][-+]?\d+)?"> => s.parse().unwrap();

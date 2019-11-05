@@ -16,6 +16,7 @@ pub mod types;
 extern crate elsa;
 extern crate hashbrown;
 extern crate jemallocator;
+extern crate lalrpop_util;
 extern crate lazy_static;
 extern crate libc;
 extern crate petgraph;
@@ -26,7 +27,10 @@ extern crate simd_json;
 extern crate smallvec;
 extern crate stable_deref_trait;
 
+use lalrpop_util::lalrpop_mod;
 use petgraph::dot;
+
+lalrpop_mod!(syntax);
 
 // TODO: put jemalloc behind a feature flag
 #[global_allocator]
@@ -35,7 +39,7 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 fn main() {
     let a = arena::Arena::default();
     let ast1: &ast::Stmt<&'static str> = {
-        use ast::{Binop::*,Expr::*,Stmt::*};
+        use ast::{Binop::*, Expr::*, Stmt::*};
         a.alloc(|| {
             Block(vec![
                 a.alloc(|| Expr(a.alloc(|| Assign(a.alloc(|| Var("i")), a.alloc(|| ILit(1)))))),
