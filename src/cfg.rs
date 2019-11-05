@@ -438,6 +438,10 @@ where
 
                 footer
             }
+            // TODO we may want checking here to avoid folks doing "continue" and "break" inside a
+            // toplevel statement that was desugared into a loop.
+            //
+            // This should become more doable once we add more metadata to AST nodes.
             Break => {
                 match self.loop_ctx.pop() {
                     Some((_, footer)) => {
