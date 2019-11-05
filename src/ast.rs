@@ -3,7 +3,7 @@ use crate::builtins::Function;
 use crate::common::Either;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub(crate) enum Unop {
+pub enum Unop {
     Column,
     Not,
     Neg,
@@ -18,7 +18,7 @@ static_map!(
     ["+", Unop::Pos]
 );
 
-pub(crate) struct Prog<'a, 'b, I> {
+pub struct Prog<'a, 'b, I> {
     begin: Option<&'a Stmt<'a, 'b, I>>,
     end: Option<&'a Stmt<'a, 'b, I>>,
     pats: Vec<(Option<&'a Expr<'a, 'b, I>>, Option<&'a Stmt<'a, 'b, I>>)>,
@@ -74,7 +74,7 @@ impl<'a, 'b, I> Prog<'a, 'b, I> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub(crate) enum Binop {
+pub enum Binop {
     Plus,
     Minus,
     Mult,
@@ -118,7 +118,7 @@ static_map!(
 );
 
 #[derive(Debug, Clone)]
-pub(crate) enum Expr<'a, 'b, I> {
+pub enum Expr<'a, 'b, I> {
     ILit(i64),
     FLit(f64),
     StrLit(&'b str),
@@ -145,7 +145,7 @@ pub(crate) enum Expr<'a, 'b, I> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Stmt<'a, 'b, I> {
+pub enum Stmt<'a, 'b, I> {
     Expr(&'a Expr<'a, 'b, I>),
     Block(Vec<&'a Stmt<'a, 'b, I>>),
     // of course, Print can have 0 arguments. But let's handle that up the stack.

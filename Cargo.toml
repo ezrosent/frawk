@@ -18,3 +18,7 @@ libc = "0.2"
 jemallocator = "0.3"
 simd-json = "0.1.21"
 rand = "0.7.2"
+lalrpop-util = "0.17.2"
+
+[build-dependencies]
+lalrpop = "0.17.2"

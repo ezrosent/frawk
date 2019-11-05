@@ -122,6 +122,10 @@ impl<'outer> Arena<'outer> {
 
     // TODO(ezr): implement alloc_many method for collection of our choice (smallvec?)
 
+    pub fn alloc_v<T: 'outer>(&self, t: T) -> &T {
+        self.alloc(move || t)
+    }
+
     pub fn alloc<T: 'outer>(&self, f: impl FnOnce() -> T) -> &T {
         match self.head().alloc(f) {
             Ok(r) => {

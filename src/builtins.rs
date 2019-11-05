@@ -8,7 +8,7 @@ use smallvec::smallvec;
 use std::convert::TryFrom;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Function {
+pub enum Function {
     Unop(ast::Unop),
     Binop(ast::Binop),
     Print,
