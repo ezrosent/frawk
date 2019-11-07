@@ -8,11 +8,19 @@ grammar<'a, 'outer>(arena: &'a Arena<'outer>);
 pub(crate) Expr: &'a Expr<'a,'a, &'a str> = {
   INum => arena.alloc_v(Expr::ILit(<>)),
   FNum => arena.alloc_v(Expr::FLit(<>)),
+  "(" <e: Expr> ")" => e,
 }
 
 // TODO: add alloc_str() to Arena
 // TODO: implement string literal parsing
 // TODO: implement pattern parsing
+
+// For the two above, we want to understand tokenizers in lalrpop better, then
+// use technique similar to string and regex literals for lalrpop/src/tok/mod.rs.
+// 
+// We may be able to get away with a regex though, and then parse those manually.
+// Ah, we will need our own, otherwise we cannot get single-line comments, which are the only awk comments.
+// Note: for precedence of ambiguous regexes/literals use `match`, for operator precedence, used "tiered rules".
 // TODO: parse the rest of the grammar
 
 INum: Int = <s:r"-?[0-9]+"> => s.parse().unwrap();

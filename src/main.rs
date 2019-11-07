@@ -11,6 +11,7 @@ pub mod cfg;
 pub mod compile;
 mod display;
 pub mod dom;
+pub mod lexer;
 pub mod runtime;
 pub mod types;
 extern crate elsa;
