@@ -120,8 +120,41 @@ impl<'outer> Arena<'outer> {
         &self.data[self.data.len() - 1]
     }
 
-    // TODO(ezr): implement alloc_many method for collection of our choice (smallvec?)
+    pub fn alloc_str<'a>(&'a self, s: &str) -> &'a str {
+        let bs = self.alloc_bytes(s.as_bytes());
+        debug_assert_eq!(s.as_bytes(), bs);
+        unsafe { std::str::from_utf8_unchecked(bs) }
+    }
 
+    pub fn alloc_bytes<'a>(&'a self, bs: &[u8]) -> &'a [u8] {
+        use std::slice;
+        if bs.len() == 0 {
+            return &[];
+        }
+        unsafe {
+            match self.head().alloc_inner::<u8>(bs.len()) {
+                Some(r) => {
+                    ptr::copy_nonoverlapping(&bs[0], r, bs.len());
+                    slice::from_raw_parts_mut(r, bs.len())
+                }
+                None => {
+                    let len = bs.len();
+                    if len >= CHUNK_SIZE / 2 {
+                        let mut v = Vec::new();
+                        v.extend_from_slice(bs);
+                        let b = v.into_boxed_slice();
+                        let p = Box::into_raw(b);
+                        self.drops
+                            .push(Box::new(move || mem::drop(Box::from_raw(p))));
+                        &*p
+                    } else {
+                        self.data.push(ChunkPtr::default());
+                        self.alloc_bytes(bs)
+                    }
+                }
+            }
+        }
+    }
     pub fn alloc_v<T: 'outer>(&self, t: T) -> &T {
         self.alloc(move || t)
     }
@@ -131,7 +164,7 @@ impl<'outer> Arena<'outer> {
             Ok(r) => {
                 if mem::needs_drop::<T>() {
                     // Close over a *mut u8 instead of a *mut T. Why? Without this the borrow checker
-                    // complains that we are moving a T (with lifetime : 'outer) into a Box (wwith
+                    // complains that we are moving a T (with lifetime : 'outer) into a Box (with
                     // lifetime 'static). We ensure that the Box's contents will be dropped within
                     // 'outer, so casting away this information is safe.
                     let rr = r as *const _ as *mut u8;
@@ -164,6 +197,48 @@ mod tests {
     use super::*;
     extern crate test;
     use test::{black_box, Bencher};
+
+    fn bytes(n: usize) -> String {
+        let mut res = Vec::with_capacity(n);
+        use rand::distributions::{Distribution, Uniform};
+        let ascii = Uniform::new_inclusive(0u8, 127u8);
+        let mut rng = rand::thread_rng();
+        for _ in 0..n {
+            res.push(ascii.sample(&mut rng))
+        }
+        String::from_utf8(res).unwrap()
+    }
+
+    #[test]
+    fn alloc_str() {
+        let a = Arena::default();
+        let s = a.alloc_str("test string");
+        assert_eq!(s, "test string");
+        let runs = CHUNK_SIZE / 2 + 2;
+        let mut origs = Vec::with_capacity(runs);
+        let mut arena = Vec::with_capacity(runs);
+        for i in 0..(CHUNK_SIZE / 2 + 2) {
+            let bs = bytes(i);
+            arena.push(a.alloc_str(bs.as_str()));
+            origs.push(bs);
+        }
+        for (orig, arena) in origs.into_iter().zip(arena.into_iter()) {
+            assert_eq!(orig.as_str(), arena);
+        }
+    }
+
+    #[test]
+    fn bumps_for_align() {
+        let a = Arena::default();
+        fn assert_aligned<T>(ptr: *const T) {
+            let align = std::mem::align_of::<T>();
+            let off = (ptr as usize) % align;
+            assert_eq!(off, 0);
+        }
+        let s = a.alloc_str("a");
+        let i = a.alloc_v(0usize);
+        assert_aligned(i);
+    }
 
     #[test]
     fn basic_alloc() {
