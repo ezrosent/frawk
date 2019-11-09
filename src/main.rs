@@ -27,6 +27,7 @@ extern crate ryu;
 extern crate simd_json;
 extern crate smallvec;
 extern crate stable_deref_trait;
+extern crate unicode_xid;
 
 use lalrpop_util::lalrpop_mod;
 use petgraph::dot;

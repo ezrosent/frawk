@@ -1,4 +1,9 @@
+//! A custom lexer for AWK for use with LALRPOP.
+//!
+//! This lexer is fairly rudamentary. It ought not be too slow, but it also has not been optimized
+//! very aggressively. Various portions of the AWK language are not yet supported.
 use regex::Regex;
+use unicode_xid::UnicodeXID;
 
 use crate::arena::Arena;
 use crate::runtime::{Float, Int};
@@ -39,6 +44,8 @@ pub enum Tok<'a> {
     DivAssign,
     Mod,
     ModAssign,
+    Match,
+    NotMatch,
 
     EQ,
     LT,
@@ -91,6 +98,8 @@ static_map!(
     ["/=", Tok::DivAssign],
     ["%", Tok::Mod],
     ["%=", Tok::ModAssign],
+    ["~", Tok::Match],
+    ["!~", Tok::NotMatch],
     ["==", Tok::EQ],
     ["<", Tok::LT],
     ["<=", Tok::LTE],
@@ -112,7 +121,7 @@ lazy_static! {
         let max_len = KEYWORDS.keys().map(|s| s.len()).max().unwrap();
         let mut res: Vec<Vec<_>> = vec![Default::default(); max_len];
         for (k, v) in KEYWORDS.iter() {
-            res[k.len()].push((k.as_bytes(), v.clone()));
+            res[k.len() - 1].push((k.as_bytes(), v.clone()));
         }
         res
     };
@@ -126,11 +135,20 @@ pub struct Tokenizer<'a, 'b> {
     arena: &'b Arena<'b>,
 }
 
+fn is_id_start(c: char) -> bool {
+    c == '_' || c.is_xid_start()
+}
+
+fn is_id_body(c: char) -> bool {
+    c == '_' || c == '\'' || c.is_xid_continue()
+}
+
 impl<'a, 'b> Tokenizer<'a, 'b> {
     fn keyword<'c>(&self) -> Option<(Tok<'c>, usize)> {
         let start = self.cur;
         let remaining = self.text.len() - start;
         for (len, ks) in KEYWORDS_BY_LEN.iter().enumerate().rev() {
+            let len = len + 1;
             if remaining < len {
                 continue;
             }
@@ -144,10 +162,46 @@ impl<'a, 'b> Tokenizer<'a, 'b> {
         None
     }
 
+    fn num<'c>(&self) -> Option<(Tok<'c>, usize)> {
+        lazy_static! {
+            static ref INT_PATTERN: Regex = Regex::new(r"^[+-]?\d+").unwrap();
+            // Adapted from https://www.regular-expressions.info/floatingpoint.html
+            static ref FLOAT_PATTERN: Regex = Regex::new(r"^[-+]?\d*\.\d+([eE][-+]?\d+)?").unwrap();
+        };
+        let text = &self.text[self.cur..];
+        if let Some(f) = FLOAT_PATTERN.captures(text).and_then(|c| c.get(0)) {
+            let fs = f.as_str();
+            Some((Tok::FLit(fs.parse().unwrap()), fs.len()))
+        } else if let Some(i) = INT_PATTERN.captures(text).and_then(|c| c.get(0)) {
+            let is = i.as_str();
+            Some((Tok::ILit(is.parse().unwrap()), is.len()))
+        } else {
+            None
+        }
+    }
+
     fn push_char(&mut self, c: char) {
         let start = self.buf.len();
         self.buf.resize_with(start + c.len_utf8(), Default::default);
         c.encode_utf8(&mut self.buf[start..]);
+    }
+
+    fn ident(&mut self, start: char) -> (&'b str, usize) {
+        debug_assert!(is_id_start(start));
+        self.buf.clear();
+        self.push_char(start);
+        let ix = self.text[self.cur..]
+            .char_indices()
+            .take_while(|(_, c)| is_id_body(*c))
+            .last()
+            .map(|(ix, _)| self.cur + ix + 1)
+            .unwrap_or(self.cur);
+        self.buf
+            .extend_from_slice(&self.text.as_bytes()[self.cur..ix]);
+        let s = self
+            .arena
+            .alloc_str(std::str::from_utf8(&self.buf[..]).unwrap());
+        (s, ix)
     }
 
     fn regex_lit(&mut self) -> Result<(&'b str, usize /* new start */), Error> {
@@ -186,7 +240,7 @@ impl<'a, 'b> Tokenizer<'a, 'b> {
                 let s = self
                     .arena
                     .alloc_str(std::str::from_utf8(&self.buf[..]).unwrap());
-                Ok((s, end))
+                Ok((s, self.cur + end))
             }
             None => Err(Error {
                 location: self.cur,
@@ -239,7 +293,7 @@ impl<'a, 'b> Tokenizer<'a, 'b> {
                 let s = self
                     .arena
                     .alloc_str(std::str::from_utf8(&self.buf[..]).unwrap());
-                Ok((s, end))
+                Ok((s, self.cur + end))
             }
             None => Err(Error {
                 location: self.cur,
@@ -249,25 +303,23 @@ impl<'a, 'b> Tokenizer<'a, 'b> {
     }
 
     fn consume_comment(&mut self) {
-        // assumes we just saw a '#'
-        if let Some((ix, _)) = self.text[self.cur..]
-            .char_indices()
-            .skip_while(|x| x.1 != '\n')
-            .next()
-        {
-            self.cur += ix;
-        } else {
-            self.cur = self.text.len();
+        let mut iter = self.text[self.cur..].char_indices();
+        if let Some((_, '#')) = iter.next() {
+            if let Some((ix, _)) = iter.skip_while(|x| x.1 != '\n').next() {
+                self.cur += ix;
+            } else {
+                self.cur = self.text.len();
+            }
         }
     }
 
     fn consume_ws(&mut self) {
         let mut res = 0;
         for (ix, c) in self.text[self.cur..].char_indices() {
+            res = ix;
             if c == '\n' || !c.is_whitespace() {
                 break;
             }
-            res = ix;
         }
         self.cur += res;
     }
@@ -281,6 +333,14 @@ impl<'a, 'b> Tokenizer<'a, 'b> {
                 break;
             }
             prev = self.cur;
+        }
+    }
+
+    fn potential_re(&self) -> bool {
+        match &self.prev_tok {
+            Some(Tok::Ident(_)) | Some(Tok::StrLit(_)) | Some(Tok::PatLit(_))
+            | Some(Tok::ILit(_)) | Some(Tok::FLit(_)) => false,
+            _ => true,
         }
     }
 }
@@ -305,15 +365,129 @@ impl<'a, 'b> Tokenizer<'a, 'b> {
 impl<'a, 'b> Iterator for Tokenizer<'a, 'b> {
     type Item = Result<Spanned<Tok<'b>>, Error>;
     fn next(&mut self) -> Option<Result<Spanned<Tok<'b>>, Error>> {
-        loop {
-            // psuedocode:
-            // repeatedly
-            //   advance
-            //   match first char:
-            //    * '"' => string_lit
-            //    * '/' when last token was ;,\n,(, => regex
-            //    * _ => number | keyword | identifier
-            //
+        macro_rules! try_tok {
+            ($e:expr) => {
+                match $e {
+                    Ok(e) => e,
+                    Err(e) => return Some(Err(e)),
+                };
+            };
         }
+        self.advance();
+        let span = if let Some((ix, c)) = self.text[self.cur..].char_indices().next() {
+            let ix = self.cur + ix;
+            match c {
+                '"' => {
+                    self.cur += 1;
+                    let (s, new_start) = try_tok!(self.string_lit());
+                    self.cur = new_start;
+                    (ix, Tok::StrLit(s), new_start)
+                }
+                '/' if self.potential_re() => {
+                    self.cur += 1;
+                    let (re, new_start) = try_tok!(self.regex_lit());
+                    self.cur = new_start;
+                    (ix, Tok::PatLit(re), new_start)
+                }
+                c => {
+                    if let Some((tok, len)) = self.keyword() {
+                        self.cur += len;
+                        (ix, tok, self.cur)
+                    } else if let Some((tok, len)) = self.num() {
+                        self.cur += len;
+                        (ix, tok, self.cur)
+                    } else if is_id_start(c) {
+                        self.cur += c.len_utf8();
+                        let (s, new_start) = self.ident(c);
+                        self.cur = new_start;
+                        (ix, Tok::Ident(s), self.cur)
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        } else {
+            return None;
+        };
+        self.prev_tok = Some(span.1.clone());
+        Some(Ok(span))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn lex_str<'b>(a: &'b Arena, s: &str) -> Vec<Spanned<Tok<'b>>> {
+        Tokenizer::new(s, a).map(|x| x.ok().unwrap()).collect()
+    }
+
+    #[test]
+    fn basic() {
+        let a = Arena::default();
+        let toks = lex_str(
+            &a,
+            r#" if (x == yzk) {
+            print x<y, y<=z, z;
+        }"#,
+        );
+        use Tok::*;
+        assert_eq!(
+            toks.into_iter().map(|x| x.1).collect::<Vec<_>>(),
+            vec![
+                If,
+                LParen,
+                Ident("x"),
+                EQ,
+                Ident("yzk"),
+                RParen,
+                LBrace,
+                Newline,
+                Print,
+                Ident("x"),
+                LT,
+                Ident("y"),
+                Comma,
+                Ident("y"),
+                LTE,
+                Ident("z"),
+                Comma,
+                Ident("z"),
+                Semi,
+                Newline,
+                RBrace
+            ]
+        );
+    }
+
+    #[test]
+    fn literals() {
+        let a = Arena::default();
+        let toks = lex_str(
+            &a,
+            r#" x="\"hi\tthere\n"; b=/hows it \/going/; x="重庆辣子鸡"; c= 1 / 3.5 "#,
+        );
+        use Tok::*;
+        assert_eq!(
+            toks.into_iter().map(|x| x.1).collect::<Vec<_>>(),
+            vec![
+                Ident("x"),
+                Assign,
+                StrLit("\"hi\tthere\n"),
+                Semi,
+                Ident("b"),
+                Assign,
+                PatLit("hows it /going"),
+                Semi,
+                Ident("x"),
+                Assign,
+                StrLit("重庆辣子鸡"),
+                Semi,
+                Ident("c"),
+                Assign,
+                ILit(1),
+                Div,
+                FLit(3.5),
+            ],
+        )
     }
 }
