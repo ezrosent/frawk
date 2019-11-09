@@ -19,6 +19,7 @@ jemallocator = "0.3"
 simd-json = "0.1.21"
 rand = "0.7.2"
 lalrpop-util = "0.17.2"
+unicode-xid = "0.2.0"
 
 [build-dependencies]
 lalrpop = "0.17.2"
