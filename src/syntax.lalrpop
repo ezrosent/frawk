@@ -1,27 +1,233 @@
 use crate::{
   arena::Arena,
-  ast::{Expr, Stmt},
-  runtime::{Int, Float},
+  ast::{Expr, Stmt, Binop, Unop},
+  runtime::{Int, Float, strton::{strtoi,strtod}},
+  lexer::{self, Tok},
 };
-grammar<'a, 'outer>(arena: &'a Arena<'outer>);
 
-pub(crate) Expr: &'a Expr<'a,'a, &'a str> = {
-  INum => arena.alloc_v(Expr::ILit(<>)),
-  FNum => arena.alloc_v(Expr::FLit(<>)),
-  "(" <e: Expr> ")" => e,
+grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>);
+
+pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
+    "if" "(" <cond:Expr> ")" <s1:BaseStmt> "else" <s2:Stmt> => arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
+    "if" "(" <cond:Expr> ")" <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
+    "do" <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
+    "while" "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(cond, body)),
+    // TODO: These should probably all be Exprs
+    "for" "(" <init: OptStmtSemi> <cond:OptExprSemi> <update:OptStmtRParen> <body:BaseStmt> => 
+        arena.alloc_v(Stmt::For(init, cond, update, body)),
 }
 
-// TODO: add alloc_str() to Arena
-// TODO: implement string literal parsing
-// TODO: implement pattern parsing
+OptStmtSemi: Option<&'a Stmt<'a,'a,&'a str>> = {
+    ";" => None,
+    <s:Stmt> ";" => Some(s),
+}
 
-// For the two above, we want to understand tokenizers in lalrpop better, then
-// use technique similar to string and regex literals for lalrpop/src/tok/mod.rs.
-// 
-// We may be able to get away with a regex though, and then parse those manually.
-// Ah, we will need our own, otherwise we cannot get single-line comments, which are the only awk comments.
-// Note: for precedence of ambiguous regexes/literals use `match`, for operator precedence, used "tiered rules".
-// TODO: parse the rest of the grammar
+OptStmtRParen: Option<&'a Stmt<'a,'a,&'a str>> = {
+    ")" => None,
+    <s:Stmt> ")" => Some(s),
+}
 
-INum: Int = <s:r"-?[0-9]+"> => s.parse().unwrap();
-FNum: Float = <s:r"[-+]?\d*\.\d+([eE][-+]?\d+)?"> => s.parse().unwrap();
+OptExprSemi: Option<&'a Expr<'a,'a,&'a str>> = {
+    ";" => None,
+    <e:Expr> ";" => Some(e),
+}
+
+BaseStmt: &'a Stmt<'a,'a,&'a str> = {
+    <e: Expr> => arena.alloc_v(Stmt::Expr(e)),
+}
+
+
+Sep: () = {
+    "\n",
+    ";",
+}
+
+pub(crate) Expr: &'a Expr<'a,'a,&'a str> = {
+    "getline" <into:BaseTerm> "<" <from:BaseTerm> => arena.alloc_v(Expr::Getline{
+        into: Some(into),
+        from: Some(from),
+    }),
+    "getline" "<" <from:BaseTerm> => arena.alloc_v(Expr::Getline{
+        into: None,
+        from: Some(from),
+    }),
+    "getline" <into:BaseTerm> => arena.alloc_v(Expr::Getline{
+        into: Some(into),
+        from: None,
+    }),
+    "getline" => arena.alloc_v(Expr::Getline{
+        into: None,
+        from: None,
+    }),
+    // TODO: figure out how lists work. We need them for both print and for statement blocks.
+    PrecAsgn
+};
+
+PrecAsgn: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecIn> "=" <r: PrecAsgn> => arena.alloc_v(Expr::Assign(l, r)),
+    <l: PrecIn> "+=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Plus, r)),
+    <l: PrecIn> "-=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Minus, r)),
+    <l: PrecIn> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
+    <l: PrecIn> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
+    <l: PrecIn> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
+    PrecIn
+}
+
+PrecIn: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecMatch> "in" <r: PrecMatch> => panic!("we have not yet wired in `in`"),
+    PrecAdd,
+}
+
+// This is where we would add ?: || &&
+// see: https://www.gnu.org/software/gawk/manual/html_node/Precedence.html
+//
+
+PrecMatch: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecMatch> "~" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::Match, l, r)),
+    <l: PrecMatch> "!~" <r: PrecCmp> => arena.alloc_v(Expr::Unop(
+            Unop::Not,
+            arena.alloc_v(Expr::Binop(Binop::Match, l, r)))),
+    PrecCmp,
+}
+
+PrecCmp: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecAdd> "<" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::LT, l, r)),
+    <l: PrecAdd> "<=" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::LTE, l, r)),
+    <l: PrecAdd> ">" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::GT, l, r)),
+    <l: PrecAdd> ">=" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::GTE, l, r)),
+    <l: PrecAdd> "==" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::EQ, l, r)),
+    PrecAdd
+}
+
+PrecAdd: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecAdd> "+" <r:PrecMul>  => arena.alloc_v(Expr::Binop(Binop::Plus, l, r)),
+    <l: PrecAdd> "-" <r:PrecMul>  => arena.alloc_v(Expr::Binop(Binop::Minus, l, r)),
+    PrecMul,
+}
+
+PrecMul: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecMul> "*" <r:PrecUnop> => arena.alloc_v(Expr::Binop(Binop::Mult, l, r)),
+    <l: PrecMul> "/" <r:PrecUnop> => arena.alloc_v(Expr::Binop(Binop::Div, l, r)),
+    <l: PrecMul> "%" <r:PrecUnop> => arena.alloc_v(Expr::Binop(Binop::Mod, l, r)),
+    PrecUnop,
+}
+
+PrecUnop: &'a Expr<'a,'a,&'a str> = {
+    "-" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Neg, e)),
+    "+" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Pos, e)),
+    "!" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Not, e)),
+    PrecInc
+}
+
+PrecInc: &'a Expr<'a,'a,&'a str> = { 
+    <e:PrecFieldRef>"++" => arena.alloc_v(Expr::Inc { is_inc: true, is_post: true, x: e }),
+    <e:PrecFieldRef>"--"=> arena.alloc_v(Expr::Inc { is_inc: false, is_post: true, x: e }),
+    "++" <e:PrecFieldRef> => arena.alloc_v(Expr::Inc { is_inc: true, is_post: false, x: e }),
+    "--" <e:PrecFieldRef> => arena.alloc_v(Expr::Inc { is_inc: false, is_post: false, x: e }),
+    PrecFieldRef,
+}
+
+CatBaseTerm: &'a Expr<'a,'a, &'a str> = {
+    <l: CatBaseTerm> <r: PrecFieldRef> => arena.alloc_v(Expr::Binop(Binop::Concat, l, r)),
+    PrecFieldRef
+}
+
+PrecFieldRef: &'a Expr<'a,'a,&'a str> = { 
+    Col,
+    BaseTerm 
+}
+
+Col: &'a Expr<'a,'a,&'a str> = { 
+    "$" <e:BaseTerm> => arena.alloc_v(Expr::Unop(Unop::Column, e)),
+}
+
+Ident: &'a Expr<'a,'a,&'a str> = {
+  "IDENT" => arena.alloc_v(Expr::Var(arena.alloc_str(<>))),
+}
+
+StrLit: &'a Expr<'a,'a,&'a str> = {
+  "STRLIT" => arena.alloc_v(Expr::StrLit(lexer::parse_string_literal(<>, &arena, buf))),
+}
+
+Index: &'a Expr<'a,'a,&'a str> = {
+  <arr:BaseTerm>"[" <e:BaseTerm> "]" => arena.alloc_v(Expr::Index(arr, e)),
+}
+
+BaseTerm: &'a Expr<'a,'a, &'a str> = {
+  Ident,
+  Index,
+  StrLit,
+  "INT" => arena.alloc_v(Expr::ILit(strtoi(<>))),
+  "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>))),
+  "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
+  
+  "(" <e:Expr> ")" => e,
+}
+
+// TODO: LVal and FileLike may not be needed
+LVal: &'a Expr<'a, 'a, &'a str> = {
+    Ident,
+    Col,
+    Index,
+}
+
+FileLike: &'a Expr<'a, 'a, &'a str> = {
+    StrLit,
+    Ident,
+}
+
+extern {
+  type Location = usize;
+  type Error = lexer::Error;
+  enum Tok<'a> {
+      "INT" => Tok::ILit(<&'a str>),
+      "FLOAT" => Tok::FLit(<&'a str>),
+      "IDENT" => Tok::Ident(<&'a str>),
+      "STRLIT" => Tok::StrLit(<&'a str>),
+      "PATLIT" => Tok::PatLit(<&'a str>),
+      "BEGIN" =>  Tok::Begin,
+      "END" =>  Tok::End,
+      "break" =>  Tok::Break,
+      "continue" =>  Tok::Continue,
+      "for" =>  Tok::For,
+      "if" =>  Tok::If,
+      "else" => Tok::Else,
+      "print" =>  Tok::Print,
+      "while" =>  Tok::While,
+      "do" =>  Tok::Do,
+      "{" =>  Tok::LBrace,
+      "}" =>  Tok::RBrace,
+      "[" =>  Tok::LBrack,
+      "]" =>  Tok::RBrack,
+      "(" =>  Tok::LParen,
+      ")" =>  Tok::RParen,
+      "getline" =>  Tok::Getline,
+      "=" =>  Tok::Assign,
+      "+" =>  Tok::Add,
+      "+=" =>  Tok::AddAssign,
+      "-" =>  Tok::Sub,
+      "-=" =>  Tok::SubAssign,
+      "*" =>  Tok::Mul,
+      "*=" =>  Tok::MulAssign,
+      "/" =>  Tok::Div,
+      "/=" =>  Tok::DivAssign,
+      "%" =>  Tok::Mod,
+      "%=" =>  Tok::ModAssign,
+      "~" =>  Tok::Match,
+      "!~" =>  Tok::NotMatch,
+      "==" =>  Tok::EQ,
+      "<" =>  Tok::LT,
+      "<=" =>  Tok::LTE,
+      ">" =>  Tok::GT,
+      "--" =>  Tok::Decr,
+      "++" =>  Tok::Incr,
+      ">=" =>  Tok::GTE,
+      ">>" =>  Tok::Append,
+      ";" =>  Tok::Semi,
+      "$" => Tok::Dollar,
+      "\n" =>  Tok::Newline,
+      "," =>  Tok::Comma,
+      "!" => Tok::Not,
+      "in" => Tok::In,
+  }
+}
