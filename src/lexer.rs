@@ -355,6 +355,7 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct Error {
     pub location: usize,
     pub desc: &'static str,

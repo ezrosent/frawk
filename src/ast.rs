@@ -19,13 +19,13 @@ static_map!(
 );
 
 pub struct Prog<'a, 'b, I> {
-    begin: Option<&'a Stmt<'a, 'b, I>>,
-    end: Option<&'a Stmt<'a, 'b, I>>,
-    pats: Vec<(Option<&'a Expr<'a, 'b, I>>, Option<&'a Stmt<'a, 'b, I>>)>,
+    pub begin: Option<&'a Stmt<'a, 'b, I>>,
+    pub end: Option<&'a Stmt<'a, 'b, I>>,
+    pub pats: Vec<(Option<&'a Expr<'a, 'b, I>>, Option<&'a Stmt<'a, 'b, I>>)>,
 }
 
 impl<'a, 'b, I> Prog<'a, 'b, I> {
-    fn desugar<'outer>(&self, arena: &'a Arena<'outer>) -> Stmt<'a, 'b, I> {
+    pub(crate) fn desugar<'outer>(&self, arena: &'a Arena<'outer>) -> Stmt<'a, 'b, I> {
         use {self::Binop::*, self::Expr::*, Stmt::*};
         let mut res = vec![];
 

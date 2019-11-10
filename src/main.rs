@@ -34,12 +34,45 @@ use petgraph::dot;
 
 lalrpop_mod!(syntax);
 
+fn parse_prog<'a, 'inp, 'outer>(
+    prog: &'inp str,
+    a: &'a arena::Arena<'outer>,
+) -> &'a ast::Stmt<'a, 'a, &'a str> {
+    let prog = a.alloc_str(prog);
+    let lexer = lexer::Tokenizer::new(prog);
+    let mut buf = Vec::new();
+    let parser = syntax::ProgParser::new();
+    match parser.parse(a, &mut buf, lexer) {
+        Ok(program) => {
+            let program: ast::Prog<'a, 'a, &'a str> = program;
+            a.alloc_v(program.desugar(a))
+        }
+        Err(e) => panic!(
+            "failed to parse program:\n======\n{}\n=====\nError: {:?}",
+            prog, e
+        ),
+    }
+}
+
 // TODO: put jemalloc behind a feature flag
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
     let a = arena::Arena::default();
+    let ast0 = parse_prog(
+        r#"BEGIN {
+    x=1
+    y=2; z=3;
+    m[x]+=5;
+    for (j in m) {
+        if (y) {
+            z++
+        }
+    }}"#,
+        &a,
+    );
+    eprintln!("{:?}", ast0);
     let ast1: &ast::Stmt<&'static str> = {
         use ast::{Binop::*, Expr::*, Stmt::*};
         a.alloc(|| {

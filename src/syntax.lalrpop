@@ -1,65 +1,112 @@
 use crate::{
   arena::Arena,
-  ast::{Expr, Stmt, Binop, Unop},
+  ast::{Expr, Stmt, Binop, Unop, Prog},
   runtime::{Int, Float, strton::{strtoi,strtod}},
   lexer::{self, Tok},
 };
 
+// TODO: function calls. Hopefully we do not need to modify the lexer for that, but we may...
+// TODO: rationalize handling of semicolons and newlines. We are probably missing some things here,
+//       but that will become clearer over time.
 grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>);
+
+pub Prog: Prog<'a,'a,&'a str> = {
+    <begin:Begin?> <pats:PatAction*> <sa:Expr?> <end:End?> =>
+        Prog {
+            begin,
+            end,
+            pats: {
+                let mut pats = pats;
+                if let Some(sa) = sa {
+                    pats.push((Some(sa), None));
+                }
+                pats
+            }
+        }
+}
+
+Begin: &'a Stmt<'a,'a,&'a str> = {
+    "BEGIN" <Block> => <>
+}
+
+End: &'a Stmt<'a,'a,&'a str> = {
+    "END" <Block> => <>
+}
+
+PatAction: (Option<&'a Expr<'a,'a,&'a str>>, Option<&'a Stmt<'a,'a,&'a str>>) = {
+    <p:Expr?> <b:Block> => (p, Some(b))
+}
 
 pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
     "if" "(" <cond:Expr> ")" <s1:BaseStmt> "else" <s2:Stmt> => arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
     "if" "(" <cond:Expr> ")" <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
     "do" <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
     "while" "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(cond, body)),
-    // TODO: These should probably all be Exprs
-    "for" "(" <init: OptStmtSemi> <cond:OptExprSemi> <update:OptStmtRParen> <body:BaseStmt> => 
-        arena.alloc_v(Stmt::For(init, cond, update, body)),
+    "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> ")" <body:BaseStmt> =>
+        arena.alloc_v(Stmt::For(
+                init.map(|x| arena.alloc_v(Stmt::Expr(x))),
+                cond,
+                update.map(|x| arena.alloc_v(Stmt::Expr(x))),
+                body
+        )),
+    "for" "(" <id:"IDENT"> "in" <arr:Expr> ")" <body: BaseStmt> =>
+        arena.alloc_v(Stmt::ForEach(id, arr, body)),
+    "print" <pa:PrintArgs?> <re:Redirect?> => arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
+    BaseStmt,
 }
 
-OptStmtSemi: Option<&'a Stmt<'a,'a,&'a str>> = {
-    ";" => None,
-    <s:Stmt> ";" => Some(s),
+Redirect: (&'a Expr<'a, 'a, &'a str>, bool) = {
+    ">" <BaseTerm> => (<>, false),
+    ">>" <BaseTerm> => (<>, true),
 }
 
-OptStmtRParen: Option<&'a Stmt<'a,'a,&'a str>> = {
-    ")" => None,
-    <s:Stmt> ")" => Some(s),
-}
-
-OptExprSemi: Option<&'a Expr<'a,'a,&'a str>> = {
-    ";" => None,
-    <e:Expr> ";" => Some(e),
-}
 
 BaseStmt: &'a Stmt<'a,'a,&'a str> = {
     <e: Expr> => arena.alloc_v(Stmt::Expr(e)),
+    "break" => arena.alloc_v(Stmt::Break),
+    "continue" => arena.alloc_v(Stmt::Continue),
+    Block,
 }
 
+Block: &'a Stmt<'a,'a,&'a str> = {
+    "{" NL <Stmt> "}" => <>,
+    "{" NL  <BlockInner> "}" => arena.alloc_v(Stmt::Block(<>)),
+}
+
+BlockInner: Vec<&'a Stmt<'a,'a,&'a str>> = {
+    <v:(<Stmt> Sep)+> <e:Stmt?> => match e {
+        None => v,
+        Some(e) => {
+            let mut v = v;
+            v.push(e);
+            v
+        }
+    }
+}
+
+PrintArgs: Vec<&'a Expr<'a,'a,&'a str>> = {
+    // To avoid ambiguities with expressions including ">" we jump down the precedence hierarchy
+    // past the comparison operators.
+    <v:(<PrecAdd> ",")+> <e:PrecAdd?> => match e {
+        None => v,
+        Some(e) => {
+            let mut v = v;
+            v.push(e);
+            v
+        }
+    }
+}
+
+NL: () = "\n"*;
 
 Sep: () = {
-    "\n",
-    ";",
+    SepBase+
 }
 
+SepBase: () = { ";", "\n" }
+
 pub(crate) Expr: &'a Expr<'a,'a,&'a str> = {
-    "getline" <into:BaseTerm> "<" <from:BaseTerm> => arena.alloc_v(Expr::Getline{
-        into: Some(into),
-        from: Some(from),
-    }),
-    "getline" "<" <from:BaseTerm> => arena.alloc_v(Expr::Getline{
-        into: None,
-        from: Some(from),
-    }),
-    "getline" <into:BaseTerm> => arena.alloc_v(Expr::Getline{
-        into: Some(into),
-        from: None,
-    }),
-    "getline" => arena.alloc_v(Expr::Getline{
-        into: None,
-        from: None,
-    }),
-    // TODO: figure out how lists work. We need them for both print and for statement blocks.
+    "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
     PrecAsgn
 };
 
@@ -71,6 +118,24 @@ PrecAsgn: &'a Expr<'a,'a,&'a str> = {
     <l: PrecIn> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
     <l: PrecIn> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
     PrecIn
+}
+
+// XXX Replicate the first two layers of the precedence hierarchy to skip "in" expressions to avoid
+// ambiguity between beginning of for loop and foreach loop. This is a hack; we should find a way
+// to tell LALRPOP the right thing here.
+ExprNoIn: &'a Expr<'a,'a,&'a str> = {
+    "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
+    PrecAsgnNoIn
+};
+
+PrecAsgnNoIn: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecMatch> "=" <r: PrecAsgn> => arena.alloc_v(Expr::Assign(l, r)),
+    <l: PrecMatch> "+=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Plus, r)),
+    <l: PrecMatch> "-=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Minus, r)),
+    <l: PrecMatch> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
+    <l: PrecMatch> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
+    <l: PrecMatch> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
+    PrecMatch
 }
 
 PrecIn: &'a Expr<'a,'a,&'a str> = {
@@ -119,7 +184,7 @@ PrecUnop: &'a Expr<'a,'a,&'a str> = {
     PrecInc
 }
 
-PrecInc: &'a Expr<'a,'a,&'a str> = { 
+PrecInc: &'a Expr<'a,'a,&'a str> = {
     <e:PrecFieldRef>"++" => arena.alloc_v(Expr::Inc { is_inc: true, is_post: true, x: e }),
     <e:PrecFieldRef>"--"=> arena.alloc_v(Expr::Inc { is_inc: false, is_post: true, x: e }),
     "++" <e:PrecFieldRef> => arena.alloc_v(Expr::Inc { is_inc: true, is_post: false, x: e }),
@@ -132,12 +197,12 @@ CatBaseTerm: &'a Expr<'a,'a, &'a str> = {
     PrecFieldRef
 }
 
-PrecFieldRef: &'a Expr<'a,'a,&'a str> = { 
+PrecFieldRef: &'a Expr<'a,'a,&'a str> = {
     Col,
-    BaseTerm 
+    BaseTerm
 }
 
-Col: &'a Expr<'a,'a,&'a str> = { 
+Col: &'a Expr<'a,'a,&'a str> = {
     "$" <e:BaseTerm> => arena.alloc_v(Expr::Unop(Unop::Column, e)),
 }
 
@@ -160,20 +225,7 @@ BaseTerm: &'a Expr<'a,'a, &'a str> = {
   "INT" => arena.alloc_v(Expr::ILit(strtoi(<>))),
   "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>))),
   "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
-  
   "(" <e:Expr> ")" => e,
-}
-
-// TODO: LVal and FileLike may not be needed
-LVal: &'a Expr<'a, 'a, &'a str> = {
-    Ident,
-    Col,
-    Index,
-}
-
-FileLike: &'a Expr<'a, 'a, &'a str> = {
-    StrLit,
-    Ident,
 }
 
 extern {
