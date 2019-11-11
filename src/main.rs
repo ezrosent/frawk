@@ -47,10 +47,15 @@ fn parse_prog<'a, 'inp, 'outer>(
             let program: ast::Prog<'a, 'a, &'a str> = program;
             a.alloc_v(program.desugar(a))
         }
-        Err(e) => panic!(
-            "failed to parse program:\n======\n{}\n=====\nError: {:?}",
-            prog, e
-        ),
+        Err(e) => {
+            let mut ix = 0;
+            let mut msg: String = "failed to parse program:\n======\n".into();
+            for line in prog.lines() {
+                msg.push_str(format!("[{:3}] {}\n", ix, line).as_str());
+                ix += line.len() + 1;
+            }
+            panic!("{}=====\nError: {:?}", msg, e)
+        }
     }
 }
 
@@ -60,6 +65,8 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
     let a = arena::Arena::default();
+    let ast3 = parse_prog(r#" { FS=","; print x, y, z > "/tmp/x"; }"#, &a);
+    eprintln!("{:?}", ast3);
     let ast0 = parse_prog(
         r#"BEGIN {
     x=1
@@ -69,7 +76,9 @@ fn main() {
         if (y) {
             z++
         }
-    }}"#,
+    }
+    }
+    { print x, y, z >> "/tmp/x"}"#,
         &a,
     );
     eprintln!("{:?}", ast0);
