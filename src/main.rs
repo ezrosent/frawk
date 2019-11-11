@@ -64,7 +64,7 @@ fn parse_prog<'a, 'inp, 'outer>(
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
-    // TODO: develop a test harness that maps program text => stdout.
+    // TODO: develop a test harness that maps program text, stdin => stdout.
     // TODO: add tests, debug
     let a = arena::Arena::default();
     let ast3 = parse_prog(r#" { FS=","; print x, y, z > "/tmp/x"; }"#, &a);
@@ -74,6 +74,8 @@ fn main() {
     x=1
     y=2; z=3;
     m[x]+=5;
+
+
     for (j in m) {
         if (y) {
             z++
