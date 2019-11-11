@@ -83,69 +83,6 @@ fn main() {
     { print x, y, z >> "/tmp/x"}"#,
         &a,
     );
-    // let ast1: &ast::Stmt<&'static str> = {
-    //     use ast::{Binop::*, Expr::*, Stmt::*};
-    //     a.alloc(|| {
-    //         Block(vec![
-    //             a.alloc(|| Expr(a.alloc(|| Assign(a.alloc(|| Var("i")), a.alloc(|| ILit(1)))))),
-    //             a.alloc(|| {
-    //                 Expr(a.alloc(|| {
-    //                     Assign(
-    //                         a.alloc(|| Var("j")),
-    //                         a.alloc(|| Binop(Plus, a.alloc(|| Var("i")), a.alloc(|| Var("j")))),
-    //                     )
-    //                 }))
-    //             }),
-    //             a.alloc(|| {
-    //                 If(
-    //                     a.alloc(|| Var("i")),
-    //                     a.alloc(|| {
-    //                         Expr(a.alloc(|| {
-    //                             AssignOp(a.alloc(|| Var("i")), Mult, a.alloc(|| FLit(2.0)))
-    //                         }))
-    //                     }),
-    //                     None,
-    //                 )
-    //             }),
-    //             a.alloc(|| {
-    //                 Expr(a.alloc(|| {
-    //                     AssignOp(
-    //                         a.alloc(|| {
-    //                             a.alloc(|| Index(a.alloc(|| Var("z")), a.alloc(|| FLit(0.0))))
-    //                         }),
-    //                         Plus,
-    //                         a.alloc(|| StrLit("23")),
-    //                     )
-    //                 }))
-    //             }),
-    //             a.alloc(|| {
-    //                 ForEach(
-    //                     "x",
-    //                     a.alloc(|| Var("z")),
-    //                     a.alloc(|| {
-    //                         Print(
-    //                             vec![
-    //                                 a.alloc(|| Var("x")),
-    //                                 a.alloc(|| StrLit(" SEP ")),
-    //                                 a.alloc(|| Var("i")),
-    //                             ],
-    //                             None,
-    //                         )
-    //                     }),
-    //                 )
-    //             }),
-    //             // Creates an error
-    //             // a.alloc(|| {
-    //             //     Print(
-    //             //         vec![
-    //             //             a.alloc(|| Binop(Ok(Plus), a.alloc(|| Var("z")), a.alloc(|| Var("z"))))
-    //             //         ],
-    //             //         None,
-    //             //     )
-    //             // }),
-    //         ])
-    //     })
-    // };
     let ast2 = cfg::Context::from_stmt(ast1).expect("ast1 must be valid");
     use common::NodeIx;
     for e in ast2.cfg().edges(NodeIx::new(0)) {
