@@ -1,4 +1,6 @@
 //! This module includes some utility functions for running AWK programs from Rust code.
+//!
+//! TODO: make this test-only
 use crate::{arena, ast, cfg, common::Result, compile, lexer, syntax};
 
 type Stmt<'a> = &'a ast::Stmt<'a, 'a, &'a str>;
