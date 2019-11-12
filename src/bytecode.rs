@@ -294,6 +294,7 @@ impl<'a> Interp<'a> {
         instrs: Vec<Instr<'a>>,
         regs: impl Fn(compile::Ty) -> usize,
         stdin: impl std::io::Read + 'static,
+        stdout: impl std::io::Write + 'static,
     ) -> Interp<'a> {
         use compile::Ty::*;
         Interp {
@@ -307,7 +308,7 @@ impl<'a> Interp<'a> {
             line: "".into(),
             split_line: LazyVec::new(),
             regexes: Default::default(),
-            write_files: Default::default(),
+            write_files: runtime::FileWrite::new(stdout),
             read_files: runtime::FileRead::new(stdin),
 
             maps_int_float: default_of(regs(MapIntFloat)),

@@ -189,19 +189,17 @@ impl RegexCache {
 
 pub(crate) struct FileWrite {
     files: Registry<io::BufWriter<File>>,
-    stdout: io::BufWriter<io::Stdout>,
-}
-
-impl Default for FileWrite {
-    fn default() -> FileWrite {
-        FileWrite {
-            files: Default::default(),
-            stdout: io::BufWriter::new(io::stdout()),
-        }
-    }
+    stdout: Box<dyn io::Write>,
 }
 
 impl FileWrite {
+    pub(crate) fn new(w: impl io::Write + 'static) -> FileWrite {
+        let stdout: Box<dyn io::Write> = Box::new(w);
+        FileWrite {
+            files: Default::default(),
+            stdout,
+        }
+    }
     pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
         if let Err(e) = s.with_str(|s| self.stdout.write_all(s.as_bytes())) {
             err!("failed to write to stdout (stdout closed?): {}", e)

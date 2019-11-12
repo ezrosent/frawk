@@ -592,7 +592,10 @@ impl<'a> Instrs<'a> {
 
 pub(crate) fn bytecode<'a, 'b>(
     ctx: &cfg::Context<'a, &'b str>,
+    // default to std::io::stdin()
     rdr: impl std::io::Read + 'static,
+    // default to std::io::BufWriter::new(std::io::stdout())
+    writer: impl std::io::Write + 'static,
 ) -> Result<Interp<'a>> {
     let mut instrs: Instrs<'a> = Instrs(Vec::new());
     let mut gen = Generator {
@@ -708,5 +711,6 @@ pub(crate) fn bytecode<'a, 'b>(
         instrs.into_vec(),
         |ty| gen.reg_counts[ty as usize] as usize,
         rdr,
+        writer,
     ))
 }
