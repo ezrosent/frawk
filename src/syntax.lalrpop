@@ -26,15 +26,15 @@ pub Prog: Prog<'a,'a,&'a str> = {
 }
 
 Begin: &'a Stmt<'a,'a,&'a str> = {
-    "BEGIN" <Block> NL => <>
+    "BEGIN" <Block> => <>
 }
 
 End: &'a Stmt<'a,'a,&'a str> = {
-    "END" <Block> NL => <>
+    "END" <Block> => <>
 }
 
 PatAction: (Option<&'a Expr<'a,'a,&'a str>>, Option<&'a Stmt<'a,'a,&'a str>>) = {
-    <p:Expr?> <b:Block> NL => (p, Some(b))
+    <p:Expr?> <b:Block> => (p, Some(b))
 }
 
 pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
@@ -62,18 +62,19 @@ Redirect: (&'a Expr<'a, 'a, &'a str>, bool) = {
 
 
 BaseStmt: &'a Stmt<'a,'a,&'a str> = {
-    <e: Expr>  => arena.alloc_v(Stmt::Expr(e)),
-    "break"  => arena.alloc_v(Stmt::Break),
+    <e: Expr> => arena.alloc_v(Stmt::Expr(e)),
+    "break" => arena.alloc_v(Stmt::Break),
     "continue" => arena.alloc_v(Stmt::Continue),
     Block,
 }
 
 Block: &'a Stmt<'a,'a,&'a str> = {
-    "{" NL <BlockInner> "}" => arena.alloc_v(Stmt::Block(<>)),
+    "{" NL <Stmt> "}" => <>,
+    "{" NL  <BlockInner> "}" => arena.alloc_v(Stmt::Block(<>)),
 }
 
 BlockInner: Vec<&'a Stmt<'a,'a,&'a str>> = {
-    <v:(<Stmt> Sep)*> <e:Stmt?> => match e {
+    <v:(<Stmt> Sep)+> <e:Stmt?> => match e {
         None => v,
         Some(e) => {
             let mut v = v;
@@ -86,6 +87,7 @@ BlockInner: Vec<&'a Stmt<'a,'a,&'a str>> = {
 PrintArgs: Vec<&'a Expr<'a,'a,&'a str>> = {
     // To avoid ambiguities with expressions including ">" we jump down the precedence hierarchy
     // past the comparison operators.
+    <PrecAdd> => vec![<>],
     <v:(<PrecAdd> ",")+> <e:PrecAdd?> => match e {
         None => v,
         Some(e) => {
@@ -98,12 +100,10 @@ PrintArgs: Vec<&'a Expr<'a,'a,&'a str>> = {
 
 NL: () = "\n"*;
 
-#[inline]
 Sep: () = {
     SepBase+
 }
 
-#[inline]
 SepBase: () = { ";", "\n" }
 
 pub(crate) Expr: &'a Expr<'a,'a,&'a str> = {
