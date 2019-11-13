@@ -149,6 +149,10 @@ impl<'a> Instrs<'a> {
     // Move src into dst at type Ty.
     fn mov(&mut self, dst_reg: u32, src_reg: u32, ty: Ty) -> Result<()> {
         use Ty::*;
+        // XXX: we may want to remove this and plumb unused through in a more principled way.
+        if dst_reg == u32::max_value() || src_reg == u32::max_value() {
+            return Ok(());
+        }
         let res = match ty {
             Int => Instr::MovInt(dst_reg.into(), src_reg.into()),
             Float => Instr::MovFloat(dst_reg.into(), src_reg.into()),
