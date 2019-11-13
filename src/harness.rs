@@ -5,7 +5,7 @@ use crate::{arena, ast, cfg, common::Result, compile, lexer, syntax};
 
 type Stmt<'a> = &'a ast::Stmt<'a, 'a, &'a str>;
 
-pub(crate) fn run_program(prog: &str, stdin: impl Into<String>) -> Result<String> {
+pub(crate) fn run_program(prog: &str, stdin: impl Into<String>) -> Result<(String, String)> {
     let a = arena::Arena::default();
     let stmt = parse_program(prog, &a)?;
     run_stmt(stmt, stdin)
@@ -20,10 +20,7 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     let mut buf = Vec::new();
     let parser = syntax::ProgParser::new();
     match parser.parse(a, &mut buf, lexer) {
-        Ok(program) => {
-            let program: ast::Prog<'a, 'a, &'a str> = program;
-            Ok(a.alloc_v(program.desugar(a)))
-        }
+        Ok(program) => Ok(a.alloc_v(program.desugar(a))),
         Err(e) => {
             let mut ix = 0;
             let mut msg: String = "failed to parse program:\n======\n".into();
@@ -36,7 +33,7 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     }
 }
 
-pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<String> {
+pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<(String, String)> {
     use std::cell::RefCell;
     use std::io;
     use std::rc::Rc;
@@ -53,16 +50,21 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<S
     let ctx = cfg::Context::from_stmt(stmt)?;
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
-    {
+    let instrs = {
+        let mut instrs = String::default();
         let mut interp = compile::bytecode(&ctx, std::io::Cursor::new(stdin), stdout.clone())?;
-        interp.run()?
+        for (i, inst) in interp.instrs().iter().enumerate() {
+            instrs.push_str(format!("[{:2}] {:?}\n", i, inst).as_str());
+        }
+        interp.run()?;
+        instrs
     };
     let v = match Rc::try_unwrap(stdout.0) {
         Ok(v) => v.into_inner(),
         Err(rc) => rc.borrow().clone(),
     };
     match String::from_utf8(v) {
-        Ok(s) => Ok(s),
+        Ok(s) => Ok((s, instrs)),
         Err(e) => err!("program produced invalid unicode: {}", e),
     }
 }
@@ -80,12 +82,19 @@ mod tests {
             fn $desc() {
                 let out = run_program($e, $inp);
                 match out {
-                    Ok(out) => assert_eq!(out, $out),
+                    Ok((out, instrs)) => {
+                        let expected = $out;
+                        assert_eq!(
+                            out, expected,
+                            "wanted {}, got {}. Bytecode:\n{}",
+                            expected, out, instrs
+                        );
+                    }
                     Err(e) => panic!("failed to run program: {}", e),
                 }
             }
         };
     }
 
-    test_program!(single_stmt, r#"{print "hello"}"#, "hello\n");
+    test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
 }

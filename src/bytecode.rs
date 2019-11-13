@@ -972,6 +972,16 @@ trait Get<T> {
     fn get_mut(&mut self, r: Reg<T>) -> &mut T;
 }
 
+fn _dbg_check_index<T>(desc: &str, v: &Vec<T>, r: usize) {
+    assert!(
+        r < v.len(),
+        "[{}] index {} is out of bounds (len={})",
+        desc,
+        r,
+        v.len()
+    );
+}
+
 #[inline]
 fn index<'a, T>(v: &'a Vec<T>, reg: &Reg<T>) -> &'a T {
     &v[reg.index()]
@@ -986,9 +996,21 @@ macro_rules! impl_get {
         // TODO(ezr): test, then benchmark with get_unchecked()
         impl<'a> Get<$t> for Interp<'a> {
             fn get(&self, r: Reg<$t>) -> &$t {
+                #[cfg(debug_assertions)]
+                _dbg_check_index(
+                    concat!(stringify!($t), "_", stringify!($fld)),
+                    &self.$fld,
+                    r.index(),
+                );
                 index(&self.$fld, &r)
             }
             fn get_mut(&mut self, r: Reg<$t>) -> &mut $t {
+                #[cfg(debug_assertions)]
+                _dbg_check_index(
+                    concat!(stringify!($t), "_", stringify!($fld)),
+                    &self.$fld,
+                    r.index(),
+                );
                 index_mut(&mut self.$fld, &r)
             }
         }
