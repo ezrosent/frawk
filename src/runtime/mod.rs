@@ -103,8 +103,8 @@ impl<'a> Default for Variables<'a> {
             argv: Default::default(),
             fs: "[ \t]+".into(),
             rs: "\n".into(),
-            nf: 0,
             nr: 0,
+            nf: 0,
             filename: Default::default(),
         }
     }
