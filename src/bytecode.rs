@@ -934,7 +934,7 @@ impl<'a> Interp<'a> {
                         let file = index(&self.strs, file);
                         match self
                             .regexes
-                            .get_line(file, &self.vars.fs, &mut self.read_files)
+                            .get_line(file, &self.vars.rs, &mut self.read_files)
                         {
                             Ok(l) => *self.get_mut(dst) = l,
                             Err(_) => *self.get_mut(dst) = "".into(),
@@ -943,15 +943,13 @@ impl<'a> Interp<'a> {
                     ReadErrStdin(dst) => {
                         let dst = *dst;
                         let res = self.read_files.read_err_stdin();
-                        eprintln!("err={}", res);
                         *self.get_mut(dst) = res;
                     }
                     NextLineStdin(dst) => {
                         let dst = *dst;
                         let res = self
                             .regexes
-                            .get_line_stdin(&self.vars.fs, &mut self.read_files)?;
-                        eprintln!("line={:?}", res);
+                            .get_line_stdin(&self.vars.rs, &mut self.read_files)?;
                         *self.get_mut(dst) = res;
                     }
                     JmpIf(cond, lbl) => {
@@ -986,6 +984,8 @@ fn _dbg_check_index<T>(desc: &str, v: &Vec<T>, r: usize) {
     );
 }
 
+// TODO: test, then benchmark with get_unchecked()
+
 #[inline]
 fn index<'a, T>(v: &'a Vec<T>, reg: &Reg<T>) -> &'a T {
     &v[reg.index()]
@@ -997,7 +997,6 @@ fn index_mut<'a, T>(v: &'a mut Vec<T>, reg: &Reg<T>) -> &'a mut T {
 
 macro_rules! impl_get {
     ($t:ty, $fld:ident) => {
-        // TODO(ezr): test, then benchmark with get_unchecked()
         impl<'a> Get<$t> for Interp<'a> {
             fn get(&self, r: Reg<$t>) -> &$t {
                 #[cfg(debug_assertions)]

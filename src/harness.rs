@@ -48,7 +48,8 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<(
         }
     }
     let ctx = cfg::Context::from_stmt(stmt)?;
-    eprintln!("{}", petgraph::dot::Dot::new(ctx.cfg()));
+    // TODO remove commented-out eprintln
+    // eprintln!("{}", petgraph::dot::Dot::new(ctx.cfg()));
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
     let instrs = {
@@ -57,7 +58,7 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<(
         for (i, inst) in interp.instrs().iter().enumerate() {
             instrs.push_str(format!("[{:2}] {:?}\n", i, inst).as_str());
         }
-        eprintln!("bcode=\n{}", instrs);
+        // eprintln!("bcode=\n{}", instrs);
         interp.run()?;
         instrs
     };
@@ -110,11 +111,23 @@ mod tests {
         factorial_read_line,
         r#"{
 target=$1
-fact=0
-for (i=1; i<target; i++) fact *= i
+fact=1
+for (i=1; i<=target; i++) fact *= i
 print fact
 }"#,
-        "120\n",
-        "5\n"
+        "24\n120\n",
+        "4\n5\n"
     );
+
+    // TODO more tests
+    // * do/while, while loops
+    // * Maps
+    //   - print out all members
+    //   - incrementing fields in a map
+    //   - Do above for a mixture of key and value types,
+    //     for string-keyed maps, use mixture of integers, floats
+    //     in literals.
+    // * All operators, even if the example is simple. Pay close attention to concatenation.
+    // * Splitting.
+    // * Matching.
 }
