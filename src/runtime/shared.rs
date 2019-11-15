@@ -6,10 +6,8 @@
 /// types without internal references to non-'static members. This
 /// simplification also allows us to have the `base` value be a `dyn
 /// Any`, which simplifies the APIs considerably.
-use smallvec::SmallVec;
 use std::any::Any;
 use std::fmt;
-use std::iter::FromIterator;
 use std::rc::Rc;
 
 pub(crate) struct Shared<T: ?Sized> {
@@ -51,16 +49,6 @@ impl<'a, 'b> IterRefFn<'a, str, str> for &'b regex::Regex {
 }
 
 impl<T: ?Sized + 'static> Shared<T> {
-    pub(crate) fn extend_slice_iter<R: ?Sized + 'static>(
-        &self,
-        f: impl for<'a> IterRefFn<'a, T, R>,
-    ) -> SharedSlice<R> {
-        SharedSlice {
-            base: self.base.clone(),
-            trans: Rc::from_iter(f.invoke(self.get()).map(|x| x as *const R)),
-        }
-    }
-
     pub(crate) fn shared_iter<'b, R: ?Sized + 'static>(
         &'b self,
         f: impl for<'a> IterRefFn<'a, T, R> + 'b,
@@ -112,47 +100,6 @@ impl<T: ?Sized + 'static> Shared<T> {
         };
         let base = self.base.clone();
         Some(Shared { base, trans })
-    }
-}
-
-pub(crate) struct SharedSlice<T: ?Sized> {
-    base: Rc<dyn Any>,
-    trans: Rc<[*const T]>,
-}
-
-impl<T: ?Sized> Clone for SharedSlice<T> {
-    fn clone(&self) -> SharedSlice<T> {
-        SharedSlice {
-            base: self.base.clone(),
-            trans: self.trans.clone(),
-        }
-    }
-}
-
-impl<T: ?Sized + 'static> SharedSlice<T> {
-    pub(crate) fn len(&self) -> usize {
-        self.trans.len()
-    }
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        self.trans.iter().map(|x| unsafe { &**x })
-    }
-    pub(crate) fn iter_shared(&self) -> impl Iterator<Item = Shared<T>> + '_ {
-        let base = self.base.clone();
-        self.trans.iter().map(move |x| Shared {
-            base: base.clone(),
-            trans: *x,
-        })
-    }
-
-    pub(crate) fn get(&self, i: usize) -> Option<&T> {
-        self.trans.get(i).map(|x| unsafe { &**x })
-    }
-
-    pub(crate) fn get_shared(&self, i: usize) -> Option<Shared<T>> {
-        self.trans.get(i).map(|x| Shared {
-            base: self.base.clone(),
-            trans: *x,
-        })
     }
 }
 

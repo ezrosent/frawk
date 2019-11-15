@@ -48,6 +48,7 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<(
         }
     }
     let ctx = cfg::Context::from_stmt(stmt)?;
+    eprintln!("{}", petgraph::dot::Dot::new(ctx.cfg()));
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
     let instrs = {
@@ -56,6 +57,7 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<(
         for (i, inst) in interp.instrs().iter().enumerate() {
             instrs.push_str(format!("[{:2}] {:?}\n", i, inst).as_str());
         }
+        eprintln!("bcode=\n{}", instrs);
         interp.run()?;
         instrs
     };
@@ -84,11 +86,7 @@ mod tests {
                 match out {
                     Ok((out, instrs)) => {
                         let expected = $out;
-                        assert_eq!(
-                            out, expected,
-                            "wanted {}, got {}. Bytecode:\n{}",
-                            expected, out, instrs
-                        );
+                        assert_eq!(out, expected, "Bytecode:\n{}", instrs);
                     }
                     Err(e) => panic!("failed to run program: {}", e),
                 }
@@ -97,4 +95,26 @@ mod tests {
     }
 
     test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
+    test_program!(
+        factorial,
+        r#"BEGIN {
+    fact=1
+    for (i=1; i<7; i++) {
+      fact *= i
+    }
+    print fact
+}"#,
+        "720\n"
+    );
+    test_program!(
+        factorial_read_line,
+        r#"{
+target=$1
+fact=0
+for (i=1; i<target; i++) fact *= i
+print fact
+}"#,
+        "120\n",
+        "5\n"
+    );
 }

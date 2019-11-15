@@ -141,7 +141,7 @@ PrecAsgnNoIn: &'a Expr<'a,'a,&'a str> = {
 
 PrecIn: &'a Expr<'a,'a,&'a str> = {
     <l: PrecMatch> "in" <r: PrecMatch> => panic!("we have not yet wired in `in`"),
-    PrecAdd,
+    PrecMatch,
 }
 
 // This is where we would add ?: || &&
