@@ -568,6 +568,7 @@ impl<'a> Interp<'a> {
                         if col == 0 {
                             self.split_line.clear();
                             self.line = self.get(*src).clone();
+                            self.vars.nf = -1;
                             break cur + 1;
                         }
                         if self.split_line.len() == 0 {
@@ -576,6 +577,7 @@ impl<'a> Interp<'a> {
                                 &self.line,
                                 &mut self.split_line,
                             )?;
+                            self.vars.nf = self.split_line.len() as Int;
                         }
                         self.split_line
                             .insert(col as usize - 1, self.get(*src).clone());
@@ -597,6 +599,7 @@ impl<'a> Interp<'a> {
                                 &self.line,
                                 &mut self.split_line,
                             )?;
+                            self.vars.nf = self.split_line.len() as Int;
                         }
                         let res = self
                             .split_line
@@ -779,7 +782,17 @@ impl<'a> Interp<'a> {
                     LoadVarInt(dst, var) => {
                         let i = match var {
                             ARGC => self.vars.argc,
-                            NF => self.vars.nf,
+                            NF => {
+                                if self.split_line.len() == 0 {
+                                    self.regexes.split_regex(
+                                        &self.vars.fs,
+                                        &self.line,
+                                        &mut self.split_line,
+                                    )?;
+                                    self.vars.nf = self.split_line.len() as Int;
+                                }
+                                self.vars.nf
+                            }
                             NR => self.vars.nr,
                             FS | RS | FILENAME | ARGV => unreachable!(),
                         };

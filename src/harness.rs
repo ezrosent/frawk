@@ -112,7 +112,7 @@ mod tests {
         r#"{
 target=$1
 fact=1
-for (i=1; i<=target; i++) fact *= i
+for (i=1; i<=target; ++i) fact *= i
 print fact
 }"#,
         "24\n120\n",
