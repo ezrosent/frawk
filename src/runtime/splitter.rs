@@ -64,7 +64,16 @@ impl<R: Read> Reader<R> {
         Ok(res)
     }
     pub(crate) fn read_state(&self) -> i64 {
-        self.state as i64
+        match self.state {
+            ReaderState::OK => self.state as i64,
+            ReaderState::ERROR | ReaderState::EOF => {
+                if self.get().len() == 0 {
+                    self.state as i64
+                } else {
+                    ReaderState::OK as i64
+                }
+            }
+        }
     }
     pub(crate) fn is_eof(&self) -> bool {
         self.get().len() == 0 && self.state == ReaderState::EOF
@@ -82,9 +91,6 @@ impl<R: Read> Reader<R> {
         }
         self.state = ReaderState::OK;
         let mut prefix: Str = "".into();
-        if self.is_eof() {
-            return "".into();
-        }
         loop {
             // Why this map invocation? Match objects hold a reference to the substring, which
             // makes it harder for us to call mutable methods like advance in the body, so just get
@@ -161,7 +167,7 @@ impl<R: Read> Reader<R> {
         if !done && ulen != bytes_read {
             self.prefix.extend_from_slice(&bytes.get()[ulen..]);
         }
-        if done {
+        if bytes_read == 0 {
             self.state = ReaderState::EOF;
         }
         Ok(utf8)

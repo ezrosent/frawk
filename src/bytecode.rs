@@ -325,6 +325,7 @@ impl<'a> Interp<'a> {
     }
     pub(crate) fn run(&mut self) -> Result<()> {
         use Instr::*;
+        let newline: Str = "\n".into();
         let mut cur = 0;
         'outer: loop {
             // must end with Halt
@@ -628,11 +629,12 @@ impl<'a> Interp<'a> {
                     PrintStdout(txt) => {
                         let txt = index(&self.strs, txt);
                         self.write_files.write_str_stdout(txt)?;
+                        self.write_files.write_str_stdout(&newline)?;
                     }
                     Print(txt, out, append) => {
                         let txt = index(&self.strs, txt);
                         let out = index(&self.strs, out);
-                        self.write_files.write_str(out, txt, *append)?;
+                        self.write_files.write_line(out, txt, *append)?;
                     }
                     LookupIntInt(res, arr, k) => {
                         let arr = index(&self.maps_int_int, arr);
@@ -941,6 +943,7 @@ impl<'a> Interp<'a> {
                     ReadErrStdin(dst) => {
                         let dst = *dst;
                         let res = self.read_files.read_err_stdin();
+                        eprintln!("err={}", res);
                         *self.get_mut(dst) = res;
                     }
                     NextLineStdin(dst) => {
@@ -948,6 +951,7 @@ impl<'a> Interp<'a> {
                         let res = self
                             .regexes
                             .get_line_stdin(&self.vars.fs, &mut self.read_files)?;
+                        eprintln!("line={:?}", res);
                         *self.get_mut(dst) = res;
                     }
                     JmpIf(cond, lbl) => {

@@ -40,7 +40,6 @@ lalrpop_mod!(syntax);
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
-    // TODO: develop a test harness that maps program text, stdin => stdout.
     // TODO: add tests, debug
     let a = arena::Arena::default();
     let ast3 = harness::parse_program(r#" { FS=","; print x, y, z > "/tmp/x"; }"#, &a)

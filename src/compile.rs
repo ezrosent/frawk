@@ -9,6 +9,12 @@ use crate::cfg::{self, is_unused, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{NodeIx, Result};
 use crate::types::{get_types, Scalar, TVar};
 
+// TODO: implement basic "optimizations"
+//    * avoid excessive moves (unless those come from the cfg?)
+//    * don't emit jumps that just point to the next instruction.
+
+const UNUSED: u32 = u32::max_value();
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub(crate) enum Ty {
     Int = 0,
@@ -125,7 +131,7 @@ impl Generator {
         if is_unused(*id) {
             // We should not actually store into the "unused" identifier.
             // TODO: remove this once there's better test coverage and we use more unsafe code.
-            return (!0, Ty::Int);
+            return (UNUSED, Ty::Int);
         }
         match self.registers.entry(*id) {
             Entry::Occupied(o) => o.get().clone(),
@@ -149,8 +155,7 @@ impl<'a> Instrs<'a> {
     // Move src into dst at type Ty.
     fn mov(&mut self, dst_reg: u32, src_reg: u32, ty: Ty) -> Result<()> {
         use Ty::*;
-        // XXX: we may want to remove this and plumb unused through in a more principled way.
-        if dst_reg == u32::max_value() || src_reg == u32::max_value() {
+        if dst_reg == UNUSED || src_reg == UNUSED {
             return Ok(());
         }
         let res = match ty {

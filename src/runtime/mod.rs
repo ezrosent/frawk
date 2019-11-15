@@ -86,7 +86,6 @@ impl<T: Default> LazyVec<T> {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct Variables<'a> {
     pub argc: Int,
     pub argv: IntMap<Str<'a>>,
@@ -95,6 +94,20 @@ pub(crate) struct Variables<'a> {
     pub nf: Int,
     pub nr: Int,
     pub filename: Str<'a>,
+}
+
+impl<'a> Default for Variables<'a> {
+    fn default() -> Variables<'a> {
+        Variables {
+            argc: 0,
+            argv: Default::default(),
+            fs: "[ \t]+".into(),
+            rs: "\n".into(),
+            nf: 0,
+            nr: 0,
+            filename: Default::default(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -200,14 +213,13 @@ impl FileWrite {
             stdout,
         }
     }
-    pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
-        if let Err(e) = s.with_str(|s| self.stdout.write_all(s.as_bytes())) {
-            err!("failed to write to stdout (stdout closed?): {}", e)
-        } else {
-            Ok(())
-        }
-    }
-    pub(crate) fn write_str(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
+
+    fn with_handle(
+        &mut self,
+        append: bool,
+        path: &Str,
+        f: impl FnOnce(&mut io::BufWriter<File>) -> Result<()>,
+    ) -> Result<()> {
         self.files.get_fallible(
             path,
             |s| match std::fs::OpenOptions::new()
@@ -224,14 +236,40 @@ impl FileWrite {
                     e
                 ),
             },
-            |writer| {
-                if let Err(e) = s.with_str(|s| writer.write_all(s.as_bytes())) {
+            f,
+        )
+    }
+
+    pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
+        if let Err(e) = s.with_str(|s| self.stdout.write_all(s.as_bytes())) {
+            err!("failed to write to stdout (stdout closed?): {}", e)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn write_str(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
+        self.with_handle(append, path, |writer| {
+            if let Err(e) = s.with_str(|s| writer.write_all(s.as_bytes())) {
+                err!("failed to write to file: {}", e)
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    pub(crate) fn write_line(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
+        self.with_handle(append, path, |writer| {
+            s.with_str(|s| {
+                if let Err(e) = writer.write_all(s.as_bytes()) {
                     err!("failed to write to file: {}", e)
+                } else if let Err(e) = writer.write_all("\n".as_bytes()) {
+                    err!("failed to write newline to file: {}", e)
                 } else {
                     Ok(())
                 }
-            },
-        )
+            })
+        })
     }
 }
 
