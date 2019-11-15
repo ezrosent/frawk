@@ -52,7 +52,14 @@ impl<'a> Str<'a> {
             Literal(s) => s.len(),
             Boxed(s) => s.len(),
             Line(s) => s.get().len(),
-            Concat(b) => b.len as usize,
+            Concat(b) => {
+                if b.len == u32::max_value() {
+                    self.force();
+                    self.len()
+                } else {
+                    b.len as usize
+                }
+            }
         }
     }
     /// We implement split here directly rather than just use with_str

@@ -22,6 +22,7 @@ pub(crate) struct Reader<R> {
     cur: Shared<str>,
     chunk_size: usize,
     state: ReaderState,
+    last_len: usize,
 }
 
 fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
@@ -59,6 +60,7 @@ impl<R: Read> Reader<R> {
             cur: EMPTY.with(Clone::clone),
             chunk_size,
             state: ReaderState::OK,
+            last_len: 0,
         };
         res.advance(0)?;
         Ok(res)
@@ -67,7 +69,7 @@ impl<R: Read> Reader<R> {
         match self.state {
             ReaderState::OK => self.state as i64,
             ReaderState::ERROR | ReaderState::EOF => {
-                if self.get().len() == 0 {
+                if self.last_len == 0 {
                     self.state as i64
                 } else {
                     ReaderState::OK as i64
@@ -79,6 +81,11 @@ impl<R: Read> Reader<R> {
         self.get().len() == 0 && self.state == ReaderState::EOF
     }
     pub(crate) fn read_line<'a>(&mut self, pat: &Regex) -> Str<'a> {
+        let res = self.read_line_inner(pat);
+        self.last_len = res.len();
+        res
+    }
+    fn read_line_inner<'a>(&mut self, pat: &Regex) -> Str<'a> {
         macro_rules! handle_err {
             ($e:expr) => {
                 if let Ok(e) = $e {
@@ -167,7 +174,7 @@ impl<R: Read> Reader<R> {
         if !done && ulen != bytes_read {
             self.prefix.extend_from_slice(&bytes.get()[ulen..]);
         }
-        if bytes_read == 0 {
+        if done {
             self.state = ReaderState::EOF;
         }
         Ok(utf8)
