@@ -172,6 +172,7 @@ impl Propagator for Function {
 pub(crate) enum Variable {
     ARGC,
     ARGV,
+    OFS,
     FS,
     RS,
     NF,
@@ -188,7 +189,7 @@ impl Variable {
                 key: Scalar::Int,
                 val: Scalar::Str,
             },
-            FS | RS | FILENAME => TVar::Scalar(Scalar::Str),
+            OFS | FS | RS | FILENAME => TVar::Scalar(Scalar::Str),
         }
     }
 }
@@ -207,6 +208,7 @@ static_map!(
     VARIABLES<&'static str, Variable>,
     ["ARGC", Variable::ARGC],
     ["ARGV", Variable::ARGV],
+    ["OFS", Variable::OFS],
     ["FS", Variable::FS],
     ["RS", Variable::RS],
     ["NF", Variable::NF],

@@ -148,6 +148,7 @@ pub(crate) struct Context<'b, I> {
 
     num_idents: usize,
     // variable that holds the FS variable, if needed
+    // TODO add OFS, SUBSEP, etc.
     tmp_fs: Option<Ident>,
 }
 
@@ -291,7 +292,7 @@ where
                             current_open,
                             PrimStmt::AsgnVar(
                                 fs.clone(),
-                                PrimExpr::LoadBuiltin(builtins::Variable::FS),
+                                PrimExpr::LoadBuiltin(builtins::Variable::OFS),
                             ),
                         );
                         PrimVal::Var(fs)
@@ -567,8 +568,14 @@ where
                 if !valid_lhs(x) {
                     return err!("invalid operand for increment operation {:?}", x);
                 };
-                // XXX Somewhat lazy; we emit a laod even if it is a post-increment.
-                let pre = self.convert_expr(x, current_open)?;
+                let pre = if *is_post {
+                    let e = self.convert_expr(x, current_open)?;
+                    let f = self.fresh();
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(f, e));
+                    Some(PrimExpr::Val(PrimVal::Var(f)))
+                } else {
+                    None
+                };
                 let post = self.convert_expr(
                     &ast::Expr::AssignOp(
                         x,
@@ -582,9 +589,9 @@ where
                     current_open,
                 )?;
                 if *is_post {
-                    post
+                    pre.unwrap()
                 } else {
-                    pre
+                    post
                 }
             }
             Getline { from, into } => {
@@ -828,6 +835,9 @@ where
                             .0
                             .push_front(stmt);
                         phis.entry(ident).or_insert(HashSet::default()).insert(d_ix);
+                        if !defsites.contains(&d_ix) {
+                            worklist.insert(d_ix);
+                        }
                     }
                 }
             }

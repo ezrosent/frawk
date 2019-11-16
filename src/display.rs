@@ -118,6 +118,7 @@ impl Display for Variable {
             match self {
                 ARGC => "ARGC",
                 ARGV => "ARGV",
+                OFS => "OFS",
                 FS => "FS",
                 RS => "RS",
                 NF => "NF",

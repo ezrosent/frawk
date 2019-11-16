@@ -48,22 +48,24 @@ impl<'a, 'b, I> Prog<'a, 'b, I> {
             }
         }
 
-        // Wrap the whole thing in a while((getline) > 0) { } statement.
-        res.push(arena.alloc(move || {
-            While(
-                arena.alloc(|| {
-                    Binop(
-                        GT,
-                        arena.alloc(|| Getline {
-                            into: None,
-                            from: None,
-                        }),
-                        arena.alloc(|| ILit(0)),
-                    )
-                }),
-                arena.alloc(move || Block(inner)),
-            )
-        }));
+        if inner.len() > 0 {
+            // Wrap the whole thing in a while((getline) > 0) { } statement.
+            res.push(arena.alloc(move || {
+                While(
+                    arena.alloc(|| {
+                        Binop(
+                            GT,
+                            arena.alloc(|| Getline {
+                                into: None,
+                                from: None,
+                            }),
+                            arena.alloc(|| ILit(0)),
+                        )
+                    }),
+                    arena.alloc(move || Block(inner)),
+                )
+            }));
+        }
 
         if let Some(end) = self.end {
             res.push(end);

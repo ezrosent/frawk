@@ -42,14 +42,14 @@ pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
     "if" "(" <cond:Expr> ")" <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
     "do" <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
     "while" "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(cond, body)),
-    "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> ")" <body:BaseStmt> =>
+    "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> ")" NL <body:BaseStmt> =>
         arena.alloc_v(Stmt::For(
                 init.map(|x| arena.alloc_v(Stmt::Expr(x))),
                 cond,
                 update.map(|x| arena.alloc_v(Stmt::Expr(x))),
                 body
         )),
-    "for" "(" <id:"IDENT"> "in" <arr:Expr> ")" <body: BaseStmt> =>
+    "for" "(" <id:"IDENT"> "in" <arr:Expr> ")" NL <body: BaseStmt> =>
         arena.alloc_v(Stmt::ForEach(id, arr, body)),
     "print" <pa:PrintArgs?> <re:Redirect?> => arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     BaseStmt,
@@ -186,11 +186,11 @@ PrecUnop: &'a Expr<'a,'a,&'a str> = {
 }
 
 PrecInc: &'a Expr<'a,'a,&'a str> = {
-    <e:PrecFieldRef>"++" => arena.alloc_v(Expr::Inc { is_inc: true, is_post: true, x: e }),
-    <e:PrecFieldRef>"--"=> arena.alloc_v(Expr::Inc { is_inc: false, is_post: true, x: e }),
-    "++" <e:PrecFieldRef> => arena.alloc_v(Expr::Inc { is_inc: true, is_post: false, x: e }),
-    "--" <e:PrecFieldRef> => arena.alloc_v(Expr::Inc { is_inc: false, is_post: false, x: e }),
-    PrecFieldRef,
+    <e:CatBaseTerm>"++" => arena.alloc_v(Expr::Inc { is_inc: true, is_post: true, x: e }),
+    <e:CatBaseTerm>"--"=> arena.alloc_v(Expr::Inc { is_inc: false, is_post: true, x: e }),
+    "++" <e:CatBaseTerm> => arena.alloc_v(Expr::Inc { is_inc: true, is_post: false, x: e }),
+    "--" <e:CatBaseTerm> => arena.alloc_v(Expr::Inc { is_inc: false, is_post: false, x: e }),
+    CatBaseTerm,
 }
 
 CatBaseTerm: &'a Expr<'a,'a, &'a str> = {
