@@ -8,7 +8,7 @@
 
 use lazy_static::lazy_static;
 use regex::Regex;
-use smallvec::{ExtendFromSlice, SmallVec};
+use smallvec::SmallVec;
 
 pub(crate) fn strtoi(s: &str) -> i64 {
     strtoi_libc(s)
@@ -27,6 +27,10 @@ fn strtod_libc(s: &str) -> f64 {
     unsafe { libc::strtod(cstr.as_ptr(), std::ptr::null_mut()) as f64 }
 }
 
+// We keep the regex-based implementations around in case we want to use 100% safe rust, or there
+// are portability issues with using libc.
+
+#[allow(unused)]
 fn strtoi_regex(s: &str) -> i64 {
     lazy_static! {
         static ref INT_PATTERN: Regex = Regex::new(r"^[+-]?\d+").unwrap();
@@ -38,6 +42,7 @@ fn strtoi_regex(s: &str) -> i64 {
     }
 }
 
+#[allow(unused)]
 fn strtod_regex(s: &str) -> f64 {
     lazy_static! {
         // Adapted from https://www.regular-expressions.info/floatingpoint.html
@@ -99,10 +104,13 @@ mod tests {
                 let y: f64 = $y;
                 let min = x * 0.99;
                 let max = x * 1.01;
-                match x.signum() {
-                    1.0 => assert!(y >= min && y <= max, "{} is not close enough to {}", x, y),
-                    -1.0 => assert!(y <= min && y >= max, "{} is not close enough to {}", x, y),
-                    _ => panic!("one of the options is NaN!"),
+                let sn = x.signum();
+                if sn == 1.0 {
+                    assert!(y >= min && y <= max, "{} is not close enough to {}", x, y)
+                } else if sn == -1.0 {
+                    assert!(y <= min && y >= max, "{} is not close enough to {}", x, y)
+                } else {
+                    panic!("one of the options is NaN!")
                 }
             }};
         }
@@ -171,29 +179,6 @@ mod tests {
         })
     }
 
-    fn strtoi_sjson(s: &str) -> i64 {
-        use simd_json::value::borrowed::Value;
-        let mut s: String = s.into();
-        let bs = unsafe { s.as_bytes_mut() };
-        let res = match simd_json::to_borrowed_value(bs).unwrap() {
-            Value::F64(f) => f as i64,
-            Value::I64(i) => i,
-            _ => panic!("invalid input"),
-        };
-        res
-    }
-    fn strtod_sjson(s: &str) -> f64 {
-        use simd_json::value::borrowed::Value;
-        let mut s: String = s.into();
-        let bs = unsafe { s.as_bytes_mut() };
-        let res = match simd_json::to_borrowed_value(bs).unwrap() {
-            Value::F64(f) => f,
-            Value::I64(i) => i as f64,
-            _ => panic!("invalid input"),
-        };
-        res
-    }
-
     #[bench]
     fn bench_strtoi_long_regex(b: &mut Bencher) {
         let _ = strtoi_regex("0");
@@ -248,22 +233,5 @@ mod tests {
     #[bench]
     fn bench_strtod_short_libc(b: &mut Bencher) {
         bench_strtod_short(b, strtod_libc)
-    }
-
-    #[bench]
-    fn bench_strtoi_medium_sjson(b: &mut Bencher) {
-        bench_strtoi_medium(b, strtoi_sjson)
-    }
-    #[bench]
-    fn bench_strtoi_short_sjson(b: &mut Bencher) {
-        bench_strtoi_short(b, strtoi_sjson)
-    }
-    #[bench]
-    fn bench_strtod_medium_sjson(b: &mut Bencher) {
-        bench_strtod_medium(b, strtod_sjson)
-    }
-    #[bench]
-    fn bench_strtod_short_sjson(b: &mut Bencher) {
-        bench_strtod_short(b, strtod_sjson)
     }
 }

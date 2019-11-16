@@ -101,6 +101,7 @@ pub enum Binop {
 // TODO add support for "next"; just continue to the toplevel loop?
 // TODO add "delete"
 // TODO add "in" -- maybe not an operator, just a builtin
+// TODO desugaring for "split"
 // TODO add UDFs
 
 static_map!(

@@ -1,7 +1,7 @@
 use crate::{
   arena::Arena,
   ast::{Expr, Stmt, Binop, Unop, Prog},
-  runtime::{Int, Float, strton::{strtoi,strtod}},
+  runtime::strton::{strtoi,strtod},
   lexer::{self, Tok},
 };
 
@@ -38,10 +38,10 @@ PatAction: (Option<&'a Expr<'a,'a,&'a str>>, Option<&'a Stmt<'a,'a,&'a str>>) = 
 }
 
 pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
-    "if" "(" <cond:Expr> ")" <s1:BaseStmt> "else" <s2:Stmt> => arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
-    "if" "(" <cond:Expr> ")" <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
-    "do" <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
-    "while" "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(cond, body)),
+    "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> "else" NL <s2:Stmt> => arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
+    "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
+    "do" NL <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
+    "while" NL "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(cond, body)),
     "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> ")" NL <body:BaseStmt> =>
         arena.alloc_v(Stmt::For(
                 init.map(|x| arena.alloc_v(Stmt::Expr(x))),

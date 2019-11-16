@@ -697,8 +697,12 @@ pub(crate) fn bytecode<'a, 'b>(
                 }
                 None => {
                     is_end = false;
-                    gen.jmps.push(instrs.len());
-                    instrs.push(Instr::Jmp(next.index().into()))
+                    // There's no point issuing an unconditional jump to the next basic block
+                    // because it comes next in the instruction stream.
+                    if next.index() != i + 1 {
+                        gen.jmps.push(instrs.len());
+                        instrs.push(Instr::Jmp(next.index().into()))
+                    }
                 }
             }
         }

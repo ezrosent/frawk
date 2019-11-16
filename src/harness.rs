@@ -151,6 +151,18 @@ print w,z;
         "1 3 5 7 9 11 13 15 17 19\n"
     );
 
+    test_program!(
+        mixed_map,
+        r#"BEGIN {
+m[1]=2
+m["1"]++
+m["hi"]=5
+for (k in m) {
+    print k,k+0,  m[k]
+}}"#,
+        "1 1.0 3\nhi 0.0 5\n"
+    );
+
     // TODO more tests
     // * Maps
     //   - Do above for a mixture of key and value types,
