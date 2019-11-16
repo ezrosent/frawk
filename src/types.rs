@@ -5,7 +5,6 @@ use crate::builtins::Function;
 use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result};
 use hashbrown::{hash_map::Entry, HashMap};
-use smallvec::smallvec;
 
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
@@ -43,7 +42,7 @@ pub(crate) trait Propagator {
 }
 
 mod prop {
-    use super::{smallvec, Function, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
+    use super::{Function, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
     use std::fmt::{self, Debug};
     fn fold_option<'a, T: Clone + 'a>(
         incoming: impl Iterator<Item = &'a T>,
@@ -225,6 +224,9 @@ mod prop {
             self.worklist.push(res);
             res
         }
+
+        // TODO refactor tests so that they do not require this method.
+        #[allow(unused)]
         pub(crate) fn update_rule(&mut self, id: NodeIx, new_rule: P) -> Result<()> {
             if let Some(Node {
                 rule, deps, active, ..

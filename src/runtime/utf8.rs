@@ -4,7 +4,7 @@
 // TODO: support AVX2 or neon?
 use std::str;
 
-pub(crate) fn parse_utf8(mut bs: &[u8]) -> Option<&str> {
+pub(crate) fn parse_utf8(bs: &[u8]) -> Option<&str> {
     if is_utf8(bs) {
         Some(unsafe { str::from_utf8_unchecked(bs) })
     } else {
@@ -77,7 +77,7 @@ fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
     }
 }
 
-pub(crate) fn parse_utf8_clipped(mut bs: &[u8]) -> Option<&str> {
+pub(crate) fn parse_utf8_clipped(bs: &[u8]) -> Option<&str> {
     validate_utf8_clipped(bs).map(|off| unsafe { str::from_utf8_unchecked(&bs[..off]) })
 }
 
@@ -93,10 +93,6 @@ fn validate_utf8_fallback(bs: &[u8]) -> Option<usize> {
             }
         }
     }
-}
-
-fn parse_utf8_fallback(bs: &[u8]) -> Option<&str> {
-    validate_utf8_fallback(bs).map(|off| unsafe { str::from_utf8_unchecked(&bs[..off]) })
 }
 
 pub(crate) fn is_utf8(mut bs: &[u8]) -> bool {
@@ -136,6 +132,9 @@ mod tests {
     use lazy_static::lazy_static;
     use test::{black_box, Bencher};
 
+    fn parse_utf8_fallback(bs: &[u8]) -> Option<&str> {
+        validate_utf8_fallback(bs).map(|off| unsafe { std::str::from_utf8_unchecked(&bs[..off]) })
+    }
     const LEN: usize = 50_000;
 
     lazy_static! {
