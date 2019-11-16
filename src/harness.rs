@@ -49,16 +49,14 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<(
     }
     let ctx = cfg::Context::from_stmt(stmt)?;
     // TODO remove commented-out eprintln
-    // eprintln!("{}", petgraph::dot::Dot::new(ctx.cfg()));
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
     let instrs = {
-        let mut instrs = String::default();
+        let mut instrs = format!("cfg:\n{}\ninstrs:\n", petgraph::dot::Dot::new(ctx.cfg()));
         let mut interp = compile::bytecode(&ctx, std::io::Cursor::new(stdin), stdout.clone())?;
         for (i, inst) in interp.instrs().iter().enumerate() {
             instrs.push_str(format!("[{:2}] {:?}\n", i, inst).as_str());
         }
-        // eprintln!("bcode=\n{}", instrs);
         interp.run()?;
         instrs
     };
@@ -119,11 +117,42 @@ print fact
         "4\n5\n"
     );
 
+    test_program!(
+        summorial_while,
+        r#"BEGIN {
+do {
+    i++;
+    j += i;
+} while( i <= -1)
+print i, j;
+while (w <= 6) {
+z += w++;
+}
+print w,z;
+}"#,
+        "1 1\n7 21\n"
+    );
+
+    test_program!(
+        map_ops,
+        r#"BEGIN {
+        for (i=0; i<10; ++i) m[i]=2*i;
+        for (i in m)
+            m[i]++
+        for (i=0; i<10; ++i) {
+            if (res) {
+                res = res OFS m[i]
+            } else {
+                res = m[i]
+            }
+        }
+        print res
+}"#,
+        "1 3 5 7 9 11 13 15 17 19\n"
+    );
+
     // TODO more tests
-    // * do/while, while loops
     // * Maps
-    //   - print out all members
-    //   - incrementing fields in a map
     //   - Do above for a mixture of key and value types,
     //     for string-keyed maps, use mixture of integers, floats
     //     in literals.

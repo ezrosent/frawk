@@ -762,6 +762,7 @@ impl<'a> Interp<'a> {
                     LoadVarStr(dst, var) => {
                         let s = match var {
                             FS => self.vars.fs.clone(),
+                            OFS => self.vars.ofs.clone(),
                             RS => self.vars.rs.clone(),
                             FILENAME => self.vars.filename.clone(),
                             ARGC | ARGV | NF | NR => unreachable!(),
@@ -774,6 +775,7 @@ impl<'a> Interp<'a> {
                         let s = self.get(src).clone();
                         match var {
                             FS => self.vars.fs = s,
+                            OFS => self.vars.ofs = s,
                             RS => self.vars.rs = s,
                             FILENAME => self.vars.filename = s,
                             ARGC | ARGV | NF | NR => unreachable!(),
@@ -794,7 +796,7 @@ impl<'a> Interp<'a> {
                                 self.vars.nf
                             }
                             NR => self.vars.nr,
-                            FS | RS | FILENAME | ARGV => unreachable!(),
+                            OFS | FS | RS | FILENAME | ARGV => unreachable!(),
                         };
                         let dst = *dst;
                         *self.get_mut(dst) = i;
@@ -806,13 +808,13 @@ impl<'a> Interp<'a> {
                             ARGC => self.vars.argc = s,
                             NF => self.vars.nf = s,
                             NR => self.vars.nr = s,
-                            FS | RS | FILENAME | ARGV => unreachable!(),
+                            OFS | FS | RS | FILENAME | ARGV => unreachable!(),
                         };
                     }
                     LoadVarIntMap(dst, var) => {
                         let arr = match var {
                             ARGV => self.vars.argv.clone(),
-                            ARGC | NF | NR | FS | RS | FILENAME => unreachable!(),
+                            OFS | ARGC | NF | NR | FS | RS | FILENAME => unreachable!(),
                         };
                         let dst = *dst;
                         *self.get_mut(dst) = arr;
@@ -822,7 +824,7 @@ impl<'a> Interp<'a> {
                         let s = self.get(src).clone();
                         match var {
                             ARGV => self.vars.argv = s,
-                            ARGC | NF | NR | FS | RS | FILENAME => unreachable!(),
+                            OFS | ARGC | NF | NR | FS | RS | FILENAME => unreachable!(),
                         };
                     }
                     IterBeginIntInt(dst, arr) => {
