@@ -163,11 +163,41 @@ for (k in m) {
         "1 1.0 3\nhi 0.0 5\n"
     );
 
-    // TODO more tests
-    // * Maps
-    //   - Do above for a mixture of key and value types,
-    //     for string-keyed maps, use mixture of integers, floats
-    //     in literals.
+    test_program!(
+        basic_regex,
+        r#"BEGIN {
+        if (!0) print "not!";
+        if ("hi" ~ /h./) print "yes1"
+        if ("hi" ~ "h.") print "yes2"
+        if ("no" ~ /h./) { } else print "no1"
+        if ("no" !~ /h./) print "yes3"
+        if ("no" !~ /n./) print "no2"
+        if ("0123" ~ /\d+/) print "yes4"
+
+}"#,
+        "not!\nyes1\nyes2\nno1\nyes3\nyes4\n"
+    );
+
+    test_program!(
+        pattern_1,
+        r#"/y.*/"#,
+        "yellow\nyells\nyard\n",
+        "yellow\ndog\nyells\nin\nthe\nyard"
+    );
+
+    test_program!(
+        pattern_2,
+        r#"
+        $1 ~ /\d+/ { print $2; }
+        $1 ~ /blorg.*/ { print $3; }
+        "#,
+        "numbers\nare\nvery\nfun!\n",
+        r#"1 numbers
+        2 are
+        blorgme not very
+        3 fun!"#
+    );
+
     // * All operators, even if the example is simple. Pay close attention to concatenation.
     // * Splitting.
     // * Matching.

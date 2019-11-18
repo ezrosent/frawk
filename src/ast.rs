@@ -102,6 +102,7 @@ pub enum Binop {
 // TODO add "delete"
 // TODO add "in" -- maybe not an operator, just a builtin
 // TODO desugaring for "split"
+// TODO add "close", make cache for regexes LRU.
 // TODO add UDFs
 
 static_map!(

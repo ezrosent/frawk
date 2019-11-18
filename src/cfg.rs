@@ -242,7 +242,15 @@ where
                 current_open
             }
             Print(vs, out) => {
-                debug_assert!(vs.len() > 0);
+                if vs.len() == 0 {
+                    return self.convert_stmt(
+                        &ast::Stmt::Print(
+                            vec![&ast::Expr::Unop(Unop::Column, &ast::Expr::ILit(0))],
+                            out.clone(),
+                        ),
+                        current_open,
+                    );
+                }
                 let out = if let Some((o, append)) = out {
                     let e = self.convert_val(o, current_open)?;
                     Some((e, append))

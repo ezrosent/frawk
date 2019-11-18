@@ -133,7 +133,8 @@ mod tests {
     use test::{black_box, Bencher};
 
     fn parse_utf8_fallback(bs: &[u8]) -> Option<&str> {
-        validate_utf8_fallback(bs).map(|off| unsafe { std::str::from_utf8_unchecked(&bs[..off]) })
+        super::validate_utf8_fallback(bs)
+            .map(|off| unsafe { std::str::from_utf8_unchecked(&bs[..off]) })
     }
     const LEN: usize = 50_000;
 
@@ -149,7 +150,7 @@ mod tests {
         let full = super::parse_utf8_clipped(&bs[..]).expect("full");
         assert_eq!(UTF8.as_str(), full);
         let partial = super::parse_utf8_clipped(&bs[..l - 1]).expect("partial (1)");
-        let partial_fallback = super::parse_utf8_fallback(&bs[..l - 1]).expect("partial (2)");
+        let partial_fallback = parse_utf8_fallback(&bs[..l - 1]).expect("partial (2)");
         assert_eq!(partial, partial_fallback);
     }
 
