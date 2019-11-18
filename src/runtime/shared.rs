@@ -41,6 +41,10 @@ pub(crate) trait IterRefFn<'a, A: 'a + ?Sized, B: 'a + ?Sized> {
     fn invoke(self, a: &'a A) -> Self::I;
 }
 
+// We add a filter on top of Split here to replicate AWK's behavior of stripping any
+// leading fields.
+//
+// TODO: just do a strip on left and right ahead of time using the same pattern.
 pub(crate) struct FilterNonEmpty<I>(I);
 
 impl<'a, I: Iterator<Item = &'a str>> Iterator for FilterNonEmpty<I> {
