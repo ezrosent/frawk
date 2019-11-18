@@ -197,8 +197,16 @@ for (k in m) {
         blorgme not very
         3 fun!"#
     );
-
-    // * All operators, even if the example is simple. Pay close attention to concatenation.
-    // * Splitting.
-    // * Matching.
+    /*
+        test_program!(
+            explicit_split,
+            r#" BEGIN {
+    split("where is all of this going", m1, /[ \t]+/);
+    for (x in m1) print x, m1[x]
+    }"#,
+            "1 where\n2 is\n3 all\n4 of\n5 this\n6 going"
+        );
+    */
+    // TODO test explicit splitting, but first need syntax for function calls.
+    // TODO test more operators
 }
