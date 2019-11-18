@@ -432,7 +432,7 @@ impl<'a> Interp<'a> {
                     Not(res, ir) => {
                         let res = *res;
                         let i = *self.get(*ir);
-                        *self.get_mut(res) = (i != 0) as Int;
+                        *self.get_mut(res) = (i == 0) as Int;
                     }
                     NotStr(res, sr) => {
                         let res = *res;

@@ -11,7 +11,7 @@ use crate::{
 grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>);
 
 pub Prog: Prog<'a,'a,&'a str> = {
-    <begin:Begin?> <pats:PatAction*> <sa:Expr?> <end:End?> =>
+    NL <begin:Begin?> <pats:PatAction*> <sa:Expr?> <end:End?> =>
         Prog {
             begin,
             end,
@@ -34,7 +34,7 @@ End: &'a Stmt<'a,'a,&'a str> = {
 }
 
 PatAction: (Option<&'a Expr<'a,'a,&'a str>>, Option<&'a Stmt<'a,'a,&'a str>>) = {
-    <p:Expr?> <b:Block> => (p, Some(b))
+    <p:Expr?> <b:Block> NL => (p, Some(b))
 }
 
 pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
@@ -51,7 +51,6 @@ pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
         )),
     "for" "(" <id:"IDENT"> "in" <arr:Expr> ")" NL <body: BaseStmt> =>
         arena.alloc_v(Stmt::ForEach(id, arr, body)),
-    "print" <pa:PrintArgs?> <re:Redirect?> => arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     BaseStmt,
 }
 
@@ -63,12 +62,14 @@ Redirect: (&'a Expr<'a, 'a, &'a str>, bool) = {
 
 BaseStmt: &'a Stmt<'a,'a,&'a str> = {
     <e: Expr> => arena.alloc_v(Stmt::Expr(e)),
+    "print" <pa:PrintArgs?> <re:Redirect?> => arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "break" => arena.alloc_v(Stmt::Break),
     "continue" => arena.alloc_v(Stmt::Continue),
     Block,
 }
 
 Block: &'a Stmt<'a,'a,&'a str> = {
+    "{" NL "}" => arena.alloc_v(Stmt::Block(vec![])),
     "{" NL <Stmt> "}" => <>,
     "{" NL  <BlockInner> "}" => arena.alloc_v(Stmt::Block(<>)),
 }
@@ -108,6 +109,8 @@ SepBase: () = { ";", "\n" }
 
 pub(crate) Expr: &'a Expr<'a,'a,&'a str> = {
     "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
+    // TODO may need to disambiguate function calls at the lexer level.
+    // <i:Ident> "(" <args:PrintArgs?> ")" => panic!("nyi"),
     PrecAsgn
 };
 

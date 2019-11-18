@@ -117,7 +117,7 @@ static_map!(
     ["\r\n", Tok::Newline],
     [",", Tok::Comma],
     ["in", Tok::In],
-    ["not", Tok::Not],
+    ["!", Tok::Not],
     ["$", Tok::Dollar]
 );
 
