@@ -41,10 +41,24 @@ pub(crate) trait IterRefFn<'a, A: 'a + ?Sized, B: 'a + ?Sized> {
     fn invoke(self, a: &'a A) -> Self::I;
 }
 
+pub(crate) struct FilterNonEmpty<I>(I);
+
+impl<'a, I: Iterator<Item = &'a str>> Iterator for FilterNonEmpty<I> {
+    type Item = &'a str;
+    fn next(&mut self) -> Option<&'a str> {
+        let next = self.0.next()?;
+        if next.len() == 0 {
+            self.next()
+        } else {
+            Some(next)
+        }
+    }
+}
+
 impl<'a, 'b> IterRefFn<'a, str, str> for &'b regex::Regex {
-    type I = regex::Split<'b, 'a>;
+    type I = FilterNonEmpty<regex::Split<'b, 'a>>;
     fn invoke(self, a: &'a str) -> Self::I {
-        self.split(a)
+        FilterNonEmpty(self.split(a))
     }
 }
 

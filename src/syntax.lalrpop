@@ -38,7 +38,8 @@ PatAction: (Option<&'a Expr<'a,'a,&'a str>>, Option<&'a Stmt<'a,'a,&'a str>>) = 
 }
 
 pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
-    "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> "else" NL <s2:Stmt> => arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
+    "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> "else" NL <s2:Stmt> =>
+	arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
     "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
     "do" NL <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
     "while" NL "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(cond, body)),
