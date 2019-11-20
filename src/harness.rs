@@ -208,7 +208,7 @@ for (k in m) {
     split("where is all of this going", m1, /[ \t]+/);
     for (i=1; i<=6; i++) print i, m1[i]
     }"#,
-        "1 where\n2 is\n3 all\n4 of\n5 this\n6 going"
+        "1 where\n2 is\n3 all\n4 of\n5 this\n6 going\n"
     );
     // TODO test more operators
 }
