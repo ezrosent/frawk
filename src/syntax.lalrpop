@@ -1,6 +1,7 @@
 use crate::{
   arena::Arena,
   ast::{Expr, Stmt, Binop, Unop, Prog},
+  common::Either,
   runtime::strton::{strtoi,strtod},
   lexer::{self, Tok},
 };
@@ -110,8 +111,8 @@ SepBase: () = { ";", "\n" }
 
 pub(crate) Expr: &'a Expr<'a,'a,&'a str> = {
     "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
-    // TODO may need to disambiguate function calls at the lexer level.
-    // <i:Ident> "(" <args:PrintArgs?> ")" => panic!("nyi"),
+    <i:"CALLSTART"> <args:PrintArgs?> ")" =>
+	arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
     PrecAsgn
 };
 
@@ -242,6 +243,7 @@ extern {
       "IDENT" => Tok::Ident(<&'a str>),
       "STRLIT" => Tok::StrLit(<&'a str>),
       "PATLIT" => Tok::PatLit(<&'a str>),
+      "CALLSTART" => Tok::CallStart(<&'a str>),
       "BEGIN" =>  Tok::Begin,
       "END" =>  Tok::End,
       "break" =>  Tok::Break,

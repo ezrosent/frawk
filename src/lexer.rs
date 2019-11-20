@@ -67,6 +67,7 @@ pub enum Tok<'a> {
     Ident(&'a str),
     StrLit(&'a str),
     PatLit(&'a str),
+    CallStart(&'a str),
 
     ILit(&'a str),
     FLit(&'a str),
@@ -408,8 +409,13 @@ impl<'a> Iterator for Tokenizer<'a> {
                     } else if is_id_start(c) {
                         self.cur += c.len_utf8();
                         let (s, new_start) = self.ident(ix);
-                        self.cur = new_start;
-                        (ix, Tok::Ident(s), self.cur)
+                        if self.text.as_bytes()[new_start] == ('(' as u8) {
+                            self.cur = new_start + 1;
+                            (ix, Tok::CallStart(s), self.cur)
+                        } else {
+                            self.cur = new_start;
+                            (ix, Tok::Ident(s), self.cur)
+                        }
                     } else {
                         return None;
                     }

@@ -694,7 +694,6 @@ impl Constraints {
                         },
                     }
                 }
-                debug_assert_eq!(deps.len(), arg_ks.len());
                 Ok(TVar::Scalar(
                     self.network.add_rule(Some(Rule::Builtin(*b)), &deps[..]),
                 ))
