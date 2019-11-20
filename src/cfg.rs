@@ -232,7 +232,10 @@ where
         use Stmt::*;
         Ok(match stmt {
             Expr(e) => {
-                self.convert_expr(e, current_open)?;
+                // We need to assign to unused here, otherwise we could generate the expression but
+                // then drop it on the floor.
+                let e = self.convert_expr(e, current_open)?;
+                self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), e));
                 current_open
             }
             Block(stmts) => {

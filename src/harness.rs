@@ -197,16 +197,18 @@ for (k in m) {
         blorgme not very
         3 fun!"#
     );
-    /*
-        test_program!(
-            explicit_split,
-            r#" BEGIN {
+
+    // TODO: I suspect there is an issue with how we handle default types here that is causing a
+    // failure. We need split to create a dependency on the key and value types of its argument.
+    test_program!(
+        explicit_split,
+        r#" BEGIN {
+    # XXX different failures with and without this line.
+    m[0]="XXX"
     split("where is all of this going", m1, /[ \t]+/);
-    for (x in m1) print x, m1[x]
+    for (i=1; i<=6; i++) print i, m1[i]
     }"#,
-            "1 where\n2 is\n3 all\n4 of\n5 this\n6 going"
-        );
-    */
-    // TODO test explicit splitting, but first need syntax for function calls.
+        "1 where\n2 is\n3 all\n4 of\n5 this\n6 going"
+    );
     // TODO test more operators
 }
