@@ -174,8 +174,8 @@ impl RegexCache {
         let mut i = 0i64;
         self.with_regex(pat, |re| {
             s.split(re, |s| {
-                m.insert(i, s);
                 i += 1;
+                m.insert(i, s);
             })
         })?;
         Ok(())
@@ -190,8 +190,8 @@ impl RegexCache {
         let mut i = 0i64;
         self.with_regex(pat, |re| {
             s.split(re, |s| {
-                m.insert(convert::<i64, Str<'_>>(i), s);
                 i += 1;
+                m.insert(convert::<i64, Str<'_>>(i), s);
             })
         })?;
         Ok(())

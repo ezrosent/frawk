@@ -411,7 +411,7 @@ impl<'a> Instrs<'a> {
             ReadErrStdin => self.push(Instr::ReadErrStdin(res_reg.into())),
             NextlineStdin => self.push(Instr::NextLineStdin(res_reg.into())),
             Setcol => self.push(Instr::SetColumn(conv_regs[0].into(), conv_regs[1].into())),
-            Split => self.push(if conv_tys[2] == Ty::MapIntStr {
+            Split => self.push(if conv_tys[1] == Ty::MapIntStr {
                 Instr::SplitInt(
                     res_reg.into(),
                     conv_regs[0].into(),
