@@ -173,6 +173,13 @@ where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
 {
+    // for debugging: get a mapping from the raw identifiers to the synthetic ones.
+    pub(crate) fn _invert_ident(&self) -> HashMap<Ident, I> {
+        self.hm
+            .iter()
+            .map(|(k, v)| (v.clone(), k.clone()))
+            .collect()
+    }
     fn field_sep(&mut self) -> Ident {
         if let Some(id) = self.tmp_fs {
             id

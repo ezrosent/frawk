@@ -1,6 +1,8 @@
 //! Algorithms and types pertaining to type deduction and converion.
 //!
 //! TODO: update this with more documentation when the algorithms are more fully baked.
+use std::iter::once;
+
 use crate::builtins::Function;
 use crate::cfg::{self, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result};
@@ -41,8 +43,8 @@ pub(crate) trait Propagator {
     fn step(&self, incoming: &[Option<Self::Item>]) -> (bool, Option<Self::Item>);
 }
 
-mod prop {
-    use super::{Function, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
+pub(crate) mod prop {
+    use super::{once, Function, Graph, NodeIx, Propagator, Result, Scalar, SmallVec};
     use std::fmt::{self, Debug};
     fn fold_option<'a, T: Clone + 'a>(
         incoming: impl Iterator<Item = &'a T>,
@@ -255,7 +257,7 @@ mod prop {
             }
         }
         pub(crate) fn add_dep(&mut self, id: NodeIx, dep: NodeIx) -> Result<()> {
-            self.add_deps(id, Some(dep).into_iter())
+            self.add_deps(id, once(dep))
         }
         pub(crate) fn add_deps(
             &mut self,
@@ -290,7 +292,7 @@ mod prop {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub(crate) enum TVar<T = NodeIx> {
     Scalar(T),
     Iter(T),
@@ -340,14 +342,17 @@ pub(crate) fn get_types<'a>(
     cs.build(cfg)
 }
 
+pub(crate) struct Constants {
+    pub str_node: NodeIx,
+    pub int_node: NodeIx,
+    pub float_node: NodeIx,
+    pub nil_node: NodeIx,
+}
+
 pub(crate) struct Constraints {
     network: prop::Network<prop::Rule>,
     ident_map: HashMap<Ident, TVar>,
-    str_node: NodeIx,
-    int_node: NodeIx,
-    float_node: NodeIx,
-    nil_node: NodeIx,
-
+    constants: Constants,
     canonical_ident: HashMap<Ident, NumTy>,
     uf: petgraph::unionfind::UnionFind<NumTy>,
     kind_map: HashMap<NumTy, Kind>,
@@ -369,11 +374,13 @@ impl Constraints {
             canonical_ident: Default::default(),
             kind_map: Default::default(),
             uf: petgraph::unionfind::UnionFind::new(n),
+            constants: Constants {
+                nil_node,
+                str_node,
+                int_node,
+                float_node,
+            },
             max_ident: 0,
-            str_node,
-            int_node,
-            float_node,
-            nil_node,
         }
     }
 
@@ -675,9 +682,9 @@ impl Constraints {
                 let mut deps = SmallVec::with_capacity(args.len());
                 for k in arg_ks.iter() {
                     match args.pop() {
-                        Some(PrimVal::StrLit(_)) => deps.push(self.str_node),
-                        Some(PrimVal::ILit(_)) => deps.push(self.int_node),
-                        Some(PrimVal::FLit(_)) => deps.push(self.float_node),
+                        Some(PrimVal::StrLit(_)) => deps.push(self.constants.str_node),
+                        Some(PrimVal::ILit(_)) => deps.push(self.constants.int_node),
+                        Some(PrimVal::FLit(_)) => deps.push(self.constants.float_node),
                         Some(PrimVal::Var(id)) => match self.get_var(id)? {
                             TVar::Scalar(v) | TVar::Iter(v) => deps.push(v),
                             TVar::Map { key, val } => {
@@ -686,14 +693,15 @@ impl Constraints {
                             }
                         },
                         None => match k {
-                            Kind::Scalar | Kind::Iter => deps.push(self.nil_node),
+                            Kind::Scalar | Kind::Iter => deps.push(self.constants.nil_node),
                             Kind::Map => {
-                                deps.push(self.nil_node);
-                                deps.push(self.nil_node);
+                                deps.push(self.constants.nil_node);
+                                deps.push(self.constants.nil_node);
                             }
                         },
                     }
                 }
+                b.feedback(&mut self.network, &self.constants, &deps[..])?;
                 Ok(TVar::Scalar(
                     self.network.add_rule(Some(Rule::Builtin(*b)), &deps[..]),
                 ))
@@ -702,7 +710,7 @@ impl Constraints {
                 let (key, val) = self.get_val(map)?.map()?;
                 let ix_node = self.get_scalar_val(ix)?;
                 // We want to add ix_node as a dependency of key
-                self.network.add_deps(key, Some(ix_node).into_iter())?;
+                self.network.add_deps(key, once(ix_node))?;
                 // Then we want to yield val, the result of this expression.
                 Ok(TVar::Scalar(val))
             }
@@ -712,7 +720,7 @@ impl Constraints {
             }
             HasNext(iter) => {
                 let _it = self.get_val(iter)?.iterator()?;
-                Ok(TVar::Scalar(self.int_node))
+                Ok(TVar::Scalar(self.constants.int_node))
             }
             Next(iter) => {
                 let it = self.get_val(iter)?.iterator()?;
@@ -732,9 +740,9 @@ impl Constraints {
     fn const_node(&self, scalar: Scalar) -> NodeIx {
         use Scalar::*;
         match scalar {
-            Int => self.int_node,
-            Float => self.float_node,
-            Str => self.str_node,
+            Int => self.constants.int_node,
+            Float => self.constants.float_node,
+            Str => self.constants.str_node,
         }
     }
 
@@ -838,9 +846,9 @@ impl Constraints {
     fn get_scalar_val<'a>(&mut self, v: &PrimVal<'a>) -> Result<NodeIx> {
         use PrimVal::*;
         match v {
-            ILit(_) => Ok(self.int_node),
-            FLit(_) => Ok(self.float_node),
-            StrLit(_) => Ok(self.str_node),
+            ILit(_) => Ok(self.constants.int_node),
+            FLit(_) => Ok(self.constants.float_node),
+            StrLit(_) => Ok(self.constants.str_node),
             Var(id) => self.get_scalar(*id),
         }
     }
@@ -859,9 +867,9 @@ impl Constraints {
     fn get_val<'a>(&mut self, v: &PrimVal<'a>) -> Result<TVar> {
         use PrimVal::*;
         match v {
-            ILit(_) => Ok(TVar::Scalar(self.int_node)),
-            FLit(_) => Ok(TVar::Scalar(self.float_node)),
-            StrLit(_) => Ok(TVar::Scalar(self.str_node)),
+            ILit(_) => Ok(TVar::Scalar(self.constants.int_node)),
+            FLit(_) => Ok(TVar::Scalar(self.constants.float_node)),
+            StrLit(_) => Ok(TVar::Scalar(self.constants.str_node)),
             Var(id) => self.get_var(*id),
         }
     }
@@ -881,7 +889,7 @@ mod test {
         let i2 = n.add_rule(None, &[]);
         let addi12 = n.add_rule(Some(Rule::Builtin(Function::Binop(Plus))), &[i1, i2]);
         assert!(n.update_rule(i2, Rule::MapKey).is_ok());
-        assert!(n.add_deps(i2, Some(addi12).into_iter()).is_ok());
+        assert!(n.add_deps(i2, once(addi12)).is_ok());
         n.solve();
         assert_eq!(n.read(i1), Some(&Int));
         assert_eq!(n.read(i2), Some(&Int));

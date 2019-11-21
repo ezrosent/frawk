@@ -1,19 +1,35 @@
 //! This module includes some utility functions for running AWK programs from Rust code.
 //!
 //! TODO: make this test-only
-use crate::{arena, ast, cfg, common::Result, compile, lexer, syntax};
+use crate::{
+    arena::Arena,
+    ast, cfg,
+    common::Result,
+    compile, lexer, syntax,
+    types::{get_types, Scalar, TVar},
+};
+use hashbrown::HashMap;
 
 type Stmt<'a> = &'a ast::Stmt<'a, 'a, &'a str>;
 
-pub(crate) fn run_program(prog: &str, stdin: impl Into<String>) -> Result<(String, String)> {
-    let a = arena::Arena::default();
+type ProgResult<'a> = Result<(
+    String,                                 /* output */
+    String,                                 /* debug info */
+    HashMap<&'a str, TVar<Option<Scalar>>>, /* type info */
+)>;
+
+pub(crate) fn run_program<'a>(
+    a: &'a Arena,
+    prog: &str,
+    stdin: impl Into<String>,
+) -> ProgResult<'a> {
     let stmt = parse_program(prog, &a)?;
     run_stmt(stmt, stdin)
 }
 
 pub(crate) fn parse_program<'a, 'inp, 'outer>(
     prog: &'inp str,
-    a: &'a arena::Arena<'outer>,
+    a: &'a Arena<'outer>,
 ) -> Result<Stmt<'a>> {
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
@@ -33,7 +49,7 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     }
 }
 
-pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<(String, String)> {
+pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> ProgResult<'a> {
     use std::cell::RefCell;
     use std::io;
     use std::rc::Rc;
@@ -48,24 +64,34 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> Result<(
         }
     }
     let ctx = cfg::Context::from_stmt(stmt)?;
-    // TODO remove commented-out eprintln
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
-    let instrs = {
+    let ident_map = ctx._invert_ident();
+    let (instrs, type_map) = {
         let mut instrs = format!("cfg:\n{}\ninstrs:\n", petgraph::dot::Dot::new(ctx.cfg()));
+        let ts = get_types(ctx.cfg(), ctx.num_idents())?;
+        // ident_map : Ident -> &str
+        // ts: Ident -> Type
+        //
+        // We want the types of all the entries in ts that show up in ident_map.
+        let type_map: HashMap<&'a str, TVar<Option<Scalar>>> = ts
+            .iter()
+            .flat_map(|((major, _), ty)| ident_map.get(&(*major, 0)).map(|s| (*s, ty.clone())))
+            .collect();
         let mut interp = compile::bytecode(&ctx, std::io::Cursor::new(stdin), stdout.clone())?;
         for (i, inst) in interp.instrs().iter().enumerate() {
             instrs.push_str(format!("[{:2}] {:?}\n", i, inst).as_str());
         }
         interp.run()?;
-        instrs
+        (instrs, type_map)
     };
+
     let v = match Rc::try_unwrap(stdout.0) {
         Ok(v) => v.into_inner(),
         Err(rc) => rc.borrow().clone(),
     };
     match String::from_utf8(v) {
-        Ok(s) => Ok((s, instrs)),
+        Ok(s) => Ok((s, instrs, type_map)),
         Err(e) => err!("program produced invalid unicode: {}", e),
     }
 }
@@ -76,16 +102,32 @@ mod tests {
 
     macro_rules! test_program {
         ($desc:ident, $e:expr, $out:expr) => {
-            test_program!($desc, $e, $out, "");
+            test_program!($desc, $e, $out, @input "", @types []);
         };
-        ($desc:ident, $e:expr, $out:expr, $inp:expr) => {
+        ($desc:ident, $e:expr, $out:expr, @input $inp:expr) => {
+            test_program!($desc, $e, $out, @input $inp, @types []);
+        };
+        ($desc:ident, $e:expr, $out:expr, @input $inp:expr,
+         @types [ $($i:ident :: $ty:expr),* ]) => {
             #[test]
             fn $desc() {
-                let out = run_program($e, $inp);
+                let a = Arena::default();
+                let out = run_program(&a, $e, $inp);
                 match out {
-                    Ok((out, instrs)) => {
+                    Ok((out, instrs, ts)) => {
                         let expected = $out;
-                        assert_eq!(out, expected, "Bytecode:\n{}", instrs);
+                        assert_eq!(out, expected, "{}\nTypes:\n{:?}", instrs, ts);
+                        {
+                            #[allow(unused)]
+                            use crate::types::{TVar::*,Scalar::*};
+                            $(
+                                assert_eq!(
+                                    ts.get(stringify!($i)).cloned(),
+                                    Some($ty),
+                                    "Types: {:?}\n{}\n", ts, instrs,
+                                );
+                            )*
+                        }
                     }
                     Err(e) => panic!("failed to run program: {}", e),
                 }
@@ -114,7 +156,7 @@ for (i=1; i<=target; ++i) fact *= i
 print fact
 }"#,
         "24\n120\n",
-        "4\n5\n"
+        @input "4\n5\n"
     );
 
     test_program!(
@@ -160,7 +202,9 @@ m["hi"]=5
 for (k in m) {
     print k,k+0,  m[k]
 }}"#,
-        "1 1.0 3\nhi 0.0 5\n"
+        "1 1.0 3\nhi 0.0 5\n",
+        @input "",
+        @types [ m :: Map{key: Some(Str), val:Some(Int)}, k :: Scalar(Some(Str)) ]
     );
 
     test_program!(
@@ -182,7 +226,7 @@ for (k in m) {
         pattern_1,
         r#"/y.*/"#,
         "yellow\nyells\nyard\n",
-        "yellow\ndog\nyells\nin\nthe\nyard"
+        @input "yellow\ndog\nyells\nin\nthe\nyard"
     );
 
     test_program!(
@@ -192,23 +236,21 @@ for (k in m) {
         $1 ~ /blorg.*/ { print $3; }
         "#,
         "numbers\nare\nvery\nfun!\n",
-        r#"1 numbers
+        @input r#"1 numbers
         2 are
         blorgme not very
         3 fun!"#
     );
 
-    // TODO: I suspect there is an issue with how we handle default types here that is causing a
-    // failure. We need split to create a dependency on the key and value types of its argument.
     test_program!(
         explicit_split,
         r#" BEGIN {
-    # XXX different failures with and without this line.
-    m[0]="XXX"
     split("where is all of this going", m1, /[ \t]+/);
     for (i=1; i<=6; i++) print i, m1[i]
     }"#,
-        "1 where\n2 is\n3 all\n4 of\n5 this\n6 going\n"
+        "1 where\n2 is\n3 all\n4 of\n5 this\n6 going\n",
+        @input "",
+        @types [ m1 :: Map { key: Some(Int), val: Some(Str) }, i :: Scalar(Some(Int))]
     );
     // TODO test more operators
 }
