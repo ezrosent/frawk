@@ -84,14 +84,22 @@ impl Ty {
 
 impl<Q: Borrow<TVar<Option<Scalar>>>> From<Q> for Ty {
     fn from(t: Q) -> Ty {
+        fn from_scalar_for_key(o: &Option<Scalar>) -> Ty {
+            match o {
+                Some(Scalar::Int) => Ty::Int,
+                Some(Scalar::Float) => Ty::Float,
+                Some(Scalar::Str) => Ty::Str,
+                None => Ty::Int,
+            }
+        }
         match t.borrow() {
             TVar::Scalar(s) => Ty::from_scalar(s),
-            TVar::Iter(t) => match Ty::from_scalar(t) {
+            TVar::Iter(t) => match from_scalar_for_key(t) {
                 Ty::Int => Ty::IterInt,
                 Ty::Str => Ty::IterStr,
                 _ => panic!("deduced invalid iterator value type: {:?}", t),
             },
-            TVar::Map { key, val } => match (Ty::from_scalar(key), Ty::from_scalar(val)) {
+            TVar::Map { key, val } => match (from_scalar_for_key(key), Ty::from_scalar(val)) {
                 (Ty::Int, Ty::Int) => Ty::MapIntInt,
                 (Ty::Int, Ty::Float) => Ty::MapIntFloat,
                 (Ty::Int, Ty::Str) => Ty::MapIntStr,
@@ -203,6 +211,9 @@ impl<'a> Instrs<'a> {
     // registers match this is a noop.
     fn convert(&mut self, dst_reg: u32, dst_ty: Ty, src_reg: u32, src_ty: Ty) -> Result<()> {
         use Ty::*;
+        if dst_reg == UNUSED {
+            return Ok(());
+        }
         if dst_reg == src_reg && dst_ty == src_ty {
             return Ok(());
         }
@@ -290,6 +301,9 @@ impl<'a> Instrs<'a> {
         arr_ty: Ty,
         key: &PrimVal<'a>,
     ) -> Result<()> {
+        if dst_reg == UNUSED {
+            return Ok(());
+        }
         // Convert `key` if necessary.
         let target_ty = arr_ty.key()?;
         let (mut key_reg, key_ty) = self.get_reg(gen, key)?;

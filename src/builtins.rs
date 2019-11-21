@@ -1,8 +1,8 @@
 //! This module contains definitions and metadata for builtin functions.
 use crate::ast;
-use crate::common::Result;
+use crate::common::{NodeIx, Result};
 use crate::compile;
-use crate::types::{Kind, Propagator, Scalar, SmallVec, TVar};
+use crate::types::{self, prop, Kind, Propagator, Scalar, SmallVec, TVar};
 use smallvec::smallvec;
 
 use std::convert::TryFrom;
@@ -47,6 +47,28 @@ impl Function {
             Setcol | Binop(_) => 2,
             Print | Split => 3,
         }
+    }
+
+    // feedback allows for certain functions to propagate type information back to their arguments.
+    pub(crate) fn feedback(
+        &self,
+        nw: &mut prop::Network<prop::Rule>,
+        cs: &types::Constants,
+        deps: &[NodeIx],
+    ) -> Result<()> {
+        if let Function::Split = self {
+            // Split acts to assign into a variable, that means we need to propagate information
+            // back out. In this case those are going to be variables 1 and 2, the key and value
+            // nodes.
+            use std::iter::once;
+
+            debug_assert_eq!(deps.len(), 4);
+            let key = deps[1];
+            let val = deps[2];
+            nw.add_deps(key, once(cs.int_node))?;
+            nw.add_deps(val, once(cs.str_node))?;
+        }
+        Ok(())
     }
     pub(crate) fn type_sig(
         &self,
