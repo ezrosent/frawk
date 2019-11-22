@@ -137,6 +137,13 @@ pub enum Expr<'a, 'b, I> {
         &'a Expr<'a, 'b, I>,
     ),
     AssignOp(&'a Expr<'a, 'b, I>, Binop, &'a Expr<'a, 'b, I>),
+    And(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
+    Or(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
+    ITE(
+        &'a Expr<'a, 'b, I>,
+        &'a Expr<'a, 'b, I>,
+        &'a Expr<'a, 'b, I>,
+    ),
     Inc {
         is_inc: bool,
         is_post: bool,

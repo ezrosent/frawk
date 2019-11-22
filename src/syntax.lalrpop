@@ -40,7 +40,7 @@ PatAction: (Option<&'a Expr<'a,'a,&'a str>>, Option<&'a Stmt<'a,'a,&'a str>>) = 
 
 pub(crate) Stmt: &'a Stmt<'a,'a,&'a str> = {
     "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> "else" NL <s2:Stmt> =>
-	arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
+           arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
     "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
     "do" NL <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
     "while" NL "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(cond, body)),
@@ -112,7 +112,7 @@ SepBase: () = { ";", "\n" }
 pub(crate) Expr: &'a Expr<'a,'a,&'a str> = {
     "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
     <i:"CALLSTART"> <args:PrintArgs?> ")" =>
-	arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
+        arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
     PrecAsgn
 };
 
@@ -123,7 +123,27 @@ PrecAsgn: &'a Expr<'a,'a,&'a str> = {
     <l: PrecIn> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
     <l: PrecIn> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
     <l: PrecIn> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
-    PrecIn
+    PrecTern,
+}
+
+PrecTern: &'a Expr<'a, 'a, &'a str> = {
+   <c: PrecOr> "?" <t: PrecTern> ":" <f: PrecTern> => arena.alloc_v(Expr::ITE(c, t, f)),
+   PrecOr,
+}
+
+PrecOr: &'a Expr<'a, 'a, &'a str> = {
+    <l: PrecAnd> "||" <r: PrecOr> => arena.alloc_v(Expr::Or(l, r)),
+    PrecAnd,
+}
+
+PrecAnd: &'a Expr<'a, 'a, &'a str> = {
+    <l: PrecIn> "&&" <r: PrecAnd> => arena.alloc_v(Expr::And(l, r)),
+    PrecIn,
+}
+
+PrecIn: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecMatch> "in" <r: PrecMatch> => panic!("we have not yet wired in `in`"),
+    PrecMatch,
 }
 
 // XXX Replicate the first two layers of the precedence hierarchy to skip "in" expressions to avoid
@@ -135,19 +155,30 @@ ExprNoIn: &'a Expr<'a,'a,&'a str> = {
 };
 
 PrecAsgnNoIn: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecMatch> "=" <r: PrecAsgn> => arena.alloc_v(Expr::Assign(l, r)),
-    <l: PrecMatch> "+=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Plus, r)),
-    <l: PrecMatch> "-=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Minus, r)),
-    <l: PrecMatch> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
-    <l: PrecMatch> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
-    <l: PrecMatch> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
-    PrecMatch
+    <l: PrecTernNoIn> "=" <r: PrecAsgn> => arena.alloc_v(Expr::Assign(l, r)),
+    <l: PrecTernNoIn> "+=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Plus, r)),
+    <l: PrecTernNoIn> "-=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Minus, r)),
+    <l: PrecTernNoIn> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
+    <l: PrecTernNoIn> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
+    <l: PrecTernNoIn> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
+    PrecTernNoIn,
 }
 
-PrecIn: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecMatch> "in" <r: PrecMatch> => panic!("we have not yet wired in `in`"),
+PrecTernNoIn: &'a Expr<'a, 'a, &'a str> = {
+   <c: PrecOrNoIn> "?" <t: PrecTernNoIn> ":" <f: PrecTern> => arena.alloc_v(Expr::ITE(c, t, f)),
+   PrecOrNoIn,
+}
+
+PrecOrNoIn: &'a Expr<'a, 'a, &'a str> = {
+    <l: PrecAndNoIn> "||" <r: PrecOrNoIn> => arena.alloc_v(Expr::Or(l, r)),
+    PrecAndNoIn,
+}
+
+PrecAndNoIn: &'a Expr<'a, 'a, &'a str> = {
+    <l: PrecMatch> "&&" <r: PrecAndNoIn> => arena.alloc_v(Expr::And(l, r)),
     PrecMatch,
 }
+
 
 // This is where we would add ?: || &&
 // see: https://www.gnu.org/software/gawk/manual/html_node/Precedence.html
@@ -287,6 +318,10 @@ extern {
       "\n" =>  Tok::Newline,
       "," =>  Tok::Comma,
       "!" => Tok::Not,
+      "||" => Tok::OR,
+      "&&" => Tok::AND,
+      "?" => Tok::QUESTION,
+      ":" => Tok::COLON,
       "in" => Tok::In,
   }
 }
