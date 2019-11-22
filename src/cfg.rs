@@ -241,9 +241,9 @@ where
             Expr(e) => {
                 // We need to assign to unused here, otherwise we could generate the expression but
                 // then drop it on the floor.
-                let e = self.convert_expr(e, current_open)?;
-                self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), e));
-                current_open
+                let (next, e) = self.convert_expr(e, current_open)?;
+                self.add_stmt(next, PrimStmt::AsgnVar(Self::unused(), e));
+                next
             }
             Block(stmts) => {
                 for s in stmts {
@@ -261,12 +261,13 @@ where
                         current_open,
                     );
                 }
-                let out = if let Some((o, append)) = out {
-                    let e = self.convert_val(o, current_open)?;
-                    Some((e, append))
+                let (next, out) = if let Some((o, append)) = out {
+                    let (next, e) = self.convert_val(o, current_open)?;
+                    (next, Some((e, append)))
                 } else {
-                    None
+                    (current_open, None)
                 };
+                current_open = next;
                 let print = {
                     |v| {
                         if let Some((o, append)) = out {
@@ -297,7 +298,8 @@ where
                     );
                     current_open
                 } else if vs.len() == 1 {
-                    let v = self.convert_val(vs[0], current_open)?;
+                    let (next, v) = self.convert_val(vs[0], current_open)?;
+                    current_open = next;
                     self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)));
                     current_open
                 } else {
@@ -327,7 +329,8 @@ where
                     let mut tmp = self.fresh();
                     self.add_stmt(current_open, PrimStmt::AsgnVar(tmp, PrimExpr::Val(EMPTY)));
                     for (i, v) in vs.iter().enumerate() {
-                        let v = self.convert_val(*v, current_open)?;
+                        let (next, v) = self.convert_val(*v, current_open)?;
+                        current_open = next;
                         if i != 0 {
                             let new_tmp = self.fresh();
                             self.add_stmt(
@@ -364,13 +367,14 @@ where
                 }
             }
             If(cond, tcase, fcase) => {
-                let c_val = if let ast::Expr::PatLit(_) = cond {
+                let (next, c_val) = if let ast::Expr::PatLit(_) = cond {
                     // For conditionals, pattern literals become matches against $0.
                     use ast::{Binop::*, Expr::*, Unop::*};
                     self.convert_val(&Binop(Match, &Unop(Column, &ILit(0)), cond), current_open)?
                 } else {
                     self.convert_val(cond, current_open)?
                 };
+                current_open = next;
                 let (t_start, t_end) = self.standalone_block(tcase)?;
                 let next = self.cfg.add_node(Default::default());
 
@@ -400,32 +404,33 @@ where
                 };
                 let (h, b_start, _b_end, f) =
                     self.make_loop(body, update.clone(), init_end, false)?;
-                let cond_val = if let Some(c) = cond {
+                let (h_end, cond_val) = if let Some(c) = cond {
                     self.convert_val(c, h)?
                 } else {
-                    PrimVal::ILit(1)
+                    (h, PrimVal::ILit(1))
                 };
-                self.cfg.add_edge(h, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h, f, Transition::null());
+                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
+                self.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             While(cond, body) => {
                 let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, false)?;
-                let cond_val = self.convert_val(cond, h)?;
-                self.cfg.add_edge(h, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h, f, Transition::null());
+                let (h_end, cond_val) = self.convert_val(cond, h)?;
+                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
+                self.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             DoWhile(cond, body) => {
                 let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, true)?;
-                let cond_val = self.convert_val(cond, h)?;
-                self.cfg.add_edge(h, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h, f, Transition::null());
+                let (h_end, cond_val) = self.convert_val(cond, h)?;
+                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
+                self.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             ForEach(v, array, body) => {
                 let v_id = self.get_identifier(v);
-                let array_val = self.convert_val(array, current_open)?;
+                let (next, array_val) = self.convert_val(array, current_open)?;
+                current_open = next;
                 let array_iter = self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open);
 
                 // First, create the loop header, which checks if there are any more elements
@@ -494,206 +499,221 @@ where
         &mut self,
         expr: &'a Expr<'a, 'b, I>,
         current_open: NodeIx,
-    ) -> Result<PrimExpr<'b>> /* should not create any new nodes. Expressions don't cause us to branch */
+    ) -> Result<(NodeIx, PrimExpr<'b>)> /* should not create any new nodes. Expressions don't cause us to branch */
     {
         use Expr::*;
-        Ok(match expr {
-            ILit(n) => PrimExpr::Val(PrimVal::ILit(*n)),
-            FLit(n) => PrimExpr::Val(PrimVal::FLit(*n)),
-            PatLit(s) | StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
-            Unop(op, e) => {
-                let v = self.convert_val(e, current_open)?;
-                PrimExpr::CallBuiltin(builtins::Function::Unop(*op), smallvec![v])
-            }
-            Binop(op, e1, e2) => {
-                let v1 = self.convert_val(e1, current_open)?;
-                let v2 = self.convert_val(e2, current_open)?;
-                PrimExpr::CallBuiltin(builtins::Function::Binop(*op), smallvec![v1, v2])
-            }
-            Var(id) => {
-                if let Ok(bi) = builtins::Variable::try_from(id.clone()) {
-                    PrimExpr::LoadBuiltin(bi)
-                } else {
-                    let ident = self.get_identifier(id);
-                    PrimExpr::Val(PrimVal::Var(ident))
+        Ok((
+            current_open,
+            match expr {
+                ILit(n) => PrimExpr::Val(PrimVal::ILit(*n)),
+                FLit(n) => PrimExpr::Val(PrimVal::FLit(*n)),
+                PatLit(s) | StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
+                Unop(op, e) => {
+                    let (next, v) = self.convert_val(e, current_open)?;
+                    return Ok((
+                        next,
+                        PrimExpr::CallBuiltin(builtins::Function::Unop(*op), smallvec![v]),
+                    ));
                 }
-            }
-            Index(arr, ix) => {
-                let arr_v = self.convert_val(arr, current_open)?;
-                let ix_v = self.convert_val(ix, current_open)?;
-                PrimExpr::Index(arr_v, ix_v)
-            }
-            Call(fname, args) => {
-                let bi = match fname {
-                    Either::Left(fname) => {
-                        if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
-                            bi
-                        } else {
-                            return err!("Call to unknown function \"{}\"", fname);
-                        }
+                Binop(op, e1, e2) => {
+                    let (next, v1) = self.convert_val(e1, current_open)?;
+                    let (next, v2) = self.convert_val(e2, next)?;
+                    return Ok((
+                        next,
+                        PrimExpr::CallBuiltin(builtins::Function::Binop(*op), smallvec![v1, v2]),
+                    ));
+                }
+                Var(id) => {
+                    if let Ok(bi) = builtins::Variable::try_from(id.clone()) {
+                        PrimExpr::LoadBuiltin(bi)
+                    } else {
+                        let ident = self.get_identifier(id);
+                        PrimExpr::Val(PrimVal::Var(ident))
                     }
-                    Either::Right(bi) => *bi,
-                };
-                let mut prim_args = SmallVec::with_capacity(args.len());
-                for a in args.iter() {
-                    prim_args.push(self.convert_val(a, current_open)?);
                 }
-                PrimExpr::CallBuiltin(bi, prim_args)
-            }
-            Assign(Index(arr, ix), to) => {
-                return self.do_assign_index(
-                    arr,
-                    ix,
-                    |slf, _, _| slf.convert_expr(to, current_open),
-                    current_open,
-                )
-            }
+                Index(arr, ix) => {
+                    let (next, arr_v) = self.convert_val(arr, current_open)?;
+                    let (next, ix_v) = self.convert_val(ix, next)?;
+                    return Ok((next, PrimExpr::Index(arr_v, ix_v)));
+                }
+                Call(fname, args) => {
+                    let bi = match fname {
+                        Either::Left(fname) => {
+                            if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
+                                bi
+                            } else {
+                                return err!("Call to unknown function \"{}\"", fname);
+                            }
+                        }
+                        Either::Right(bi) => *bi,
+                    };
+                    let mut prim_args = SmallVec::with_capacity(args.len());
+                    let mut open = current_open;
+                    for a in args.iter() {
+                        let (next, v) = self.convert_val(a, open)?;
+                        open = next;
+                        prim_args.push(v);
+                    }
+                    return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
+                }
+                Assign(Index(arr, ix), to) => {
+                    return self.do_assign_index(
+                        arr,
+                        ix,
+                        |slf, _, _, open| slf.convert_expr(to, open),
+                        current_open,
+                    )
+                }
 
-            AssignOp(Index(arr, ix), op, to) => {
-                return self.do_assign_index(
-                    arr,
-                    ix,
-                    |slf, arr_v, ix_v| {
-                        let to_v = slf.convert_val(to, current_open)?;
-                        let arr_cell_v =
-                            slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), current_open);
-                        Ok(PrimExpr::CallBuiltin(
-                            builtins::Function::Binop(*op),
-                            smallvec![arr_cell_v, to_v],
-                        ))
-                    },
-                    current_open,
-                )
-            }
-            Assign(x, to) => {
-                let to = self.convert_expr(to, current_open)?;
-                return self.do_assign(x, |_| to, current_open);
-            }
-            AssignOp(x, op, to) => {
-                let to_v = self.convert_val(to, current_open)?;
-                return self.do_assign(
-                    x,
-                    |v| {
-                        PrimExpr::CallBuiltin(
-                            builtins::Function::Binop(*op),
-                            smallvec![v.clone(), to_v],
-                        )
-                    },
-                    current_open,
-                );
-            }
-            Inc { is_inc, is_post, x } => {
-                if !valid_lhs(x) {
-                    return err!("invalid operand for increment operation {:?}", x);
-                };
-                let pre = if *is_post {
-                    let e = self.convert_expr(x, current_open)?;
-                    let f = self.fresh();
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(f, e));
-                    Some(PrimExpr::Val(PrimVal::Var(f)))
-                } else {
-                    None
-                };
-                let post = self.convert_expr(
-                    &ast::Expr::AssignOp(
-                        x,
-                        if *is_inc {
-                            ast::Binop::Plus
-                        } else {
-                            ast::Binop::Minus
-                        },
-                        &ast::Expr::ILit(1),
-                    ),
-                    current_open,
-                )?;
-                if *is_post {
-                    pre.unwrap()
-                } else {
-                    post
-                }
-            }
-            Getline { from, into } => {
-                // Another use of non-structural recursion for desugaring. Here we desugar:
-                //   getline var < file
-                // to
-                //   var = nextline(file)
-                //   readerr(file)
-                // And we fill in various other pieces of sugar as well. Informally:
-                //  getline < file => getline $0 < file
-                //  getline var => getline var < stdin
-                //  getline => getline $0
-                use builtins::Function::{Nextline, NextlineStdin, ReadErr, ReadErrStdin};
-                match (from, into) {
-                    (from, None /* $0 */) => self.convert_expr(
-                        &ast::Expr::Getline {
-                            from: from.clone(),
-                            into: Some(&Unop(ast::Unop::Column, &ast::Expr::ILit(0))),
+                AssignOp(Index(arr, ix), op, to) => {
+                    return self.do_assign_index(
+                        arr,
+                        ix,
+                        |slf, arr_v, ix_v, open| {
+                            let (next, to_v) = slf.convert_val(to, open)?;
+                            let arr_cell_v = slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), next);
+                            Ok((
+                                next,
+                                PrimExpr::CallBuiltin(
+                                    builtins::Function::Binop(*op),
+                                    smallvec![arr_cell_v, to_v],
+                                ),
+                            ))
                         },
                         current_open,
-                    ),
-                    (Some(from), Some(into)) => {
-                        self.convert_expr(
-                            &ast::Expr::Assign(
-                                into,
-                                &ast::Expr::Call(Either::Right(Nextline), vec![from]),
-                            ),
-                            current_open,
-                        )?;
-                        self.convert_expr(
-                            &ast::Expr::Call(Either::Right(ReadErr), vec![from]),
-                            current_open,
-                        )
-                    }
-                    (None /*stdin*/, Some(into)) => {
-                        self.convert_expr(
-                            &ast::Expr::Assign(
-                                into,
-                                &ast::Expr::Call(Either::Right(NextlineStdin), vec![]),
-                            ),
-                            current_open,
-                        )?;
-                        self.convert_expr(
-                            &ast::Expr::Call(Either::Right(ReadErrStdin), vec![]),
-                            current_open,
-                        )
-                    }
-                }?
-            }
-        })
+                    )
+                }
+                Assign(x, to) => {
+                    let (next, to) = self.convert_expr(to, current_open)?;
+                    return self.do_assign(x, |_| to, next);
+                }
+                AssignOp(x, op, to) => {
+                    let (next, to_v) = self.convert_val(to, current_open)?;
+                    return self.do_assign(
+                        x,
+                        |v| {
+                            PrimExpr::CallBuiltin(
+                                builtins::Function::Binop(*op),
+                                smallvec![v.clone(), to_v],
+                            )
+                        },
+                        next,
+                    );
+                }
+                Inc { is_inc, is_post, x } => {
+                    if !valid_lhs(x) {
+                        return err!("invalid operand for increment operation {:?}", x);
+                    };
+                    let (next, pre) = if *is_post {
+                        let (next, e) = self.convert_expr(x, current_open)?;
+                        let f = self.fresh();
+                        self.add_stmt(next, PrimStmt::AsgnVar(f, e));
+                        (next, Some(PrimExpr::Val(PrimVal::Var(f))))
+                    } else {
+                        (current_open, None)
+                    };
+                    let (next, post) = self.convert_expr(
+                        &ast::Expr::AssignOp(
+                            x,
+                            if *is_inc {
+                                ast::Binop::Plus
+                            } else {
+                                ast::Binop::Minus
+                            },
+                            &ast::Expr::ILit(1),
+                        ),
+                        next,
+                    )?;
+                    return Ok((next, if *is_post { pre.unwrap() } else { post }));
+                }
+                Getline { from, into } => {
+                    // Another use of non-structural recursion for desugaring. Here we desugar:
+                    //   getline var < file
+                    // to
+                    //   var = nextline(file)
+                    //   readerr(file)
+                    // And we fill in various other pieces of sugar as well. Informally:
+                    //  getline < file => getline $0 < file
+                    //  getline var => getline var < stdin
+                    //  getline => getline $0
+                    use builtins::Function::{Nextline, NextlineStdin, ReadErr, ReadErrStdin};
+                    match (from, into) {
+                        (from, None /* $0 */) => {
+                            return self.convert_expr(
+                                &ast::Expr::Getline {
+                                    from: from.clone(),
+                                    into: Some(&Unop(ast::Unop::Column, &ast::Expr::ILit(0))),
+                                },
+                                current_open,
+                            )
+                        }
+                        (Some(from), Some(into)) => {
+                            let (next, e) = self.convert_expr(
+                                &ast::Expr::Assign(
+                                    into,
+                                    &ast::Expr::Call(Either::Right(Nextline), vec![from]),
+                                ),
+                                current_open,
+                            )?;
+                            return self.convert_expr(
+                                &ast::Expr::Call(Either::Right(ReadErr), vec![from]),
+                                next,
+                            );
+                        }
+                        (None /*stdin*/, Some(into)) => {
+                            let (next, e) = self.convert_expr(
+                                &ast::Expr::Assign(
+                                    into,
+                                    &ast::Expr::Call(Either::Right(NextlineStdin), vec![]),
+                                ),
+                                current_open,
+                            )?;
+                            return self.convert_expr(
+                                &ast::Expr::Call(Either::Right(ReadErrStdin), vec![]),
+                                next,
+                            );
+                        }
+                    };
+                }
+            },
+        ))
     }
     fn do_assign<'a>(
         &mut self,
         v: &'a Expr<'a, 'b, I>,
         to: impl FnOnce(&PrimVal<'b>) -> PrimExpr<'b>,
         current_open: NodeIx,
-    ) -> Result<PrimExpr<'b>> {
+    ) -> Result<(NodeIx, PrimExpr<'b>)> {
         use ast::Expr::*;
         match v {
-            Var(i) => Ok(if let Ok(b) = builtins::Variable::try_from(i.clone()) {
-                let res = PrimExpr::LoadBuiltin(b);
-                let res_v = self.to_val(res.clone(), current_open);
-                self.add_stmt(current_open, PrimStmt::SetBuiltin(b, to(&res_v)));
-                res
-            } else {
-                let ident = self.get_identifier(i);
-                let res_v = PrimVal::Var(ident);
-                self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to(&res_v)));
-                PrimExpr::Val(res_v)
-            }),
+            Var(i) => Ok((
+                current_open,
+                if let Ok(b) = builtins::Variable::try_from(i.clone()) {
+                    let res = PrimExpr::LoadBuiltin(b);
+                    let res_v = self.to_val(res.clone(), current_open);
+                    self.add_stmt(current_open, PrimStmt::SetBuiltin(b, to(&res_v)));
+                    res
+                } else {
+                    let ident = self.get_identifier(i);
+                    let res_v = PrimVal::Var(ident);
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to(&res_v)));
+                    PrimExpr::Val(res_v)
+                },
+            )),
             Unop(ast::Unop::Column, n) => {
                 use {ast::Unop::*, builtins::Function};
-                let v = self.convert_val(n, current_open)?;
+                let (next, v) = self.convert_val(n, current_open)?;
                 let res = PrimExpr::CallBuiltin(Function::Unop(Column), smallvec![v.clone()]);
-                let res_v = self.to_val(res.clone(), current_open);
-                let to_v = self.to_val(to(&res_v), current_open);
+                let res_v = self.to_val(res.clone(), next);
+                let to_v = self.to_val(to(&res_v), next);
                 self.add_stmt(
-                    current_open,
+                    next,
                     PrimStmt::AsgnVar(
                         Self::unused(),
                         PrimExpr::CallBuiltin(Function::Setcol, smallvec![v, to_v]),
                     ),
                 );
-                Ok(res)
+                Ok((next, res))
             }
             _ => err!("unsupprted assignment LHS: {:?}", v),
         }
@@ -702,30 +722,35 @@ where
         &mut self,
         arr: &'a Expr<'a, 'b, I>,
         ix: &'a Expr<'a, 'b, I>,
-        mut to_f: impl FnMut(&mut Self, PrimVal<'b>, PrimVal<'b>) -> Result<PrimExpr<'b>>,
+        mut to_f: impl FnMut(
+            &mut Self,
+            PrimVal<'b>,
+            PrimVal<'b>,
+            NodeIx,
+        ) -> Result<(NodeIx, PrimExpr<'b>)>,
         current_open: NodeIx,
-    ) -> Result<PrimExpr<'b>> {
-        let arr_e = self.convert_expr(arr, current_open)?;
+    ) -> Result<(NodeIx, PrimExpr<'b>)> {
+        let (next, arr_e) = self.convert_expr(arr, current_open)?;
         let arr_id = self.fresh();
-        self.add_stmt(current_open, PrimStmt::AsgnVar(arr_id, arr_e));
+        self.add_stmt(next, PrimStmt::AsgnVar(arr_id, arr_e));
         let arr_v = PrimVal::Var(arr_id);
 
-        let ix_v = self.convert_val(ix, current_open)?;
-        let to_e = to_f(self, arr_v.clone(), ix_v.clone())?;
+        let (next, ix_v) = self.convert_val(ix, next)?;
+        let (next, to_e) = to_f(self, arr_v.clone(), ix_v.clone(), next)?;
         self.add_stmt(
-            current_open,
+            next,
             PrimStmt::AsgnIndex(arr_id, ix_v.clone(), to_e.clone()),
         );
-        Ok(PrimExpr::Index(arr_v, ix_v))
+        Ok((next, PrimExpr::Index(arr_v, ix_v)))
     }
 
     fn convert_val<'a>(
         &mut self,
         expr: &'a Expr<'a, 'b, I>,
         current_open: NodeIx,
-    ) -> Result<PrimVal<'b>> {
-        let e = self.convert_expr(expr, current_open)?;
-        Ok(self.to_val(e, current_open))
+    ) -> Result<(NodeIx, PrimVal<'b>)> {
+        let (next_open, e) = self.convert_expr(expr, current_open)?;
+        Ok((next_open, self.to_val(e, next_open)))
     }
     fn make_loop<'a>(
         &mut self,
