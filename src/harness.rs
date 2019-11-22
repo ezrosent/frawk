@@ -252,5 +252,17 @@ for (k in m) {
         @input "",
         @types [ m1 :: Map { key: Some(Int), val: Some(Str) }, i :: Scalar(Some(Int))]
     );
+
+    test_program!(
+        flowy_operators,
+        r#" BEGIN {
+        x = 1 && 0
+        y = x || 3;
+        w = x || "0";
+        z = 3 ? 5 : 0 ? 8 : 7
+        print w, x, y, z
+        }"#,
+        "1 0 1 5\n"
+    );
     // TODO test more operators
 }

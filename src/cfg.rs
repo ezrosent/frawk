@@ -134,6 +134,13 @@ fn valid_lhs<'a, 'b, I>(e: &ast::Expr<'a, 'b, I>) -> bool {
 
 pub(crate) struct Context<'b, I> {
     hm: HashMap<I, Ident>,
+
+    // Many identifiers are generated and assigned to only once by construction, so we do not add
+    // them to the work list for renaming. All named identifiers are added, as well as the ones
+    // created during evaluation of conditional expression (?:, and, or). Doing this saves us not
+    // only time, but also extra phi nodes in the IR, which eventually lead to more assignments
+    // than are required.
+    may_rename: Vec<Ident>,
     defsites: HashMap<Ident, HashSet<NodeIx>>,
     orig: HashMap<NodeIx, HashSet<Ident>>,
     max: NumTy,
@@ -195,6 +202,7 @@ where
     pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
         let mut ctx = Context {
             hm: Default::default(),
+            may_rename: Default::default(),
             defsites: Default::default(),
             orig: Default::default(),
             max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations.
@@ -220,6 +228,15 @@ where
         ctx.insert_phis();
         ctx.rename(ctx.entry());
         Ok(ctx)
+    }
+
+    fn standalone_expr<'a>(
+        &mut self,
+        expr: &'a Expr<'a, 'b, I>,
+    ) -> Result<(NodeIx /*start*/, NodeIx /*end*/, PrimExpr<'b>)> {
+        let start = self.cfg.add_node(Default::default());
+        let (end, res) = self.convert_expr(expr, start)?;
+        Ok((start, end, res))
     }
 
     pub fn standalone_block<'a>(
@@ -367,34 +384,13 @@ where
                 }
             }
             If(cond, tcase, fcase) => {
-                let (next, c_val) = if let ast::Expr::PatLit(_) = cond {
-                    // For conditionals, pattern literals become matches against $0.
-                    use ast::{Binop::*, Expr::*, Unop::*};
-                    self.convert_val(&Binop(Match, &Unop(Column, &ILit(0)), cond), current_open)?
+                let tcase = self.standalone_block(tcase)?;
+                let fcase = if let Some(fcase) = fcase {
+                    Some(self.standalone_block(fcase)?)
                 } else {
-                    self.convert_val(cond, current_open)?
+                    None
                 };
-                current_open = next;
-                let (t_start, t_end) = self.standalone_block(tcase)?;
-                let next = self.cfg.add_node(Default::default());
-
-                // current_open => t_start if the condition holds
-                self.cfg
-                    .add_edge(current_open, t_start, Transition::new(c_val));
-                // continue to next after the true case is evaluated
-                self.cfg.add_edge(t_end, next, Transition::null());
-
-                if let Some(fcase) = fcase {
-                    // if an else case is there, compute a standalone block and set up the same
-                    // connections as before, this time with a null edge rather than c_val.
-                    let (f_start, f_end) = self.standalone_block(fcase)?;
-                    self.cfg.add_edge(current_open, f_start, Transition::null());
-                    self.cfg.add_edge(f_end, next, Transition::null());
-                } else {
-                    // otherwise continue directly from current_open.
-                    self.cfg.add_edge(current_open, next, Transition::null());
-                }
-                next
+                self.do_condition(cond, tcase, fcase, current_open)?
             }
             For(init, cond, update, body) => {
                 let init_end = if let Some(i) = init {
@@ -499,9 +495,15 @@ where
         &mut self,
         expr: &'a Expr<'a, 'b, I>,
         current_open: NodeIx,
-    ) -> Result<(NodeIx, PrimExpr<'b>)> /* should not create any new nodes. Expressions don't cause us to branch */
-    {
+    ) -> Result<(NodeIx, PrimExpr<'b>)> {
         use Expr::*;
+
+        // This isn't a function because we want the &s to point to the current stack frame.
+        macro_rules! to_bool {
+            ($e:expr) => {
+                &Unop(ast::Unop::Not, &Unop(ast::Unop::Not, $e))
+            };
+        }
         Ok((
             current_open,
             match expr {
@@ -522,6 +524,27 @@ where
                         next,
                         PrimExpr::CallBuiltin(builtins::Function::Binop(*op), smallvec![v1, v2]),
                     ));
+                }
+                ITE(cond, tcase, fcase) => {
+                    let res_id = self.fresh();
+                    self.may_rename.push(res_id);
+                    let (tstart, tend, te) = self.standalone_expr(tcase)?;
+                    let (fstart, fend, fe) = self.standalone_expr(fcase)?;
+                    self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te));
+                    self.add_stmt(fend, PrimStmt::AsgnVar(res_id, fe));
+                    let next = self.do_condition(
+                        cond,
+                        (tstart, tend),
+                        Some((fstart, fend)),
+                        current_open,
+                    )?;
+                    return Ok((next, PrimExpr::Val(PrimVal::Var(res_id))));
+                }
+                And(e1, e2) => {
+                    return self.convert_expr(&ITE(e1, to_bool!(e2), &ILit(0)), current_open)
+                }
+                Or(e1, e2) => {
+                    return self.convert_expr(&ITE(e1, &ILit(1), to_bool!(e2)), current_open)
                 }
                 Var(id) => {
                     if let Ok(bi) = builtins::Variable::try_from(id.clone()) {
@@ -648,7 +671,7 @@ where
                             )
                         }
                         (Some(from), Some(into)) => {
-                            let (next, e) = self.convert_expr(
+                            let (next, _) = self.convert_expr(
                                 &ast::Expr::Assign(
                                     into,
                                     &ast::Expr::Call(Either::Right(Nextline), vec![from]),
@@ -661,7 +684,7 @@ where
                             );
                         }
                         (None /*stdin*/, Some(into)) => {
-                            let (next, e) = self.convert_expr(
+                            let (next, _) = self.convert_expr(
                                 &ast::Expr::Assign(
                                     into,
                                     &ast::Expr::Call(Either::Right(NextlineStdin), vec![]),
@@ -742,6 +765,41 @@ where
             PrimStmt::AsgnIndex(arr_id, ix_v.clone(), to_e.clone()),
         );
         Ok((next, PrimExpr::Index(arr_v, ix_v)))
+    }
+
+    fn do_condition<'a>(
+        &mut self,
+        cond: &'a Expr<'a, 'b, I>,
+        tcase: (NodeIx, NodeIx),
+        fcase: Option<(NodeIx, NodeIx)>,
+        current_open: NodeIx,
+    ) -> Result<NodeIx> {
+        let (t_start, t_end) = tcase;
+        let (current_open, c_val) = if let ast::Expr::PatLit(_) = cond {
+            // For conditionals, pattern literals become matches against $0.
+            use ast::{Binop::*, Expr::*, Unop::*};
+            self.convert_val(&Binop(Match, &Unop(Column, &ILit(0)), cond), current_open)?
+        } else {
+            self.convert_val(cond, current_open)?
+        };
+        let next = self.cfg.add_node(Default::default());
+
+        // current_open => t_start if the condition holds
+        self.cfg
+            .add_edge(current_open, t_start, Transition::new(c_val));
+        // continue to next after the true case is evaluated
+        self.cfg.add_edge(t_end, next, Transition::null());
+
+        if let Some((f_start, f_end)) = fcase {
+            // Set up the same connections as before, this time with a null edge rather
+            // than c_val.
+            self.cfg.add_edge(current_open, f_start, Transition::null());
+            self.cfg.add_edge(f_end, next, Transition::null());
+        } else {
+            // otherwise continue directly from current_open.
+            self.cfg.add_edge(current_open, next, Transition::null());
+        }
+        Ok(next)
     }
 
     fn convert_val<'a>(
@@ -829,6 +887,7 @@ where
         }
         let next = self.fresh();
         self.hm.insert(i.clone(), next);
+        self.may_rename.push(next);
         next
     }
 
@@ -846,11 +905,7 @@ where
         // phis: the set of basic blocks that must have a phi node for a given variable.
         let mut phis = HashMap::<Ident, HashSet<NodeIx>>::new();
         let mut worklist = WorkList::default();
-        // Note, to be cautious we could insert Phis for all identifiers.  But that would introduce
-        // additional nodes for variables that are assigned to only once by construction. Instead
-        // we only use named variables. Of course, were this to change we would need to fall back
-        // on something more conservative.
-        for ident in self.hm.values().map(Clone::clone) {
+        for ident in self.may_rename.iter().cloned() {
             // Add all defsites into the worklist.
             let defsites = if let Some(ds) = self.defsites.get(&ident) {
                 ds

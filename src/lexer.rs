@@ -56,6 +56,11 @@ pub enum Tok<'a> {
     Decr,
     Not,
 
+    AND,
+    OR,
+    QUESTION,
+    COLON,
+
     Append, // >>
 
     Dollar,
@@ -119,6 +124,10 @@ static_map!(
     [",", Tok::Comma],
     ["in", Tok::In],
     ["!", Tok::Not],
+    ["&&", Tok::AND],
+    ["||", Tok::OR],
+    ["?", Tok::QUESTION],
+    [":", Tok::COLON],
     ["$", Tok::Dollar]
 );
 
