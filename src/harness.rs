@@ -264,5 +264,28 @@ for (k in m) {
         }"#,
         "1 0 1 5\n"
     );
+
+    // TODO I think that we are assigning too much. We have code like:
+    // 2-0 = 1-0
+    // 2-0[0] = 1;
+    // 3-0 = 2-0;
+    // 3-0[1] = 2;
+    // ...
+    // This isn't necessary. Let's see if it's easy to fix in the cfg translation (e.g.
+    // short-circuit if we see it's an ident and don't evaluate?)
+    test_program!(
+        map_contains,
+        r#" BEGIN {
+            m[0] = 1;
+            m[1] = 2;
+            if (0 in m) { print "yes!"; }
+            if (1 in m) { print "yes!"; }
+            if ("hi" in m) { print "no!"; }
+        }"#,
+        "yes!\nyes!\n"
+        @input "",
+        @types [m :: Map { key: Some(Str), val: Some(Int) }],
+    );
+
     // TODO test more operators
 }

@@ -73,7 +73,16 @@ impl std::fmt::Display for CompileError {
 }
 
 macro_rules! err {
-    ($($t:expr),*) => { Err($crate::common::CompileError(format!($($t),*))) }
+    ($head:expr) => {
+        Err($crate::common::CompileError(
+                format!(concat!("[", file!(), ":", line!(), ":", column!(), "] ", $head))
+        ))
+    };
+    ($head:expr, $($t:expr),+) => {
+        Err($crate::common::CompileError(
+                format!(concat!("[", file!(), ":", line!(), ":", column!(), "] ", $head), $($t),*)
+        ))
+    };
 }
 
 macro_rules! static_map {
