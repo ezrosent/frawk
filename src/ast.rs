@@ -100,7 +100,6 @@ pub enum Binop {
 //   instructions
 // TODO add support for "next"; just continue to the toplevel loop?
 // TODO add "delete"
-// TODO add "in" -- maybe not an operator, just a builtin
 // TODO desugaring for "split"
 // TODO add "close", make cache for regexes LRU.
 // TODO add UDFs
