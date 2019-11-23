@@ -1,6 +1,7 @@
 use crate::{
   arena::Arena,
   ast::{Expr, Stmt, Binop, Unop, Prog},
+  builtins::Function,
   common::Either,
   runtime::strton::{strtoi,strtod},
   lexer::{self, Tok},
@@ -142,7 +143,8 @@ PrecAnd: &'a Expr<'a, 'a, &'a str> = {
 }
 
 PrecIn: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecMatch> "in" <r: PrecMatch> => panic!("we have not yet wired in `in`"),
+    <l: PrecMatch> "in" <r: PrecMatch> =>
+        arena.alloc_v(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
     PrecMatch,
 }
 
@@ -178,11 +180,6 @@ PrecAndNoIn: &'a Expr<'a, 'a, &'a str> = {
     <l: PrecMatch> "&&" <r: PrecAndNoIn> => arena.alloc_v(Expr::And(l, r)),
     PrecMatch,
 }
-
-
-// This is where we would add ?: || &&
-// see: https://www.gnu.org/software/gawk/manual/html_node/Precedence.html
-//
 
 PrecMatch: &'a Expr<'a,'a,&'a str> = {
     <l: PrecMatch> "~" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::Match, l, r)),

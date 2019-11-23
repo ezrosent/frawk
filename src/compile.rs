@@ -420,6 +420,15 @@ impl<'a> Instrs<'a> {
             Binop(LTE) => gen_op!(LTE, [Float, LTEFloat], [Int, LTEInt], [Str, LTEStr]),
             Binop(GTE) => gen_op!(GTE, [Float, GTEFloat], [Int, GTEInt], [Str, GTEStr]),
             Binop(EQ) => gen_op!(EQ, [Float, EQFloat], [Int, EQInt], [Str, EQStr]),
+            Contains => gen_op!(
+                Contains,
+                [MapIntInt, ContainsIntInt],
+                [MapIntStr, ContainsIntStr],
+                [MapIntFloat, ContainsIntFloat],
+                [MapStrInt, ContainsStrInt],
+                [MapStrStr, ContainsStrStr],
+                [MapStrFloat, ContainsStrFloat]
+            ),
             ReadErr => self.push(Instr::ReadErr(res_reg.into(), conv_regs[0].into())),
             Nextline => self.push(Instr::NextLine(res_reg.into(), conv_regs[0].into())),
             ReadErrStdin => self.push(Instr::ReadErrStdin(res_reg.into())),

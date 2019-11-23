@@ -105,6 +105,7 @@ impl Display for Function {
             NextlineStdin => write!(f, "{}", "nextline(stdin)"),
             Setcol => write!(f, "{}", "$="),
             Split => write!(f, "{}", "split"),
+            Contains => write!(f, "{}", "contains"),
         }
     }
 }

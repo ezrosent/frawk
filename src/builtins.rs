@@ -19,6 +19,7 @@ pub enum Function {
     NextlineStdin,
     Setcol,
     Split,
+    Contains,
 }
 
 static_map!(
@@ -45,6 +46,8 @@ impl Function {
             ReadErrStdin | NextlineStdin => 0,
             ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Setcol | Binop(_) => 2,
+            // is this right?
+            Contains => 2,
             Print | Split => 3,
         }
     }
@@ -56,17 +59,23 @@ impl Function {
         cs: &types::Constants,
         deps: &[NodeIx],
     ) -> Result<()> {
+        use std::iter::once;
         if let Function::Split = self {
             // Split acts to assign into a variable, that means we need to propagate information
             // back out. In this case those are going to be variables 1 and 2, the key and value
             // nodes.
-            use std::iter::once;
 
             debug_assert_eq!(deps.len(), 4);
             let key = deps[1];
             let val = deps[2];
             nw.add_deps(key, once(cs.int_node))?;
             nw.add_deps(val, once(cs.str_node))?;
+        } else if let Function::Contains = self {
+            // Attempting to look up in a map informs its type.
+            debug_assert_eq!(deps.len(), 3);
+            let key = deps[0];
+            let query = deps[2];
+            nw.add_deps(key, once(query))?;
         }
         Ok(())
     }
@@ -123,6 +132,11 @@ impl Function {
                 }
             }
             Binop(Div) => (smallvec![Float;2], Float),
+            Contains => match incoming[0] {
+                MapIntInt | MapIntStr | MapIntFloat => (smallvec![incoming[0], Int], Int),
+                MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
+                _ => return err!("invalid input spec fo Contains: {:?}", &incoming[..]),
+            },
             Print => (smallvec![Str, Str, Int], Int),
             PrintStdout => (smallvec![Str], Int),
             Nextline => (smallvec![Str], Str),
@@ -146,6 +160,7 @@ impl Function {
     pub(crate) fn signature(&self) -> SmallVec<Kind> {
         match self {
             Function::Split => smallvec![Kind::Scalar, Kind::Map, Kind::Scalar],
+            Function::Contains => smallvec![Kind::Map, Kind::Scalar],
             _ => smallvec![Kind::Scalar; self.fixed_arity()],
         }
     }
@@ -181,6 +196,7 @@ impl Propagator for Function {
             }
             Binop(Div) => (true, Some(Float)),
             Print => (true, None),
+            Contains => (true, Some(Int)),
             PrintStdout => (true, None),
             ReadErr | ReadErrStdin => (true, Some(Int)),
             Nextline | NextlineStdin => (true, Some(Str)),

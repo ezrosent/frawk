@@ -675,17 +675,17 @@ impl Constraints {
                 }
             }
             CallBuiltin(b, args) => {
-                let mut args = args.clone();
                 let arg_ks = b.signature();
                 // optimize for the all-scalar case; if maps are involved we will just grow the
                 // vector.
                 let mut deps = SmallVec::with_capacity(args.len());
+                let mut ix = 0;
                 for k in arg_ks.iter() {
-                    match args.pop() {
+                    match args.get(ix) {
                         Some(PrimVal::StrLit(_)) => deps.push(self.constants.str_node),
                         Some(PrimVal::ILit(_)) => deps.push(self.constants.int_node),
                         Some(PrimVal::FLit(_)) => deps.push(self.constants.float_node),
-                        Some(PrimVal::Var(id)) => match self.get_var(id)? {
+                        Some(PrimVal::Var(id)) => match self.get_var(*id)? {
                             TVar::Scalar(v) | TVar::Iter(v) => deps.push(v),
                             TVar::Map { key, val } => {
                                 deps.push(key);
@@ -700,6 +700,7 @@ impl Constraints {
                             }
                         },
                     }
+                    ix += 1;
                 }
                 b.feedback(&mut self.network, &self.constants, &deps[..])?;
                 Ok(TVar::Scalar(
