@@ -754,10 +754,17 @@ where
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
         let (next, arr_e) = self.convert_expr(arr, current_open)?;
-        let arr_id = self.fresh();
-        self.add_stmt(next, PrimStmt::AsgnVar(arr_id, arr_e));
-        let arr_v = PrimVal::Var(arr_id);
 
+        // Only assign to a new variable if we need to.
+        let arr_id = if let PrimExpr::Val(PrimVal::Var(id)) = arr_e {
+            id
+        } else {
+            let arr_id = self.fresh();
+            self.add_stmt(next, PrimStmt::AsgnVar(arr_id, arr_e));
+            arr_id
+        };
+
+        let arr_v = PrimVal::Var(arr_id);
         let (next, ix_v) = self.convert_val(ix, next)?;
         let (next, to_e) = to_f(self, arr_v.clone(), ix_v.clone(), next)?;
         self.add_stmt(
