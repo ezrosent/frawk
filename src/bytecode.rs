@@ -208,6 +208,12 @@ pub(crate) enum Instr<'a> {
     ContainsStrInt(Reg<Int>, Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
     ContainsStrStr(Reg<Int>, Reg<runtime::StrMap<'a, Str<'a>>>, Reg<Str<'a>>),
     ContainsStrFloat(Reg<Int>, Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
+    DeleteIntInt(Reg<runtime::IntMap<Int>>, Reg<Int>),
+    DeleteIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
+    DeleteIntFloat(Reg<runtime::IntMap<Float>>, Reg<Int>),
+    DeleteStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
+    DeleteStrStr(Reg<runtime::StrMap<'a, Str<'a>>>, Reg<Str<'a>>),
+    DeleteStrFloat(Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
     IterBeginIntInt(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Int>>),
     IterBeginIntStr(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Str<'a>>>),
     IterBeginIntFloat(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Float>>),
@@ -722,6 +728,36 @@ impl<'a> Interp<'a> {
                         let v = arr.get(k).is_some() as i64;
                         let res = *res;
                         *self.get_mut(res) = v;
+                    }
+                    DeleteIntInt(arr, k) => {
+                        let arr = index(&self.maps_int_int, arr);
+                        let k = index(&self.ints, k);
+                        arr.delete(k);
+                    }
+                    DeleteIntFloat(arr, k) => {
+                        let arr = index(&self.maps_int_float, arr);
+                        let k = index(&self.ints, k);
+                        arr.delete(k);
+                    }
+                    DeleteIntStr(arr, k) => {
+                        let arr = index(&self.maps_int_str, arr);
+                        let k = index(&self.ints, k);
+                        arr.delete(k);
+                    }
+                    DeleteStrInt(arr, k) => {
+                        let arr = index(&self.maps_str_int, arr);
+                        let k = index(&self.strs, k);
+                        arr.delete(k);
+                    }
+                    DeleteStrFloat(arr, k) => {
+                        let arr = index(&self.maps_str_float, arr);
+                        let k = index(&self.strs, k);
+                        arr.delete(k);
+                    }
+                    DeleteStrStr(arr, k) => {
+                        let arr = index(&self.maps_str_str, arr);
+                        let k = index(&self.strs, k);
+                        arr.delete(k);
                     }
                     StoreIntInt(arr, k, v) => {
                         let arr = index(&self.maps_int_int, arr);

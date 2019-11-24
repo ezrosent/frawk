@@ -68,6 +68,7 @@ pub enum Tok<'a> {
     Newline,
     Comma,
     In,
+    Delete,
 
     Ident(&'a str),
     StrLit(&'a str),
@@ -128,6 +129,7 @@ static_map!(
     ["||", Tok::OR],
     ["?", Tok::QUESTION],
     [":", Tok::COLON],
+    ["delete", Tok::Delete],
     ["$", Tok::Dollar]
 );
 
@@ -447,7 +449,6 @@ mod tests {
 
     #[test]
     fn basic() {
-        let a = Arena::default();
         let toks = lex_str(
             r#" if (x == yzk){
             print x<y, y<=z, z;

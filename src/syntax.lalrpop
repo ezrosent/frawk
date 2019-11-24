@@ -65,6 +65,8 @@ Redirect: (&'a Expr<'a, 'a, &'a str>, bool) = {
 
 BaseStmt: &'a Stmt<'a,'a,&'a str> = {
     <e: Expr> => arena.alloc_v(Stmt::Expr(e)),
+    "delete" <i: IndexBase> =>
+        arena.alloc_v(Stmt::Expr(arena.alloc_v(Expr::Call(Either::Right(Function::Delete), vec![i.0, i.1])))),
     "print" <pa:PrintArgs?> <re:Redirect?> => arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "break" => arena.alloc_v(Stmt::Break),
     "continue" => arena.alloc_v(Stmt::Continue),
@@ -249,7 +251,11 @@ StrLit: &'a Expr<'a,'a,&'a str> = {
 }
 
 Index: &'a Expr<'a,'a,&'a str> = {
-  <arr:BaseTerm>"[" <e:BaseTerm> "]" => arena.alloc_v(Expr::Index(arr, e)),
+    <i:IndexBase> => arena.alloc_v(Expr::Index(i.0, i.1)),
+}
+
+IndexBase: (&'a Expr<'a,'a,&'a str>, &'a Expr<'a,'a,&'a str>) = {
+  <arr:BaseTerm> "[" <e:Expr> "]" => (arr, e),
 }
 
 BaseTerm: &'a Expr<'a,'a, &'a str> = {
@@ -319,6 +325,7 @@ extern {
       "&&" => Tok::AND,
       "?" => Tok::QUESTION,
       ":" => Tok::COLON,
+      "delete" => Tok::Delete,
       "in" => Tok::In,
   }
 }

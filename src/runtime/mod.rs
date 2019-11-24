@@ -449,6 +449,9 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
     pub(crate) fn insert(&self, k: K, v: V) {
         self.0.borrow_mut().insert(k, v);
     }
+    pub(crate) fn delete(&self, k: &K) {
+        self.0.borrow_mut().remove(k);
+    }
 }
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     pub(crate) fn get(&self, k: &K) -> Option<V> {

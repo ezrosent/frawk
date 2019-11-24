@@ -570,12 +570,26 @@ where
                         }
                         Either::Right(bi) => *bi,
                     };
+
                     let mut prim_args = SmallVec::with_capacity(args.len());
                     let mut open = current_open;
                     for a in args.iter() {
                         let (next, v) = self.convert_val(a, open)?;
                         open = next;
                         prim_args.push(v);
+                    }
+                    if let builtins::Function::Split = bi {
+                        if prim_args.len() == 2 {
+                            let fs = self.field_sep();
+                            self.add_stmt(
+                                current_open,
+                                PrimStmt::AsgnVar(
+                                    fs.clone(),
+                                    PrimExpr::LoadBuiltin(builtins::Variable::OFS),
+                                ),
+                            );
+                            prim_args.push(PrimVal::Var(fs));
+                        }
                     }
                     return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
                 }

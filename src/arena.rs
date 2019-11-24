@@ -235,7 +235,7 @@ mod tests {
             let off = (ptr as usize) % align;
             assert_eq!(off, 0);
         }
-        let s = a.alloc_str("a");
+        let _s = a.alloc_str("a");
         let i = a.alloc_v(0usize);
         assert_aligned(i);
     }

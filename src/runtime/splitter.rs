@@ -207,7 +207,7 @@ mod test {
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
-        let mut expected: Vec<_> = LINE.split(bs.as_str()).map(|x| Str::from(x)).collect();
+        let expected: Vec<_> = LINE.split(bs.as_str()).map(|x| Str::from(x)).collect();
         assert_eq!(lines, expected);
     }
 
