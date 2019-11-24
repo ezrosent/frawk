@@ -98,10 +98,14 @@ pub enum Binop {
 // length($0)
 //   * for polymorphism, just exempt it from kind inference, and just generate separate
 //   instructions
-// TODO add support for "next"; just continue to the toplevel loop?
-// TODO desugaring for "split"
+// TODO add support for "next"; just continue to the toplevel loop -- annotate while loop?
 // TODO add "close", make cache for regexes LRU.
+// TODO trig functions
+// TODO printf
 // TODO add UDFs
+// TODO CLI
+// TODO multiple files
+// TODO backend
 
 static_map!(
     BINOPS<&'static str, Binop>,
