@@ -441,13 +441,25 @@ impl<'a> Instrs<'a> {
                     conv_regs[1].into(),
                     conv_regs[2].into(),
                 )
-            } else {
+            } else if conv_tys[1] == Ty::MapStrStr {
                 Instr::SplitStr(
                     res_reg.into(),
                     conv_regs[0].into(),
                     conv_regs[1].into(),
                     conv_regs[2].into(),
                 )
+            } else {
+                return err!("invalid input types to split: {:?}", &conv_tys[..]);
+            }),
+            Length => self.push(match conv_tys[0] {
+                Ty::MapIntInt => Instr::LenIntInt(res_reg.into(), conv_regs[0].into()),
+                Ty::MapIntStr => Instr::LenIntStr(res_reg.into(), conv_regs[0].into()),
+                Ty::MapIntFloat => Instr::LenIntFloat(res_reg.into(), conv_regs[0].into()),
+                Ty::MapStrInt => Instr::LenStrInt(res_reg.into(), conv_regs[0].into()),
+                Ty::MapStrStr => Instr::LenStrStr(res_reg.into(), conv_regs[0].into()),
+                Ty::MapStrFloat => Instr::LenStrFloat(res_reg.into(), conv_regs[0].into()),
+                Ty::Str => Instr::LenStr(res_reg.into(), conv_regs[0].into()),
+                _ => return err!("invalid input type for length: {:?}", &conv_tys[..]),
             }),
             Print => {
                 // XXX this imports a specific assumption on how the PrimStmt is generated, we may

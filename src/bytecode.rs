@@ -214,6 +214,13 @@ pub(crate) enum Instr<'a> {
     DeleteStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
     DeleteStrStr(Reg<runtime::StrMap<'a, Str<'a>>>, Reg<Str<'a>>),
     DeleteStrFloat(Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
+    LenIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>),
+    LenIntFloat(Reg<Int>, Reg<runtime::IntMap<Float>>),
+    LenIntStr(Reg<Int>, Reg<runtime::IntMap<Str<'a>>>),
+    LenStrInt(Reg<Int>, Reg<runtime::StrMap<'a, Int>>),
+    LenStrFloat(Reg<Int>, Reg<runtime::StrMap<'a, Float>>),
+    LenStrStr(Reg<Int>, Reg<runtime::StrMap<'a, Str<'a>>>),
+
     IterBeginIntInt(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Int>>),
     IterBeginIntStr(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Str<'a>>>),
     IterBeginIntFloat(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Float>>),
@@ -758,6 +765,42 @@ impl<'a> Interp<'a> {
                         let arr = index(&self.maps_str_str, arr);
                         let k = index(&self.strs, k);
                         arr.delete(k);
+                    }
+                    LenIntInt(res, arr) => {
+                        let arr = *arr;
+                        let len = self.get(arr).len();
+                        let res = *res;
+                        *self.get_mut(res) = len as Int;
+                    }
+                    LenIntFloat(res, arr) => {
+                        let arr = *arr;
+                        let len = self.get(arr).len();
+                        let res = *res;
+                        *self.get_mut(res) = len as Int;
+                    }
+                    LenIntStr(res, arr) => {
+                        let arr = *arr;
+                        let len = self.get(arr).len();
+                        let res = *res;
+                        *self.get_mut(res) = len as Int;
+                    }
+                    LenStrInt(res, arr) => {
+                        let arr = *arr;
+                        let len = self.get(arr).len();
+                        let res = *res;
+                        *self.get_mut(res) = len as Int;
+                    }
+                    LenStrFloat(res, arr) => {
+                        let arr = *arr;
+                        let len = self.get(arr).len();
+                        let res = *res;
+                        *self.get_mut(res) = len as Int;
+                    }
+                    LenStrStr(res, arr) => {
+                        let arr = *arr;
+                        let len = self.get(arr).len();
+                        let res = *res;
+                        *self.get_mut(res) = len as Int;
                     }
                     StoreIntInt(arr, k, v) => {
                         let arr = index(&self.maps_int_int, arr);

@@ -470,7 +470,9 @@ impl Constraints {
                 }
                 // N.B: Awk lets you pass fewer variables than declared in the function.
                 for (a, k) in args.iter().zip(arg_ks.iter()) {
-                    self.assert_val_kind(a, *k)?;
+                    if let Some(k) = k {
+                        self.assert_val_kind(a, *k)?;
+                    }
                 }
                 match e {
                     Left(k) => {
@@ -693,9 +695,15 @@ impl Constraints {
                             }
                         },
                         None => match k {
-                            Kind::Scalar | Kind::Iter => deps.push(self.constants.nil_node),
-                            Kind::Map => {
+                            Some(Kind::Scalar) | Some(Kind::Iter) => {
+                                deps.push(self.constants.nil_node)
+                            }
+                            Some(Kind::Map) => {
                                 deps.push(self.constants.nil_node);
+                                deps.push(self.constants.nil_node);
+                            }
+                            None => {
+                                // XXX: this may not work?
                                 deps.push(self.constants.nil_node);
                             }
                         },
