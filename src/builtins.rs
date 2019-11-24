@@ -19,6 +19,7 @@ pub enum Function {
     NextlineStdin,
     Setcol,
     Split,
+    Length,
     Contains,
     Delete,
 }
@@ -26,7 +27,8 @@ pub enum Function {
 static_map!(
     FUNCTIONS<&'static str, Function>,
     ["print", Function::Print],
-    ["split", Function::Split]
+    ["split", Function::Split],
+    ["length", Function::Length]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -45,7 +47,7 @@ impl Function {
         use Function::*;
         match self {
             ReadErrStdin | NextlineStdin => 0,
-            ReadErr | Nextline | PrintStdout | Unop(_) => 1,
+            Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Setcol | Binop(_) => 2,
             // is this right?
             Delete | Contains => 2,
@@ -151,6 +153,7 @@ impl Function {
             ReadErrStdin => (smallvec![], Int),
             // irrelevant return type
             Setcol => (smallvec![Int, Str], Int),
+            Length => (smallvec![incoming[0]], Int),
             // Split's second input can be a map of either type
             Split => {
                 if let MapIntStr | MapStrStr = incoming[1] {
@@ -163,11 +166,12 @@ impl Function {
     }
 
     // Return kind is alway scalar. AWK lets you just assign into a provided map.
-    pub(crate) fn signature(&self) -> SmallVec<Kind> {
+    pub(crate) fn signature(&self) -> SmallVec<Option<Kind>> {
         match self {
-            Function::Split => smallvec![Kind::Scalar, Kind::Map, Kind::Scalar],
-            Function::Contains | Function::Delete => smallvec![Kind::Map, Kind::Scalar],
-            _ => smallvec![Kind::Scalar; self.fixed_arity()],
+            Function::Split => smallvec![Some(Kind::Scalar), Some(Kind::Map), Some(Kind::Scalar)],
+            Function::Contains | Function::Delete => smallvec![Some(Kind::Map), Some(Kind::Scalar)],
+            Function::Length => smallvec![None],
+            _ => smallvec![Some(Kind::Scalar); self.fixed_arity()],
         }
     }
 }
@@ -209,6 +213,7 @@ impl Propagator for Function {
             Nextline | NextlineStdin => (true, Some(Str)),
             Setcol => (true, Some(Int)), // no result
             Split => (true, Some(Int)),
+            Length => (true, Some(Int)),
         }
     }
 }

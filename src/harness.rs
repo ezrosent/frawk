@@ -293,5 +293,15 @@ for (k in m) {
         @types [m :: Map { key: Some(Str), val: Some(Int) }]
     );
 
+    test_program!(
+        lengths,
+        r#" BEGIN {
+        h="12345"
+        m[0]=1;m[1]=2;m[2]=3;
+        print length(h), length(m)
+        }"#,
+        "5 3\n"
+    );
+
     // TODO test more operators
 }

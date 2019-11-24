@@ -114,8 +114,6 @@ SepBase: () = { ";", "\n" }
 
 pub(crate) Expr: &'a Expr<'a,'a,&'a str> = {
     "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
-    <i:"CALLSTART"> <args:PrintArgs?> ")" =>
-        arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
     PrecAsgn
 };
 
@@ -265,6 +263,8 @@ BaseTerm: &'a Expr<'a,'a, &'a str> = {
   "INT" => arena.alloc_v(Expr::ILit(strtoi(<>))),
   "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>))),
   "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
+    <i:"CALLSTART"> <args:PrintArgs?> ")" =>
+        arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
   "(" <e:Expr> ")" => e,
 }
 
