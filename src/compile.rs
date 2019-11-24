@@ -467,6 +467,33 @@ impl<'a> Instrs<'a> {
                 self.push(Instr::PrintStdout(conv_regs[0].into()));
                 return Ok(());
             }
+            Delete => match &conv_tys[0] {
+                Ty::MapIntInt => self.push(Instr::DeleteIntInt(
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                )),
+                Ty::MapIntStr => self.push(Instr::DeleteIntStr(
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                )),
+                Ty::MapIntFloat => self.push(Instr::DeleteIntFloat(
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                )),
+                Ty::MapStrInt => self.push(Instr::DeleteStrInt(
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                )),
+                Ty::MapStrStr => self.push(Instr::DeleteStrStr(
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                )),
+                Ty::MapStrFloat => self.push(Instr::DeleteStrFloat(
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                )),
+                _ => return err!("incorrect parameter types for Delete: {:?}", &conv_tys[..]),
+            },
         };
         self.convert(dst_reg, dst_ty, res_reg, res_ty)
     }

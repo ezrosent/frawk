@@ -106,6 +106,7 @@ impl Display for Function {
             Setcol => write!(f, "{}", "$="),
             Split => write!(f, "{}", "split"),
             Contains => write!(f, "{}", "contains"),
+            Delete => write!(f, "{}", "delete"),
         }
     }
 }

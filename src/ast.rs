@@ -99,7 +99,6 @@ pub enum Binop {
 //   * for polymorphism, just exempt it from kind inference, and just generate separate
 //   instructions
 // TODO add support for "next"; just continue to the toplevel loop?
-// TODO add "delete"
 // TODO desugaring for "split"
 // TODO add "close", make cache for regexes LRU.
 // TODO add UDFs

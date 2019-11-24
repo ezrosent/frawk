@@ -295,7 +295,7 @@ mod test {
             .max()
             .unwrap();
         let mut cfg = Graph::<(), ()>::new();
-        let mut ixes: Vec<_> = (0..n_nodes)
+        let ixes: Vec<_> = (0..n_nodes)
             .map(|_| cfg.add_node(Default::default()))
             .collect();
         cfg.extend_with_edges(edges.into_iter().map(|(i, j)| (ixes[i.ix()], ixes[j.ix()])));

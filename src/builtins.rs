@@ -20,6 +20,7 @@ pub enum Function {
     Setcol,
     Split,
     Contains,
+    Delete,
 }
 
 static_map!(
@@ -47,7 +48,7 @@ impl Function {
             ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Setcol | Binop(_) => 2,
             // is this right?
-            Contains => 2,
+            Delete | Contains => 2,
             Print | Split => 3,
         }
     }
@@ -137,6 +138,11 @@ impl Function {
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
                 _ => return err!("invalid input spec fo Contains: {:?}", &incoming[..]),
             },
+            Delete => match incoming[0] {
+                MapIntInt | MapIntStr | MapIntFloat => (smallvec![incoming[0], Int], Int),
+                MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
+                _ => return err!("invalid input spec fo Delete: {:?}", &incoming[..]),
+            },
             Print => (smallvec![Str, Str, Int], Int),
             PrintStdout => (smallvec![Str], Int),
             Nextline => (smallvec![Str], Str),
@@ -160,7 +166,7 @@ impl Function {
     pub(crate) fn signature(&self) -> SmallVec<Kind> {
         match self {
             Function::Split => smallvec![Kind::Scalar, Kind::Map, Kind::Scalar],
-            Function::Contains => smallvec![Kind::Map, Kind::Scalar],
+            Function::Contains | Function::Delete => smallvec![Kind::Map, Kind::Scalar],
             _ => smallvec![Kind::Scalar; self.fixed_arity()],
         }
     }
@@ -197,6 +203,7 @@ impl Propagator for Function {
             Binop(Div) => (true, Some(Float)),
             Print => (true, None),
             Contains => (true, Some(Int)),
+            Delete => (true, Some(Int)),
             PrintStdout => (true, None),
             ReadErr | ReadErrStdin => (true, Some(Int)),
             Nextline | NextlineStdin => (true, Some(Str)),

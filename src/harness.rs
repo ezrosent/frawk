@@ -243,12 +243,23 @@ for (k in m) {
     );
 
     test_program!(
-        explicit_split,
+        explicit_split_fs,
         r#" BEGIN {
-    split("where is all of this going", m1, /[ \t]+/);
+    split("where is all of this going", m1);
     for (i=1; i<=6; i++) print i, m1[i]
     }"#,
         "1 where\n2 is\n3 all\n4 of\n5 this\n6 going\n",
+        @input "",
+        @types [ m1 :: Map { key: Some(Int), val: Some(Str) }, i :: Scalar(Some(Int))]
+    );
+
+    test_program!(
+        explicit_split,
+        r#" BEGIN {
+    split("where-is-this-all-going", m1, "-");
+    for (i=1; i<=6; i++) print i, m1[i]
+    }"#,
+        "1 where\n2 is\n3 this\n4 all\n5 going\n6 \n",
         @input "",
         @types [ m1 :: Map { key: Some(Int), val: Some(Str) }, i :: Scalar(Some(Int))]
     );
@@ -270,11 +281,14 @@ for (k in m) {
         r#" BEGIN {
             m[0] = 1;
             m[1] = 2;
-            if (0 in m) { print "yes!"; }
-            if (1 in m) { print "yes!"; }
+            if (0 in m) { print "yes 0!"; }
+            if (1 in m) { print "yes 1!"; }
             if ("hi" in m) { print "no!"; }
+            if (1)
+            delete m[0]
+            if (0 in m) { print "yes 2!"; }
         }"#,
-        "yes!\nyes!\n",
+        "yes 0!\nyes 1!\n",
         @input "",
         @types [m :: Map { key: Some(Str), val: Some(Int) }]
     );

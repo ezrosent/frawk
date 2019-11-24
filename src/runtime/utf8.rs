@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_partial() {
-        let mut bs: Vec<_> = UTF8.as_bytes().iter().cloned().collect();
+        let bs: Vec<_> = UTF8.as_bytes().iter().cloned().collect();
         let l = bs.len();
         let full = super::parse_utf8_clipped(&bs[..]).expect("full");
         assert_eq!(UTF8.as_str(), full);
