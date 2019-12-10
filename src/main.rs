@@ -15,6 +15,7 @@ pub mod harness;
 pub mod lexer;
 pub mod runtime;
 pub mod types;
+pub mod types2;
 extern crate elsa;
 extern crate hashbrown;
 extern crate jemallocator;
