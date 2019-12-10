@@ -94,10 +94,6 @@ pub enum Binop {
 // Once we have done this, it's time to add a parser. That will let us clean out a lot of bugs and
 // get a more robust test suite as well.
 //
-// TODO add "length" -- works on strings and arrays, along with desugaring for length() =>
-// length($0)
-//   * for polymorphism, just exempt it from kind inference, and just generate separate
-//   instructions
 // TODO add support for "next"; just continue to the toplevel loop -- annotate while loop?
 // TODO add "close", make cache for regexes LRU.
 // TODO trig functions
@@ -106,6 +102,8 @@ pub enum Binop {
 // TODO CLI
 // TODO multiple files
 // TODO backend
+//
+// TVar is the variable?
 
 static_map!(
     BINOPS<&'static str, Binop>,
