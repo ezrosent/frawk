@@ -4,7 +4,7 @@ use crate::common::{self, NodeIx, Result};
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub(crate) enum Scalar {
+pub(crate) enum BaseTy {
     // TODO(ezr): think about if we need this; I think we do because of printing.
     Null,
     Int,
@@ -119,28 +119,81 @@ struct Edge {
 
 enum Rule {
     Var,
-    Const(TVar<Scalar>),
+    Const(TVar<BaseTy>),
 }
 
-pub(crate) type State = Option<TVar<Option<Scalar>>>;
+pub(crate) type State = Option<TVar<Option<BaseTy>>>;
 
 impl Rule {
-    fn step(&self, deps: &[Constraint<State>]) -> State {
-        match self {
-            // Do the usual LUB business
-            Rule::Var => unimplemented!(),
-            Rule::Const(tv) => tv.abs(),
+    // TODO(ezr): Why also have `cur`? This allows us to only hand the deps back that have changed
+    // since the last update. But be careful about how this will affect UDF inference.
+    // TODO(ezr): Do we need to make kind constraints bidirectional? Lets see how far we get
+    // without.
+    fn step(&self, prev: &State, deps: &[State]) -> Result<State> {
+        fn value_rule(b1: BaseTy, b2: BaseTy) -> BaseTy {
+            use BaseTy::*;
+            match (b1, b2) {
+                (Null, _) | (_, Null) | (Str, _) | (_, Str) => Str,
+                (Float, _) | (_, Float) => Float,
+                (Int, Int) => Int,
+            }
         }
+        if let Rule::Const(tv) = self {
+            return Ok(tv.abs());
+        }
+        let mut cur = prev.clone();
+        for d in deps.iter().cloned() {
+            use TVar::*;
+            cur = match (cur, d) {
+                (None, x) | (x, None) => x,
+                (Some(x), Some(y)) => match (x, y) {
+                    (Iter(x), Iter(None)) | (Iter(None), Iter(x)) => Some(Iter(x)),
+                    (Iter(Some(x)), Iter(Some(y))) => {
+                        if x == y {
+                            cur
+                        } else {
+                            return err!("Incompatible iterator types: {:?} vs. {:?}", x, y);
+                        }
+                    }
+                    (Scalar(x), Scalar(None)) | (Scalar(None), Scalar(x)) => Some(Scalar(x)),
+                    (Scalar(Some(x)), Scalar(Some(y))) => Some(Scalar(Some(value_rule(x, y)))),
+                    // rustfmt really blows up these next two patterns.
+                    #[rustfmt::skip]
+                    (Map {key: Some(k), val: Some(v)}, Map {key: None, val: None}) |
+                    (Map {key: None, val: None}, Map {key: Some(k), val: Some(v)}) |
+                    (Map {key: Some(k), val: None}, Map {key: None, val: Some(v)}) |
+                    (Map {key: None, val: Some(v)}, Map {key: Some(k), val: None})
+                    => Some(Map {
+                        key: Some(k),
+                        val: Some(v),
+                    }),
+
+                    #[rustfmt::skip]
+                    (
+                        Map {key: Some(k1), val: Some(v1)},
+                        Map {key: Some(k2), val: Some(v2)},
+                    ) => {
+                        use BaseTy::*;
+                        let key = Some(match (k1, k2) {
+                            (Int, Int) => Int,
+                            (_, _) => Str,
+                        });
+                        let val = Some(value_rule(v1, v2));
+                        Some(Map { key, val })
+                    }
+                    (t1, t2) => return err!("kinds do not match. {:?} vs {:?}", t1, t2),
+                },
+            };
+        }
+        Ok(cur)
     }
 }
 
-fn concrete(state: State) -> TVar<Scalar> {
-    let null = Scalar::Null;
-    let string = Scalar::Str;
-    fn concrete_scalar(o: Option<Scalar>) -> Scalar {
+fn concrete(state: State) -> TVar<BaseTy> {
+    fn concrete_scalar(o: Option<BaseTy>) -> BaseTy {
         match o {
             Some(s) => s,
-            None => Scalar::Null,
+            None => BaseTy::Null,
         }
     }
 
@@ -152,15 +205,15 @@ fn concrete(state: State) -> TVar<Scalar> {
             Some(Map { key, val }) => Map {
                 key: {
                     let k = concrete_scalar(key);
-                    if k == null {
-                        string
+                    if let BaseTy::Null = k {
+                        BaseTy::Str
                     } else {
                         k
                     }
                 },
                 val: concrete_scalar(val),
             },
-            None => Scalar(null),
+            None => Scalar(BaseTy::Null),
         }
     }
 }
@@ -168,6 +221,7 @@ fn concrete(state: State) -> TVar<Scalar> {
 struct Node {
     rule: Rule,
     cur_val: State,
+    // TODO(ezr): put debugging information in here?
 }
 
 impl Node {
