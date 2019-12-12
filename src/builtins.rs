@@ -3,6 +3,7 @@ use crate::ast;
 use crate::common::{NodeIx, Result};
 use crate::compile;
 use crate::types::{self, prop, Kind, Propagator, Scalar, SmallVec, TVar};
+use crate::types2;
 use smallvec::smallvec;
 
 use std::convert::TryFrom;
@@ -173,6 +174,11 @@ impl Function {
             Function::Length => smallvec![None],
             _ => smallvec![Some(Kind::Scalar); self.fixed_arity()],
         }
+    }
+
+    // TODO(ezr): rename this once old types module is gone
+    pub(crate) fn step_t2(&self, args: &[types2::State]) -> Result<types2::State> {
+        unimplemented!()
     }
 }
 
