@@ -156,11 +156,8 @@ enum Rule {
 pub(crate) type State = Option<TVar<Option<BaseTy>>>;
 
 impl Rule {
-    // TODO(ezr): Why also have `cur`? This allows us to only hand the deps back that have changed
+    // TODO(ezr): Why also have `prev`? This allows us to only hand the deps back that have changed
     // since the last update. But be careful about how this will affect UDF inference.
-    // TODO(ezr): Do we need to make kind constraints bidirectional? Lets see how far we get
-    // without.
-    // TODO(ezr): make deps an iterator?
     fn step(&self, prev: &State, deps: &[State]) -> Result<State> {
         fn value_rule(b1: BaseTy, b2: BaseTy) -> BaseTy {
             use BaseTy::*;
@@ -205,17 +202,6 @@ impl Rule {
                         Map {key: Some(k1), val: Some(v1)},
                         Map {key: Some(k2), val: Some(v2)},
                     ) => {
-                        // TODO(ezr): While we do want to promote Null => Str, this could cause
-                        // some errors during compilation, as we do not support conversions for map
-                        // types.
-                        //
-                        // The solution is to ensure a bidirectional constraint when assigning two
-                        // maps. We of course may not know until later, what the kind of a variable
-                        // is! That probably means we have to mutate the graph here. Can we add a
-                        // "SameAs(ix, T)" constraint variant (or just give `eval` access to source
-                        // and target). That doesn't really change the problem here though. You may
-                        // just want to return a flag that says "all arrows bidirectional" and then
-                        // make that adjustment during `solve`.
                         use BaseTy::*;
                         let key = Some(match (k1, k2) {
                             (Int, Int) => Int,
