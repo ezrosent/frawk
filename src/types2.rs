@@ -393,10 +393,11 @@ struct TypeContext {
 
 impl Default for TypeContext {
     fn default() -> TypeContext {
-        let mut nw = Network::default();
-        let base = HashMap::default();
-        let env = HashMap::default();
-        TypeContext { nw, base, env }
+        TypeContext {
+            nw: Default::default(),
+            base: Default::default(),
+            env: Default::default(),
+        }
     }
 }
 
