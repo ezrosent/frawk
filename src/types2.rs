@@ -1,10 +1,12 @@
+use crate::ast;
 use crate::builtins;
+use crate::cfg::{self, Ident};
 use crate::common::{self, NodeIx, NumTy, Result};
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum BaseTy {
     // TODO(ezr): think about if we need this; I think we do because of printing.
     Null,
@@ -13,7 +15,7 @@ pub(crate) enum BaseTy {
     Str,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum TVar<T> {
     Iter(T),
     Scalar(T),
@@ -36,7 +38,7 @@ impl<T> TVar<T> {
 }
 
 impl<T: Clone> TVar<T> {
-    fn abs(&self) -> Option<TVar<Option<T>>> {
+    pub(crate) fn abs(&self) -> Option<TVar<Option<T>>> {
         Some(self.map(|t| Some(t.clone())))
     }
 }
@@ -48,6 +50,8 @@ enum Constraint<T> {
     Key(T),
     ValIn(T),
     Val(T),
+    IterVal(T),
+    IterValIn(T),
     Flows(T),
     // TODO(ezr): have a shared Vec and just store a slice here?
     CallBuiltin(SmallVec<NodeIx>, builtins::Function),
@@ -60,6 +64,8 @@ impl<T> Constraint<T> {
             Constraint::Key(_) => Constraint::Key(s),
             Constraint::ValIn(_) => Constraint::ValIn(s),
             Constraint::Val(_) => Constraint::Val(s),
+            Constraint::IterValIn(_) => Constraint::IterValIn(s),
+            Constraint::IterVal(_) => Constraint::IterVal(s),
             Constraint::Flows(_) => Constraint::Flows(s),
             Constraint::CallBuiltin(args, f) => Constraint::CallBuiltin(args.clone(), f.clone()),
         }
@@ -97,10 +103,19 @@ impl Constraint<State> {
             Constraint::ValIn(op) => err!("Non-scalar ValIn constraint: {:?}", op),
 
             Constraint::Val(None) => Ok(None),
-            Constraint::Val(Some(TVar::Iter(s)))
-            | Constraint::Val(Some(TVar::Map { val: s, .. })) => Ok(Some(TVar::Scalar(s.clone()))),
-            Constraint::Val(op) => err!(
-                "invalid operand for Val constraint: {:?} (must be map or iterator)",
+            Constraint::Val(Some(TVar::Map { val: s, .. })) => Ok(Some(TVar::Scalar(s.clone()))),
+            Constraint::Val(op) => {
+                err!("invalid operand for Val constraint: {:?} (must be map)", op)
+            }
+
+            Constraint::IterValIn(None) => Ok(None),
+            Constraint::IterValIn(Some(TVar::Scalar(v))) => Ok(Some(TVar::Iter(v.clone()))),
+            Constraint::IterValIn(op) => err!("Non-scalar IterValIn constraint: {:?}", op),
+
+            Constraint::IterVal(None) => Ok(None),
+            Constraint::IterVal(Some(TVar::Iter(s))) => Ok(Some(TVar::Scalar(s.clone()))),
+            Constraint::IterVal(op) => err!(
+                "invalid operand for IterVal constraint: {:?} (must be iterator)",
                 op
             ),
 
@@ -285,6 +300,12 @@ fn make_iso(set: &mut HashSet<(NumTy, NumTy)>, n1: NodeIx, n2: NodeIx) -> bool {
 }
 
 impl Network {
+    fn add_rule(&mut self, rule: Rule) -> NodeIx {
+        self.graph.add_node(Node {
+            rule,
+            cur_val: None,
+        })
+    }
     fn incoming(
         &self,
         ix: NodeIx,
@@ -357,5 +378,153 @@ impl Network {
     }
     fn read(&self, ix: NodeIx) -> &State {
         &self.graph.node_weight(ix).unwrap().cur_val
+    }
+    fn add_dep(&mut self, from: NodeIx, to: NodeIx, constraint: Constraint<()>) {
+        self.graph.add_edge(from, to, Edge { constraint });
+        self.wl.insert(from);
+    }
+}
+
+struct TypeContext {
+    nw: Network,
+    base: HashMap<TVar<BaseTy>, NodeIx>,
+    env: HashMap<Ident, NodeIx>,
+}
+
+impl Default for TypeContext {
+    fn default() -> TypeContext {
+        let mut nw = Network::default();
+        let base = HashMap::default();
+        let env = HashMap::default();
+        TypeContext { nw, base, env }
+    }
+}
+
+impl TypeContext {
+    fn build<'a>(&mut self, cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, State>> {
+        let nodes = cfg.raw_nodes();
+        for bb in nodes {
+            for stmt in bb.weight.0.iter() {
+                self.constrain_stmt(stmt);
+            }
+        }
+        self.nw.solve()?;
+        Ok(self
+            .env
+            .iter()
+            .map(|(ident, ix)| (*ident, *self.nw.read(*ix)))
+            .collect())
+    }
+
+    fn constrain_stmt<'a>(&mut self, stmt: &cfg::PrimStmt<'a>) {
+        use cfg::PrimStmt::*;
+        match stmt {
+            AsgnIndex(arr, ix, v) => {
+                let arr_ix = self.ident_node(arr);
+                let ix_ix = self.val_node(ix);
+                // TODO(ezr): set up caching for keys, values of maps and iterators?
+                self.set_key(arr_ix, ix_ix);
+                let val_ix = self.nw.add_rule(Rule::Var);
+                self.set_val(arr_ix, val_ix);
+                self.constrain_expr(v, val_ix);
+            }
+            AsgnVar(v, e) => {
+                let v_ix = self.ident_node(v);
+                self.constrain_expr(e, v_ix);
+            }
+            // Builtins have fixed types; no constraint generation is necessary.
+            SetBuiltin(_, _) => {}
+        }
+    }
+
+    fn constrain_expr<'a>(&mut self, expr: &cfg::PrimExpr<'a>, to: NodeIx) {
+        use cfg::PrimExpr::*;
+        match expr {
+            Val(pv) => {
+                let pv_ix = self.val_node(pv);
+                self.nw.add_dep(pv_ix, to, Constraint::Flows(()));
+            }
+            Phi(preds) => {
+                for (_, id) in preds.iter() {
+                    let id_ix = self.ident_node(id);
+                    self.nw.add_dep(id_ix, to, Constraint::Flows(()));
+                }
+            }
+            CallBuiltin(f, args) => {
+                let args: SmallVec<NodeIx> = args.iter().map(|arg| self.val_node(arg)).collect();
+                let null = self.constant(TVar::Scalar(BaseTy::Null));
+                self.nw.add_dep(null, to, Constraint::CallBuiltin(args, *f));
+            }
+            Index(arr, ix) => {
+                let arr_ix = self.val_node(arr);
+                let ix_ix = self.val_node(ix);
+                self.set_key(arr_ix, ix_ix);
+                self.set_val(arr_ix, to);
+            }
+            IterBegin(arr) => {
+                let arr_ix = self.val_node(arr);
+                let iter_ix = to;
+                let key_ix = self.nw.add_rule(Rule::Var);
+
+                // The key of the map and the iterator must be the same.
+                self.set_key(arr_ix, key_ix);
+                self.set_iter_val(iter_ix, key_ix);
+            }
+            HasNext(_) => {
+                let int = self.constant(TVar::Scalar(BaseTy::Int));
+                self.nw.add_dep(int, to, Constraint::Flows(()))
+            }
+            Next(iter) => {
+                let iter_ix = self.val_node(iter);
+                self.set_iter_val(iter_ix, to);
+            }
+            LoadBuiltin(bv) => {
+                let bv_ix = self.constant(bv.ty2());
+                self.nw.add_dep(bv_ix, to, Constraint::Flows(()));
+            }
+        };
+    }
+
+    fn val_node<'a>(&mut self, val: &cfg::PrimVal<'a>) -> NodeIx {
+        use cfg::PrimVal::*;
+        match val {
+            Var(id) => self.ident_node(id),
+            ILit(_) => self.constant(TVar::Scalar(BaseTy::Int)),
+            FLit(_) => self.constant(TVar::Scalar(BaseTy::Float)),
+            StrLit(_) => self.constant(TVar::Scalar(BaseTy::Str)),
+        }
+    }
+
+    fn ident_node(&mut self, id: &Ident) -> NodeIx {
+        self.env
+            .entry(*id)
+            .or_insert(self.nw.add_rule(Rule::Var))
+            .clone()
+    }
+
+    fn set_key(&mut self, arr: NodeIx, key: NodeIx) {
+        self.nw.add_dep(key, arr, Constraint::KeyIn(()));
+        self.nw.add_dep(arr, key, Constraint::Key(()));
+    }
+
+    fn set_val(&mut self, arr: NodeIx, val: NodeIx) {
+        self.nw.add_dep(val, arr, Constraint::ValIn(()));
+        self.nw.add_dep(arr, val, Constraint::Val(()));
+    }
+
+    fn set_iter_val(&mut self, iter: NodeIx, val: NodeIx) {
+        self.nw.add_dep(val, iter, Constraint::IterValIn(()));
+        self.nw.add_dep(iter, val, Constraint::IterVal(()));
+    }
+    fn constant(&mut self, tv: TVar<BaseTy>) -> NodeIx {
+        use hashbrown::hash_map::Entry::*;
+        match self.base.entry(tv) {
+            Occupied(o) => *o.get(),
+            Vacant(v) => {
+                let res = self.nw.add_rule(Rule::Const(tv));
+                v.insert(res);
+                res
+            }
+        }
     }
 }
