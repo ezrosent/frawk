@@ -166,7 +166,7 @@ impl Function {
         })
     }
 
-    // Return kind is alway scalar. AWK lets you just assign into a provided map.
+    // Return kind is must alway scalar. AWK lets you just assign into a provided map.
     pub(crate) fn signature(&self) -> SmallVec<Option<Kind>> {
         match self {
             Function::Split => smallvec![Some(Kind::Scalar), Some(Kind::Map), Some(Kind::Scalar)],
@@ -176,9 +176,52 @@ impl Function {
         }
     }
 
+    pub(crate) fn arity_t2(&self) -> Option<usize> {
+        use Function::*;
+        Some(match self {
+            ReadErrStdin | NextlineStdin => 0,
+            Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
+            Setcol | Binop(_) => 2,
+            // is this right?
+            Delete | Contains => 2,
+            Print | Split => 3,
+        })
+    }
+
     // TODO(ezr): rename this once old types module is gone
     pub(crate) fn step_t2(&self, args: &[types2::State]) -> Result<types2::State> {
-        unimplemented!()
+        use {
+            ast::{Binop::*, Unop::*},
+            types2::{BaseTy, TVar::*},
+            Function::*,
+        };
+        match self {
+            Unop(Neg) | Unop(Pos) => match &args[0] {
+                Some(Scalar(Some(BaseTy::Str))) | Some(Scalar(Some(BaseTy::Float))) => {
+                    Ok(Scalar(BaseTy::Float).abs())
+                }
+                x => Ok(*x),
+            },
+            Binop(Plus) | Binop(Minus) | Binop(Mod) | Binop(Mult) => {
+                use BaseTy::*;
+                match (&args[0], &args[1]) {
+                    (Some(Scalar(Some(Str))), _)
+                    | (_, Some(Scalar(Some(Str))))
+                    | (Some(Scalar(Some(Float))), _)
+                    | (_, Some(Scalar(Some(Float)))) => Ok(Scalar(Float).abs()),
+                    (_, _) => Ok(Scalar(Int).abs()),
+                }
+            }
+            Binop(Div) => Ok(Scalar(BaseTy::Float).abs()),
+            Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
+            Unop(Not) | Binop(Match) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
+            | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete => {
+                Ok(Scalar(BaseTy::Int).abs())
+            }
+            Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {
+                Ok(Scalar(BaseTy::Str).abs())
+            }
+        }
     }
 }
 
@@ -246,6 +289,34 @@ impl Variable {
                 val: Scalar::Str,
             },
             OFS | FS | RS | FILENAME => TVar::Scalar(Scalar::Str),
+        }
+    }
+    pub(crate) fn ty2(&self) -> types2::TVar<types2::BaseTy> {
+        use Variable::*;
+        match self {
+            ARGC | NF | NR => types2::TVar::Scalar(types2::BaseTy::Int),
+            // TODO(ezr): For full compliance, this may have to be Str -> Str
+            //  If we had
+            //  m["x"] = 1;
+            //  if (true) {
+            //      m = ARGV
+            //  }
+            //  I think we have SSA:
+            //  L0:
+            //    m0["x"] = 1;
+            //    jmpif false L2
+            //  L1:
+            //    m1 = ARGV
+            //  L2:
+            //    m2 = phi [L0: m0, L1: m1]
+            //
+            //  And m0 and m1 have to be the same type, because we do not want to convert between map
+            //  types.
+            ARGV => types2::TVar::Map {
+                key: types2::BaseTy::Int,
+                val: types2::BaseTy::Str,
+            },
+            OFS | FS | RS | FILENAME => types2::TVar::Scalar(types2::BaseTy::Str),
         }
     }
 }
