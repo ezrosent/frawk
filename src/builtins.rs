@@ -57,6 +57,28 @@ impl Function {
     }
 
     // feedback allows for certain functions to propagate type information back to their arguments.
+
+    pub(crate) fn feedback2(&self, args: &[NodeIx], ctx: &mut types2::TypeContext) {
+        use types2::{BaseTy, Constraint, TVar::*};
+        match self {
+            Function::Split => {
+                let arg1 = ctx.constant(
+                    Map {
+                        key: BaseTy::Int,
+                        val: BaseTy::Str,
+                    }
+                    .abs(),
+                );
+                ctx.nw.add_dep(arg1, args[1], Constraint::Flows(()));
+            }
+            Function::Contains | Function::Delete => {
+                let arr = args[0];
+                let query = args[1];
+                ctx.set_key(arr, query);
+            }
+            _ => {}
+        };
+    }
     pub(crate) fn feedback(
         &self,
         nw: &mut prop::Network<prop::Rule>,

@@ -45,7 +45,7 @@ impl<T: Clone> TVar<T> {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-enum Constraint<T> {
+pub(crate) enum Constraint<T> {
     // TODO(ezr): Better names for Key/KeyIn etc.
     KeyIn(T),
     Key(T),
@@ -166,7 +166,7 @@ struct Edge {
 #[derive(Copy, Clone)]
 enum Rule {
     Var,
-    Const(TVar<BaseTy>),
+    Const(State),
 }
 
 pub(crate) type State = Option<TVar<Option<BaseTy>>>;
@@ -184,7 +184,7 @@ impl Rule {
             }
         }
         if let Rule::Const(tv) = self {
-            return Ok(tv.abs());
+            return Ok(tv.clone());
         }
         let mut cur = prev.clone();
         for d in deps.iter().cloned() {
@@ -202,29 +202,34 @@ impl Rule {
                     }
                     (Scalar(x), Scalar(None)) | (Scalar(None), Scalar(x)) => Some(Scalar(x)),
                     (Scalar(Some(x)), Scalar(Some(y))) => Some(Scalar(Some(value_rule(x, y)))),
-                    // rustfmt really blows up these next two patterns.
-                    #[rustfmt::skip]
-                    (Map {key: Some(k), val: Some(v)}, Map {key: None, val: None}) |
-                    (Map {key: None, val: None}, Map {key: Some(k), val: Some(v)}) |
-                    (Map {key: Some(k), val: None}, Map {key: None, val: Some(v)}) |
-                    (Map {key: None, val: Some(v)}, Map {key: Some(k), val: None})
-                    => Some(Map {
-                        key: Some(k),
-                        val: Some(v),
-                    }),
-
-                    #[rustfmt::skip]
-                    (
-                        Map {key: Some(k1), val: Some(v1)},
-                        Map {key: Some(k2), val: Some(v2)},
-                    ) => {
-                        use BaseTy::*;
-                        let key = Some(match (k1, k2) {
-                            (Int, Int) => Int,
-                            (_, _) => Str,
-                        });
-                        let val = Some(value_rule(v1, v2));
-                        Some(Map { key, val })
+                    (Map { key: k1, val: v1 }, Map { key: k2, val: v2 }) => {
+                        fn join_key(b1: BaseTy, b2: BaseTy) -> BaseTy {
+                            use BaseTy::*;
+                            match (b1, b2) {
+                                (Float, _)
+                                | (_, Float)
+                                | (Str, _)
+                                | (_, Str)
+                                | (Null, _)
+                                | (_, Null) => Str,
+                                (Int, _) => Int,
+                            }
+                        }
+                        fn lift(
+                            f: impl Fn(BaseTy, BaseTy) -> BaseTy,
+                            o1: Option<BaseTy>,
+                            o2: Option<BaseTy>,
+                        ) -> Option<BaseTy> {
+                            match (o1, o2) {
+                                (Some(x), Some(y)) => Some(f(x, y)),
+                                (Some(x), None) | (None, Some(x)) => Some(x),
+                                (None, None) => None,
+                            }
+                        }
+                        Some(Map {
+                            key: lift(join_key, k1, k2),
+                            val: lift(value_rule, v1, v2),
+                        })
                     }
                     (t1, t2) => return err!("kinds do not match. {:?} vs {:?}", t1, t2),
                 },
@@ -306,12 +311,26 @@ impl Node {
     }
 }
 
-#[derive(Default)]
-struct Network {
+pub(crate) struct Network {
+    base_node: NodeIx,
     wl: common::WorkList<NodeIx>,
     call_deps: HashMap<NodeIx, SmallVec<NodeIx>>,
     graph: common::Graph<Node, Edge>,
     iso: HashSet<(NumTy, NumTy)>,
+}
+
+impl Default for Network {
+    fn default() -> Network {
+        let mut graph = common::Graph::default();
+        let base_node = graph.add_node(Node::new(Rule::Var));
+        Network {
+            graph,
+            base_node,
+            wl: Default::default(),
+            call_deps: Default::default(),
+            iso: Default::default(),
+        }
+    }
 }
 
 fn is_iso(set: &HashSet<(NumTy, NumTy)>, n1: NodeIx, n2: NodeIx) -> bool {
@@ -330,10 +349,7 @@ fn make_iso(set: &mut HashSet<(NumTy, NumTy)>, n1: NodeIx, n2: NodeIx) -> bool {
 
 impl Network {
     fn add_rule(&mut self, rule: Rule) -> NodeIx {
-        self.graph.add_node(Node {
-            rule,
-            cur_val: None,
-        })
+        self.graph.add_node(Node::new(rule))
     }
     fn incoming(
         &self,
@@ -413,16 +429,16 @@ impl Network {
     fn read(&self, ix: NodeIx) -> &State {
         &self.graph.node_weight(ix).unwrap().cur_val
     }
-    fn add_dep(&mut self, from: NodeIx, to: NodeIx, constraint: Constraint<()>) {
+    pub(crate) fn add_dep(&mut self, from: NodeIx, to: NodeIx, constraint: Constraint<()>) {
         self.graph.add_edge(from, to, Edge { constraint });
         self.wl.insert(from);
     }
 }
 
 #[derive(Default)]
-struct TypeContext {
-    nw: Network,
-    base: HashMap<TVar<BaseTy>, NodeIx>,
+pub(crate) struct TypeContext {
+    pub(crate) nw: Network,
+    base: HashMap<State, NodeIx>,
     env: HashMap<Ident, NodeIx>,
 }
 
@@ -444,6 +460,19 @@ impl TypeContext {
             res.insert(*ident, flatten(concrete(*self.nw.read(*ix)))?);
         }
         Ok(res)
+    }
+    fn add_call(&mut self, f: builtins::Function, args: SmallVec<NodeIx>, to: NodeIx) {
+        f.feedback2(&args[..], self);
+        for arg in args.iter() {
+            self.nw
+                .call_deps
+                .entry(*arg)
+                .or_insert(Default::default())
+                .push(to);
+        }
+        let from = self.nw.base_node;
+        self.nw.add_dep(from, to, Constraint::CallBuiltin(args, f));
+        self.nw.wl.insert(to);
     }
 
     fn constrain_stmt<'a>(&mut self, stmt: &cfg::PrimStmt<'a>) {
@@ -482,15 +511,7 @@ impl TypeContext {
             }
             CallBuiltin(f, args) => {
                 let args: SmallVec<NodeIx> = args.iter().map(|arg| self.val_node(arg)).collect();
-                let null = self.constant(TVar::Scalar(BaseTy::Null));
-                for arg in args.iter() {
-                    self.nw
-                        .call_deps
-                        .entry(*arg)
-                        .or_insert(Default::default())
-                        .push(to);
-                }
-                self.nw.add_dep(null, to, Constraint::CallBuiltin(args, *f));
+                self.add_call(*f, args, to);
             }
             Index(arr, ix) => {
                 let arr_ix = self.val_node(arr);
@@ -508,7 +529,7 @@ impl TypeContext {
                 self.set_iter_val(iter_ix, key_ix);
             }
             HasNext(_) => {
-                let int = self.constant(TVar::Scalar(BaseTy::Int));
+                let int = self.constant(TVar::Scalar(BaseTy::Int).abs());
                 self.nw.add_dep(int, to, Constraint::Flows(()))
             }
             Next(iter) => {
@@ -516,7 +537,7 @@ impl TypeContext {
                 self.set_iter_val(iter_ix, to);
             }
             LoadBuiltin(bv) => {
-                let bv_ix = self.constant(bv.ty2());
+                let bv_ix = self.constant(bv.ty2().abs());
                 self.nw.add_dep(bv_ix, to, Constraint::Flows(()));
             }
         };
@@ -526,9 +547,9 @@ impl TypeContext {
         use cfg::PrimVal::*;
         match val {
             Var(id) => self.ident_node(id),
-            ILit(_) => self.constant(TVar::Scalar(BaseTy::Int)),
-            FLit(_) => self.constant(TVar::Scalar(BaseTy::Float)),
-            StrLit(_) => self.constant(TVar::Scalar(BaseTy::Str)),
+            ILit(_) => self.constant(TVar::Scalar(BaseTy::Int).abs()),
+            FLit(_) => self.constant(TVar::Scalar(BaseTy::Float).abs()),
+            StrLit(_) => self.constant(TVar::Scalar(BaseTy::Str).abs()),
         }
     }
 
@@ -539,7 +560,7 @@ impl TypeContext {
             .clone()
     }
 
-    fn set_key(&mut self, arr: NodeIx, key: NodeIx) {
+    pub(crate) fn set_key(&mut self, arr: NodeIx, key: NodeIx) {
         self.nw.add_dep(key, arr, Constraint::KeyIn(()));
         self.nw.add_dep(arr, key, Constraint::Key(()));
     }
@@ -553,7 +574,7 @@ impl TypeContext {
         self.nw.add_dep(val, iter, Constraint::IterValIn(()));
         self.nw.add_dep(iter, val, Constraint::IterVal(()));
     }
-    fn constant(&mut self, tv: TVar<BaseTy>) -> NodeIx {
+    pub(crate) fn constant(&mut self, tv: State) -> NodeIx {
         use hashbrown::hash_map::Entry::*;
         match self.base.entry(tv) {
             Occupied(o) => *o.get(),
