@@ -64,7 +64,7 @@ impl<T> Copy for Reg<T> {}
 //                also going to be writing output)
 //   [x] * Conversions:
 //          - Current plan: do pass with regex, then use simdjson (or stdlib). Benchmark with both.
-//   [ ] * HashMaps:
+//   [x] * HashMaps:
 //          - For now, wrap hashbrown, but add in explicit handling for iteration to allow
 //            insertions: wrap in refcell (needed anyway): add potential for stack of
 //            modifications. (complex)

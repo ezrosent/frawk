@@ -2,6 +2,7 @@ use crate::ast;
 use crate::builtins;
 use crate::cfg::{self, Ident};
 use crate::common::{self, NodeIx, NumTy, Result};
+use crate::compile;
 use hashbrown::{HashMap, HashSet};
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
@@ -262,6 +263,33 @@ fn concrete(state: State) -> TVar<BaseTy> {
     }
 }
 
+fn flatten(tv: TVar<BaseTy>) -> Result<compile::Ty> {
+    use compile::Ty;
+    use {BaseTy::*, TVar::*};
+    match tv {
+        Scalar(Int) => Ok(Ty::Int),
+        Scalar(Float) => Ok(Ty::Float),
+        // TODO(ezr): add Null to compile::Ty?
+        Scalar(Null) | Scalar(Str) => Ok(Ty::Str),
+        Iter(Int) => Ok(Ty::IterInt),
+        Iter(Null) | Iter(Str) => Ok(Ty::IterStr),
+        Iter(x) => err!("Iterator over an unsupported type: {:?}", x),
+        Map { key: Int, val: Int } => Ok(Ty::MapIntInt),
+        Map {
+            key: Int,
+            val: Float,
+        } => Ok(Ty::MapIntFloat),
+        Map { key: Int, val: Str } => Ok(Ty::MapIntStr),
+        Map { key: Str, val: Int } => Ok(Ty::MapStrInt),
+        Map {
+            key: Str,
+            val: Float,
+        } => Ok(Ty::MapStrFloat),
+        Map { key: Str, val: Str } => Ok(Ty::MapStrStr),
+        Map { key, val } => err!("Map with unsupported type (key={:?} val={:?})", key, val),
+    }
+}
+
 #[derive(Clone)]
 struct Node {
     rule: Rule,
@@ -398,12 +426,12 @@ struct TypeContext {
     env: HashMap<Ident, NodeIx>,
 }
 
-pub(crate) fn get_types<'a>(cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, State>> {
+pub(crate) fn get_types<'a>(cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile::Ty>> {
     TypeContext::default().build(cfg)
 }
 
 impl TypeContext {
-    fn build<'a>(&mut self, cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, State>> {
+    fn build<'a>(&mut self, cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile::Ty>> {
         let nodes = cfg.raw_nodes();
         for bb in nodes {
             for stmt in bb.weight.0.iter() {
@@ -411,11 +439,11 @@ impl TypeContext {
             }
         }
         self.nw.solve()?;
-        Ok(self
-            .env
-            .iter()
-            .map(|(ident, ix)| (*ident, *self.nw.read(*ix)))
-            .collect())
+        let mut res = HashMap::new();
+        for (ident, ix) in self.env.iter() {
+            res.insert(*ident, flatten(concrete(*self.nw.read(*ix)))?);
+        }
+        Ok(res)
     }
 
     fn constrain_stmt<'a>(&mut self, stmt: &cfg::PrimStmt<'a>) {
