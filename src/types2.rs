@@ -281,6 +281,7 @@ impl Node {
 #[derive(Default)]
 struct Network {
     wl: common::WorkList<NodeIx>,
+    call_deps: HashMap<NodeIx, SmallVec<NodeIx>>,
     graph: common::Graph<Node, Edge>,
     iso: HashSet<(NumTy, NumTy)>,
 }
@@ -373,6 +374,11 @@ impl Network {
             for n in self.graph.neighbors(ix) {
                 self.wl.insert(n);
             }
+            if let Some(calls) = self.call_deps.get(&ix) {
+                for c in calls.iter() {
+                    self.wl.insert(*c);
+                }
+            }
         }
         Ok(())
     }
@@ -385,20 +391,15 @@ impl Network {
     }
 }
 
+#[derive(Default)]
 struct TypeContext {
     nw: Network,
     base: HashMap<TVar<BaseTy>, NodeIx>,
     env: HashMap<Ident, NodeIx>,
 }
 
-impl Default for TypeContext {
-    fn default() -> TypeContext {
-        TypeContext {
-            nw: Default::default(),
-            base: Default::default(),
-            env: Default::default(),
-        }
-    }
+pub(crate) fn get_types<'a>(cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, State>> {
+    TypeContext::default().build(cfg)
 }
 
 impl TypeContext {
@@ -454,6 +455,13 @@ impl TypeContext {
             CallBuiltin(f, args) => {
                 let args: SmallVec<NodeIx> = args.iter().map(|arg| self.val_node(arg)).collect();
                 let null = self.constant(TVar::Scalar(BaseTy::Null));
+                for arg in args.iter() {
+                    self.nw
+                        .call_deps
+                        .entry(*arg)
+                        .or_insert(Default::default())
+                        .push(to);
+                }
                 self.nw.add_dep(null, to, Constraint::CallBuiltin(args, *f));
             }
             Index(arr, ix) => {
