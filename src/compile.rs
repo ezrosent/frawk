@@ -1,5 +1,3 @@
-use std::borrow::Borrow;
-
 use hashbrown::{hash_map::Entry, HashMap};
 use smallvec::smallvec;
 
@@ -7,7 +5,7 @@ use crate::builtins::{self, Variable};
 use crate::bytecode::{self, Instr, Interp};
 use crate::cfg::{self, is_unused, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{NodeIx, Result};
-use crate::types::{get_types, Scalar, TVar};
+use crate::types2;
 
 // TODO: implement basic "optimizations"
 //    * avoid excessive moves (unless those come from the cfg?)
@@ -31,15 +29,6 @@ pub(crate) enum Ty {
 }
 
 impl Ty {
-    fn from_scalar(o: &Option<Scalar>) -> Ty {
-        match o {
-            Some(Scalar::Int) => Ty::Int,
-            Some(Scalar::Float) => Ty::Float,
-            Some(Scalar::Str) => Ty::Str,
-            // To respect printing
-            None => Ty::Str,
-        }
-    }
     fn of_var(v: Variable) -> Ty {
         use Variable::*;
         match v {
@@ -82,36 +71,6 @@ impl Ty {
     }
 }
 
-impl<Q: Borrow<TVar<Option<Scalar>>>> From<Q> for Ty {
-    fn from(t: Q) -> Ty {
-        fn from_scalar_for_key(o: &Option<Scalar>) -> Ty {
-            match o {
-                Some(Scalar::Int) => Ty::Int,
-                Some(Scalar::Float) => Ty::Float,
-                Some(Scalar::Str) => Ty::Str,
-                None => Ty::Int,
-            }
-        }
-        match t.borrow() {
-            TVar::Scalar(s) => Ty::from_scalar(s),
-            TVar::Iter(t) => match from_scalar_for_key(t) {
-                Ty::Int => Ty::IterInt,
-                Ty::Str => Ty::IterStr,
-                _ => panic!("deduced invalid iterator value type: {:?}", t),
-            },
-            TVar::Map { key, val } => match (from_scalar_for_key(key), Ty::from_scalar(val)) {
-                (Ty::Int, Ty::Int) => Ty::MapIntInt,
-                (Ty::Int, Ty::Float) => Ty::MapIntFloat,
-                (Ty::Int, Ty::Str) => Ty::MapIntStr,
-                (Ty::Str, Ty::Int) => Ty::MapStrInt,
-                (Ty::Str, Ty::Float) => Ty::MapStrFloat,
-                (Ty::Str, Ty::Str) => Ty::MapStrStr,
-                (x, y) => panic!("deduced invalid map type key={:?} val={:?}", x, y),
-            },
-        }
-    }
-}
-
 const NUM_TYPES: usize = Ty::IterStr as usize + 1;
 
 struct Generator {
@@ -119,7 +78,7 @@ struct Generator {
     reg_counts: [u32; NUM_TYPES],
     jmps: Vec<usize>,
     bb_to_instr: Vec<usize>,
-    ts: HashMap<Ident, TVar<Option<Scalar>>>,
+    ts: HashMap<Ident, Ty>,
 }
 
 // This is a macro to defeat the borrow checker when used inside methods for `Generator`.
@@ -148,7 +107,7 @@ impl Generator {
                     .ts
                     .get(v.key())
                     .expect("identifiers must be given types")
-                    .into();
+                    .clone();
                 let reg = reg_of_ty!(self, ty);
                 v.insert((reg, ty));
                 (reg, ty)
@@ -674,7 +633,7 @@ pub(crate) fn bytecode<'a, 'b>(
         reg_counts: [0u32; NUM_TYPES],
         jmps: Default::default(),
         bb_to_instr: vec![0; ctx.cfg().node_count()],
-        ts: get_types(ctx.cfg(), ctx.num_idents())?,
+        ts: types2::get_types(ctx.cfg())?,
     };
 
     for (i, n) in ctx.cfg().raw_nodes().iter().enumerate() {
