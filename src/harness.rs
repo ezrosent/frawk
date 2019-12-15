@@ -6,16 +6,16 @@ use crate::{
     ast, cfg,
     common::Result,
     compile, lexer, syntax,
-    types::{get_types, Scalar, TVar},
+    types::{get_types, BaseTy, TVar},
 };
 use hashbrown::HashMap;
 
 type Stmt<'a> = &'a ast::Stmt<'a, 'a, &'a str>;
 
 type ProgResult<'a> = Result<(
-    String,                                 /* output */
-    String,                                 /* debug info */
-    HashMap<&'a str, TVar<Option<Scalar>>>, /* type info */
+    String,                        /* output */
+    String,                        /* debug info */
+    HashMap<&'a str, compile::Ty>, /* type info */
 )>;
 
 pub(crate) fn run_program<'a>(
@@ -69,12 +69,12 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> ProgResu
     let ident_map = ctx._invert_ident();
     let (instrs, type_map) = {
         let mut instrs = format!("cfg:\n{}\ninstrs:\n", petgraph::dot::Dot::new(ctx.cfg()));
-        let ts = get_types(ctx.cfg(), ctx.num_idents())?;
+        let ts = get_types(ctx.cfg())?;
         // ident_map : Ident -> &str
         // ts: Ident -> Type
         //
         // We want the types of all the entries in ts that show up in ident_map.
-        let type_map: HashMap<&'a str, TVar<Option<Scalar>>> = ts
+        let type_map: HashMap<&'a str, compile::Ty> = ts
             .iter()
             .flat_map(|((major, _), ty)| ident_map.get(&(*major, 0)).map(|s| (*s, ty.clone())))
             .collect();
@@ -119,7 +119,7 @@ mod tests {
                         assert_eq!(out, expected, "{}\nTypes:\n{:?}", instrs, ts);
                         {
                             #[allow(unused)]
-                            use crate::types::{TVar::*,Scalar::*};
+                            use crate::compile::Ty::*;
                             $(
                                 assert_eq!(
                                     ts.get(stringify!($i)).cloned(),
@@ -204,7 +204,7 @@ for (k in m) {
 }}"#,
         "1 1.0 3\nhi 0.0 5\n",
         @input "",
-        @types [ m :: Map{key: Some(Str), val:Some(Int)}, k :: Scalar(Some(Str)) ]
+        @types [ m :: MapStrInt, k :: Str ]
     );
 
     test_program!(
@@ -250,7 +250,7 @@ for (k in m) {
     }"#,
         "1 where\n2 is\n3 all\n4 of\n5 this\n6 going\n",
         @input "",
-        @types [ m1 :: Map { key: Some(Int), val: Some(Str) }, i :: Scalar(Some(Int))]
+        @types [ m1 :: MapIntStr, i :: Int]
     );
 
     test_program!(
@@ -261,7 +261,7 @@ for (k in m) {
     }"#,
         "1 where\n2 is\n3 this\n4 all\n5 going\n6 \n",
         @input "",
-        @types [ m1 :: Map { key: Some(Int), val: Some(Str) }, i :: Scalar(Some(Int))]
+        @types [ m1 :: MapIntStr, i :: Int]
     );
 
     test_program!(
@@ -290,7 +290,7 @@ for (k in m) {
         }"#,
         "yes 0!\nyes 1!\n",
         @input "",
-        @types [m :: Map { key: Some(Str), val: Some(Int) }]
+        @types [m :: MapStrInt]
     );
 
     test_program!(

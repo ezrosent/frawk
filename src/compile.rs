@@ -5,7 +5,7 @@ use crate::builtins::{self, Variable};
 use crate::bytecode::{self, Instr, Interp};
 use crate::cfg::{self, is_unused, Ident, PrimExpr, PrimStmt, PrimVal};
 use crate::common::{NodeIx, Result};
-use crate::types2;
+use crate::types;
 
 // TODO: implement basic "optimizations"
 //    * avoid excessive moves (unless those come from the cfg?)
@@ -633,7 +633,7 @@ pub(crate) fn bytecode<'a, 'b>(
         reg_counts: [0u32; NUM_TYPES],
         jmps: Default::default(),
         bb_to_instr: vec![0; ctx.cfg().node_count()],
-        ts: types2::get_types(ctx.cfg())?,
+        ts: types::get_types(ctx.cfg())?,
     };
 
     for (i, n) in ctx.cfg().raw_nodes().iter().enumerate() {
