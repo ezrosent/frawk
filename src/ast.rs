@@ -18,7 +18,17 @@ static_map!(
     ["+", Unop::Pos]
 );
 
+pub struct FunDec<'a, 'b, I> {
+    pub name: I,
+    pub args: Vec<I>,
+    pub body: &'a Stmt<'a, 'b, I>,
+}
+
 pub struct Prog<'a, 'b, I> {
+    // TODO: Add `return` statement
+    // TODO: Add variants for CallFunction in PrimExpr, Return in PrimStmt, (make sure to handle
+    // the loop stack appropriately as well).
+    pub decs: Vec<FunDec<'a, 'b, I>>,
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
     pub end: Option<&'a Stmt<'a, 'b, I>>,
     pub pats: Vec<(Option<&'a Expr<'a, 'b, I>>, Option<&'a Stmt<'a, 'b, I>>)>,

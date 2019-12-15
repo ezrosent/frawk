@@ -1,20 +1,19 @@
 use crate::{
   arena::Arena,
-  ast::{Expr, Stmt, Binop, Unop, Prog},
+  ast::{Expr, Stmt, Binop, Unop, Prog, FunDec},
   builtins::Function,
   common::Either,
   runtime::strton::{strtoi,strtod},
+  smallvec::smallvec,
   lexer::{self, Tok},
 };
 
-// TODO: function calls. Hopefully we do not need to modify the lexer for that, but we may...
-// TODO: rationalize handling of semicolons and newlines. We are probably missing some things here,
-//       but that will become clearer over time.
 grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>);
 
 pub Prog: Prog<'a,'a,&'a str> = {
-    NL <begin:Begin?> <pats:PatAction*> <sa:Expr?> <end:End?> =>
+    <fs:(NL <Function>)*> NL <begin:Begin?> <pats:PatAction*> <sa:Expr?> <end:End?> =>
         Prog {
+            decs: fs,
             begin,
             end,
             pats: {
@@ -27,12 +26,29 @@ pub Prog: Prog<'a,'a,&'a str> = {
         }
 }
 
+Function: FunDec<'a, 'a, &'a str> = {
+    "function" <name:"CALLSTART"> <args:FormalParams?> ")" <body:Block> =>
+        FunDec {
+          name,
+          body,
+          args: args.unwrap_or(Default::default()),
+       }
+}
+
+FormalParams: Vec<&'a str> = {
+   NL <"IDENT"> => vec![<>],
+   <v:(NL <"IDENT"> ",")+> <iopt:(NL <"IDENT">)?> => match iopt {
+      Some(e) => { let mut v = v; v.push(e); v }
+      None => v,
+   }
+}
+
 Begin: &'a Stmt<'a,'a,&'a str> = {
-    "BEGIN" <Block> => <>
+    "BEGIN" NL <Block> => <>
 }
 
 End: &'a Stmt<'a,'a,&'a str> = {
-    "END" <Block> => <>
+    "END" NL <Block> => <>
 }
 
 PatAction: (Option<&'a Expr<'a,'a,&'a str>>, Option<&'a Stmt<'a,'a,&'a str>>) = {
@@ -104,6 +120,8 @@ PrintArgs: Vec<&'a Expr<'a,'a,&'a str>> = {
     }
 }
 
+
+#[inline]
 NL: () = "\n"*;
 
 Sep: () = {
@@ -327,5 +345,6 @@ extern {
       ":" => Tok::COLON,
       "delete" => Tok::Delete,
       "in" => Tok::In,
+      "function" => Tok::Function,
   }
 }
