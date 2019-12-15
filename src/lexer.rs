@@ -69,6 +69,7 @@ pub enum Tok<'a> {
     Comma,
     In,
     Delete,
+    Function,
 
     Ident(&'a str),
     StrLit(&'a str),
@@ -130,6 +131,7 @@ static_map!(
     ["?", Tok::QUESTION],
     [":", Tok::COLON],
     ["delete", Tok::Delete],
+    ["function", Tok::Function],
     ["$", Tok::Dollar]
 );
 
