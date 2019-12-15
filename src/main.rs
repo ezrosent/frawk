@@ -15,7 +15,6 @@ pub mod harness;
 pub mod lexer;
 pub mod runtime;
 pub mod types;
-pub mod types2;
 extern crate elsa;
 extern crate hashbrown;
 extern crate jemallocator;
@@ -68,10 +67,7 @@ fn main() {
         eprintln!("EDGE {}", e.weight());
     }
     eprintln!("n_idents={}", ast2.num_idents());
-    for (k, v) in types::get_types(ast2.cfg(), ast2.num_idents())
-        .expect("types!")
-        .iter()
-    {
+    for (k, v) in types::get_types(ast2.cfg()).expect("types!").iter() {
         eprintln!("{:?} : {:?}", k, v);
     }
     println!("{}", dot::Dot::new(&ast2.cfg()));

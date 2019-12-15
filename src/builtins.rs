@@ -2,8 +2,7 @@
 use crate::ast;
 use crate::common::{NodeIx, Result};
 use crate::compile;
-use crate::types::{self, prop, Kind, Propagator, Scalar, SmallVec, TVar};
-use crate::types2;
+use crate::types::{self, SmallVec};
 use smallvec::smallvec;
 
 use std::convert::TryFrom;
@@ -43,23 +42,9 @@ impl<'a> TryFrom<&'a str> for Function {
 }
 
 impl Function {
-    // All builtins are fixed-arity.
-    pub(crate) fn fixed_arity(&self) -> usize {
-        use Function::*;
-        match self {
-            ReadErrStdin | NextlineStdin => 0,
-            Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
-            Setcol | Binop(_) => 2,
-            // is this right?
-            Delete | Contains => 2,
-            Print | Split => 3,
-        }
-    }
-
     // feedback allows for certain functions to propagate type information back to their arguments.
-
-    pub(crate) fn feedback2(&self, args: &[NodeIx], ctx: &mut types2::TypeContext) {
-        use types2::{BaseTy, Constraint, TVar::*};
+    pub(crate) fn feedback(&self, args: &[NodeIx], ctx: &mut types::TypeContext) {
+        use types::{BaseTy, Constraint, TVar::*};
         match self {
             Function::Split => {
                 let arg1 = ctx.constant(
@@ -79,32 +64,6 @@ impl Function {
             _ => {}
         };
     }
-    pub(crate) fn feedback(
-        &self,
-        nw: &mut prop::Network<prop::Rule>,
-        cs: &types::Constants,
-        deps: &[NodeIx],
-    ) -> Result<()> {
-        use std::iter::once;
-        if let Function::Split = self {
-            // Split acts to assign into a variable, that means we need to propagate information
-            // back out. In this case those are going to be variables 1 and 2, the key and value
-            // nodes.
-
-            debug_assert_eq!(deps.len(), 4);
-            let key = deps[1];
-            let val = deps[2];
-            nw.add_deps(key, once(cs.int_node))?;
-            nw.add_deps(val, once(cs.str_node))?;
-        } else if let Function::Contains = self {
-            // Attempting to look up in a map informs its type.
-            debug_assert_eq!(deps.len(), 3);
-            let key = deps[0];
-            let query = deps[2];
-            nw.add_deps(key, once(query))?;
-        }
-        Ok(())
-    }
     pub(crate) fn type_sig(
         &self,
         incoming: &[compile::Ty],
@@ -115,13 +74,15 @@ impl Function {
             compile::Ty::*,
             Function::*,
         };
-        if incoming.len() != self.fixed_arity() {
-            return err!(
-                "function {} expected {} inputs but got {}",
-                self,
-                self.fixed_arity(),
-                incoming.len()
-            );
+        if let Some(a) = self.arity() {
+            if incoming.len() != a {
+                return err!(
+                    "function {} expected {} inputs but got {}",
+                    self,
+                    a,
+                    incoming.len()
+                );
+            }
         }
         Ok(match self {
             Unop(Neg) | Unop(Pos) => match &incoming[0] {
@@ -188,17 +149,7 @@ impl Function {
         })
     }
 
-    // Return kind is must alway scalar. AWK lets you just assign into a provided map.
-    pub(crate) fn signature(&self) -> SmallVec<Option<Kind>> {
-        match self {
-            Function::Split => smallvec![Some(Kind::Scalar), Some(Kind::Map), Some(Kind::Scalar)],
-            Function::Contains | Function::Delete => smallvec![Some(Kind::Map), Some(Kind::Scalar)],
-            Function::Length => smallvec![None],
-            _ => smallvec![Some(Kind::Scalar); self.fixed_arity()],
-        }
-    }
-
-    pub(crate) fn arity_t2(&self) -> Option<usize> {
+    pub(crate) fn arity(&self) -> Option<usize> {
         use Function::*;
         Some(match self {
             ReadErrStdin | NextlineStdin => 0,
@@ -211,10 +162,10 @@ impl Function {
     }
 
     // TODO(ezr): rename this once old types module is gone
-    pub(crate) fn step_t2(&self, args: &[types2::State]) -> Result<types2::State> {
+    pub(crate) fn step(&self, args: &[types::State]) -> Result<types::State> {
         use {
             ast::{Binop::*, Unop::*},
-            types2::{BaseTy, TVar::*},
+            types::{BaseTy, TVar::*},
             Function::*,
         };
         match self {
@@ -247,48 +198,6 @@ impl Function {
     }
 }
 
-impl Propagator for Function {
-    type Item = Scalar;
-    fn arity(&self) -> Option<usize> {
-        Some(self.fixed_arity())
-    }
-    // TODO unify more of this with `input_ty`
-    fn step(&self, incoming: &[Option<Scalar>]) -> (bool, Option<Scalar>) {
-        use {
-            ast::{Binop::*, Unop::*},
-            Function::*,
-            Scalar::*,
-        };
-        match self {
-            Unop(Neg) | Unop(Pos) => match &incoming[0] {
-                Some(Str) | Some(Float) => (true, Some(Float)),
-                x => (false, *x),
-            },
-            Unop(Column) | Binop(Concat) => (true, Some(Str)),
-            Unop(Not) | Binop(Match) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
-            | Binop(EQ) => (true, Some(Int)),
-            Binop(Plus) | Binop(Minus) | Binop(Mod) | Binop(Mult) => {
-                match (&incoming[0], &incoming[1]) {
-                    (Some(Str), _) | (_, Some(Str)) | (Some(Float), _) | (_, Some(Float)) => {
-                        (true, Some(Float))
-                    }
-                    (_, _) => (false, Some(Int)),
-                }
-            }
-            Binop(Div) => (true, Some(Float)),
-            Print => (true, None),
-            Contains => (true, Some(Int)),
-            Delete => (true, Some(Int)),
-            PrintStdout => (true, None),
-            ReadErr | ReadErrStdin => (true, Some(Int)),
-            Nextline | NextlineStdin => (true, Some(Str)),
-            Setcol => (true, Some(Int)), // no result
-            Split => (true, Some(Int)),
-            Length => (true, Some(Int)),
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Variable {
     ARGC,
@@ -302,21 +211,10 @@ pub(crate) enum Variable {
 }
 
 impl Variable {
-    pub(crate) fn ty(&self) -> TVar<Scalar> {
+    pub(crate) fn ty(&self) -> types::TVar<types::BaseTy> {
         use Variable::*;
         match self {
-            ARGC | NF | NR => TVar::Scalar(Scalar::Int),
-            ARGV => TVar::Map {
-                key: Scalar::Int,
-                val: Scalar::Str,
-            },
-            OFS | FS | RS | FILENAME => TVar::Scalar(Scalar::Str),
-        }
-    }
-    pub(crate) fn ty2(&self) -> types2::TVar<types2::BaseTy> {
-        use Variable::*;
-        match self {
-            ARGC | NF | NR => types2::TVar::Scalar(types2::BaseTy::Int),
+            ARGC | NF | NR => types::TVar::Scalar(types::BaseTy::Int),
             // TODO(ezr): For full compliance, this may have to be Str -> Str
             //  If we had
             //  m["x"] = 1;
@@ -334,11 +232,13 @@ impl Variable {
             //
             //  And m0 and m1 have to be the same type, because we do not want to convert between map
             //  types.
-            ARGV => types2::TVar::Map {
-                key: types2::BaseTy::Int,
-                val: types2::BaseTy::Str,
+            //  I think the solution here is just to have ARGV be a local variable. It doesn't
+            //  actually have to be a builtin.
+            ARGV => types::TVar::Map {
+                key: types::BaseTy::Int,
+                val: types::BaseTy::Str,
             },
-            OFS | FS | RS | FILENAME => types2::TVar::Scalar(types2::BaseTy::Str),
+            OFS | FS | RS | FILENAME => types::TVar::Scalar(types::BaseTy::Str),
         }
     }
 }
