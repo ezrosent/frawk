@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-// TODO: rename context to something more descriptive. Maybe split out some structs.
+// TODO: rename context to something more descriptive. Make it `ProgramContext`
 
 // consider making this just "by number" and putting branch instructions elsewhere.
 // need to verify the order
@@ -29,6 +29,12 @@ impl<'a> Transition<'a> {
     fn null() -> Transition<'a> {
         Transition(None)
     }
+}
+
+pub(crate) struct Function<'a, I> {
+    name: Option<I>,
+    num_params: usize,
+    cfg: CFG<'a>,
 }
 
 // None indicates `else`
@@ -144,6 +150,39 @@ pub(crate) struct Context<'b, I> {
     defsites: HashMap<Ident, HashSet<NodeIx>>,
     orig: HashMap<NodeIx, HashSet<Ident>>,
     max: NumTy,
+    // TODO: reorg
+    //     Vec<Function?>
+    //     Input: Map<str, FunDec>
+    //     Output: Context, but with
+    //     funcs: Map<Option<str>, Function>
+    //     with funcs[None] as the toplevel function.
+    //     instead of CFG.
+    //     Fucntion needs to include `entry`, `loop_ctx`, `dt`, `df`. We
+    //     probably want to keep the methods up here so we don't have
+    //     pointers back up to global definitions (defsites, orig,
+    //     hm). But perhaps we can just pass hm down?  Or make a
+    //     FunctionCtx struct that borrows members of the outer context.
+    // TODO: rationalize null handling. We want to infer that all 0-subscripted variables are null,
+    // and use that information when doing type deduction. Conversions at he bytecode level just
+    // insert constants. We want to make sure that
+    // { SUM += 1} END {print SUM}
+    // has SUM as an integer though.
+    //  start:
+    //  body:
+    //  SUM_1 = phi [ SUM_0: start, SUM_2: body]
+    //  SUM_2 = SUM_1 + 1;
+    //  jmp body;
+    // Seems like SUM_0 cannot be treated as a string here... That makes this difficult because we
+    // want to also handle
+    // function x(y) { if (y) { return 1;} }
+    // print x(0),x(1) # " 1"
+    // Which implies that we can't just coerce this to a phi node. What matters is the "use" of a
+    // variable down the line. Perhaps we can encode that as some kind of constraint. For now,
+    // let's proceed with the Integer semantics (breaking some uses of `x` for the moment).
+    // TODO: figure out how to handle returns. Implement "single return style" by adding a special
+    // "return" identifier and then jumping to a return block with a phi node at the end? For any
+    // cases where control "runs off the end" (nodes for which there is no successor), add another
+    // jmp (potentially with an assignment to null -- perhaps that's not needed?).
     cfg: CFG<'b>,
     entry: NodeIx,
     // Stack of the entry and exit nodes for the loops within which the current statement is nested.
@@ -153,9 +192,11 @@ pub(crate) struct Context<'b, I> {
     dt: dom::Tree,
     df: dom::Frontier,
 
+    // TODO remove this; it was only needed for the old typechecking code.
     num_idents: usize,
     // variable that holds the FS variable, if needed
-    // TODO add OFS, SUBSEP, etc.
+    // TODO add OFS, SUBSEP, etc. Revisit this as a technique (can it be generalized? How about any
+    // Key or value of a named variable. Implement this after we have more tests.)
     tmp_fs: Option<Ident>,
 }
 
