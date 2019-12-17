@@ -19,6 +19,8 @@ use std::hash::Hash;
 // SSA conversion.
 #[derive(Debug, Default)]
 pub(crate) struct BasicBlock<'a>(pub VecDeque<PrimStmt<'a>>);
+
+// None indicates `else`
 #[derive(Debug, Default)]
 pub(crate) struct Transition<'a>(pub Option<PrimVal<'a>>);
 
@@ -37,7 +39,6 @@ pub(crate) struct Function<'a, I> {
     cfg: CFG<'a>,
 }
 
-// None indicates `else`
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
 pub(crate) type Ident = (NumTy, NumTy);
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
@@ -162,23 +163,6 @@ pub(crate) struct Context<'b, I> {
     //     pointers back up to global definitions (defsites, orig,
     //     hm). But perhaps we can just pass hm down?  Or make a
     //     FunctionCtx struct that borrows members of the outer context.
-    // TODO: rationalize null handling. We want to infer that all 0-subscripted variables are null,
-    // and use that information when doing type deduction. Conversions at he bytecode level just
-    // insert constants. We want to make sure that
-    // { SUM += 1} END {print SUM}
-    // has SUM as an integer though.
-    //  start:
-    //  body:
-    //  SUM_1 = phi [ SUM_0: start, SUM_2: body]
-    //  SUM_2 = SUM_1 + 1;
-    //  jmp body;
-    // Seems like SUM_0 cannot be treated as a string here... That makes this difficult because we
-    // want to also handle
-    // function x(y) { if (y) { return 1;} }
-    // print x(0),x(1) # " 1"
-    // Which implies that we can't just coerce this to a phi node. What matters is the "use" of a
-    // variable down the line. Perhaps we can encode that as some kind of constraint. For now,
-    // let's proceed with the Integer semantics (breaking some uses of `x` for the moment).
     // TODO: figure out how to handle returns. Implement "single return style" by adding a special
     // "return" identifier and then jumping to a return block with a phi node at the end? For any
     // cases where control "runs off the end" (nodes for which there is no successor), add another
