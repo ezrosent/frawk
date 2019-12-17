@@ -8,6 +8,7 @@ pub mod ast;
 pub mod builtins;
 pub mod bytecode;
 pub mod cfg;
+pub mod cfg2;
 pub mod compile;
 mod display;
 pub mod dom;

@@ -151,8 +151,6 @@ struct GlobalContext<I> {
     // only time, but also extra phi nodes in the IR, which eventually lead to more assignments
     // than are required.
     may_rename: Vec<Ident>,
-    defsites: HashMap<Ident, HashSet<NodeIx>>,
-    orig: HashMap<NodeIx, HashSet<Ident>>,
     max: NumTy,
 
     // variable that holds the FS variable, if needed
@@ -167,6 +165,8 @@ struct Function<'a, I> {
     // TODO args
     cfg: CFG<'a>,
 
+    defsites: HashMap<Ident, HashSet<NodeIx>>,
+    orig: HashMap<NodeIx, HashSet<Ident>>,
     entry: NodeIx,
     // TODO populate
     exit: NodeIx,
@@ -182,60 +182,12 @@ struct Function<'a, I> {
     num_idents: usize,
 }
 
-pub(crate) struct Context<'b, I> {
-    hm: HashMap<I, Ident>,
-
-    // Many identifiers are generated and assigned to only once by construction, so we do not add
-    // them to the work list for renaming. All named identifiers are added, as well as the ones
-    // created during evaluation of conditional expression (?:, and, or). Doing this saves us not
-    // only time, but also extra phi nodes in the IR, which eventually lead to more assignments
-    // than are required.
-    may_rename: Vec<Ident>,
-    defsites: HashMap<Ident, HashSet<NodeIx>>,
-    orig: HashMap<NodeIx, HashSet<Ident>>,
-    max: NumTy,
-    // TODO: reorg
-    //     Vec<Function?>
-    //     Input: Map<str, FunDec>
-    //     Output: Context, but with
-    //     funcs: Map<Option<str>, Function>
-    //     with funcs[None] as the toplevel function.
-    //     instead of CFG.
-    //     Function needs to include `entry`, `loop_ctx`, `dt`, `df`. We
-    //     probably want to keep the methods up here so we don't have
-    //     pointers back up to global definitions (defsites, orig,
-    //     hm). But perhaps we can just pass hm down?  Or make a
-    //     FunctionCtx struct that borrows members of the outer context.
-    // TODO: figure out how to handle returns. Implement "single return style" by adding a special
-    // "return" identifier and then jumping to a return block with a phi node at the end? For any
-    // cases where control "runs off the end" (nodes for which there is no successor), add another
-    // jmp (potentially with an assignment to null -- perhaps that's not needed?).
-    cfg: CFG<'b>,
-    entry: NodeIx,
-    // Stack of the entry and exit nodes for the loops within which the current statement is nested.
-    loop_ctx: SmallVec<(NodeIx, NodeIx)>,
-
-    // Dominance information about `cfg`.
-    dt: dom::Tree,
-    df: dom::Frontier,
-
-    // TODO remove this; it was only needed for the old typechecking code.
-    num_idents: usize,
-    // variable that holds the FS variable, if needed
-    // TODO add OFS, SUBSEP, etc. Revisit this as a technique (can it be generalized? How about any
-    // Key or value of a named variable. Implement this after we have more tests.)
-    tmp_fs: Option<Ident>,
-}
-
-impl<'b, I> Context<'b, I> {
-    pub(crate) fn cfg<'a>(&'a self) -> &'a CFG<'b> {
-        &self.cfg
-    }
-    pub(crate) fn num_idents(&self) -> usize {
-        self.num_idents
+impl<'a, 'b, I> View<'a, 'b, I> {
+    pub(crate) fn cfg<'c: 'a>(&'c self) -> &'a CFG<'b> {
+        &self.f.cfg
     }
     pub(crate) fn entry(&self) -> NodeIx {
-        self.entry
+        self.f.entry
     }
 }
 
@@ -243,82 +195,84 @@ pub(crate) fn is_unused(i: Ident) -> bool {
     i.0 == 0
 }
 
-impl<'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> Context<'b, I>
+impl<'a, 'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> View<'a, 'b, I>
 where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
 {
     // for debugging: get a mapping from the raw identifiers to the synthetic ones.
     pub(crate) fn _invert_ident(&self) -> HashMap<Ident, I> {
-        self.hm
+        self.ctx
+            .hm
             .iter()
             .map(|(k, v)| (v.clone(), k.clone()))
             .collect()
     }
     fn field_sep(&mut self) -> Ident {
-        if let Some(id) = self.tmp_fs {
+        if let Some(id) = self.ctx.tmp_fs {
             id
         } else {
             let n = self.fresh();
-            self.tmp_fs = Some(n);
+            self.ctx.tmp_fs = Some(n);
             n
         }
     }
     fn unused() -> Ident {
         (0, 0)
     }
-    pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
-        let mut ctx = Context {
-            hm: Default::default(),
-            may_rename: Default::default(),
-            defsites: Default::default(),
-            orig: Default::default(),
-            max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations.
-            cfg: Default::default(),
-            entry: Default::default(),
-            loop_ctx: Default::default(),
-            dt: Default::default(),
-            df: Default::default(),
-            num_idents: 0,
-            tmp_fs: None,
-        };
-        // convert AST to CFG
-        let (start, _) = ctx.standalone_block(stmt)?;
-        ctx.entry = start;
-        // SSA conversion: compute dominator tree and dominance frontier.
-        let (dt, df) = {
-            let di = dom::DomInfo::new(ctx.cfg(), ctx.entry());
-            (di.dom_tree(), di.dom_frontier())
-        };
-        ctx.dt = dt;
-        ctx.df = df;
-        // SSA conversion: insert phi functions, and rename variables.
-        ctx.insert_phis();
-        ctx.rename(ctx.entry());
-        Ok(ctx)
-    }
 
-    fn standalone_expr<'a>(
+    // pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
+    //     let mut ctx = Context {
+    //         hm: Default::default(),
+    //         may_rename: Default::default(),
+    //         defsites: Default::default(),
+    //         orig: Default::default(),
+    //         max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations.
+    //         cfg: Default::default(),
+    //         entry: Default::default(),
+    //         loop_ctx: Default::default(),
+    //         dt: Default::default(),
+    //         df: Default::default(),
+    //         num_idents: 0,
+    //         tmp_fs: None,
+    //     };
+    //     // convert AST to CFG
+    //     let (start, _) = ctx.standalone_block(stmt)?;
+    //     ctx.entry = start;
+    //     // SSA conversion: compute dominator tree and dominance frontier.
+    //     let (dt, df) = {
+    //         let di = dom::DomInfo::new(ctx.cfg(), ctx.entry());
+    //         (di.dom_tree(), di.dom_frontier())
+    //     };
+    //     ctx.dt = dt;
+    //     ctx.df = df;
+    //     // SSA conversion: insert phi functions, and rename variables.
+    //     ctx.insert_phis();
+    //     ctx.rename(ctx.entry());
+    //     Ok(ctx)
+    // }
+
+    fn standalone_expr<'c>(
         &mut self,
-        expr: &'a Expr<'a, 'b, I>,
+        expr: &'c Expr<'c, 'b, I>,
     ) -> Result<(NodeIx /*start*/, NodeIx /*end*/, PrimExpr<'b>)> {
-        let start = self.cfg.add_node(Default::default());
+        let start = self.f.cfg.add_node(Default::default());
         let (end, res) = self.convert_expr(expr, start)?;
         Ok((start, end, res))
     }
 
-    pub fn standalone_block<'a>(
+    pub fn standalone_block<'c>(
         &mut self,
-        stmt: &'a Stmt<'a, 'b, I>,
+        stmt: &'c Stmt<'c, 'b, I>,
     ) -> Result<(NodeIx /*start*/, NodeIx /*end*/)> {
-        let start = self.cfg.add_node(Default::default());
+        let start = self.f.cfg.add_node(Default::default());
         let end = self.convert_stmt(stmt, start)?;
         Ok((start, end))
     }
 
-    fn convert_stmt<'a>(
+    fn convert_stmt<'c>(
         &mut self,
-        stmt: &'a Stmt<'a, 'b, I>,
+        stmt: &'c Stmt<'c, 'b, I>,
         mut current_open: NodeIx,
     ) -> Result<NodeIx> /*next open */ {
         use Stmt::*;
@@ -473,22 +427,28 @@ where
                 } else {
                     (h, PrimVal::ILit(1))
                 };
-                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h_end, f, Transition::null());
+                self.f
+                    .cfg
+                    .add_edge(h_end, b_start, Transition::new(cond_val));
+                self.f.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             While(cond, body) => {
                 let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, false)?;
                 let (h_end, cond_val) = self.convert_val(cond, h)?;
-                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h_end, f, Transition::null());
+                self.f
+                    .cfg
+                    .add_edge(h_end, b_start, Transition::new(cond_val));
+                self.f.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             DoWhile(cond, body) => {
                 let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, true)?;
                 let (h_end, cond_val) = self.convert_val(cond, h)?;
-                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h_end, f, Transition::null());
+                self.f
+                    .cfg
+                    .add_edge(h_end, b_start, Transition::new(cond_val));
+                self.f.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             ForEach(v, array, body) => {
@@ -500,29 +460,33 @@ where
                 // First, create the loop header, which checks if there are any more elements
                 // in the array.
                 let cond = PrimExpr::HasNext(array_iter.clone());
-                let cond_block = self.cfg.add_node(Default::default());
+                let cond_block = self.f.cfg.add_node(Default::default());
                 let cond_v = self.to_val(cond, cond_block);
-                self.cfg
+                self.f
+                    .cfg
                     .add_edge(current_open, cond_block, Transition::null());
 
                 // Then add a footer to exit the loop from cond. We will add the edge after adding
                 // the edge into the loop body, as order matters.
-                let footer = self.cfg.add_node(Default::default());
+                let footer = self.f.cfg.add_node(Default::default());
 
-                self.loop_ctx.push((cond_block, footer));
+                self.f.loop_ctx.push((cond_block, footer));
 
                 // Create the body, but start by getting the next element from the iterator and
                 // assigning it to `v`
                 let update = PrimStmt::AsgnVar(v_id, PrimExpr::Next(array_iter.clone()));
-                let body_start = self.cfg.add_node(Default::default());
+                let body_start = self.f.cfg.add_node(Default::default());
                 self.add_stmt(body_start, update);
                 let body_end = self.convert_stmt(body, body_start)?;
-                self.cfg
+                self.f
+                    .cfg
                     .add_edge(cond_block, body_start, Transition::new(cond_v));
-                self.cfg.add_edge(cond_block, footer, Transition::null());
-                self.cfg.add_edge(body_end, cond_block, Transition::null());
+                self.f.cfg.add_edge(cond_block, footer, Transition::null());
+                self.f
+                    .cfg
+                    .add_edge(body_end, cond_block, Transition::null());
 
-                self.loop_ctx.pop().unwrap();
+                self.f.loop_ctx.pop().unwrap();
 
                 footer
             }
@@ -531,10 +495,12 @@ where
             //
             // This should become more doable once we add more metadata to AST nodes.
             Break => {
-                match self.loop_ctx.pop() {
+                match self.f.loop_ctx.pop() {
                     Some((_, footer)) => {
                         // Break statements unconditionally jump to the end of the loop.
-                        self.cfg.add_edge(current_open, footer, Transition::null());
+                        self.f
+                            .cfg
+                            .add_edge(current_open, footer, Transition::null());
                         current_open
                     }
                     None => {
@@ -543,10 +509,12 @@ where
                 }
             }
             Continue => {
-                match self.loop_ctx.pop() {
+                match self.f.loop_ctx.pop() {
                     Some((header, _)) => {
                         // Continue statements unconditionally jump to the top of the loop.
-                        self.cfg.add_edge(current_open, header, Transition::null());
+                        self.f
+                            .cfg
+                            .add_edge(current_open, header, Transition::null());
                         current_open
                     }
                     None => {
@@ -559,9 +527,9 @@ where
         })
     }
 
-    fn convert_expr<'a>(
+    fn convert_expr<'c>(
         &mut self,
-        expr: &'a Expr<'a, 'b, I>,
+        expr: &'c Expr<'c, 'b, I>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
         use Expr::*;
@@ -595,7 +563,7 @@ where
                 }
                 ITE(cond, tcase, fcase) => {
                     let res_id = self.fresh();
-                    self.may_rename.push(res_id);
+                    self.ctx.may_rename.push(res_id);
                     let (tstart, tend, te) = self.standalone_expr(tcase)?;
                     let (fstart, fend, fe) = self.standalone_expr(fcase)?;
                     self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te));
@@ -783,9 +751,9 @@ where
             },
         ))
     }
-    fn do_assign<'a>(
+    fn do_assign<'c>(
         &mut self,
-        v: &'a Expr<'a, 'b, I>,
+        v: &'c Expr<'c, 'b, I>,
         to: impl FnOnce(&PrimVal<'b>) -> PrimExpr<'b>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
@@ -823,10 +791,10 @@ where
             _ => err!("unsupprted assignment LHS: {:?}", v),
         }
     }
-    fn do_assign_index<'a>(
+    fn do_assign_index<'c>(
         &mut self,
-        arr: &'a Expr<'a, 'b, I>,
-        ix: &'a Expr<'a, 'b, I>,
+        arr: &'c Expr<'c, 'b, I>,
+        ix: &'c Expr<'c, 'b, I>,
         mut to_f: impl FnMut(
             &mut Self,
             PrimVal<'b>,
@@ -856,9 +824,9 @@ where
         Ok((next, PrimExpr::Index(arr_v, ix_v)))
     }
 
-    fn do_condition<'a>(
+    fn do_condition<'c>(
         &mut self,
-        cond: &'a Expr<'a, 'b, I>,
+        cond: &'c Expr<'c, 'b, I>,
         tcase: (NodeIx, NodeIx),
         fcase: Option<(NodeIx, NodeIx)>,
         current_open: NodeIx,
@@ -871,38 +839,42 @@ where
         } else {
             self.convert_val(cond, current_open)?
         };
-        let next = self.cfg.add_node(Default::default());
+        let next = self.f.cfg.add_node(Default::default());
 
         // current_open => t_start if the condition holds
-        self.cfg
+        self.f
+            .cfg
             .add_edge(current_open, t_start, Transition::new(c_val));
         // continue to next after the true case is evaluated
-        self.cfg.add_edge(t_end, next, Transition::null());
+        self.f.cfg.add_edge(t_end, next, Transition::null());
 
         if let Some((f_start, f_end)) = fcase {
             // Set up the same connections as before, this time with a null edge rather
             // than c_val.
-            self.cfg.add_edge(current_open, f_start, Transition::null());
-            self.cfg.add_edge(f_end, next, Transition::null());
+            self.f
+                .cfg
+                .add_edge(current_open, f_start, Transition::null());
+            self.f.cfg.add_edge(f_end, next, Transition::null());
         } else {
             // otherwise continue directly from current_open.
-            self.cfg.add_edge(current_open, next, Transition::null());
+            self.f.cfg.add_edge(current_open, next, Transition::null());
         }
         Ok(next)
     }
 
-    fn convert_val<'a>(
+    fn convert_val<'c>(
         &mut self,
-        expr: &'a Expr<'a, 'b, I>,
+        expr: &'c Expr<'c, 'b, I>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimVal<'b>)> {
         let (next_open, e) = self.convert_expr(expr, current_open)?;
         Ok((next_open, self.to_val(e, next_open)))
     }
-    fn make_loop<'a>(
+
+    fn make_loop<'c>(
         &mut self,
-        body: &'a Stmt<'a, 'b, I>,
-        update: Option<&'a Stmt<'a, 'b, I>>,
+        body: &'c Stmt<'c, 'b, I>,
+        update: Option<&'c Stmt<'c, 'b, I>>,
         current_open: NodeIx,
         is_do: bool,
     ) -> Result<(
@@ -912,9 +884,9 @@ where
         NodeIx, // footer = next open
     )> {
         // Create header and footer nodes.
-        let h = self.cfg.add_node(Default::default());
-        let f = self.cfg.add_node(Default::default());
-        self.loop_ctx.push((h, f));
+        let h = self.f.cfg.add_node(Default::default());
+        let f = self.f.cfg.add_node(Default::default());
+        self.f.loop_ctx.push((h, f));
 
         // The body is a standalone graph.
         let (b_start, b_end) = if let Some(u) = update {
@@ -931,15 +903,17 @@ where
             // Current => Body => Header => Body => Footer
             //                      ^       |
             //                      ^--------
-            self.cfg.add_edge(current_open, b_start, Transition::null());
+            self.f
+                .cfg
+                .add_edge(current_open, b_start, Transition::null());
         } else {
             // Current => Header => Body => Footer
             //             ^         |
             //             ^---------
-            self.cfg.add_edge(current_open, h, Transition::null());
+            self.f.cfg.add_edge(current_open, h, Transition::null());
         }
-        self.cfg.add_edge(b_end, h, Transition::null());
-        self.loop_ctx.pop().unwrap();
+        self.f.cfg.add_edge(b_end, h, Transition::null());
+        self.f.loop_ctx.pop().unwrap();
         Ok((h, b_start, b_end, f))
     }
 
@@ -954,29 +928,31 @@ where
     }
 
     fn fresh(&mut self) -> Ident {
-        let res = self.max;
-        self.max += 1;
+        let res = self.ctx.max;
+        self.ctx.max += 1;
         (res, 0)
     }
 
     fn record_ident(&mut self, id: Ident, blk: NodeIx) {
-        self.defsites
+        self.f
+            .defsites
             .entry(id)
             .or_insert(HashSet::default())
             .insert(blk);
-        self.orig
+        self.f
+            .orig
             .entry(blk)
             .or_insert(HashSet::default())
             .insert(id);
     }
 
     fn get_identifier(&mut self, i: &I) -> Ident {
-        if let Some(id) = self.hm.get(i) {
+        if let Some(id) = self.ctx.hm.get(i) {
             return *id;
         }
         let next = self.fresh();
-        self.hm.insert(i.clone(), next);
-        self.may_rename.push(next);
+        self.ctx.hm.insert(i.clone(), next);
+        self.ctx.may_rename.push(next);
         next
     }
 
@@ -984,7 +960,7 @@ where
         if let PrimStmt::AsgnVar(ident, _) = stmt {
             self.record_ident(ident, at);
         }
-        self.cfg.node_weight_mut(at).unwrap().0.push_back(stmt);
+        self.f.cfg.node_weight_mut(at).unwrap().0.push_back(stmt);
     }
 
     fn insert_phis(&mut self) {
@@ -994,9 +970,11 @@ where
         // phis: the set of basic blocks that must have a phi node for a given variable.
         let mut phis = HashMap::<Ident, HashSet<NodeIx>>::new();
         let mut worklist = WorkList::default();
-        for ident in self.may_rename.iter().cloned() {
+        // TODO rework this iteration to explicitly intersect may_rename and defsites? That way we
+        // do O(min(|defsites|,|may_rename|)) work.
+        for ident in self.ctx.may_rename.iter().cloned() {
             // Add all defsites into the worklist.
-            let defsites = if let Some(ds) = self.defsites.get(&ident) {
+            let defsites = if let Some(ds) = self.f.defsites.get(&ident) {
                 ds
             } else {
                 continue;
@@ -1006,17 +984,19 @@ where
                 // For all nodes on the dominance frontier without phi nodes for this identifier,
                 // create a phi node of the appropriate size and insert it at the front of the
                 // block (no renaming).
-                for d in self.df[node.index()].iter() {
+                for d in self.f.df[node.index()].iter() {
                     let d_ix = NodeIx::new(*d as usize);
                     if phis.get(&ident).map(|s| s.contains(&d_ix)) != Some(true) {
                         let phi = PrimExpr::Phi(
-                            self.cfg()
+                            self.f
+                                .cfg
                                 .neighbors_directed(d_ix, Direction::Incoming)
                                 .map(|n| (n, ident))
                                 .collect(),
                         );
                         let stmt = PrimStmt::AsgnVar(ident, phi);
-                        self.cfg
+                        self.f
+                            .cfg
                             .node_weight_mut(d_ix)
                             .expect("node in dominance frontier must be valid")
                             .0
@@ -1054,7 +1034,7 @@ where
         }
 
         fn rename_recursive<'b, I>(
-            ctx: &mut Context<'b, I>,
+            f: &mut Function<'b, I>,
             cur: NodeIx,
             state: &mut Vec<RenameStack>,
         ) {
@@ -1064,7 +1044,7 @@ where
 
             // First, go through all the statements and update the variables to the highest
             // subscript (second component in Ident).
-            for stmt in &mut ctx
+            for stmt in &mut f
                 .cfg
                 .node_weight_mut(cur)
                 .expect("rename must be passed valid node indices")
@@ -1107,16 +1087,12 @@ where
             //
             // To fix this, we iterate over any outgoing neighbors and find phi functions that
             // point back to the current node and update the subscript accordingly.
-            let mut walker = ctx
-                .cfg
-                .neighbors_directed(cur, Direction::Outgoing)
-                .detach();
-            while let Some((edge, neigh)) = walker.next(&ctx.cfg) {
-                if let Some(PrimVal::Var((x, sub))) = &mut ctx.cfg.edge_weight_mut(edge).unwrap().0
-                {
+            let mut walker = f.cfg.neighbors_directed(cur, Direction::Outgoing).detach();
+            while let Some((edge, neigh)) = walker.next(&f.cfg) {
+                if let Some(PrimVal::Var((x, sub))) = &mut f.cfg.edge_weight_mut(edge).unwrap().0 {
                     *sub = state[*x as usize].latest();
                 }
-                for stmt in &mut ctx.cfg.node_weight_mut(neigh).unwrap().0 {
+                for stmt in &mut f.cfg.node_weight_mut(neigh).unwrap().0 {
                     if let PrimStmt::AsgnVar(_, PrimExpr::Phi(ps)) = stmt {
                         for (pred, (x, sub)) in ps.iter_mut() {
                             if pred == &cur {
@@ -1127,8 +1103,8 @@ where
                     }
                 }
             }
-            for child in ctx.dt[cur.index()].clone().iter() {
-                rename_recursive(ctx, NodeIx::new(*child as usize), state);
+            for child in f.dt[cur.index()].clone().iter() {
+                rename_recursive(f, NodeIx::new(*child as usize), state);
             }
             for d in defs.into_iter() {
                 let _res = state[d as usize].stack.pop();
@@ -1140,13 +1116,13 @@ where
                 count: 0,
                 stack: smallvec![0],
             };
-            self.max as usize
+            self.ctx.max as usize
         ];
-        rename_recursive(self, cur, &mut state);
+        rename_recursive(self.f, cur, &mut state);
         for s in state {
             // `s.count` really counts the *extra* identifiers we introduce after (N, 0), so we
             // need to add an extra.
-            self.num_idents += s.count as usize + 1;
+            self.f.num_idents += s.count as usize + 1;
         }
     }
 }
