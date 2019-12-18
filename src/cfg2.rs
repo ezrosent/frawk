@@ -163,6 +163,13 @@ struct Function<'a, I> {
     name: Option<I>,
     ident: Option<Ident>,
     // TODO args
+    //  * args get placed in local variables immediately?
+    //  * args are just local variables?
+    // TODO Local identifiers in addition to global ones.
+    //  * temporary variables are local?
+    //  * "Function Table" during type inference should have pointers to local variables as well,
+    //  that way you can have a map : global -> Ty, as well as local_name -> arg_tys -> ty
+    //  * We can keep the flat namespace, but add a bool (or enum) to Ident indicating global or
     cfg: CFG<'a>,
 
     defsites: HashMap<Ident, HashSet<NodeIx>>,
@@ -177,9 +184,6 @@ struct Function<'a, I> {
     // Dominance information about `cfg`.
     dt: dom::Tree,
     df: dom::Frontier,
-
-    // TODO remove this; it was only needed for the old typechecking code.
-    num_idents: usize,
 }
 
 impl<'a, 'b, I> View<'a, 'b, I> {
@@ -1119,10 +1123,5 @@ where
             self.ctx.max as usize
         ];
         rename_recursive(self.f, cur, &mut state);
-        for s in state {
-            // `s.count` really counts the *extra* identifiers we introduce after (N, 0), so we
-            // need to add an extra.
-            self.f.num_idents += s.count as usize + 1;
-        }
     }
 }
