@@ -67,7 +67,6 @@ fn main() {
     for e in ast2.cfg().edges(NodeIx::new(0)) {
         eprintln!("EDGE {}", e.weight());
     }
-    eprintln!("n_idents={}", ast2.num_idents());
     for (k, v) in types::get_types(ast2.cfg()).expect("types!").iter() {
         eprintln!("{:?} : {:?}", k, v);
     }

@@ -219,8 +219,6 @@ pub(crate) struct Context<'b, I> {
     dt: dom::Tree,
     df: dom::Frontier,
 
-    // TODO remove this; it was only needed for the old typechecking code.
-    num_idents: usize,
     // variable that holds the FS variable, if needed
     // TODO add OFS, SUBSEP, etc. Revisit this as a technique (can it be generalized? How about any
     // Key or value of a named variable. Implement this after we have more tests.)
@@ -231,9 +229,9 @@ impl<'b, I> Context<'b, I> {
     pub(crate) fn cfg<'a>(&'a self) -> &'a CFG<'b> {
         &self.cfg
     }
-    pub(crate) fn num_idents(&self) -> usize {
-        self.num_idents
-    }
+    // pub(crate) fn num_idents(&self) -> usize {
+    //     self.num_idents
+    // }
     pub(crate) fn entry(&self) -> NodeIx {
         self.entry
     }
@@ -279,7 +277,6 @@ where
             loop_ctx: Default::default(),
             dt: Default::default(),
             df: Default::default(),
-            num_idents: 0,
             tmp_fs: None,
         };
         // convert AST to CFG
@@ -1143,10 +1140,5 @@ where
             self.max as usize
         ];
         rename_recursive(self, cur, &mut state);
-        for s in state {
-            // `s.count` really counts the *extra* identifiers we introduce after (N, 0), so we
-            // need to add an extra.
-            self.num_idents += s.count as usize + 1;
-        }
     }
 }
