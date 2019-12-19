@@ -320,6 +320,7 @@ where
     ) -> Result<NodeIx> /*next open */ {
         use Stmt::*;
         Ok(match stmt {
+            Return(_) => unimplemented!(),
             Expr(e) => {
                 // We need to assign to unused here, otherwise we could generate the expression but
                 // then drop it on the floor.
