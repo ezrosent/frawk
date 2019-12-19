@@ -190,4 +190,5 @@ pub enum Stmt<'a, 'b, I> {
     ForEach(I, &'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
     Break,
     Continue,
+    Return(&'a Expr<'a, 'b, I>),
 }

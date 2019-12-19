@@ -11,14 +11,20 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-// TODO: rename context to something more descriptive. Make it `ProgramContext`
+// TODO migrate most uses of fresh() to fresh_local()
+//      We need to make sure that subcomputations involving locals don't
+//      infect different calls to the same function.
+// TODO construct a ProgramContext from an ast::Prog
+// TODO add a CallUDF PrimStmt, stub out in compile
+// TODO add a Return PrimStmt (? -- maybe just to the bytecode)
+// TODO type inference
+// TODO add Call/Return to bytecode, wire into compile
 
-// consider making this just "by number" and putting branch instructions elsewhere.
-// need to verify the order
-// Use VecDequeue to support things like prepending definitions and phi statements to blocks during
-// SSA conversion.
 #[derive(Debug, Default)]
-pub(crate) struct BasicBlock<'a>(pub VecDeque<PrimStmt<'a>>);
+pub(crate) struct BasicBlock<'a> {
+    pub q: VecDeque<PrimStmt<'a>>,
+    pub sealed: bool,
+}
 
 // None indicates `else`
 #[derive(Debug, Default)]
@@ -34,7 +40,30 @@ impl<'a> Transition<'a> {
 }
 
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
-pub(crate) type Ident = (NumTy, NumTy);
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
+pub(crate) struct Ident {
+    low: NumTy,
+    sub: NumTy,
+    global: bool,
+}
+
+impl Ident {
+    fn new_global(low: NumTy) -> Ident {
+        Ident {
+            low,
+            sub: 0,
+            global: true,
+        }
+    }
+    fn new_local(low: NumTy) -> Ident {
+        Ident {
+            low,
+            sub: 0,
+            global: false,
+        }
+    }
+}
+
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
 #[derive(Debug, Clone)]
@@ -69,6 +98,7 @@ pub(crate) enum PrimStmt<'a> {
     ),
     AsgnVar(Ident /* var */, PrimExpr<'a>),
     SetBuiltin(builtins::Variable, PrimExpr<'a>),
+    // TODO add return
 }
 
 // only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
@@ -159,9 +189,16 @@ struct GlobalContext<I> {
     tmp_fs: Option<Ident>,
 }
 
+struct Arg<I> {
+    name: I,
+    id: Ident,
+}
+
 struct Function<'a, I> {
     name: Option<I>,
     ident: Option<Ident>,
+    args: SmallVec<Arg<I>>,
+    ret: Ident,
     // TODO args
     //  * args get placed in local variables immediately?
     //  * args are just local variables?
@@ -175,7 +212,8 @@ struct Function<'a, I> {
     defsites: HashMap<Ident, HashSet<NodeIx>>,
     orig: HashMap<NodeIx, HashSet<Ident>>,
     entry: NodeIx,
-    // TODO populate
+    // We enforce that a single basic block has a return statement. This is to ensure that type
+    // inference infers the same type for each return site.
     exit: NodeIx,
     // Stack of the entry and exit nodes for the loops within which the current statement is
     // nested.
@@ -196,7 +234,7 @@ impl<'a, 'b, I> View<'a, 'b, I> {
 }
 
 pub(crate) fn is_unused(i: Ident) -> bool {
-    i.0 == 0
+    i.low == 0
 }
 
 impl<'a, 'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> View<'a, 'b, I>
@@ -221,8 +259,26 @@ where
             n
         }
     }
+
+    // We want to make sure there is a single exit node. This method adds an unconditional branch
+    // to the end of each basic block without one already to the exit node.
+    fn finish(&mut self) {
+        for bb in self.f.cfg.node_indices() {
+            let mut found = false;
+            let mut walker = self.f.cfg.neighbors(bb).detach();
+            while let Some((e, _)) = walker.next(&self.f.cfg) {
+                if let Transition(None) = self.f.cfg.edge_weight(e).unwrap() {
+                    found = true;
+                }
+            }
+            if !found {
+                self.f.cfg.add_edge(bb, self.f.exit, Transition::null());
+            }
+        }
+    }
+
     fn unused() -> Ident {
-        (0, 0)
+        Ident::new_global(0)
     }
 
     // pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
@@ -285,7 +341,7 @@ where
                 // We need to assign to unused here, otherwise we could generate the expression but
                 // then drop it on the floor.
                 let (next, e) = self.convert_expr(e, current_open)?;
-                self.add_stmt(next, PrimStmt::AsgnVar(Self::unused(), e));
+                self.add_stmt(next, PrimStmt::AsgnVar(Self::unused(), e))?;
                 next
             }
             Block(stmts) => {
@@ -334,16 +390,16 @@ where
                                 smallvec![PrimVal::ILit(0)],
                             ),
                         ),
-                    );
+                    )?;
                     self.add_stmt(
                         current_open,
                         PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
-                    );
+                    )?;
                     current_open
                 } else if vs.len() == 1 {
                     let (next, v) = self.convert_val(vs[0], current_open)?;
                     current_open = next;
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)));
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)))?;
                     current_open
                 } else {
                     const EMPTY: PrimVal<'static> = PrimVal::StrLit("");
@@ -357,7 +413,7 @@ where
                                 fs.clone(),
                                 PrimExpr::LoadBuiltin(builtins::Variable::OFS),
                             ),
-                        );
+                        )?;
                         PrimVal::Var(fs)
                     };
 
@@ -370,7 +426,7 @@ where
                     // (e.g.  how will printf work? Will we disallow dynamically computed printf
                     // strings? We probably should...)
                     let mut tmp = self.fresh();
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(tmp, PrimExpr::Val(EMPTY)));
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(tmp, PrimExpr::Val(EMPTY)))?;
                     for (i, v) in vs.iter().enumerate() {
                         let (next, v) = self.convert_val(*v, current_open)?;
                         current_open = next;
@@ -459,13 +515,14 @@ where
                 let v_id = self.get_identifier(v);
                 let (next, array_val) = self.convert_val(array, current_open)?;
                 current_open = next;
-                let array_iter = self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open);
+                let array_iter =
+                    self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open)?;
 
                 // First, create the loop header, which checks if there are any more elements
                 // in the array.
                 let cond = PrimExpr::HasNext(array_iter.clone());
                 let cond_block = self.f.cfg.add_node(Default::default());
-                let cond_v = self.to_val(cond, cond_block);
+                let cond_v = self.to_val(cond, cond_block)?;
                 self.f
                     .cfg
                     .add_edge(current_open, cond_block, Transition::null());
@@ -480,7 +537,7 @@ where
                 // assigning it to `v`
                 let update = PrimStmt::AsgnVar(v_id, PrimExpr::Next(array_iter.clone()));
                 let body_start = self.f.cfg.add_node(Default::default());
-                self.add_stmt(body_start, update);
+                self.add_stmt(body_start, update)?;
                 let body_end = self.convert_stmt(body, body_start)?;
                 self.f
                     .cfg
@@ -528,6 +585,14 @@ where
                     }
                 }
             }
+            Return(ret) => {
+                let (current_open, e) = self.convert_expr(ret, current_open)?;
+                self.add_stmt(current_open, PrimStmt::AsgnVar(self.f.ret, e))?;
+                self.f
+                    .cfg
+                    .add_edge(current_open, self.f.exit, Transition::null());
+                current_open
+            }
         })
     }
 
@@ -570,8 +635,8 @@ where
                     self.ctx.may_rename.push(res_id);
                     let (tstart, tend, te) = self.standalone_expr(tcase)?;
                     let (fstart, fend, fe) = self.standalone_expr(fcase)?;
-                    self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te));
-                    self.add_stmt(fend, PrimStmt::AsgnVar(res_id, fe));
+                    self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te))?;
+                    self.add_stmt(fend, PrimStmt::AsgnVar(res_id, fe))?;
                     let next = self.do_condition(
                         cond,
                         (tstart, tend),
@@ -627,7 +692,7 @@ where
                                     fs.clone(),
                                     PrimExpr::LoadBuiltin(builtins::Variable::OFS),
                                 ),
-                            );
+                            )?;
                             prim_args.push(PrimVal::Var(fs));
                         }
                     }
@@ -648,7 +713,8 @@ where
                         ix,
                         |slf, arr_v, ix_v, open| {
                             let (next, to_v) = slf.convert_val(to, open)?;
-                            let arr_cell_v = slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), next);
+                            let arr_cell_v =
+                                slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), next)?;
                             Ok((
                                 next,
                                 PrimExpr::CallBuiltin(
@@ -684,7 +750,7 @@ where
                     let (next, pre) = if *is_post {
                         let (next, e) = self.convert_expr(x, current_open)?;
                         let f = self.fresh();
-                        self.add_stmt(next, PrimStmt::AsgnVar(f, e));
+                        self.add_stmt(next, PrimStmt::AsgnVar(f, e))?;
                         (next, Some(PrimExpr::Val(PrimVal::Var(f))))
                     } else {
                         (current_open, None)
@@ -767,13 +833,13 @@ where
                 current_open,
                 if let Ok(b) = builtins::Variable::try_from(i.clone()) {
                     let res = PrimExpr::LoadBuiltin(b);
-                    let res_v = self.to_val(res.clone(), current_open);
-                    self.add_stmt(current_open, PrimStmt::SetBuiltin(b, to(&res_v)));
+                    let res_v = self.to_val(res.clone(), current_open)?;
+                    self.add_stmt(current_open, PrimStmt::SetBuiltin(b, to(&res_v)))?;
                     res
                 } else {
                     let ident = self.get_identifier(i);
                     let res_v = PrimVal::Var(ident);
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to(&res_v)));
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to(&res_v)))?;
                     PrimExpr::Val(res_v)
                 },
             )),
@@ -781,15 +847,15 @@ where
                 use {ast::Unop::*, builtins::Function};
                 let (next, v) = self.convert_val(n, current_open)?;
                 let res = PrimExpr::CallBuiltin(Function::Unop(Column), smallvec![v.clone()]);
-                let res_v = self.to_val(res.clone(), next);
-                let to_v = self.to_val(to(&res_v), next);
+                let res_v = self.to_val(res.clone(), next)?;
+                let to_v = self.to_val(to(&res_v), next)?;
                 self.add_stmt(
                     next,
                     PrimStmt::AsgnVar(
                         Self::unused(),
                         PrimExpr::CallBuiltin(Function::Setcol, smallvec![v, to_v]),
                     ),
-                );
+                )?;
                 Ok((next, res))
             }
             _ => err!("unsupprted assignment LHS: {:?}", v),
@@ -814,7 +880,7 @@ where
             id
         } else {
             let arr_id = self.fresh();
-            self.add_stmt(next, PrimStmt::AsgnVar(arr_id, arr_e));
+            self.add_stmt(next, PrimStmt::AsgnVar(arr_id, arr_e))?;
             arr_id
         };
 
@@ -824,7 +890,7 @@ where
         self.add_stmt(
             next,
             PrimStmt::AsgnIndex(arr_id, ix_v.clone(), to_e.clone()),
-        );
+        )?;
         Ok((next, PrimExpr::Index(arr_v, ix_v)))
     }
 
@@ -872,7 +938,7 @@ where
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimVal<'b>)> {
         let (next_open, e) = self.convert_expr(expr, current_open)?;
-        Ok((next_open, self.to_val(e, next_open)))
+        Ok((next_open, self.to_val(e, next_open)?))
     }
 
     fn make_loop<'c>(
@@ -921,20 +987,26 @@ where
         Ok((h, b_start, b_end, f))
     }
 
-    fn to_val(&mut self, exp: PrimExpr<'b>, current_open: NodeIx) -> PrimVal<'b> {
-        if let PrimExpr::Val(v) = exp {
+    fn to_val(&mut self, exp: PrimExpr<'b>, current_open: NodeIx) -> Result<PrimVal<'b>> {
+        Ok(if let PrimExpr::Val(v) = exp {
             v
         } else {
             let f = self.fresh();
-            self.add_stmt(current_open, PrimStmt::AsgnVar(f, exp));
+            self.add_stmt(current_open, PrimStmt::AsgnVar(f, exp))?;
             PrimVal::Var(f)
-        }
+        })
     }
 
     fn fresh(&mut self) -> Ident {
         let res = self.ctx.max;
         self.ctx.max += 1;
-        (res, 0)
+        Ident::new_global(res)
+    }
+
+    fn fresh_local(&mut self) -> Ident {
+        let res = self.ctx.max;
+        self.ctx.max += 1;
+        Ident::new_local(res)
     }
 
     fn record_ident(&mut self, id: Ident, blk: NodeIx) {
@@ -960,11 +1032,20 @@ where
         next
     }
 
-    fn add_stmt(&mut self, at: NodeIx, stmt: PrimStmt<'b>) {
+    fn add_stmt(&mut self, at: NodeIx, stmt: PrimStmt<'b>) -> Result<()> {
         if let PrimStmt::AsgnVar(ident, _) = stmt {
             self.record_ident(ident, at);
         }
-        self.f.cfg.node_weight_mut(at).unwrap().0.push_back(stmt);
+        let bb = self.f.cfg.node_weight_mut(at).unwrap();
+        if bb.sealed {
+            return err!(
+                "appending to sealed basic block ({}). Last instr={:?}",
+                at.index(),
+                bb.q.back().unwrap()
+            );
+        }
+        bb.q.push_back(stmt);
+        Ok(())
     }
 
     fn insert_phis(&mut self) {
@@ -1003,7 +1084,7 @@ where
                             .cfg
                             .node_weight_mut(d_ix)
                             .expect("node in dominance frontier must be valid")
-                            .0
+                            .q
                             .push_front(stmt);
                         phis.entry(ident).or_insert(HashSet::default()).insert(d_ix);
                         if !defsites.contains(&d_ix) {
@@ -1052,14 +1133,18 @@ where
                 .cfg
                 .node_weight_mut(cur)
                 .expect("rename must be passed valid node indices")
-                .0
+                .q
             {
                 // Note that `replace` is specialized to our use-case in this method. It does not hit
                 // AsgnVar identifiers, and it skips Phi nodes.
-                stmt.replace(|(x, _)| (x, state[x as usize].latest()));
-                if let PrimStmt::AsgnVar((a, i), _) = stmt {
-                    *i = state[*a as usize].get_next();
-                    defs.push(*a);
+                stmt.replace(|Ident { low, global, .. }| Ident {
+                    low,
+                    sub: state[low as usize].latest(),
+                    global,
+                });
+                if let PrimStmt::AsgnVar(Ident { low, sub, .. }, _) = stmt {
+                    *sub = state[*low as usize].get_next();
+                    defs.push(*low);
                 }
             }
 
@@ -1093,14 +1178,16 @@ where
             // point back to the current node and update the subscript accordingly.
             let mut walker = f.cfg.neighbors_directed(cur, Direction::Outgoing).detach();
             while let Some((edge, neigh)) = walker.next(&f.cfg) {
-                if let Some(PrimVal::Var((x, sub))) = &mut f.cfg.edge_weight_mut(edge).unwrap().0 {
-                    *sub = state[*x as usize].latest();
+                if let Some(PrimVal::Var(Ident { low, sub, .. })) =
+                    &mut f.cfg.edge_weight_mut(edge).unwrap().0
+                {
+                    *sub = state[*low as usize].latest();
                 }
-                for stmt in &mut f.cfg.node_weight_mut(neigh).unwrap().0 {
+                for stmt in &mut f.cfg.node_weight_mut(neigh).unwrap().q {
                     if let PrimStmt::AsgnVar(_, PrimExpr::Phi(ps)) = stmt {
-                        for (pred, (x, sub)) in ps.iter_mut() {
+                        for (pred, Ident { low, sub, .. }) in ps.iter_mut() {
                             if pred == &cur {
-                                *sub = state[*x as usize].latest();
+                                *sub = state[*low as usize].latest();
                                 break;
                             }
                         }
