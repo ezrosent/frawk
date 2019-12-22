@@ -18,6 +18,7 @@ pub(crate) enum ReaderState {
 
 pub(crate) struct Reader<R> {
     inner: R,
+    // The "stray bytes" that will be prepended to the next buffer.
     prefix: SmallVec<[u8; 8]>,
     cur: Shared<str>,
     chunk_size: usize,
@@ -118,11 +119,11 @@ impl<R: Read> Reader<R> {
                 None => {
                     let cur: Str = self.cur.clone().into();
                     handle_err!(self.advance(self.get().len()));
+                    prefix = Str::concat(prefix, cur.into());
                     if self.is_eof() {
                         // All done! Just return the rest of the buffer.
-                        return cur.into();
+                        return prefix;
                     }
-                    prefix = Str::concat(prefix, cur.into());
                 }
             }
         }
@@ -148,8 +149,8 @@ impl<R: Read> Reader<R> {
     fn get_next_buf(&mut self) -> Result<Shared<str>> {
         let mut done = false;
         let mut data = vec![0u8; self.chunk_size];
-        for (i, b) in self.prefix.iter().enumerate() {
-            data[i] = *b;
+        for (i, b) in self.prefix.iter().cloned().enumerate() {
+            data[i] = b;
         }
         let bytes_read = read_to_slice(&mut self.inner, &mut data[self.prefix.len()..])?;
         self.prefix.clear();
@@ -313,7 +314,7 @@ mod test {
         let mut res = Vec::with_capacity(n);
         use rand::distributions::{Distribution, Uniform};
         let between = Uniform::new_inclusive(0.0, 1.0);
-        let ascii = Uniform::new_inclusive(0u8, 127u8);
+        let ascii = Uniform::new_inclusive(33u8, 126u8);
         let mut rng = rand::thread_rng();
         for _ in 0..n {
             let s = between.sample(&mut rng);
