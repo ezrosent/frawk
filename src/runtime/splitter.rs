@@ -1,3 +1,8 @@
+//! This module implements line reading in the style of AWK's getline. In particular, it has the
+//! cumbersome API of letting you know if there was an error, or EOF, after the read has completed.
+//!
+//! In addition to this API, it also handles reading in chunks, with appropriate handling of UTF8
+//! characters that cross chunk boundaries, or multi-chunk "lines".
 use super::shared::Shared;
 use super::utf8::{parse_utf8, parse_utf8_clipped};
 use super::Str;
@@ -148,16 +153,25 @@ impl<R: Read> Reader<R> {
     }
     fn get_next_buf(&mut self) -> Result<Shared<str>> {
         let mut done = false;
+        // Copy the last few bytes over to `data`, if there were any.
+        //
+        // TODO: add a test for this behavior.
         let mut data = vec![0u8; self.chunk_size];
         for (i, b) in self.prefix.iter().cloned().enumerate() {
             data[i] = b;
         }
-        let bytes_read = read_to_slice(&mut self.inner, &mut data[self.prefix.len()..])?;
+        let plen = self.prefix.len();
         self.prefix.clear();
+        // Try to fill up the rest of `data` with new bytes.
+        let bytes_read = plen + read_to_slice(&mut self.inner, &mut data[plen..])?;
+        self.prefix.clear();
+
         if bytes_read != self.chunk_size {
             done = true;
             data.truncate(bytes_read);
         }
+
+        // Read the data into a Shared buffer, then parse it into utf8.
         let bytes = Shared::<[u8]>::from(Box::from(data));
         let utf8 = {
             let opt = if done {
@@ -173,6 +187,7 @@ impl<R: Read> Reader<R> {
         };
         let ulen = utf8.get().len();
         if !done && ulen != bytes_read {
+            // We clipped a utf8 character at the end of the buffer. Add it to prefix.
             self.prefix.extend_from_slice(&bytes.get()[ulen..]);
         }
         if done {
@@ -209,6 +224,35 @@ mod test {
             lines.push(line);
         }
         let expected: Vec<_> = LINE.split(bs.as_str()).map(|x| Str::from(x)).collect();
+        assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn test_clipped_chunk_split() {
+        use super::Str;
+        use std::io::Cursor;
+
+        let corpus_size = 1 << 18;
+        let chunk_size = 1 << 9;
+
+        let multi_byte = "學";
+        assert!(multi_byte.len() > 1);
+        let mut bs = bytes(corpus_size, 0.001, 0.05);
+        let start = chunk_size - 1;
+        for (i, b) in multi_byte.as_bytes().iter().enumerate() {
+            bs[start + i] = *b;
+        }
+
+        let s = String::from_utf8(bs).unwrap();
+        let c = Cursor::new(s.clone());
+        let mut rdr = super::Reader::new(c, chunk_size).unwrap();
+        let mut lines = Vec::new();
+        while !rdr.is_eof() {
+            let line = rdr.read_line(&*LINE);
+            assert!(rdr.read_state() != -1);
+            lines.push(line);
+        }
+        let expected: Vec<_> = LINE.split(s.as_str()).map(|x| Str::from(x)).collect();
         assert_eq!(lines, expected);
     }
 
