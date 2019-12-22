@@ -12,9 +12,22 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-// TODO add a Return PrimStmt (? -- maybe just to the bytecode)
 // TODO type inference
+//  * clear out type definitions in cfg, rename them to those in cfg2
+//  * stub out any `match`es in `compile`; get everything compiling.
+//  * add a new factory method on TypeContext that takes a whole ProgramContext
+//  * Do the actual work
+//      - Env currently maps identifiers to NodeIx. Instead, it needs to map either a global
+//      identifier or a <local identifier, Vec<arg types>> to a NodeIx (QQ: do you need the
+//      function in there, or is it not needed).
+//      - In addition, you'll need to map <Function Id, Vec<arg types>> to NodeIx, where that node
+//      represents the return value.
+//  * Once we do that; the rest should be "just plumbing". Calls to UDFs can mutate the network in
+//  place as needed. When there isn't an entry in the function map, create a new one and iterate
+//  over its primStmts. The existing code modified to perform lookups in the new environment should
+//  make things "just work".
 // TODO add Call/Return to bytecode, wire into compile
+// TODO add a Return PrimStmt (? -- maybe just to the bytecode)
 
 #[derive(Debug, Default)]
 pub(crate) struct BasicBlock<'a> {
