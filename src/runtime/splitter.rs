@@ -154,8 +154,6 @@ impl<R: Read> Reader<R> {
     fn get_next_buf(&mut self) -> Result<Shared<str>> {
         let mut done = false;
         // Copy the last few bytes over to `data`, if there were any.
-        //
-        // TODO: add a test for this behavior.
         let mut data = vec![0u8; self.chunk_size];
         for (i, b) in self.prefix.iter().cloned().enumerate() {
             data[i] = b;
