@@ -25,7 +25,6 @@ pub struct FunDec<'a, 'b, I> {
 }
 
 pub struct Prog<'a, 'b, I> {
-    // TODO: Add `return` statement
     // TODO: Add variants for CallFunction in PrimExpr, Return in PrimStmt, (make sure to handle
     // the loop stack appropriately as well).
     pub decs: Vec<FunDec<'a, 'b, I>>,
