@@ -1,3 +1,4 @@
+use crate::arena;
 use crate::ast::{self, Binop, Expr, Stmt, Unop};
 use crate::builtins;
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result};
@@ -11,11 +12,6 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-// TODO migrate most uses of fresh() to fresh_local()
-//      We need to make sure that subcomputations involving locals don't
-//      infect different calls to the same function.
-// TODO construct a ProgramContext from an ast::Prog
-// TODO add a CallUDF PrimStmt, stub out in compile
 // TODO add a Return PrimStmt (? -- maybe just to the bytecode)
 // TODO type inference
 // TODO add Call/Return to bytecode, wire into compile
@@ -79,6 +75,7 @@ pub(crate) enum PrimExpr<'a> {
     Val(PrimVal<'a>),
     Phi(SmallVec<(NodeIx /* pred */, Ident)>),
     CallBuiltin(builtins::Function, SmallVec<PrimVal<'a>>),
+    CallUDF(NumTy, SmallVec<PrimVal<'a>>),
     Index(PrimVal<'a>, PrimVal<'a>),
 
     // For iterating over vectors.
@@ -121,7 +118,7 @@ impl<'a> PrimExpr<'a> {
         match self {
             Val(v) => v.replace(update),
             Phi(_) => {}
-            CallBuiltin(_, args) => {
+            CallBuiltin(_, args) | CallUDF(_, args) => {
                 for a in args.iter_mut() {
                     a.replace(&mut update)
                 }
@@ -164,12 +161,122 @@ fn valid_lhs<'a, 'b, I>(e: &ast::Expr<'a, 'b, I>) -> bool {
 }
 pub(crate) struct ProgramContext<'a, I> {
     shared: GlobalContext<I>,
-    funcs: HashMap<Option<I>, Function<'a, I>>,
+    // On one level, it makes more sense to have this as a single  mapping Option<I> ->
+    // Function<I>. After all, Function contains its Ident.
+    //
+    // We add a layer of indirection because we will need to mutably borrow members of `funcs`
+    // while maintaining immutable access to the mapping from Is to numbers.
+    func_table: HashMap<Option<I>, NumTy>,
+    funcs: Vec<Function<'a, I>>,
+}
+
+impl<'a, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> ProgramContext<'a, I>
+where
+    builtins::Variable: TryFrom<I>,
+    builtins::Function: TryFrom<I>,
+{
+    fn from_prog<'b, 'outer>(
+        arena: &'a arena::Arena<'outer>,
+        p: &ast::Prog<'a, 'b, I>,
+    ) -> Result<Self> {
+        let mut shared: GlobalContext<I> = GlobalContext {
+            hm: Default::default(),
+            may_rename: Default::default(),
+            max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations
+            tmp_fs: None,
+        };
+        let mut func_table: HashMap<Option<I>, NumTy> = Default::default();
+        let mut funcs: Vec<Function<'a, I>> = Default::default();
+        for fundec in p.decs.iter() {
+            if let Some(_) = func_table.insert(Some(fundec.name.clone()), funcs.len() as NumTy) {
+                return err!("duplicate function found for name {}", fundec.name);
+            }
+            if let Ok(bi) = builtins::Function::try_from(fundec.name.clone()) {
+                return err!("attempted redefinition of builtin function {}", bi);
+            }
+            let mut ix = 0;
+            let mut args_map = HashMap::new();
+            let mut cfg = CFG::default();
+            let entry = cfg.add_node(Default::default());
+            let exit = cfg.add_node(Default::default());
+            let f = Function {
+                name: Some(fundec.name.clone()),
+                ident: Some(funcs.len() as u32),
+                args: fundec
+                    .args
+                    .iter()
+                    .map(|i| {
+                        let name = i.clone();
+                        let id = shared.fresh_local();
+                        args_map.insert(i.clone(), ix);
+                        ix += 1;
+                        Arg { name, id }
+                    })
+                    .collect(),
+                args_map,
+                ret: shared.fresh_local(),
+                cfg,
+                defsites: Default::default(),
+                orig: Default::default(),
+                entry,
+                exit,
+                loop_ctx: Default::default(),
+                dt: Default::default(),
+                df: Default::default(),
+            };
+            funcs.push(f);
+        }
+        // Bind the main function
+        let main_stmt = arena.alloc_v(p.desugar(arena));
+        let mut cfg = CFG::default();
+        let entry = cfg.add_node(Default::default());
+        let exit = cfg.add_node(Default::default());
+        let mut main_func = Function {
+            name: None,
+            ident: None,
+            args: Default::default(),
+            args_map: Default::default(),
+            ret: View::<'a, 'a, I>::unused(),
+            cfg,
+            defsites: Default::default(),
+            orig: Default::default(),
+            entry,
+            exit,
+            loop_ctx: Default::default(),
+            dt: Default::default(),
+            df: Default::default(),
+        };
+        // Now that we have all the functions in place, it's time to fill them up and convert them
+        // to SSA.
+        View {
+            ctx: &mut shared,
+            f: &mut main_func,
+            func_table: &func_table,
+        }
+        .fill(main_stmt)?;
+        func_table.insert(None, funcs.len() as NumTy);
+        funcs.push(main_func);
+        for fundec in p.decs.iter() {
+            let f = *func_table.get_mut(&Some(fundec.name.clone())).unwrap();
+            View {
+                ctx: &mut shared,
+                f: funcs.get_mut(f as usize).unwrap(),
+                func_table: &func_table,
+            }
+            .fill(fundec.body)?;
+        }
+        Ok(ProgramContext {
+            shared,
+            func_table,
+            funcs,
+        })
+    }
 }
 
 struct View<'a, 'b, I> {
     ctx: &'a mut GlobalContext<I>,
     f: &'a mut Function<'b, I>,
+    func_table: &'a HashMap<Option<I>, NumTy>,
 }
 
 struct GlobalContext<I> {
@@ -189,6 +296,20 @@ struct GlobalContext<I> {
     tmp_fs: Option<Ident>,
 }
 
+impl<I> GlobalContext<I> {
+    fn fresh(&mut self) -> Ident {
+        let res = self.max;
+        self.max += 1;
+        Ident::new_global(res)
+    }
+
+    fn fresh_local(&mut self) -> Ident {
+        let res = self.max;
+        self.max += 1;
+        Ident::new_local(res)
+    }
+}
+
 struct Arg<I> {
     name: I,
     id: Ident,
@@ -196,8 +317,10 @@ struct Arg<I> {
 
 struct Function<'a, I> {
     name: Option<I>,
-    ident: Option<Ident>,
+    ident: Option<NumTy>,
     args: SmallVec<Arg<I>>,
+    // Indexes into args, to guard against adversarially large functions.
+    args_map: HashMap<I, NumTy>,
     ret: Ident,
     // TODO args
     //  * args get placed in local variables immediately?
@@ -250,6 +373,27 @@ where
             .map(|(k, v)| (v.clone(), k.clone()))
             .collect()
     }
+
+    fn fill<'c>(&mut self, stmt: &'c Stmt<'c, 'b, I>) -> Result<()> {
+        // Add a CFG corresponding to `stmt`
+        let _next = self.convert_stmt(stmt, self.f.entry)?;
+        // Insert edges to the exit nodes if where they do not  exist
+        self.finish();
+        // SSA Conversion:
+        // 1. Compute the dominator tree and dominance frontiers
+        let (dt, df) = {
+            let di = dom::DomInfo::new(&self.f.cfg, self.f.entry);
+            (di.dom_tree(), di.dom_frontier())
+        };
+        self.f.dt = dt;
+        self.f.df = df;
+        // 2. Insert phi nodes where appropriate
+        self.insert_phis();
+        // 3. Rename variables
+        self.rename(self.f.entry);
+        Ok(())
+    }
+
     fn field_sep(&mut self) -> Ident {
         if let Some(id) = self.ctx.tmp_fs {
             id
@@ -280,37 +424,6 @@ where
     fn unused() -> Ident {
         Ident::new_global(0)
     }
-
-    // pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
-    //     let mut ctx = Context {
-    //         hm: Default::default(),
-    //         may_rename: Default::default(),
-    //         defsites: Default::default(),
-    //         orig: Default::default(),
-    //         max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations.
-    //         cfg: Default::default(),
-    //         entry: Default::default(),
-    //         loop_ctx: Default::default(),
-    //         dt: Default::default(),
-    //         df: Default::default(),
-    //         num_idents: 0,
-    //         tmp_fs: None,
-    //     };
-    //     // convert AST to CFG
-    //     let (start, _) = ctx.standalone_block(stmt)?;
-    //     ctx.entry = start;
-    //     // SSA conversion: compute dominator tree and dominance frontier.
-    //     let (dt, df) = {
-    //         let di = dom::DomInfo::new(ctx.cfg(), ctx.entry());
-    //         (di.dom_tree(), di.dom_frontier())
-    //     };
-    //     ctx.dt = dt;
-    //     ctx.df = df;
-    //     // SSA conversion: insert phi functions, and rename variables.
-    //     ctx.insert_phis();
-    //     ctx.rename(ctx.entry());
-    //     Ok(ctx)
-    // }
 
     fn standalone_expr<'c>(
         &mut self,
@@ -380,6 +493,13 @@ where
                     }
                 };
                 if vs.len() == 0 {
+                    // It's safe to leave these as globals, as we are writing them to $0, which is
+                    // always going to be a string. Similar logic applies to the temporaries
+                    // introduced below; they are all the result of Concat, which always returns a
+                    // string.
+                    //
+                    // TODO: this reasoning is based on the idea that  globals are "cheaper"; if
+                    // that changes, then we'll want to migrate these to `fresh_local`
                     let tmp = self.fresh();
                     self.add_stmt(
                         current_open,
@@ -631,7 +751,7 @@ where
                     ));
                 }
                 ITE(cond, tcase, fcase) => {
-                    let res_id = self.fresh();
+                    let res_id = self.fresh_local();
                     self.ctx.may_rename.push(res_id);
                     let (tstart, tend, te) = self.standalone_expr(tcase)?;
                     let (fstart, fend, fe) = self.standalone_expr(fcase)?;
@@ -668,14 +788,13 @@ where
                     let bi = match fname {
                         Either::Left(fname) => {
                             if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
-                                bi
+                                Either::Right(bi)
                             } else {
-                                return err!("Call to unknown function \"{}\"", fname);
+                                Either::Left(fname.clone())
                             }
                         }
-                        Either::Right(bi) => *bi,
+                        Either::Right(bi) => Either::Right(*bi),
                     };
-
                     let mut prim_args = SmallVec::with_capacity(args.len());
                     let mut open = current_open;
                     for a in args.iter() {
@@ -683,20 +802,31 @@ where
                         open = next;
                         prim_args.push(v);
                     }
-                    if let builtins::Function::Split = bi {
-                        if prim_args.len() == 2 {
-                            let fs = self.field_sep();
-                            self.add_stmt(
-                                current_open,
-                                PrimStmt::AsgnVar(
-                                    fs.clone(),
-                                    PrimExpr::LoadBuiltin(builtins::Variable::OFS),
-                                ),
-                            )?;
-                            prim_args.push(PrimVal::Var(fs));
+                    match bi {
+                        Either::Left(fname) => {
+                            return if let Some(i) = self.func_table.get(&Some(fname.clone())) {
+                                Ok((open, PrimExpr::CallUDF(*i, prim_args)))
+                            } else {
+                                err!("Call to unknown function \"{}\"", fname)
+                            };
+                        }
+                        Either::Right(bi) => {
+                            if let builtins::Function::Split = bi {
+                                if prim_args.len() == 2 {
+                                    let fs = self.field_sep();
+                                    self.add_stmt(
+                                        current_open,
+                                        PrimStmt::AsgnVar(
+                                            fs.clone(),
+                                            PrimExpr::LoadBuiltin(builtins::Variable::OFS),
+                                        ),
+                                    )?;
+                                    prim_args.push(PrimVal::Var(fs));
+                                }
+                            }
+                            return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
                         }
                     }
-                    return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
                 }
                 Assign(Index(arr, ix), to) => {
                     return self.do_assign_index(
@@ -749,7 +879,7 @@ where
                     };
                     let (next, pre) = if *is_post {
                         let (next, e) = self.convert_expr(x, current_open)?;
-                        let f = self.fresh();
+                        let f = self.fresh_local();
                         self.add_stmt(next, PrimStmt::AsgnVar(f, e))?;
                         (next, Some(PrimExpr::Val(PrimVal::Var(f))))
                     } else {
@@ -879,7 +1009,7 @@ where
         let arr_id = if let PrimExpr::Val(PrimVal::Var(id)) = arr_e {
             id
         } else {
-            let arr_id = self.fresh();
+            let arr_id = self.fresh_local();
             self.add_stmt(next, PrimStmt::AsgnVar(arr_id, arr_e))?;
             arr_id
         };
@@ -991,22 +1121,18 @@ where
         Ok(if let PrimExpr::Val(v) = exp {
             v
         } else {
-            let f = self.fresh();
+            let f = self.fresh_local();
             self.add_stmt(current_open, PrimStmt::AsgnVar(f, exp))?;
             PrimVal::Var(f)
         })
     }
 
     fn fresh(&mut self) -> Ident {
-        let res = self.ctx.max;
-        self.ctx.max += 1;
-        Ident::new_global(res)
+        self.ctx.fresh()
     }
 
     fn fresh_local(&mut self) -> Ident {
-        let res = self.ctx.max;
-        self.ctx.max += 1;
-        Ident::new_local(res)
+        self.ctx.fresh_local()
     }
 
     fn record_ident(&mut self, id: Ident, blk: NodeIx) {
@@ -1026,10 +1152,15 @@ where
         if let Some(id) = self.ctx.hm.get(i) {
             return *id;
         }
-        let next = self.fresh();
-        self.ctx.hm.insert(i.clone(), next);
-        self.ctx.may_rename.push(next);
-        next
+        // The only identifiers that can be locals are arguments to the current function.
+        if let Some(ix) = self.f.args_map.get(i) {
+            self.f.args[*ix as usize].id
+        } else {
+            let next = self.fresh();
+            self.ctx.hm.insert(i.clone(), next);
+            self.ctx.may_rename.push(next);
+            next
+        }
     }
 
     fn add_stmt(&mut self, at: NodeIx, stmt: PrimStmt<'b>) -> Result<()> {
