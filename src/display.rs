@@ -8,7 +8,8 @@ struct Wrap(pub Ident);
 
 impl Display for Wrap {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}-{}", (self.0).0, (self.0).1)
+        let Ident { low, sub, global } = self.0;
+        write!(f, "{}-{}%{}", low, sub, if global { "g" } else { "l" })
     }
 }
 
@@ -44,6 +45,22 @@ impl<'a> Display for PrimStmt<'a> {
 impl<'a> Display for PrimExpr<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         use PrimExpr::*;
+        fn write_func(
+            f: &mut Formatter,
+            func: impl fmt::Display,
+            os: &[impl fmt::Display],
+        ) -> fmt::Result {
+            write!(f, "{}(", func)?;
+            for (i, o) in os.iter().enumerate() {
+                let is_last = i == os.len() - 1;
+                if is_last {
+                    write!(f, "{}", o)?;
+                } else {
+                    write!(f, "{}, ", o)?;
+                }
+            }
+            write!(f, ")")
+        }
         match self {
             Val(v) => write!(f, "{}", v),
             Phi(preds) => {
@@ -58,18 +75,8 @@ impl<'a> Display for PrimExpr<'a> {
                 }
                 write!(f, "]")
             }
-            CallBuiltin(b, os) => {
-                write!(f, "{}(", b)?;
-                for (i, o) in os.iter().enumerate() {
-                    let is_last = i == os.len() - 1;
-                    if is_last {
-                        write!(f, "{}", o)?;
-                    } else {
-                        write!(f, "{}, ", o)?;
-                    }
-                }
-                write!(f, ")")
-            }
+            CallBuiltin(b, os) => write_func(f, b, &os[..]),
+            CallUDF(func, os) => write_func(f, func, &os[..]),
             Index(m, v) => write!(f, "{}[{}]", m, v),
             IterBegin(m) => write!(f, "begin({})", m),
             HasNext(i) => write!(f, "hasnext({})", i),

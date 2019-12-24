@@ -3,7 +3,8 @@
 //! TODO: make this test-only
 use crate::{
     arena::Arena,
-    ast, cfg,
+    ast,
+    cfg::{self, Ident},
     common::Result,
     compile, lexer, syntax,
     types::{get_types, BaseTy, TVar},
@@ -76,7 +77,15 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> ProgResu
         // We want the types of all the entries in ts that show up in ident_map.
         let type_map: HashMap<&'a str, compile::Ty> = ts
             .iter()
-            .flat_map(|((major, _), ty)| ident_map.get(&(*major, 0)).map(|s| (*s, ty.clone())))
+            .flat_map(|(Ident { low, global, .. }, ty)| {
+                ident_map
+                    .get(&Ident {
+                        low: *low,
+                        sub: 0,
+                        global: *global,
+                    })
+                    .map(|s| (*s, ty.clone()))
+            })
             .collect();
         let mut interp = compile::bytecode(&ctx, std::io::Cursor::new(stdin), stdout.clone())?;
         for (i, inst) in interp.instrs().iter().enumerate() {

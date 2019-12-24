@@ -32,44 +32,45 @@ impl<'a> Transition<'a> {
         Transition(None)
     }
 }
+pub(crate) use crate::cfg2::{Ident, PrimExpr, PrimStmt, PrimVal};
 
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
-pub(crate) type Ident = (NumTy, NumTy);
+// pub(crate) type Ident = (NumTy, NumTy);
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
-#[derive(Debug, Clone)]
-pub(crate) enum PrimVal<'a> {
-    Var(Ident),
-    ILit(i64),
-    FLit(f64),
-    StrLit(&'a str),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum PrimExpr<'a> {
-    Val(PrimVal<'a>),
-    Phi(SmallVec<(NodeIx /* pred */, Ident)>),
-    CallBuiltin(builtins::Function, SmallVec<PrimVal<'a>>),
-    Index(PrimVal<'a>, PrimVal<'a>),
-
-    // For iterating over vectors.
-    // TODO: make these builtins? Unfortunately, IterBegin returns an iterator...
-    IterBegin(PrimVal<'a>),
-    HasNext(PrimVal<'a>),
-    Next(PrimVal<'a>),
-    LoadBuiltin(builtins::Variable),
-}
-
-#[derive(Debug)]
-pub(crate) enum PrimStmt<'a> {
-    AsgnIndex(
-        Ident,        /*map*/
-        PrimVal<'a>,  /* index */
-        PrimExpr<'a>, /* assign to */
-    ),
-    AsgnVar(Ident /* var */, PrimExpr<'a>),
-    SetBuiltin(builtins::Variable, PrimExpr<'a>),
-}
+// #[derive(Debug, Clone)]
+// pub(crate) enum PrimVal<'a> {
+//     Var(Ident),
+//     ILit(i64),
+//     FLit(f64),
+//     StrLit(&'a str),
+// }
+//
+// #[derive(Debug, Clone)]
+// pub(crate) enum PrimExpr<'a> {
+//     Val(PrimVal<'a>),
+//     Phi(SmallVec<(NodeIx /* pred */, Ident)>),
+//     CallBuiltin(builtins::Function, SmallVec<PrimVal<'a>>),
+//     Index(PrimVal<'a>, PrimVal<'a>),
+//
+//     // For iterating over vectors.
+//     // TODO: make these builtins? Unfortunately, IterBegin returns an iterator...
+//     IterBegin(PrimVal<'a>),
+//     HasNext(PrimVal<'a>),
+//     Next(PrimVal<'a>),
+//     LoadBuiltin(builtins::Variable),
+// }
+//
+// #[derive(Debug)]
+// pub(crate) enum PrimStmt<'a> {
+//     AsgnIndex(
+//         Ident,        /*map*/
+//         PrimVal<'a>,  /* index */
+//         PrimExpr<'a>, /* assign to */
+//     ),
+//     AsgnVar(Ident /* var */, PrimExpr<'a>),
+//     SetBuiltin(builtins::Variable, PrimExpr<'a>),
+// }
 
 // only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
 // Maybe also keep an auxiliary map from Var => node in graph, also allow Key(map_ident)
@@ -77,53 +78,53 @@ pub(crate) enum PrimStmt<'a> {
 //
 // Build up network. then solve. then use that to insert conversions when producing bytecode.
 
-impl<'a> PrimVal<'a> {
-    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
-        if let PrimVal::Var(ident) = self {
-            *ident = update(*ident)
-        }
-    }
-}
-
-impl<'a> PrimExpr<'a> {
-    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
-        use PrimExpr::*;
-        match self {
-            Val(v) => v.replace(update),
-            Phi(_) => {}
-            CallBuiltin(_, args) => {
-                for a in args.iter_mut() {
-                    a.replace(&mut update)
-                }
-            }
-            Index(v1, v2) => {
-                v1.replace(&mut update);
-                v2.replace(update);
-            }
-            IterBegin(v) => v.replace(update),
-            HasNext(v) => v.replace(update),
-            Next(v) => v.replace(update),
-            LoadBuiltin(_) => {}
-        }
-    }
-}
-
-impl<'a> PrimStmt<'a> {
-    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
-        use PrimStmt::*;
-        match self {
-            AsgnIndex(ident, v, exp) => {
-                *ident = update(*ident);
-                v.replace(&mut update);
-                exp.replace(update);
-            }
-            // We handle assignments separately. Note that this is not needed for index
-            // expressions, because assignments to m[k] are *uses* of m, not definitions.
-            AsgnVar(_, e) => e.replace(update),
-            SetBuiltin(_, e) => e.replace(update),
-        }
-    }
-}
+// impl<'a> PrimVal<'a> {
+//     fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+//         if let PrimVal::Var(ident) = self {
+//             *ident = update(*ident)
+//         }
+//     }
+// }
+//
+// impl<'a> PrimExpr<'a> {
+//     fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+//         use PrimExpr::*;
+//         match self {
+//             Val(v) => v.replace(update),
+//             Phi(_) => {}
+//             CallBuiltin(_, args) => {
+//                 for a in args.iter_mut() {
+//                     a.replace(&mut update)
+//                 }
+//             }
+//             Index(v1, v2) => {
+//                 v1.replace(&mut update);
+//                 v2.replace(update);
+//             }
+//             IterBegin(v) => v.replace(update),
+//             HasNext(v) => v.replace(update),
+//             Next(v) => v.replace(update),
+//             LoadBuiltin(_) => {}
+//         }
+//     }
+// }
+//
+// impl<'a> PrimStmt<'a> {
+//     fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+//         use PrimStmt::*;
+//         match self {
+//             AsgnIndex(ident, v, exp) => {
+//                 *ident = update(*ident);
+//                 v.replace(&mut update);
+//                 exp.replace(update);
+//             }
+//             // We handle assignments separately. Note that this is not needed for index
+//             // expressions, because assignments to m[k] are *uses* of m, not definitions.
+//             AsgnVar(_, e) => e.replace(update),
+//             SetBuiltin(_, e) => e.replace(update),
+//         }
+//     }
+// }
 
 fn valid_lhs<'a, 'b, I>(e: &ast::Expr<'a, 'b, I>) -> bool {
     use ast::Expr::*;
@@ -238,7 +239,7 @@ impl<'b, I> Context<'b, I> {
 }
 
 pub(crate) fn is_unused(i: Ident) -> bool {
-    i.0 == 0
+    i.low == 0
 }
 
 impl<'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> Context<'b, I>
@@ -263,7 +264,11 @@ where
         }
     }
     fn unused() -> Ident {
-        (0, 0)
+        Ident {
+            low: 0,
+            sub: 0,
+            global: true,
+        }
     }
     pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
         let mut ctx = Context {
@@ -954,7 +959,11 @@ where
     fn fresh(&mut self) -> Ident {
         let res = self.max;
         self.max += 1;
-        (res, 0)
+        Ident {
+            low: res,
+            sub: 0,
+            global: true,
+        }
     }
 
     fn record_ident(&mut self, id: Ident, blk: NodeIx) {
@@ -1070,10 +1079,14 @@ where
             {
                 // Note that `replace` is specialized to our use-case in this method. It does not hit
                 // AsgnVar identifiers, and it skips Phi nodes.
-                stmt.replace(|(x, _)| (x, state[x as usize].latest()));
-                if let PrimStmt::AsgnVar((a, i), _) = stmt {
-                    *i = state[*a as usize].get_next();
-                    defs.push(*a);
+                stmt.replace(|Ident { low, .. }| Ident {
+                    low,
+                    sub: state[low as usize].latest(),
+                    global: true,
+                });
+                if let PrimStmt::AsgnVar(Ident { low, sub, .. }, _) = stmt {
+                    *sub = state[*low as usize].get_next();
+                    defs.push(*low);
                 }
             }
 
@@ -1110,13 +1123,14 @@ where
                 .neighbors_directed(cur, Direction::Outgoing)
                 .detach();
             while let Some((edge, neigh)) = walker.next(&ctx.cfg) {
-                if let Some(PrimVal::Var((x, sub))) = &mut ctx.cfg.edge_weight_mut(edge).unwrap().0
+                if let Some(PrimVal::Var(Ident { low: x, sub, .. })) =
+                    &mut ctx.cfg.edge_weight_mut(edge).unwrap().0
                 {
                     *sub = state[*x as usize].latest();
                 }
                 for stmt in &mut ctx.cfg.node_weight_mut(neigh).unwrap().0 {
                     if let PrimStmt::AsgnVar(_, PrimExpr::Phi(ps)) = stmt {
-                        for (pred, (x, sub)) in ps.iter_mut() {
+                        for (pred, Ident { low: x, sub, .. }) in ps.iter_mut() {
                             if pred == &cur {
                                 *sub = state[*x as usize].latest();
                                 break;

@@ -533,6 +533,7 @@ impl TypeContext {
                 let args: SmallVec<NodeIx> = args.iter().map(|arg| self.val_node(arg)).collect();
                 self.add_call(*f, args, to);
             }
+            CallUDF(_f, _args) => unimplemented!(),
             Index(arr, ix) => {
                 let arr_ix = self.val_node(arr);
                 let ix_ix = self.val_node(ix);

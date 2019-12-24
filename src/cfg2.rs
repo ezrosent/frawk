@@ -51,9 +51,9 @@ impl<'a> Transition<'a> {
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
 pub(crate) struct Ident {
-    low: NumTy,
-    sub: NumTy,
-    global: bool,
+    pub(crate) low: NumTy,
+    pub(crate) sub: NumTy,
+    pub(crate) global: bool,
 }
 
 impl Ident {
@@ -149,7 +149,8 @@ impl<'a> PrimExpr<'a> {
 }
 
 impl<'a> PrimStmt<'a> {
-    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+    // TODO: remove pub(crate) once we consolidate the cfg modules
+    pub(crate) fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
         use PrimStmt::*;
         match self {
             AsgnIndex(ident, v, exp) => {
@@ -574,7 +575,7 @@ where
                                         smallvec![PrimVal::Var(tmp), fs.clone()],
                                     ),
                                 ),
-                            );
+                            )?;
                             tmp = new_tmp;
                         }
                         let new_tmp = self.fresh();
@@ -587,13 +588,13 @@ where
                                     smallvec![PrimVal::Var(tmp), v],
                                 ),
                             ),
-                        );
+                        )?;
                         tmp = new_tmp;
                     }
                     self.add_stmt(
                         current_open,
                         PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
-                    );
+                    )?;
 
                     current_open
                 }
