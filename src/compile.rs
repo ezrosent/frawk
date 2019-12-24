@@ -481,6 +481,7 @@ impl<'a> Instrs<'a> {
             // Phi functions are handled elsewhere
             PrimExpr::Phi(_) => {}
             PrimExpr::CallBuiltin(bf, vs) => self.builtin(gen, dst_reg, dst_ty, bf, vs)?,
+            PrimExpr::CallUDF(_func, _vs) => unimplemented!(),
             PrimExpr::Index(arr, k) => {
                 let (arr_reg, arr_ty) = if let PrimVal::Var(arr_id) = arr {
                     gen.reg_of_ident(arr_id)
