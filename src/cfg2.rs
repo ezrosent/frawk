@@ -13,15 +13,8 @@ use std::convert::TryFrom;
 use std::hash::Hash;
 
 // TODO type inference
-//  * clear out type definitions in cfg, rename them to those in cfg2
-//  * stub out any `match`es in `compile`; get everything compiling.
 //  * add a new factory method on TypeContext that takes a whole ProgramContext
-//  * Do the actual work
-//      - Env currently maps identifiers to NodeIx. Instead, it needs to map either a global
-//      identifier or a <local identifier, Vec<arg types>> to a NodeIx (QQ: do you need the
-//      function in there, or is it not needed).
-//      - In addition, you'll need to map <Function Id, Vec<arg types>> to NodeIx, where that node
-//      represents the return value.
+//  * Do the actual work (see TODO in types.rs)
 //  * Once we do that; the rest should be "just plumbing". Calls to UDFs can mutate the network in
 //  place as needed. When there isn't an entry in the function map, create a new one and iterate
 //  over its primStmts. The existing code modified to perform lookups in the new environment should
@@ -181,7 +174,7 @@ pub(crate) struct ProgramContext<'a, I> {
     // We add a layer of indirection because we will need to mutably borrow members of `funcs`
     // while maintaining immutable access to the mapping from Is to numbers.
     func_table: HashMap<Option<I>, NumTy>,
-    funcs: Vec<Function<'a, I>>,
+    pub funcs: Vec<Function<'a, I>>,
 }
 
 impl<'a, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> ProgramContext<'a, I>
@@ -215,7 +208,7 @@ where
             let exit = cfg.add_node(Default::default());
             let f = Function {
                 name: Some(fundec.name.clone()),
-                ident: Some(funcs.len() as u32),
+                ident: funcs.len() as NumTy,
                 args: fundec
                     .args
                     .iter()
@@ -247,7 +240,7 @@ where
         let exit = cfg.add_node(Default::default());
         let mut main_func = Function {
             name: None,
-            ident: None,
+            ident: funcs.len() as NumTy,
             args: Default::default(),
             args_map: Default::default(),
             ret: View::<'a, 'a, I>::unused(),
@@ -324,18 +317,18 @@ impl<I> GlobalContext<I> {
     }
 }
 
-struct Arg<I> {
-    name: I,
-    id: Ident,
+pub(crate) struct Arg<I> {
+    pub name: I,
+    pub id: Ident,
 }
 
-struct Function<'a, I> {
-    name: Option<I>,
-    ident: Option<NumTy>,
-    args: SmallVec<Arg<I>>,
+pub(crate) struct Function<'a, I> {
+    pub name: Option<I>,
+    pub ident: NumTy,
+    pub args: SmallVec<Arg<I>>,
     // Indexes into args, to guard against adversarially large functions.
     args_map: HashMap<I, NumTy>,
-    ret: Ident,
+    pub ret: Ident,
     // TODO args
     //  * args get placed in local variables immediately?
     //  * args are just local variables?
@@ -344,7 +337,7 @@ struct Function<'a, I> {
     //  * "Function Table" during type inference should have pointers to local variables as well,
     //  that way you can have a map : global -> Ty, as well as local_name -> arg_tys -> ty
     //  * We can keep the flat namespace, but add a bool (or enum) to Ident indicating global or
-    cfg: CFG<'a>,
+    pub cfg: CFG<'a>,
 
     defsites: HashMap<Ident, HashSet<NodeIx>>,
     orig: HashMap<NodeIx, HashSet<Ident>>,
