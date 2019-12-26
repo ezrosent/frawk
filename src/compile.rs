@@ -13,7 +13,7 @@ use crate::types;
 
 const UNUSED: u32 = u32::max_value();
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum Ty {
     Int = 0,
     Float = 1,

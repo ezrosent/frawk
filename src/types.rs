@@ -415,7 +415,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
     fn from_prog<'a>(
         &mut self,
         pc: &ProgramContext<'a, &'a str>,
-    ) -> Result<HashMap<Args<Ident>, compile::Ty>> {
+    ) -> Result<HashMap<(Ident, SmallVec<compile::Ty>), compile::Ty>> {
         let mut tc = TypeContext::default();
         tc.func_table = &pc.funcs[..];
         // By convention, "main" is the last function in the table. This
@@ -426,8 +426,21 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         tc.get_function(main, &empty);
         tc.solve()?;
         let mut res = HashMap::new();
-        for (arg, ix) in self.env.iter() {
-            res.insert(arg.clone(), flatten(concrete(*self.nw.read(*ix)))?);
+        for (Args { id, args }, ix) in self.env.iter() {
+            let mut flat_args = SmallVec::new();
+            for a in args.iter().cloned() {
+                flat_args.push(flatten(concrete(a))?);
+            }
+            let v = flatten(concrete(*self.nw.read(*ix)))?;
+            if let Some(prev) = res.insert((*id, flat_args), v) {
+                return err!(
+                    "coherence violation! {:?} in args {:?}, we get both {:?} and {:?}",
+                    id,
+                    args,
+                    v,
+                    prev
+                );
+            }
         }
         Ok(res)
     }
