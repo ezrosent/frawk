@@ -13,6 +13,20 @@ use std::convert::TryFrom;
 use std::hash::Hash;
 
 // TODO add Call/Return to bytecode, wire into compile
+//  - currently the types have a map from Vec<state>,Ident -> state
+//  - does the `flatten` map to Vec<Ty>,Ident -> Ty "conform" in the appropriate way? It should...
+//    It should be easy enough to check in-flight. If they conflict, we of course want the "more
+//    concrete" one, but we should at least think about if them not
+//    matching points to a bug of some kind. We can do the conversion
+//    when building the map. (done)
+//    (NOTE we may want to take the "right adjoint" here by mapping all the args to a compile::Ty
+//    then mapping them back, then running everything again)
+//
+//    Registers will now have to be indexed by <Vec<Ty>, Ident> in the same way as types.
+//
+//    Then during compilation we can have a new set of function identifiers, indexed by arg types.
+//    per-type stacks. per-type "return registers". That will be enough to implement function
+//    calls.
 // TODO add a Return PrimStmt (? -- maybe just to the bytecode)
 
 #[derive(Debug, Default)]
