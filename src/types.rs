@@ -32,7 +32,6 @@ pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 // the variable yet, Null means it was really never written to).
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum BaseTy {
-    // TODO(ezr): think about if we need this; I think we do because of printing.
     Null,
     Int,
     Float,
@@ -164,9 +163,8 @@ impl Constraint<State> {
 // We distinguish Edge from Constraint because we want to add more data later.
 #[derive(Clone)]
 struct Edge {
+    // TODO: do we need a separtae edge type, or can it just be Constraint<()>
     constraint: Constraint<()>,
-    // TODO(ezr): store an index here? or will we replicate the rule in the graph to allow for
-    // multiple call-sites?
 }
 
 // encode deps as a single edge from function to Var?
@@ -181,7 +179,9 @@ pub(crate) type State = Option<TVar<Option<BaseTy>>>;
 
 impl Rule {
     // TODO(ezr): Why also have `prev`? This allows us to only hand the deps back that have changed
-    // since the last update. But be careful about how this will affect UDF inference.
+    // since the last update. this extra functionality is not yet implemented; it's unclear if we
+    // can use it while still relying on petgraph, or if we'll have to (e.g.) store a priority
+    // queue of edges per node ordered by modified timestamp.
     fn step(&self, prev: &State, deps: &[State]) -> Result<State> {
         fn value_rule(b1: BaseTy, b2: BaseTy) -> BaseTy {
             use BaseTy::*;
@@ -369,16 +369,6 @@ impl Network {
     }
 }
 
-// TODO
-// - Env currently maps identifiers to NodeIx. Instead, it needs to map either a global
-//   identifier or a <local identifier, Vec<arg types>> to a NodeIx (QQ: do you need the
-//   function in there, or is it not needed).
-// - In addition, you'll need to map <Function Id, Vec<arg types>> to NodeIx, where that node
-//   represents the return value.
-//
-// Do we want to have some kind of extra hyperedge? CallUDF<SmalVec<NodeIX>, ... > and interpret
-// that appropriately? That seems like the most natural thing to do here.
-
 #[derive(Default)]
 pub(crate) struct TypeContext<'a, 'b> {
     pub(crate) nw: Network,
@@ -428,6 +418,8 @@ impl<'b, 'c> TypeContext<'b, 'c> {
     ) -> Result<HashMap<Args<Ident>, compile::Ty>> {
         let mut tc = TypeContext::default();
         tc.func_table = &pc.funcs[..];
+        // By convention, "main" is the last function in the table. This
+        // assertion ensures that tests will fail if that ever changes.
         let main = &pc.funcs[pc.funcs.len() - 1];
         assert!(main.name.is_none());
         let empty: SmallVec<State> = Default::default();

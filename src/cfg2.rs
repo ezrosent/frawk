@@ -12,13 +12,6 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-// TODO type inference
-//  * add a new factory method on TypeContext that takes a whole ProgramContext
-//  * Do the actual work (see TODO in types.rs)
-//  * Once we do that; the rest should be "just plumbing". Calls to UDFs can mutate the network in
-//  place as needed. When there isn't an entry in the function map, create a new one and iterate
-//  over its primStmts. The existing code modified to perform lookups in the new environment should
-//  make things "just work".
 // TODO add Call/Return to bytecode, wire into compile
 // TODO add a Return PrimStmt (? -- maybe just to the bytecode)
 
