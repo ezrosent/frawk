@@ -1,8 +1,11 @@
 use crate::builtins;
 use crate::cfg::{self, Ident};
+use crate::cfg2::{self, Function, ProgramContext};
 use crate::common::{self, NodeIx, NumTy, Result};
 use crate::compile;
 use hashbrown::{HashMap, HashSet};
+
+use std::ops::{Deref, DerefMut};
 
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 // TODO: rationalize null handling. We want to infer that all 0-subscripted variables are null, and
@@ -76,6 +79,7 @@ pub(crate) enum Constraint<T> {
     Flows(T),
     // TODO(ezr): have a shared Vec and just store a slice here?
     CallBuiltin(SmallVec<NodeIx>, builtins::Function),
+    CallUDF(SmallVec<NodeIx>, NumTy),
 }
 
 impl<T> Constraint<T> {
@@ -89,6 +93,7 @@ impl<T> Constraint<T> {
             Constraint::IterVal(_) => Constraint::IterVal(s),
             Constraint::Flows(_) => Constraint::Flows(s),
             Constraint::CallBuiltin(args, f) => Constraint::CallBuiltin(args.clone(), f.clone()),
+            Constraint::CallUDF(args, f) => Constraint::CallUDF(args.clone(), f.clone()),
         }
     }
     fn is_flow(&self) -> bool {
@@ -101,7 +106,7 @@ impl<T> Constraint<T> {
 }
 
 impl Constraint<State> {
-    fn eval(&self, nw: &Network) -> Result<State> {
+    fn eval<'a, 'b>(&self, tc: &mut TypeContext<'a, 'b>) -> Result<State> {
         match self {
             Constraint::KeyIn(None) => Ok(None),
             Constraint::KeyIn(Some(TVar::Scalar(k))) => Ok(Some(TVar::Map {
@@ -141,40 +146,23 @@ impl Constraint<State> {
             ),
 
             Constraint::Flows(s) => Ok(s.clone()),
-            // We need to keep "feedback" because calling it repeatedly will leak.
             Constraint::CallBuiltin(args, f) => {
-                let args_state: SmallVec<State> =
-                    args.iter().map(|ix| nw.read(*ix).clone()).collect();
-                f.step(&args_state[..])
+                let arg_state: SmallVec<State> =
+                    args.iter().map(|ix| tc.nw.read(*ix).clone()).collect();
+                f.step(&arg_state[..])
+            }
+            Constraint::CallUDF(args, f) => {
+                let arg_state: SmallVec<State> =
+                    args.iter().map(|ix| tc.nw.read(*ix).clone()).collect();
+                let ret_ix = tc.get_function(&tc.func_table[*f as usize], &arg_state);
+                Ok(tc.nw.read(ret_ix).clone())
             }
         }
     }
 }
 
-/*
- *
-Assuming everything is a local variable, and ignoring termination issues.
-A(..) {
-    return X(
-             B(a),
-             B(c),
-             A(w));
-}
-B(..) {
-    return Y(A(a),
-             A(c),
-             B(x));
-
-so if you have x = A(y);
-
-First, you get a fixpoint with no params assigned.
-
-Then, for a CG you do a DFS, mutating the graph as you go but also keeping a stack of assignments.
-Basically, mirroring what you'd do when interpreting the program.
-}
- */
-
 // We distinguish Edge from Constraint because we want to add more data later.
+#[derive(Clone)]
 struct Edge {
     constraint: Constraint<()>,
     // TODO(ezr): store an index here? or will we replicate the rule in the graph to allow for
@@ -371,44 +359,106 @@ impl Network {
     fn add_rule(&mut self, rule: Rule) -> NodeIx {
         self.graph.add_node(Node::new(rule))
     }
-    fn incoming(
-        &self,
-        ix: NodeIx,
-        mut f: impl FnMut(&Edge, &Node, NodeIx) -> Result<()>,
-    ) -> Result<()> {
-        use petgraph::Direction::Incoming;
-        let mut cur = if let Some(c) = self.graph.first_edge(ix, Incoming) {
-            c
-        } else {
-            return Ok(());
-        };
-        loop {
-            let e = self.graph.edge_weight(cur).unwrap();
-            let n_ix = self.graph.edge_endpoints(cur).unwrap().0;
-            let n = self.graph.node_weight(n_ix).unwrap();
-            f(e, n, n_ix)?;
-            if let Some(next) = self.graph.next_edge(cur, Incoming) {
-                cur = next;
-                continue;
-            }
-            return Ok(());
+
+    fn read(&self, ix: NodeIx) -> &State {
+        &self.graph.node_weight(ix).unwrap().cur_val
+    }
+    pub(crate) fn add_dep(&mut self, from: NodeIx, to: NodeIx, constraint: Constraint<()>) {
+        self.graph.add_edge(from, to, Edge { constraint });
+        self.wl.insert(from);
+    }
+}
+
+// TODO
+// - Env currently maps identifiers to NodeIx. Instead, it needs to map either a global
+//   identifier or a <local identifier, Vec<arg types>> to a NodeIx (QQ: do you need the
+//   function in there, or is it not needed).
+// - In addition, you'll need to map <Function Id, Vec<arg types>> to NodeIx, where that node
+//   represents the return value.
+//
+// Do we want to have some kind of extra hyperedge? CallUDF<SmalVec<NodeIX>, ... > and interpret
+// that appropriately? That seems like the most natural thing to do here.
+
+#[derive(Default)]
+pub(crate) struct TypeContext<'a, 'b> {
+    pub(crate) nw: Network,
+    base: HashMap<State, NodeIx>,
+    env: HashMap<Args<Ident>, NodeIx>,
+    funcs: HashMap<Args<NumTy>, NodeIx>,
+    func_table: &'a [Function<'b, &'b str>],
+}
+
+struct View<'a, 'b, 'c> {
+    tc: &'a mut TypeContext<'b, 'c>,
+    frame: SmallVec<State>,
+}
+
+impl<'a, 'b, 'c> Deref for View<'a, 'b, 'c> {
+    type Target = &'a mut TypeContext<'b, 'c>;
+    fn deref(&self) -> &&'a mut TypeContext<'b, 'c> {
+        &self.tc
+    }
+}
+
+impl<'a, 'b, 'c> DerefMut for View<'a, 'b, 'c> {
+    fn deref_mut(&mut self) -> &mut &'a mut TypeContext<'b, 'c> {
+        &mut self.tc
+    }
+}
+
+pub(crate) fn get_types<'a>(cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile::Ty>> {
+    let mut tc = TypeContext::default();
+    View {
+        tc: &mut tc,
+        frame: Default::default(),
+    }
+    .build(cfg)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Args<T> {
+    id: T,
+    args: SmallVec<State>, // ignored when id.global
+}
+
+impl<'b, 'c> TypeContext<'b, 'c> {
+    fn from_prog<'a>(
+        &mut self,
+        pc: &ProgramContext<'a, &'a str>,
+    ) -> Result<HashMap<Args<Ident>, compile::Ty>> {
+        let mut tc = TypeContext::default();
+        tc.func_table = &pc.funcs[..];
+        let main = &pc.funcs[pc.funcs.len() - 1];
+        assert!(main.name.is_none());
+        let empty: SmallVec<State> = Default::default();
+        tc.get_function(main, &empty);
+        tc.solve()?;
+        let mut res = HashMap::new();
+        for (arg, ix) in self.env.iter() {
+            res.insert(arg.clone(), flatten(concrete(*self.nw.read(*ix)))?);
         }
+        Ok(res)
     }
     fn solve(&mut self) -> Result<()> {
         let mut dep_indices: SmallVec<NodeIx> = Default::default();
         let mut deps: SmallVec<State> = Default::default();
-        while let Some(ix) = self.wl.pop() {
+        while let Some(ix) = self.nw.wl.pop() {
             deps.clear();
             dep_indices.clear();
-            let Node { rule, cur_val } = self.graph.node_weight(ix).unwrap().clone();
-            self.incoming(ix, |edge, node, node_ix| {
-                let res = edge.constraint.sub(node.cur_val).eval(self)?;
-                deps.push(res);
+            let Node { rule, cur_val } = self.nw.graph.node_weight(ix).unwrap().clone();
+            // Iterate over the incoming edges; read their current values and evaluate the
+            // constraints.
+            use petgraph::Direction::Incoming;
+            let mut walker = self.nw.graph.neighbors_directed(ix, Incoming).detach();
+            while let Some((e_ix, node_ix)) = walker.next(&self.nw.graph) {
+                let edge = self.nw.graph.edge_weight(e_ix).unwrap().clone();
+                let node_val = self.nw.graph.node_weight(node_ix).unwrap().cur_val.clone();
+                deps.push(edge.constraint.sub(node_val).eval(self)?);
                 if edge.constraint.is_flow() {
                     dep_indices.push(node_ix);
                 }
-                Ok(())
-            })?;
+            }
+            // Compute an update value based on the newly-evaluated constraints.
             let next = rule.step(&cur_val, &deps[..])?;
             if next == cur_val {
                 continue;
@@ -421,67 +471,129 @@ impl Network {
                 // by using the `iso` functions, which take care to sort the indices before before
                 // inserting them into the hash set so we only store them once.
                 for d in dep_indices.iter().cloned() {
-                    if is_iso(&self.iso, ix, d) {
+                    if is_iso(&self.nw.iso, ix, d) {
                         continue;
                     }
-                    self.graph.add_edge(
+                    self.nw.graph.add_edge(
                         ix,
                         d,
                         Edge {
                             constraint: Constraint::Flows(()),
                         },
                     );
-                    make_iso(&mut self.iso, ix, d);
+                    make_iso(&mut self.nw.iso, ix, d);
                 }
             }
-            self.graph.node_weight_mut(ix).unwrap().cur_val = next;
-            for n in self.graph.neighbors(ix) {
-                self.wl.insert(n);
+            self.nw.graph.node_weight_mut(ix).unwrap().cur_val = next;
+            for n in self.nw.graph.neighbors(ix) {
+                self.nw.wl.insert(n);
             }
-            if let Some(calls) = self.call_deps.get(&ix) {
+            if let Some(calls) = self.nw.call_deps.get(&ix) {
                 for c in calls.iter() {
-                    self.wl.insert(*c);
+                    self.nw.wl.insert(*c);
                 }
             }
         }
         Ok(())
     }
-    fn read(&self, ix: NodeIx) -> &State {
-        &self.graph.node_weight(ix).unwrap().cur_val
+    pub(crate) fn set_key(&mut self, arr: NodeIx, key: NodeIx) {
+        self.nw.add_dep(key, arr, Constraint::KeyIn(()));
+        self.nw.add_dep(arr, key, Constraint::Key(()));
     }
-    pub(crate) fn add_dep(&mut self, from: NodeIx, to: NodeIx, constraint: Constraint<()>) {
-        self.graph.add_edge(from, to, Edge { constraint });
-        self.wl.insert(from);
+
+    fn set_val(&mut self, arr: NodeIx, val: NodeIx) {
+        self.nw.add_dep(val, arr, Constraint::ValIn(()));
+        self.nw.add_dep(arr, val, Constraint::Val(()));
+    }
+
+    fn set_iter_val(&mut self, iter: NodeIx, val: NodeIx) {
+        self.nw.add_dep(val, iter, Constraint::IterValIn(()));
+        self.nw.add_dep(iter, val, Constraint::IterVal(()));
+    }
+    pub(crate) fn constant(&mut self, tv: State) -> NodeIx {
+        use hashbrown::hash_map::Entry::*;
+        match self.base.entry(tv) {
+            Occupied(o) => *o.get(),
+            Vacant(v) => {
+                let res = self.nw.add_rule(Rule::Const(tv));
+                v.insert(res);
+                res
+            }
+        }
+    }
+    pub(crate) fn get_node(&mut self, key: Args<Ident>) -> NodeIx {
+        self.env
+            .entry(key)
+            .or_insert(self.nw.add_rule(Rule::Var))
+            .clone()
+    }
+
+    fn get_function<'a>(
+        &mut self,
+        Function {
+            ident,
+            cfg,
+            args,
+            ret,
+            ..
+        }: &Function<'a, &'a str>,
+        arg_states: &SmallVec<State>,
+    ) -> NodeIx {
+        let mut key = Args {
+            id: *ident,
+            args: arg_states.clone(),
+        };
+        // First we want to normalize the provided arguments. If we provide too few arguments, the
+        // rest are filled with nulls. If we provide too many arguments, we throw away the extras.
+        if key.args.len() < args.len() {
+            for _ in 0..(args.len() - key.args.len()) {
+                key.args.push(None);
+            }
+        }
+        if args.len() < key.args.len() {
+            key.args.truncate(args.len());
+        }
+        if let Some(ix) = self.funcs.get(&key) {
+            return *ix;
+        }
+
+        let mut view = View {
+            tc: self,
+            frame: key.args.clone(),
+        };
+        // Apply the arguments appropriately:
+        for (cfg2::Arg { id, .. }, state) in args.iter().zip(key.args.iter()) {
+            let ix = view.ident_node(id);
+            let cnode = view.constant(*state);
+            view.nw.add_dep(cnode, ix, Constraint::Flows(()));
+        }
+        let nodes = cfg.raw_nodes();
+        for bb in nodes {
+            for stmt in bb.weight.q.iter() {
+                view.constrain_stmt(stmt);
+            }
+        }
+        view.ident_node(ret)
     }
 }
 
-#[derive(Default)]
-pub(crate) struct TypeContext {
-    pub(crate) nw: Network,
-    base: HashMap<State, NodeIx>,
-    env: HashMap<Ident, NodeIx>,
-}
-
-pub(crate) fn get_types<'a>(cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile::Ty>> {
-    TypeContext::default().build(cfg)
-}
-
-impl TypeContext {
+impl<'b, 'c, 'd> View<'b, 'c, 'd> {
     fn build<'a>(&mut self, cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile::Ty>> {
+        // TODO(ezr): remove this
         let nodes = cfg.raw_nodes();
         for bb in nodes {
             for stmt in bb.weight.0.iter() {
                 self.constrain_stmt(stmt);
             }
         }
-        self.nw.solve()?;
+        self.solve()?;
         let mut res = HashMap::new();
-        for (ident, ix) in self.env.iter() {
-            res.insert(*ident, flatten(concrete(*self.nw.read(*ix)))?);
+        for (Args { id, .. }, ix) in self.env.iter() {
+            res.insert(*id, flatten(concrete(*self.nw.read(*ix)))?);
         }
         Ok(res)
     }
-    fn add_call(&mut self, f: builtins::Function, args: SmallVec<NodeIx>, to: NodeIx) {
+    fn add_builtin_call(&mut self, f: builtins::Function, args: SmallVec<NodeIx>, to: NodeIx) {
         f.feedback(&args[..], self);
         for arg in args.iter() {
             self.nw
@@ -492,6 +604,18 @@ impl TypeContext {
         }
         let from = self.nw.base_node;
         self.nw.add_dep(from, to, Constraint::CallBuiltin(args, f));
+        self.nw.wl.insert(to);
+    }
+    fn add_udf_call(&mut self, f: NumTy, args: SmallVec<NodeIx>, to: NodeIx) {
+        for arg in args.iter() {
+            self.nw
+                .call_deps
+                .entry(*arg)
+                .or_insert(Default::default())
+                .push(to);
+        }
+        let from = self.nw.base_node;
+        self.nw.add_dep(from, to, Constraint::CallUDF(args, f));
         self.nw.wl.insert(to);
     }
 
@@ -531,9 +655,12 @@ impl TypeContext {
             }
             CallBuiltin(f, args) => {
                 let args: SmallVec<NodeIx> = args.iter().map(|arg| self.val_node(arg)).collect();
-                self.add_call(*f, args, to);
+                self.add_builtin_call(*f, args, to);
             }
-            CallUDF(_f, _args) => unimplemented!(),
+            CallUDF(f, args) => {
+                let args: SmallVec<NodeIx> = args.iter().map(|arg| self.val_node(arg)).collect();
+                self.add_udf_call(*f, args, to);
+            }
             Index(arr, ix) => {
                 let arr_ix = self.val_node(arr);
                 let ix_ix = self.val_node(ix);
@@ -575,35 +702,14 @@ impl TypeContext {
     }
 
     fn ident_node(&mut self, id: &Ident) -> NodeIx {
-        self.env
-            .entry(*id)
-            .or_insert(self.nw.add_rule(Rule::Var))
-            .clone()
-    }
-
-    pub(crate) fn set_key(&mut self, arr: NodeIx, key: NodeIx) {
-        self.nw.add_dep(key, arr, Constraint::KeyIn(()));
-        self.nw.add_dep(arr, key, Constraint::Key(()));
-    }
-
-    fn set_val(&mut self, arr: NodeIx, val: NodeIx) {
-        self.nw.add_dep(val, arr, Constraint::ValIn(()));
-        self.nw.add_dep(arr, val, Constraint::Val(()));
-    }
-
-    fn set_iter_val(&mut self, iter: NodeIx, val: NodeIx) {
-        self.nw.add_dep(val, iter, Constraint::IterValIn(()));
-        self.nw.add_dep(iter, val, Constraint::IterVal(()));
-    }
-    pub(crate) fn constant(&mut self, tv: State) -> NodeIx {
-        use hashbrown::hash_map::Entry::*;
-        match self.base.entry(tv) {
-            Occupied(o) => *o.get(),
-            Vacant(v) => {
-                let res = self.nw.add_rule(Rule::Const(tv));
-                v.insert(res);
-                res
-            }
-        }
+        let key = Args {
+            id: *id,
+            args: if id.global {
+                Default::default()
+            } else {
+                self.frame.clone()
+            },
+        };
+        self.get_node(key)
     }
 }

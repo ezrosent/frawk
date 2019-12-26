@@ -643,18 +643,11 @@ pub(crate) fn bytecode<'a, 'b>(
             instrs.stmt(&mut gen, stmt)?;
         }
 
-        // Petgraph does not seem to have a convenience function for getting edge indexes from a
-        // node, but we can use a low-level API to do it.
         let ix = NodeIx::new(i);
-        let mut branches: cfg::SmallVec<_> = Default::default();
-        use petgraph::Direction;
-        let e = ctx.cfg().first_edge(ix, Direction::Outgoing);
-        if let Some(mut e) = e {
-            branches.push(e);
-            while let Some(next) = ctx.cfg().next_edge(e, Direction::Outgoing) {
-                branches.push(next);
-                e = next
-            }
+        let mut branches: cfg::SmallVec<petgraph::graph::EdgeIndex> = Default::default();
+        let mut walker = ctx.cfg().neighbors(ix).detach();
+        while let Some(e) = walker.next_edge(ctx.cfg()) {
+            branches.push(e)
         }
 
         // Petgraph gives us edges back in reverse order.
@@ -665,10 +658,7 @@ pub(crate) fn bytecode<'a, 'b>(
         // NB Why is it sufficient to do all assignments here? Shouldn't we limit code gen to  the
         // branch we are actually going to take? No, because one must first go through another
         // block that assigns to the node again before actually reading the variable.
-        for n in ctx
-            .cfg()
-            .neighbors_directed(NodeIx::new(i), Direction::Outgoing)
-        {
+        for n in ctx.cfg().neighbors(NodeIx::new(i)) {
             let weight = ctx.cfg().node_weight(n).unwrap();
             for stmt in weight.0.iter() {
                 if let PrimStmt::AsgnVar(id, PrimExpr::Phi(preds)) = stmt {
