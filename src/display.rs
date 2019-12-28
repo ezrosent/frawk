@@ -38,6 +38,7 @@ impl<'a> Display for PrimStmt<'a> {
             AsgnIndex(id, pv, pe) => write!(f, "{}[{}] = {}", Wrap(*id), pv, pe),
             AsgnVar(id, pe) => write!(f, "{} = {}", Wrap(*id), pe),
             SetBuiltin(v, pv) => write!(f, "{} = {}", v, pv),
+            Return(v) => write!(f, "return {}", v),
         }
     }
 }
