@@ -380,7 +380,8 @@ pub(crate) struct TypeContext<'a, 'b> {
 
 struct View<'a, 'b, 'c> {
     tc: &'a mut TypeContext<'b, 'c>,
-    frame: SmallVec<State>,
+    frame_id: NumTy, // which function are we in?
+    frame_args: SmallVec<State>,
 }
 
 impl<'a, 'b, 'c> Deref for View<'a, 'b, 'c> {
@@ -400,22 +401,30 @@ pub(crate) fn get_types<'a>(cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile
     let mut tc = TypeContext::default();
     View {
         tc: &mut tc,
-        frame: Default::default(),
+        frame_id: 0,
+        frame_args: Default::default(),
     }
     .build(cfg)
+}
+
+pub(crate) fn get_types_program<'a>(
+    pc: &ProgramContext<'a, &'a str>,
+) -> Result<HashMap<(Ident, NumTy, SmallVec<compile::Ty>), compile::Ty>> {
+    TypeContext::default().from_prog(pc)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Args<T> {
     id: T,
+    func_id: NumTy,
     args: SmallVec<State>, // ignored when id.global
 }
 
 impl<'b, 'c> TypeContext<'b, 'c> {
-    fn from_prog<'a>(
+    pub(crate) fn from_prog<'a>(
         &mut self,
         pc: &ProgramContext<'a, &'a str>,
-    ) -> Result<HashMap<(Ident, SmallVec<compile::Ty>), compile::Ty>> {
+    ) -> Result<HashMap<(Ident, NumTy, SmallVec<compile::Ty>), compile::Ty>> {
         let mut tc = TypeContext::default();
         tc.func_table = &pc.funcs[..];
         // By convention, "main" is the last function in the table. This
@@ -426,13 +435,13 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         tc.get_function(main, &empty);
         tc.solve()?;
         let mut res = HashMap::new();
-        for (Args { id, args }, ix) in self.env.iter() {
+        for (Args { id, func_id, args }, ix) in self.env.iter() {
             let mut flat_args = SmallVec::new();
             for a in args.iter().cloned() {
                 flat_args.push(flatten(concrete(a))?);
             }
             let v = flatten(concrete(*self.nw.read(*ix)))?;
-            if let Some(prev) = res.insert((*id, flat_args), v) {
+            if let Some(prev) = res.insert((*id, *func_id, flat_args), v) {
                 return err!(
                     "coherence violation! {:?} in args {:?}, we get both {:?} and {:?}",
                     id,
@@ -539,13 +548,13 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             ident,
             cfg,
             args,
-            ret,
             ..
         }: &Function<'a, &'a str>,
         arg_states: &SmallVec<State>,
     ) -> NodeIx {
         let mut key = Args {
             id: *ident,
+            func_id: *ident,
             args: arg_states.clone(),
         };
         // First we want to normalize the provided arguments. If we provide too few arguments, the
@@ -558,13 +567,17 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         if args.len() < key.args.len() {
             key.args.truncate(args.len());
         }
+
+        // Check if we have already created the function
         if let Some(ix) = self.funcs.get(&key) {
             return *ix;
         }
 
+        // Create a new function.
         let mut view = View {
             tc: self,
-            frame: key.args.clone(),
+            frame_id: *ident,
+            frame_args: key.args.clone(),
         };
         // Apply the arguments appropriately:
         for (cfg2::Arg { id, .. }, state) in args.iter().zip(key.args.iter()) {
@@ -578,13 +591,17 @@ impl<'b, 'c> TypeContext<'b, 'c> {
                 view.constrain_stmt(stmt);
             }
         }
-        view.ident_node(ret)
+        // Just return a new node for the return value. We will infer return types by looking up
+        // this node later and adding dependencies when we encounter a `Return` stmt.
+        //
+        // TODO: this means we do some duplicate work in rewriting returns in the cfg module.
+        view.nw.add_rule( Rule::Var)
     }
 }
 
 impl<'b, 'c, 'd> View<'b, 'c, 'd> {
     fn build<'a>(&mut self, cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile::Ty>> {
-        // TODO(ezr): remove this
+        // TODO(ezr): build in favor of program-oriented code.
         let nodes = cfg.raw_nodes();
         for bb in nodes {
             for stmt in bb.weight.0.iter() {
@@ -639,6 +656,16 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
             AsgnVar(v, e) => {
                 let v_ix = self.ident_node(v);
                 self.constrain_expr(e, v_ix);
+            }
+            Return(v) => {
+                let v_ix = self.val_node(v);
+                let cur_func_key = Args {
+                    id: self.frame_id,
+                    func_id: self.frame_id,
+                    args: self.frame_args.clone(),
+                };
+                let ret_ix = self.tc.funcs[&cur_func_key];
+                self.nw.add_dep(v_ix, ret_ix, Constraint::Flows(()));
             }
             // Builtins have fixed types; no constraint generation is necessary.
             SetBuiltin(_, _) => {}
@@ -709,10 +736,11 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
     fn ident_node(&mut self, id: &Ident) -> NodeIx {
         let key = Args {
             id: *id,
+            func_id: self.frame_id,
             args: if id.global {
                 Default::default()
             } else {
-                self.frame.clone()
+                self.frame_args.clone()
             },
         };
         self.get_node(key)

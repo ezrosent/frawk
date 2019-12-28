@@ -257,6 +257,28 @@ pub(crate) enum Instr<'a> {
     JmpIf(Reg<Int>, Label),
     Jmp(Label),
     Halt,
+    // Functions
+    PushInt(Reg<Int>),
+    PushFloat(Reg<Float>),
+    PushStr(Reg<Str<'a>>),
+    PushIntInt(Reg<runtime::IntMap<Int>>),
+    PushIntFloat(Reg<runtime::IntMap<Float>>),
+    PushIntStr(Reg<runtime::IntMap<Str<'a>>>),
+
+    PushStrInt(Reg<runtime::StrMap<'a, Int>>),
+    PushStrFloat(Reg<runtime::StrMap<'a, Float>>),
+    PushStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
+
+    PopInt(Reg<Int>),
+    PopFloat(Reg<Float>),
+    PopStr(Reg<Str<'a>>),
+    PopIntInt(Reg<runtime::IntMap<Int>>),
+    PopIntFloat(Reg<runtime::IntMap<Float>>),
+    PopIntStr(Reg<runtime::IntMap<Str<'a>>>),
+
+    PopStrInt(Reg<runtime::StrMap<'a, Int>>),
+    PopStrFloat(Reg<runtime::StrMap<'a, Float>>),
+    PopStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
 }
 
 impl<T> Reg<T> {
@@ -265,12 +287,28 @@ impl<T> Reg<T> {
     }
 }
 
+struct Storage<T> {
+    regs: Vec<T>,
+    stack: Vec<T>,
+}
+
+impl<T> Default for Storage<T> {
+    fn default() -> Storage<T> {
+        Storage {
+            regs: Default::default(),
+            stack: Default::default(),
+        }
+    }
+}
+// TODO: Want a Vec<Vec<Instr>> indexed by function.
+// TODO: Can we use the Rust stack to do calls? We should probably have a stack of (function index,
+// instr index) to store the continuation. That'll make tail calls easier later on if we want to
+// implement them.
+// TODO: We probably want return to take an (optional) operand, for more alignment with LLVM
+
 pub(crate) struct Interp<'a> {
     instrs: Vec<Instr<'a>>,
 
-    floats: Vec<Float>,
-    ints: Vec<Int>,
-    strs: Vec<Str<'a>>,
     vars: runtime::Variables<'a>,
 
     line: Str<'a>,
@@ -281,22 +319,28 @@ pub(crate) struct Interp<'a> {
 
     // TODO: should these be smallvec<[T; 32]>? We never add registers, so could we allocate one
     // contiguous region ahead of time?
-    maps_int_float: Vec<runtime::IntMap<Float>>,
-    maps_int_int: Vec<runtime::IntMap<Int>>,
-    maps_int_str: Vec<runtime::IntMap<Str<'a>>>,
+    floats: Storage<Float>,
+    ints: Storage<Int>,
+    strs: Storage<Str<'a>>,
+    maps_int_float: Storage<runtime::IntMap<Float>>,
+    maps_int_int: Storage<runtime::IntMap<Int>>,
+    maps_int_str: Storage<runtime::IntMap<Str<'a>>>,
 
-    maps_str_float: Vec<runtime::StrMap<'a, Float>>,
-    maps_str_int: Vec<runtime::StrMap<'a, Int>>,
-    maps_str_str: Vec<runtime::StrMap<'a, Str<'a>>>,
+    maps_str_float: Storage<runtime::StrMap<'a, Float>>,
+    maps_str_int: Storage<runtime::StrMap<'a, Int>>,
+    maps_str_str: Storage<runtime::StrMap<'a, Str<'a>>>,
 
-    iters_int: Vec<runtime::Iter<Int>>,
-    iters_str: Vec<runtime::Iter<Str<'a>>>,
+    iters_int: Storage<runtime::Iter<Int>>,
+    iters_str: Storage<runtime::Iter<Str<'a>>>,
 }
 
-fn default_of<T: Default>(n: usize) -> Vec<T> {
-    let mut res = Vec::new();
-    res.resize_with(n, Default::default);
-    res
+fn default_of<T: Default>(n: usize) -> Storage<T> {
+    let mut regs = Vec::new();
+    regs.resize_with(n, Default::default);
+    Storage {
+        regs,
+        stack: Default::default(),
+    }
 }
 
 impl<'a> Interp<'a> {
@@ -1055,6 +1099,80 @@ impl<'a> Interp<'a> {
                     Jmp(lbl) => {
                         break lbl.0 as usize;
                     }
+                    PushInt(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+                    PushFloat(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+                    PushStr(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+                    PushIntInt(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+                    PushIntFloat(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+                    PushIntStr(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+                    PushStrInt(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+                    PushStrFloat(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+                    PushStrStr(reg) => {
+                        let reg = *reg;
+                        self.push(reg)
+                    }
+
+                    PopInt(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+                    PopFloat(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+                    PopStr(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+                    PopIntInt(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+                    PopIntFloat(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+                    PopIntStr(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+                    PopStrInt(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+                    PopStrFloat(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+                    PopStrStr(reg) => {
+                        let reg = *reg;
+                        self.pop(reg)
+                    }
+
                     Halt => break 'outer Ok(()),
                 };
                 break cur + 1;
@@ -1067,28 +1185,56 @@ trait Get<T> {
     fn get(&self, r: Reg<T>) -> &T;
     fn get_mut(&mut self, r: Reg<T>) -> &mut T;
 }
+trait Pop<T> {
+    fn push(&mut self, r: Reg<T>);
+    fn pop(&mut self, r: Reg<T>);
+}
 
-fn _dbg_check_index<T>(desc: &str, v: &Vec<T>, r: usize) {
+fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) {
     assert!(
-        r < v.len(),
+        r < regs.len(),
         "[{}] index {} is out of bounds (len={})",
         desc,
         r,
-        v.len()
+        regs.len()
     );
 }
 
 // TODO: test, then benchmark with get_unchecked()
 
 #[inline]
-fn index<'a, T>(v: &'a Vec<T>, reg: &Reg<T>) -> &'a T {
-    &v[reg.index()]
+fn index<'a, T>(Storage { regs, .. }: &'a Storage<T>, reg: &Reg<T>) -> &'a T {
+    &regs[reg.index()]
 }
 #[inline]
-fn index_mut<'a, T>(v: &'a mut Vec<T>, reg: &Reg<T>) -> &'a mut T {
-    &mut v[reg.index()]
+fn index_mut<'a, T>(Storage { regs, .. }: &'a mut Storage<T>, reg: &Reg<T>) -> &'a mut T {
+    &mut regs[reg.index()]
 }
 
+#[inline]
+fn push<'a, T: Clone>(s: &'a mut Storage<T>, reg: &Reg<T>) {
+    let v = index(s, reg).clone();
+    s.stack.push(v);
+}
+
+#[inline]
+fn pop<'a, T: Clone>(s: &'a mut Storage<T>) -> T {
+    s.stack.pop().expect("pop must be called on nonempty stack")
+}
+
+macro_rules! impl_pop {
+    ($t:ty, $fld:ident) => {
+        impl<'a> Pop<$t> for Interp<'a> {
+            fn push(&mut self, r: Reg<$t>) {
+                push(&mut self.$fld, &r)
+            }
+            fn pop(&mut self, r: Reg<$t>) {
+                let v = pop(&mut self.$fld);
+                *self.get_mut(r) = v;
+            }
+        }
+    };
+}
 macro_rules! impl_get {
     ($t:ty, $fld:ident) => {
         impl<'a> Get<$t> for Interp<'a> {
@@ -1114,14 +1260,21 @@ macro_rules! impl_get {
     };
 }
 
-impl_get!(Int, ints);
-impl_get!(Str<'a>, strs);
-impl_get!(Float, floats);
-impl_get!(runtime::IntMap<Float>, maps_int_float);
-impl_get!(runtime::IntMap<Int>, maps_int_int);
-impl_get!(runtime::IntMap<Str<'a>>, maps_int_str);
-impl_get!(runtime::StrMap<'a, Float>, maps_str_float);
-impl_get!(runtime::StrMap<'a, Int>, maps_str_int);
-impl_get!(runtime::StrMap<'a, Str<'a>>, maps_str_str);
+macro_rules! impl_all {
+    ($t:ty, $fld:ident) => {
+        impl_get!($t, $fld);
+        impl_pop!($t, $fld);
+    };
+}
+
+impl_all!(Int, ints);
+impl_all!(Str<'a>, strs);
+impl_all!(Float, floats);
+impl_all!(runtime::IntMap<Float>, maps_int_float);
+impl_all!(runtime::IntMap<Int>, maps_int_int);
+impl_all!(runtime::IntMap<Str<'a>>, maps_int_str);
+impl_all!(runtime::StrMap<'a, Float>, maps_str_float);
+impl_all!(runtime::StrMap<'a, Int>, maps_str_int);
+impl_all!(runtime::StrMap<'a, Str<'a>>, maps_str_str);
 impl_get!(runtime::Iter<Int>, iters_int);
 impl_get!(runtime::Iter<Str<'a>>, iters_str);

@@ -108,7 +108,7 @@ pub(crate) enum PrimStmt<'a> {
     ),
     AsgnVar(Ident /* var */, PrimExpr<'a>),
     SetBuiltin(builtins::Variable, PrimExpr<'a>),
-    // TODO add return
+    Return(PrimVal<'a>),
 }
 
 // only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
@@ -162,6 +162,7 @@ impl<'a> PrimStmt<'a> {
             // expressions, because assignments to m[k] are *uses* of m, not definitions.
             AsgnVar(_, e) => e.replace(update),
             SetBuiltin(_, e) => e.replace(update),
+            Return(v) => v.replace(update),
         }
     }
 }
@@ -212,7 +213,15 @@ where
             let mut args_map = HashMap::new();
             let mut cfg = CFG::default();
             let entry = cfg.add_node(Default::default());
-            let exit = cfg.add_node(Default::default());
+
+            // All exit blocks simply return the designated return node. Return statements in the
+            // AST will becode assignments to this variable followed by an unconditional jump to
+            // this block.
+            let ret = shared.fresh_local();
+            let mut exit_block = BasicBlock::default();
+            exit_block.q.push_back(PrimStmt::Return(PrimVal::Var(ret)));
+            let exit = cfg.add_node(exit_block);
+
             let f = Function {
                 name: Some(fundec.name.clone()),
                 ident: funcs.len() as NumTy,
@@ -228,7 +237,7 @@ where
                     })
                     .collect(),
                 args_map,
-                ret: shared.fresh_local(),
+                ret,
                 cfg,
                 defsites: Default::default(),
                 orig: Default::default(),
@@ -335,7 +344,7 @@ pub(crate) struct Function<'a, I> {
     pub args: SmallVec<Arg<I>>,
     // Indexes into args, to guard against adversarially large functions.
     args_map: HashMap<I, NumTy>,
-    pub ret: Ident,
+    ret: Ident,
     // TODO args
     //  * args get placed in local variables immediately?
     //  * args are just local variables?
@@ -351,7 +360,7 @@ pub(crate) struct Function<'a, I> {
     entry: NodeIx,
     // We enforce that a single basic block has a return statement. This is to ensure that type
     // inference infers the same type for each return site.
-    exit: NodeIx,
+    pub exit: NodeIx,
     // Stack of the entry and exit nodes for the loops within which the current statement is
     // nested.
     loop_ctx: SmallVec<(NodeIx, NodeIx)>,
