@@ -177,6 +177,10 @@ enum Rule {
 
 pub(crate) type State = Option<TVar<Option<BaseTy>>>;
 
+pub(crate) fn null_ty() -> compile::Ty {
+    flatten(concrete(None)).unwrap()
+}
+
 impl Rule {
     // TODO(ezr): Why also have `prev`? This allows us to only hand the deps back that have changed
     // since the last update. this extra functionality is not yet implemented; it's unclear if we
