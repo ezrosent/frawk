@@ -104,6 +104,9 @@ macro_rules! reg_of_ty {
 #[derive(Default)]
 struct ProgramGenerator<'a> {
     regs: Registers,
+
+    // TODO: can this be a Vec<NumTy>?
+    arity_map: HashMap<NumTy /* cfg-level func id */, NumTy /* arity */>,
     id_map: HashMap<
         // TODO: make newtypes for these different Ids?
         (
@@ -112,6 +115,8 @@ struct ProgramGenerator<'a> {
         ),
         NumTy, /* bytecode-level func id */
     >,
+    // TODO store return type and register in a separate vector, store offset into the vector in
+    // the frame, pass a reference to the vector in View.
     func_rets:
         HashMap<(NumTy /* func id */, SmallVec<Ty> /* arg types */), Ty /* return type */>,
     frames: Vec<Frame<'a>>,
@@ -141,7 +146,8 @@ impl<'a> ProgramGenerator<'a> {
                         f.ret_reg=ret_reg;
                         f.ret_ty=ret_ty;
                         f.src_function = *func_id;
-                        f.arity = pc.funcs[*func_id as usize].args.len() as u32;
+                        let arity = pc.funcs[*func_id as usize].args.len() as u32;
+                        gen.arity_map.insert(*func_id, arity);
                         gen.frames.push(f);
                         &mut gen.frames[res as usize]
                     }
@@ -163,6 +169,7 @@ impl<'a> ProgramGenerator<'a> {
                 frame,
                 regs: &mut gen.regs,
                 id_map: &gen.id_map,
+                arity_map: &gen.arity_map,
             }
             .process_function(&pc.funcs[src_func])?;
         }
@@ -186,13 +193,13 @@ struct Frame<'a> {
     // TODO add these fields, but first we need to propagate return types in the `types` module
     ret_reg: u32,
     ret_ty: Ty,
-    arity: u32,
 }
 
 struct View<'a, 'b> {
     frame: &'b mut Frame<'a>,
     regs: &'b mut Registers,
     id_map: &'b HashMap<(NumTy, SmallVec<Ty>), NumTy>,
+    arity_map: &'b HashMap<NumTy, NumTy>,
 }
 
 struct Generator {
@@ -711,13 +718,57 @@ impl<'a, 'b> View<'a, 'b> {
             // Phi functions are handled elsewhere
             PrimExpr::Phi(_) => {}
             PrimExpr::CallBuiltin(bf, vs) => self.builtin(dst_reg, dst_ty, bf, vs)?,
-            // TODO insert pushes (easy)
             // TODO return register into dst_reg
-            // TODO compute types of arguments to find the function's offset.
-            //  * That includes normalizing the call, which will require passing arity information
-            //    into the frame.
-            //  * Arity field is now in there, so the normalization logic will be similar.
-            PrimExpr::CallUDF(_func, _vs) => unimplemented!(),
+            PrimExpr::CallUDF(func_id, vs) => {
+                let mut arg_regs: SmallVec<_> = SmallVec::with_capacity(vs.len());
+                let mut arg_tys: SmallVec<_> = SmallVec::with_capacity(vs.len());
+                for v in vs.iter() {
+                    let (reg, ty) = self.get_reg(v)?;
+                    arg_regs.push(reg);
+                    arg_tys.push(ty);
+                }
+                // Normalize the call
+                let true_arity = self.arity_map[func_id] as usize;
+                if arg_regs.len() < true_arity {
+                    // Not enough arguments; fill in the rest with nulls.
+                    // TODO reuse registers here. This is wasteful for functions with a lot of
+                    // arguments.
+                    let null_ty = types::null_ty();
+                    let null_reg = reg_of_ty!(self.regs, null_ty);
+                    for _ in 0..(true_arity-arg_regs.len()) {
+                        arg_regs.push(null_reg);
+                        arg_tys.push(null_ty);
+                    }
+                }
+                if arg_regs.len() > true_arity {
+                    // Too many arguments; don't pass the extra.
+                    arg_regs.truncate(true_arity);
+                    arg_tys.truncate(true_arity);
+                }
+
+                let monomorphized = self.id_map[&(*func_id, arg_tys.clone())];
+                // Push onto the stack in reverse order.
+                arg_regs.reverse();
+                arg_tys.reverse();
+                for (reg, ty) in arg_regs.iter().cloned().zip(arg_tys.iter().cloned()) {
+                    use Ty::*;
+                    self.push(match ty {
+                        Int => Instr::PushInt(reg.into()),
+                        Float => Instr::PushFloat(reg.into()),
+                        Str => Instr::PushStr(reg.into()),
+                        MapIntInt   => Instr::PushIntInt(reg.into()),
+                        MapIntFloat => Instr::PushIntFloat(reg.into()),
+                        MapIntStr   => Instr::PushIntStr(reg.into()),
+                        MapStrInt   => Instr::PushStrInt(reg.into()),
+                        MapStrFloat => Instr::PushStrFloat(reg.into()),
+                        MapStrStr   => Instr::PushStrStr(reg.into()),
+                        IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
+                    });
+                }
+                self.push(Instr::Call(monomorphized as usize));
+                // TODO move the ret_reg information around so we can use it here.
+                unimplemented!()
+            },
             PrimExpr::Index(arr, k) => {
                 let (arr_reg, arr_ty) = if let PrimVal::Var(arr_id) = arr {
                     self.reg_of_ident(arr_id)
