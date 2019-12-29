@@ -257,6 +257,7 @@ pub(crate) enum Instr<'a> {
     JmpIf(Reg<Int>, Label),
     Jmp(Label),
     Halt,
+
     // Functions
     PushInt(Reg<Int>),
     PushFloat(Reg<Float>),
@@ -279,6 +280,10 @@ pub(crate) enum Instr<'a> {
     PopStrInt(Reg<runtime::StrMap<'a, Int>>),
     PopStrFloat(Reg<runtime::StrMap<'a, Float>>),
     PopStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
+
+    Call(usize),
+    Ret,
+    // TODO use registers to store results and load them.
 }
 
 impl<T> Reg<T> {
@@ -287,19 +292,12 @@ impl<T> Reg<T> {
     }
 }
 
+#[derive(Default)]
 struct Storage<T> {
     regs: Vec<T>,
     stack: Vec<T>,
 }
 
-impl<T> Default for Storage<T> {
-    fn default() -> Storage<T> {
-        Storage {
-            regs: Default::default(),
-            stack: Default::default(),
-        }
-    }
-}
 // TODO: Want a Vec<Vec<Instr>> indexed by function.
 // TODO: Can we use the Rust stack to do calls? We should probably have a stack of (function index,
 // instr index) to store the continuation. That'll make tail calls easier later on if we want to
@@ -307,7 +305,8 @@ impl<T> Default for Storage<T> {
 // TODO: We probably want return to take an (optional) operand, for more alignment with LLVM
 
 pub(crate) struct Interp<'a> {
-    instrs: Vec<Instr<'a>>,
+    instrs: Vec<Vec<Instr<'a>>>,
+    stack: Vec<(usize /*function*/, Label /*instr*/)>,
 
     vars: runtime::Variables<'a>,
 
@@ -345,7 +344,8 @@ fn default_of<T: Default>(n: usize) -> Storage<T> {
 
 impl<'a> Interp<'a> {
     pub(crate) fn instrs(&self) -> &Vec<Instr<'a>> {
-        &self.instrs
+        // TODO remove this
+        &self.instrs[0]
     }
     pub(crate) fn new(
         instrs: Vec<Instr<'a>>,
@@ -355,8 +355,8 @@ impl<'a> Interp<'a> {
     ) -> Interp<'a> {
         use compile::Ty::*;
         Interp {
-            instrs,
-
+            instrs: vec![instrs],
+            stack: Default::default(),
             floats: default_of(regs(Float)),
             ints: default_of(regs(Int)),
             strs: default_of(regs(Str)),
@@ -383,13 +383,17 @@ impl<'a> Interp<'a> {
     pub(crate) fn run(&mut self) -> Result<()> {
         use Instr::*;
         let newline: Str = "\n".into();
+        // We are only accessing one vector at a time here, but it's hard to convince the borrow
+        // checker of this fact, so we access the vectors through raw pointers.
+        let mut cur_fn = 0;
+        let mut instrs = (&mut self.instrs[cur_fn]) as *mut Vec<Instr<'a>>;
         let mut cur = 0;
         'outer: loop {
             // must end with Halt
             cur = loop {
-                debug_assert!(cur < self.instrs.len());
+                debug_assert!(cur < unsafe { (*instrs).len() });
                 use Variable::*;
-                match unsafe { self.instrs.get_unchecked(cur) } {
+                match unsafe { (*instrs).get_unchecked(cur) } {
                     StoreConstStr(sr, s) => {
                         let sr = *sr;
                         *self.get_mut(sr) = s.clone()
@@ -1172,7 +1176,21 @@ impl<'a> Interp<'a> {
                         let reg = *reg;
                         self.pop(reg)
                     }
-
+                    Call(func) => {
+                        self.stack.push((cur_fn, Label(cur as u32 + 1)));
+                        cur_fn = *func;
+                        instrs = &mut self.instrs[*func];
+                        break 0;
+                    }
+                    Ret => {
+                        if let Some((func, Label(inst))) = self.stack.pop() {
+                            cur_fn = func;
+                            instrs = &mut self.instrs[func];
+                            break inst as usize;
+                        } else {
+                            break 'outer Ok(());
+                        }
+                    }
                     Halt => break 'outer Ok(()),
                 };
                 break cur + 1;
@@ -1235,6 +1253,18 @@ macro_rules! impl_pop {
         }
     };
 }
+
+macro_rules! impl_ret {
+    ($t:ty, $fld:ident) => {
+        impl<'a> Pop<$t> for Interp<'a> {
+            fn ret(&mut self, r: Reg<$t>) {
+                let v = self.get(r).clone();
+                self.$fld.ret = v;
+            }
+        }
+    };
+}
+
 macro_rules! impl_get {
     ($t:ty, $fld:ident) => {
         impl<'a> Get<$t> for Interp<'a> {
