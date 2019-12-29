@@ -407,9 +407,7 @@ pub(crate) fn get_types<'a>(cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile
     .build(cfg)
 }
 
-pub(crate) fn get_types_program<'a>(
-    pc: &ProgramContext<'a, &'a str>,
-) -> Result<HashMap<(Ident, NumTy, SmallVec<compile::Ty>), compile::Ty>> {
+pub(crate) fn get_types_program<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
     TypeContext::default().from_prog(pc)
 }
 
@@ -420,11 +418,15 @@ pub(crate) struct Args<T> {
     args: SmallVec<State>, // ignored when id.global
 }
 
+pub(crate) struct TypeInfo {
+    // Map a particular identifier in a function to a type.
+    pub var_tys: HashMap<(Ident, NumTy, SmallVec<compile::Ty>), compile::Ty>,
+    // Map a particular function invocation to a return type.
+    pub func_tys: HashMap<(NumTy, SmallVec<compile::Ty>), compile::Ty>,
+}
+
 impl<'b, 'c> TypeContext<'b, 'c> {
-    pub(crate) fn from_prog<'a>(
-        &mut self,
-        pc: &ProgramContext<'a, &'a str>,
-    ) -> Result<HashMap<(Ident, NumTy, SmallVec<compile::Ty>), compile::Ty>> {
+    pub(crate) fn from_prog<'a>(&mut self, pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
         let mut tc = TypeContext::default();
         tc.func_table = &pc.funcs[..];
         // By convention, "main" is the last function in the table. This
@@ -434,14 +436,25 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         let empty: SmallVec<State> = Default::default();
         tc.get_function(main, &empty);
         tc.solve()?;
-        let mut res = HashMap::new();
+        let mut var_tys = HashMap::new();
+        let mut func_tys = HashMap::new();
         for (Args { id, func_id, args }, ix) in self.env.iter() {
             let mut flat_args = SmallVec::new();
             for a in args.iter().cloned() {
                 flat_args.push(flatten(concrete(a))?);
             }
             let v = flatten(concrete(*self.nw.read(*ix)))?;
-            if let Some(prev) = res.insert((*id, *func_id, flat_args), v) {
+            if let hashbrown::hash_map::Entry::Vacant(v) =
+                func_tys.entry((*func_id, flat_args.clone()))
+            {
+                let arg = Args {
+                    id: *func_id,
+                    func_id: *func_id,
+                    args: args.clone(),
+                };
+                v.insert(flatten(concrete(*self.nw.read(self.funcs[&arg])))?);
+            }
+            if let Some(prev) = var_tys.insert((*id, *func_id, flat_args), v) {
                 return err!(
                     "coherence violation! {:?} in args {:?}, we get both {:?} and {:?}",
                     id,
@@ -451,7 +464,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
                 );
             }
         }
-        Ok(res)
+        Ok(TypeInfo { var_tys, func_tys })
     }
     fn solve(&mut self) -> Result<()> {
         let mut dep_indices: SmallVec<NodeIx> = Default::default();
@@ -545,10 +558,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
     fn get_function<'a>(
         &mut self,
         Function {
-            ident,
-            cfg,
-            args,
-            ..
+            ident, cfg, args, ..
         }: &Function<'a, &'a str>,
         arg_states: &SmallVec<State>,
     ) -> NodeIx {
@@ -595,7 +605,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         // this node later and adding dependencies when we encounter a `Return` stmt.
         //
         // TODO: this means we do some duplicate work in rewriting returns in the cfg module.
-        view.nw.add_rule( Rule::Var)
+        view.nw.add_rule(Rule::Var)
     }
 }
 

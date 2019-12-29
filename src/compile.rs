@@ -29,6 +29,10 @@ pub(crate) enum Ty {
     IterStr = 10,
 }
 
+impl Default for Ty {
+    fn default() -> Ty { Ty::Str }
+}
+
 impl Ty {
     fn of_var(v: Variable) -> Ty {
         use Variable::*;
@@ -108,6 +112,8 @@ struct ProgramGenerator<'a> {
         ),
         NumTy, /* bytecode-level func id */
     >,
+    func_rets:
+        HashMap<(NumTy /* func id */, SmallVec<Ty> /* arg types */), Ty /* return type */>,
     frames: Vec<Frame<'a>>,
 }
 
@@ -117,8 +123,9 @@ impl<'a> ProgramGenerator<'a> {
         // and global variables.
         let mut n_funcs = 0;
         let mut gen = ProgramGenerator::default();
-        let ts = types::get_types_program(pc)?;
-        for ((id, func_id, args), ty) in ts.iter() {
+        let types::TypeInfo { var_tys, func_tys } = types::get_types_program(pc)?;
+        gen.func_rets = func_tys;
+        for ((id, func_id, args), ty) in var_tys.iter() {
             let map = if id.global {
                 &mut gen.regs.globals
             } else {
@@ -128,8 +135,13 @@ impl<'a> ProgramGenerator<'a> {
                         let res = n_funcs;
                         n_funcs += 1;
                         v.insert(res);
+                        let ret_ty = gen.func_rets[&(*func_id, args.clone())];
+                        let ret_reg = reg_of_ty!(gen.regs, ret_ty);
                         let mut f = Frame::default();
+                        f.ret_reg=ret_reg;
+                        f.ret_ty=ret_ty;
                         f.src_function = *func_id;
+                        f.arity = pc.funcs[*func_id as usize].args.len() as u32;
                         gen.frames.push(f);
                         &mut gen.frames[res as usize]
                     }
@@ -151,7 +163,8 @@ impl<'a> ProgramGenerator<'a> {
                 frame,
                 regs: &mut gen.regs,
                 id_map: &gen.id_map,
-            }.process_function(&pc.funcs[src_func])?;
+            }
+            .process_function(&pc.funcs[src_func])?;
         }
         Ok(gen)
     }
@@ -170,6 +183,10 @@ struct Frame<'a> {
     jmps: Vec<usize>,
     bb_to_instr: Vec<usize>,
     instrs: Vec<Instr<'a>>,
+    // TODO add these fields, but first we need to propagate return types in the `types` module
+    ret_reg: u32,
+    ret_ty: Ty,
+    arity: u32,
 }
 
 struct View<'a, 'b> {
@@ -694,8 +711,12 @@ impl<'a, 'b> View<'a, 'b> {
             // Phi functions are handled elsewhere
             PrimExpr::Phi(_) => {}
             PrimExpr::CallBuiltin(bf, vs) => self.builtin(dst_reg, dst_ty, bf, vs)?,
-            // TODO add call instruction
             // TODO insert pushes (easy)
+            // TODO return register into dst_reg
+            // TODO compute types of arguments to find the function's offset.
+            //  * That includes normalizing the call, which will require passing arity information
+            //    into the frame.
+            //  * Arity field is now in there, so the normalization logic will be similar.
             PrimExpr::CallUDF(_func, _vs) => unimplemented!(),
             PrimExpr::Index(arr, k) => {
                 let (arr_reg, arr_ty) = if let PrimVal::Var(arr_id) = arr {
@@ -821,7 +842,8 @@ impl<'a, 'b> View<'a, 'b> {
                     _ => return err!("unexpected type for variable {} : {:?}", v, ty),
                 });
             }
-            // TODO add Return to bytecode
+            // TODO move v into return register (converting if necessary)
+            // TODO insert Return.
             PrimStmt::Return(v) => unimplemented!(),
         };
         Ok(())
