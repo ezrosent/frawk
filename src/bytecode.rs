@@ -305,6 +305,8 @@ struct Storage<T> {
 // TODO: We probably want return to take an (optional) operand, for more alignment with LLVM
 
 pub(crate) struct Interp<'a> {
+    // index of `instrs` that contains "main"
+    main_func: usize,
     instrs: Vec<Vec<Instr<'a>>>,
     stack: Vec<(usize /*function*/, Label /*instr*/)>,
 
@@ -348,14 +350,16 @@ impl<'a> Interp<'a> {
         &self.instrs[0]
     }
     pub(crate) fn new(
-        instrs: Vec<Instr<'a>>,
+        instrs: Vec<Vec<Instr<'a>>>,
+        main_func: usize,
         regs: impl Fn(compile::Ty) -> usize,
         stdin: impl std::io::Read + 'static,
         stdout: impl std::io::Write + 'static,
     ) -> Interp<'a> {
         use compile::Ty::*;
         Interp {
-            instrs: vec![instrs],
+            main_func,
+            instrs,
             stack: Default::default(),
             floats: default_of(regs(Float)),
             ints: default_of(regs(Int)),
@@ -385,7 +389,7 @@ impl<'a> Interp<'a> {
         let newline: Str = "\n".into();
         // We are only accessing one vector at a time here, but it's hard to convince the borrow
         // checker of this fact, so we access the vectors through raw pointers.
-        let mut cur_fn = 0;
+        let mut cur_fn = self.main_func;
         let mut instrs = (&mut self.instrs[cur_fn]) as *mut Vec<Instr<'a>>;
         let mut cur = 0;
         'outer: loop {
@@ -1249,17 +1253,6 @@ macro_rules! impl_pop {
             fn pop(&mut self, r: Reg<$t>) {
                 let v = pop(&mut self.$fld);
                 *self.get_mut(r) = v;
-            }
-        }
-    };
-}
-
-macro_rules! impl_ret {
-    ($t:ty, $fld:ident) => {
-        impl<'a> Pop<$t> for Interp<'a> {
-            fn ret(&mut self, r: Reg<$t>) {
-                let v = self.get(r).clone();
-                self.$fld.ret = v;
             }
         }
     };
