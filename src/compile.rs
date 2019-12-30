@@ -106,7 +106,6 @@ struct FuncInfo {
 struct ProgramGenerator<'a> {
     regs: Registers,
 
-    // TODO: can this be a Vec<NumTy>?
     id_map: HashMap<
         // TODO: make newtypes for these different Ids?
         (
@@ -184,8 +183,19 @@ impl<'a> ProgramGenerator<'a> {
         Ok(gen)
     }
 
-    fn into_interp(self) -> Interp<'a> {
-        unimplemented!()
+    fn into_interp(
+        mut self,
+        reader: impl std::io::Read + 'static,
+        writer: impl std::io::Write + 'static,
+    ) -> Interp<'a> {
+        let instrs: Vec<_> = self.frames.drain(..).map(|x| x.instrs).collect();
+        Interp::new(
+            instrs,
+            self.main_offset,
+            |ty| self.regs.reg_counts[ty as usize] as usize,
+            reader,
+            writer,
+        )
     }
 }
 
@@ -1563,11 +1573,12 @@ pub(crate) fn bytecode<'a, 'b>(
             _ => unreachable!(),
         }
     }
+    panic!("delete this function")
 
-    Ok(Interp::new(
-        instrs.into_vec(),
-        |ty| gen.reg_counts[ty as usize] as usize,
-        rdr,
-        writer,
-    ))
+    // Ok(Interp::new(
+    //     instrs.into_vec(),
+    //     |ty| gen.reg_counts[ty as usize] as usize,
+    //     rdr,
+    //     writer,
+    // ))
 }
