@@ -183,6 +183,7 @@ pub(crate) struct ProgramContext<'a, I> {
     // while maintaining immutable access to the mapping from Is to numbers.
     func_table: HashMap<Option<I>, NumTy>,
     pub funcs: Vec<Function<'a, I>>,
+    pub main_offset: usize,
 }
 
 impl<'a, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> ProgramContext<'a, I>
@@ -277,7 +278,8 @@ where
             func_table: &func_table,
         }
         .fill(main_stmt)?;
-        func_table.insert(None, funcs.len() as NumTy);
+        let main_offset = funcs.len();
+        func_table.insert(None, main_offset as NumTy);
         funcs.push(main_func);
         for fundec in p.decs.iter() {
             let f = *func_table.get_mut(&Some(fundec.name.clone())).unwrap();
@@ -292,6 +294,7 @@ where
             shared,
             func_table,
             funcs,
+            main_offset,
         })
     }
 }

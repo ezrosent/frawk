@@ -107,7 +107,6 @@ struct ProgramGenerator<'a> {
     regs: Registers,
 
     // TODO: can this be a Vec<NumTy>?
-    arity_map: HashMap<NumTy /* cfg-level func id */, NumTy /* arity */>,
     id_map: HashMap<
         // TODO: make newtypes for these different Ids?
         (
@@ -116,10 +115,17 @@ struct ProgramGenerator<'a> {
         ),
         NumTy, /* bytecode-level func id */
     >,
-    // TODO store return type and register in a separate vector, store offset into the vector in
-    // the frame, pass a reference to the vector in View.
+    // Why not just store the fields in FuncInfo in a Frame?
+    // We access Frames one at a time (through a View); but we need access to function arity and
+    // return types across invidual views. We expose these fields in a separate type immutably to
+    // facilitate that.
+    //
+    // Another option would be to pass a mutable reference to `frames` for all of bytecode-building
+    // functions below, but then each access to frame would have the form of
+    // self.frames[current_index], which is less efficient and (more importantly) error-prone.
     func_info: Vec<FuncInfo>,
     frames: Vec<Frame<'a>>,
+    main_offset: usize,
 }
 
 impl<'a> ProgramGenerator<'a> {
@@ -128,15 +134,6 @@ impl<'a> ProgramGenerator<'a> {
         // and global variables.
         let mut gen = ProgramGenerator::default();
         let types::TypeInfo { var_tys, func_tys } = types::get_types_program(pc)?;
-        // for ((func_id, args), ret_ty) in func_tys.into_iter() {
-        //     if let Entry::Vacant(v) = gen.func_rets.entry((func_id, args)) {
-        //         v.insert(gen.func_info.len() as NumTy);
-        //         gen.func_info.push(FuncInfo {
-        //             ret_reg: reg_of_ty!(gen.regs, ret_ty),
-        //             ret_ty,
-        //         })
-        //     }
-        // }
         for ((id, func_id, args), ty) in var_tys.iter() {
             let map = if id.global {
                 &mut gen.regs.globals
@@ -152,7 +149,6 @@ impl<'a> ProgramGenerator<'a> {
                         f.src_function = *func_id;
                         f.cur_ident = res;
                         let arity = pc.funcs[*func_id as usize].args.len() as u32;
-                        gen.arity_map.insert(*func_id, arity);
                         gen.frames.push(f);
                         gen.func_info.push(FuncInfo {
                             ret_reg,
@@ -173,6 +169,8 @@ impl<'a> ProgramGenerator<'a> {
                 );
             }
         }
+        let main_offset = gen.id_map[&(pc.main_offset as NumTy, Default::default())];
+        gen.main_offset = main_offset as usize;
         for frame in gen.frames.iter_mut() {
             let src_func = frame.src_function as usize;
             View {
@@ -184,6 +182,10 @@ impl<'a> ProgramGenerator<'a> {
             .process_function(&pc.funcs[src_func])?;
         }
         Ok(gen)
+    }
+
+    fn into_interp(self) -> Interp<'a> {
+        unimplemented!()
     }
 }
 
