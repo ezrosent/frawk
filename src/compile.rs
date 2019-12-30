@@ -30,7 +30,9 @@ pub(crate) enum Ty {
 }
 
 impl Default for Ty {
-    fn default() -> Ty { Ty::Str }
+    fn default() -> Ty {
+        Ty::Str
+    }
 }
 
 impl Ty {
@@ -77,19 +79,12 @@ impl Ty {
 }
 
 const NUM_TYPES: usize = Ty::IterStr as usize + 1;
+
 // TODO:
-//  * stub out new `full_bytecode` function taking a cfg2::ProgramContext
-//  * Build a new ProgramGenerator that consists of Registers and Map<(NumTy /*old function Id */,
-//  SmallVec<Ty>), NumTy /*new function Id */>, and Vec<Frame> (or Frame,Instrs, depending on how
-//  it all works out)
-//      * Get main to go first
-//  * Build a View with mut refs to Registers and Frame
-//  * Move all code to new ProgramGenerator (c/p is fine;we'll remove it all, but it could be
-//  doable to just port everything over.)
-//  Get all code compiling and tests passing before adding in full function support.
-//
-//  * On compile side, we'll need a runtime stack for continuations, a Vec<Vec<Instr>> for all
-//  functions, and some return mechanism.
+//  * Distinguish `main` function.
+//  * rewrite `run` function.
+//  * delete the duplicate code, get everything compiling.
+//  * debug debug debug (get tests passing; add new tests, etc.).
 
 // This is a macro to defeat the borrow checker when used inside methods for `Generator`.
 macro_rules! reg_of_ty {
@@ -99,6 +94,12 @@ macro_rules! reg_of_ty {
         *cnt += 1;
         res
     }};
+}
+
+struct FuncInfo {
+    arity: NumTy,
+    ret_reg: NumTy,
+    ret_ty: Ty,
 }
 
 #[derive(Default)]
@@ -117,8 +118,7 @@ struct ProgramGenerator<'a> {
     >,
     // TODO store return type and register in a separate vector, store offset into the vector in
     // the frame, pass a reference to the vector in View.
-    func_rets:
-        HashMap<(NumTy /* func id */, SmallVec<Ty> /* arg types */), Ty /* return type */>,
+    func_info: Vec<FuncInfo>,
     frames: Vec<Frame<'a>>,
 }
 
@@ -126,10 +126,17 @@ impl<'a> ProgramGenerator<'a> {
     fn init_from_ctx(pc: &ProgramContext<'a, &'a str>) -> Result<ProgramGenerator<'a>> {
         // Type-check the code, then initialize a ProgramGenerator, assigning registers to local
         // and global variables.
-        let mut n_funcs = 0;
         let mut gen = ProgramGenerator::default();
         let types::TypeInfo { var_tys, func_tys } = types::get_types_program(pc)?;
-        gen.func_rets = func_tys;
+        // for ((func_id, args), ret_ty) in func_tys.into_iter() {
+        //     if let Entry::Vacant(v) = gen.func_rets.entry((func_id, args)) {
+        //         v.insert(gen.func_info.len() as NumTy);
+        //         gen.func_info.push(FuncInfo {
+        //             ret_reg: reg_of_ty!(gen.regs, ret_ty),
+        //             ret_ty,
+        //         })
+        //     }
+        // }
         for ((id, func_id, args), ty) in var_tys.iter() {
             let map = if id.global {
                 &mut gen.regs.globals
@@ -137,18 +144,21 @@ impl<'a> ProgramGenerator<'a> {
                 let mapped_func = match gen.id_map.entry((*func_id, args.clone())) {
                     Entry::Occupied(o) => &mut gen.frames[*o.get() as usize],
                     Entry::Vacant(v) => {
-                        let res = n_funcs;
-                        n_funcs += 1;
+                        let res = gen.frames.len() as NumTy;
                         v.insert(res);
-                        let ret_ty = gen.func_rets[&(*func_id, args.clone())];
+                        let ret_ty = func_tys[&(*func_id, args.clone())];
                         let ret_reg = reg_of_ty!(gen.regs, ret_ty);
                         let mut f = Frame::default();
-                        f.ret_reg=ret_reg;
-                        f.ret_ty=ret_ty;
                         f.src_function = *func_id;
+                        f.cur_ident = res;
                         let arity = pc.funcs[*func_id as usize].args.len() as u32;
                         gen.arity_map.insert(*func_id, arity);
                         gen.frames.push(f);
+                        gen.func_info.push(FuncInfo {
+                            ret_reg,
+                            ret_ty,
+                            arity,
+                        });
                         &mut gen.frames[res as usize]
                     }
                 };
@@ -169,7 +179,7 @@ impl<'a> ProgramGenerator<'a> {
                 frame,
                 regs: &mut gen.regs,
                 id_map: &gen.id_map,
-                arity_map: &gen.arity_map,
+                func_info: &gen.func_info,
             }
             .process_function(&pc.funcs[src_func])?;
         }
@@ -186,20 +196,18 @@ struct Registers {
 #[derive(Default)]
 struct Frame<'a> {
     src_function: NumTy,
+    cur_ident: NumTy,
     locals: HashMap<Ident, (u32, Ty)>,
     jmps: Vec<usize>,
     bb_to_instr: Vec<usize>,
     instrs: Vec<Instr<'a>>,
-    // TODO add these fields, but first we need to propagate return types in the `types` module
-    ret_reg: u32,
-    ret_ty: Ty,
 }
 
 struct View<'a, 'b> {
     frame: &'b mut Frame<'a>,
     regs: &'b mut Registers,
     id_map: &'b HashMap<(NumTy, SmallVec<Ty>), NumTy>,
-    arity_map: &'b HashMap<NumTy, NumTy>,
+    func_info: &'b Vec<FuncInfo>,
 }
 
 struct Generator {
@@ -728,14 +736,15 @@ impl<'a, 'b> View<'a, 'b> {
                     arg_tys.push(ty);
                 }
                 // Normalize the call
-                let true_arity = self.arity_map[func_id] as usize;
+                let info = &self.func_info[*func_id as usize];
+                let true_arity = info.arity as usize;
                 if arg_regs.len() < true_arity {
                     // Not enough arguments; fill in the rest with nulls.
                     // TODO reuse registers here. This is wasteful for functions with a lot of
                     // arguments.
                     let null_ty = types::null_ty();
                     let null_reg = reg_of_ty!(self.regs, null_ty);
-                    for _ in 0..(true_arity-arg_regs.len()) {
+                    for _ in 0..(true_arity - arg_regs.len()) {
                         arg_regs.push(null_reg);
                         arg_tys.push(null_ty);
                     }
@@ -756,19 +765,18 @@ impl<'a, 'b> View<'a, 'b> {
                         Int => Instr::PushInt(reg.into()),
                         Float => Instr::PushFloat(reg.into()),
                         Str => Instr::PushStr(reg.into()),
-                        MapIntInt   => Instr::PushIntInt(reg.into()),
+                        MapIntInt => Instr::PushIntInt(reg.into()),
                         MapIntFloat => Instr::PushIntFloat(reg.into()),
-                        MapIntStr   => Instr::PushIntStr(reg.into()),
-                        MapStrInt   => Instr::PushStrInt(reg.into()),
+                        MapIntStr => Instr::PushIntStr(reg.into()),
+                        MapStrInt => Instr::PushStrInt(reg.into()),
                         MapStrFloat => Instr::PushStrFloat(reg.into()),
-                        MapStrStr   => Instr::PushStrStr(reg.into()),
+                        MapStrStr => Instr::PushStrStr(reg.into()),
                         IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
                     });
                 }
                 self.push(Instr::Call(monomorphized as usize));
-                // TODO move the ret_reg information around so we can use it here.
-                unimplemented!()
-            },
+                self.convert(dst_reg, dst_ty, info.ret_reg, info.ret_ty)?;
+            }
             PrimExpr::Index(arr, k) => {
                 let (arr_reg, arr_ty) = if let PrimVal::Var(arr_id) = arr {
                     self.reg_of_ident(arr_id)
@@ -893,9 +901,13 @@ impl<'a, 'b> View<'a, 'b> {
                     _ => return err!("unexpected type for variable {} : {:?}", v, ty),
                 });
             }
-            // TODO move v into return register (converting if necessary)
-            // TODO insert Return.
-            PrimStmt::Return(v) => unimplemented!(),
+            PrimStmt::Return(v) => {
+                let (v_reg, v_ty) = self.get_reg(v)?;
+                let FuncInfo {
+                    ret_reg, ret_ty, ..
+                } = &self.func_info[self.frame.cur_ident as usize];
+                self.convert(*ret_reg, *ret_ty, v_reg, v_ty)?;
+            }
         };
         Ok(())
     }
