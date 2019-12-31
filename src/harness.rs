@@ -7,7 +7,7 @@ use crate::{
     cfg::{self, Ident},
     common::Result,
     compile, lexer, syntax,
-    types::{self, get_types, BaseTy, TVar},
+    types::{self, get_types},
 };
 use hashbrown::HashMap;
 use std::io::Write;
@@ -94,7 +94,7 @@ pub(crate) fn run_prog<'a>(
             )
             .unwrap();
         }
-        let types::TypeInfo { var_tys, func_tys } = get_types(&ctx)?;
+        let types::TypeInfo { var_tys, .. } = get_types(&ctx)?;
         // ident_map : Ident -> &str (but only has globals)
         // ts: Ident -> Type
         //
@@ -119,7 +119,7 @@ pub(crate) fn run_prog<'a>(
             }
             write!(&mut instrs_buf, "}}\n").unwrap();
         }
-        let mut instrs = String::from_utf8(instrs_buf).unwrap();
+        let instrs = String::from_utf8(instrs_buf).unwrap();
         interp.run()?;
         (instrs, type_map)
     };

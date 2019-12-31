@@ -174,14 +174,12 @@ fn valid_lhs<'a, 'b, I>(e: &ast::Expr<'a, 'b, I>) -> bool {
         _ => false,
     }
 }
+
+#[derive(Debug)]
 pub(crate) struct ProgramContext<'a, I> {
     shared: GlobalContext<I>,
-    // On one level, it makes more sense to have this as a single  mapping Option<I> ->
-    // Function<I>. After all, Function contains its Ident.
-    //
-    // We add a layer of indirection because we will need to mutably borrow members of `funcs`
-    // while maintaining immutable access to the mapping from Is to numbers.
-    func_table: HashMap<Option<I>, NumTy>,
+    // Functions "know" which Option<Ident> maps to which offset in this
+    // table at construction time (in the func_table passed to View).
     pub funcs: Vec<Function<'a, I>>,
     pub main_offset: usize,
 }
@@ -301,7 +299,6 @@ where
         }
         Ok(ProgramContext {
             shared,
-            func_table,
             funcs,
             main_offset,
         })
@@ -314,6 +311,7 @@ struct View<'a, 'b, I> {
     func_table: &'a HashMap<Option<I>, NumTy>,
 }
 
+#[derive(Debug)]
 struct GlobalContext<I> {
     hm: HashMap<I, Ident>,
 
@@ -345,11 +343,13 @@ impl<I> GlobalContext<I> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Arg<I> {
     pub name: I,
     pub id: Ident,
 }
 
+#[derive(Debug)]
 pub(crate) struct Function<'a, I> {
     pub name: Option<I>,
     pub ident: NumTy,
@@ -380,15 +380,6 @@ pub(crate) struct Function<'a, I> {
     // Dominance information about `cfg`.
     dt: dom::Tree,
     df: dom::Frontier,
-}
-
-impl<'a, 'b, I> View<'a, 'b, I> {
-    pub(crate) fn cfg<'c: 'a>(&'c self) -> &'a CFG<'b> {
-        &self.f.cfg
-    }
-    pub(crate) fn entry(&self) -> NodeIx {
-        self.f.entry
-    }
 }
 
 pub(crate) fn is_unused(i: Ident) -> bool {

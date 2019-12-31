@@ -401,7 +401,7 @@ impl<'a, 'b, 'c> DerefMut for View<'a, 'b, 'c> {
 }
 
 pub(crate) fn get_types<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
-    TypeContext::default().from_prog(pc)
+    TypeContext::from_prog(pc)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -419,24 +419,21 @@ pub(crate) struct TypeInfo {
 }
 
 impl<'b, 'c> TypeContext<'b, 'c> {
-    pub(crate) fn from_prog<'a>(&mut self, pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
+    pub(crate) fn from_prog<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
         let mut tc = TypeContext::default();
         tc.func_table = &pc.funcs[..];
-        // By convention, "main" is the last function in the table. This
-        // assertion ensures that tests will fail if that ever changes.
-        let main = &pc.funcs[pc.funcs.len() - 1];
-        assert!(main.name.is_none());
+        let main = &pc.funcs[pc.main_offset];
         let empty: SmallVec<State> = Default::default();
         tc.get_function(main, &empty);
         tc.solve()?;
         let mut var_tys = HashMap::new();
         let mut func_tys = HashMap::new();
-        for (Args { id, func_id, args }, ix) in self.env.iter() {
+        for (Args { id, func_id, args }, ix) in tc.env.iter() {
             let mut flat_args = SmallVec::new();
             for a in args.iter().cloned() {
                 flat_args.push(flatten(concrete(a))?);
             }
-            let v = flatten(concrete(*self.nw.read(*ix)))?;
+            let v = flatten(concrete(*tc.nw.read(*ix)))?;
             if let hashbrown::hash_map::Entry::Vacant(v) =
                 func_tys.entry((*func_id, flat_args.clone()))
             {
@@ -445,7 +442,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
                     func_id: *func_id,
                     args: args.clone(),
                 };
-                v.insert(flatten(concrete(*self.nw.read(self.funcs[&arg])))?);
+                v.insert(flatten(concrete(*tc.nw.read(tc.funcs[&arg])))?);
             }
             if let Some(prev) = var_tys.insert((*id, *func_id, flat_args), v) {
                 return err!(
@@ -598,7 +595,9 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         // this node later and adding dependencies when we encounter a `Return` stmt.
         //
         // TODO: this means we do some duplicate work in rewriting returns in the cfg module.
-        view.nw.add_rule(Rule::Var)
+        let res = view.nw.add_rule(Rule::Var);
+        self.funcs.insert(key, res);
+        res
     }
 }
 

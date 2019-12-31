@@ -133,30 +133,26 @@ impl<'a> ProgramGenerator<'a> {
         let mut gen = ProgramGenerator::default();
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
         for ((id, func_id, args), ty) in var_tys.iter() {
+            if let Entry::Vacant(v) = gen.id_map.entry((*func_id, args.clone())) {
+                let res = gen.frames.len() as NumTy;
+                v.insert(res);
+                let ret_ty = func_tys[&(*func_id, args.clone())];
+                let ret_reg = reg_of_ty!(gen.regs, ret_ty);
+                let mut f = Frame::default();
+                f.src_function = *func_id;
+                f.cur_ident = res;
+                let arity = pc.funcs[*func_id as usize].args.len() as u32;
+                gen.frames.push(f);
+                gen.func_info.push(FuncInfo {
+                    ret_reg,
+                    ret_ty,
+                    arity,
+                });
+            };
             let map = if id.global {
                 &mut gen.regs.globals
             } else {
-                let mapped_func = match gen.id_map.entry((*func_id, args.clone())) {
-                    Entry::Occupied(o) => &mut gen.frames[*o.get() as usize],
-                    Entry::Vacant(v) => {
-                        let res = gen.frames.len() as NumTy;
-                        v.insert(res);
-                        let ret_ty = func_tys[&(*func_id, args.clone())];
-                        let ret_reg = reg_of_ty!(gen.regs, ret_ty);
-                        let mut f = Frame::default();
-                        f.src_function = *func_id;
-                        f.cur_ident = res;
-                        let arity = pc.funcs[*func_id as usize].args.len() as u32;
-                        gen.frames.push(f);
-                        gen.func_info.push(FuncInfo {
-                            ret_reg,
-                            ret_ty,
-                            arity,
-                        });
-                        &mut gen.frames[res as usize]
-                    }
-                };
-                &mut mapped_func.locals
+                &mut gen.frames[gen.id_map[&(*func_id, args.clone())] as usize].locals
             };
             let reg = reg_of_ty!(gen.regs, *ty);
             if let Some(old) = map.insert(*id, (reg, *ty)) {
@@ -219,20 +215,6 @@ struct View<'a, 'b> {
     regs: &'b mut Registers,
     id_map: &'b HashMap<(NumTy, SmallVec<Ty>), NumTy>,
     func_info: &'b Vec<FuncInfo>,
-}
-
-struct Generator {
-    // local*
-    registers: HashMap<Ident, (u32, Ty)>,
-    // global
-    reg_counts: [u32; NUM_TYPES],
-    // local
-    jmps: Vec<usize>,
-    // local
-    bb_to_instr: Vec<usize>,
-    // local*; but do we need it at all?
-    ts: HashMap<Ident, Ty>,
-    // *Could be done as (Ident, SmallVec<Ty>)
 }
 
 impl<'a, 'b> View<'a, 'b> {
@@ -918,6 +900,7 @@ impl<'a, 'b> View<'a, 'b> {
                     ret_reg, ret_ty, ..
                 } = &self.func_info[self.frame.cur_ident as usize];
                 self.convert(*ret_reg, *ret_ty, v_reg, v_ty)?;
+                self.push(Instr::Ret);
             }
         };
         Ok(())
@@ -925,9 +908,6 @@ impl<'a, 'b> View<'a, 'b> {
 
     fn push(&mut self, i: Instr<'a>) {
         self.frame.instrs.push(i)
-    }
-    fn len(&self) -> usize {
-        self.frame.instrs.len()
     }
 }
 
