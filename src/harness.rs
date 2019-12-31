@@ -7,11 +7,12 @@ use crate::{
     cfg::{self, Ident},
     common::Result,
     compile, lexer, syntax,
-    types::{get_types, BaseTy, TVar},
+    types::{self, get_types, BaseTy, TVar},
 };
 use hashbrown::HashMap;
+use std::io::Write;
 
-type Stmt<'a> = &'a ast::Stmt<'a, 'a, &'a str>;
+type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
 type ProgResult<'a> = Result<(
     String,                        /* output */
@@ -24,20 +25,20 @@ pub(crate) fn run_program<'a>(
     prog: &str,
     stdin: impl Into<String>,
 ) -> ProgResult<'a> {
-    let stmt = parse_program(prog, &a)?;
-    run_stmt(stmt, stdin)
+    let stmt = parse_program(prog, a)?;
+    run_prog(a, stmt, stdin)
 }
 
 pub(crate) fn parse_program<'a, 'inp, 'outer>(
     prog: &'inp str,
     a: &'a Arena<'outer>,
-) -> Result<Stmt<'a>> {
+) -> Result<Prog<'a>> {
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = syntax::ProgParser::new();
     match parser.parse(a, &mut buf, lexer) {
-        Ok(program) => Ok(a.alloc_v(program.desugar(a))),
+        Ok(program) => Ok(a.alloc_v(program)),
         Err(e) => {
             let mut ix = 0;
             let mut msg: String = "failed to parse program:\n======\n".into();
@@ -50,7 +51,11 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     }
 }
 
-pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> ProgResult<'a> {
+pub(crate) fn run_prog<'a>(
+    arena: &'a Arena,
+    prog: Prog<'a>,
+    stdin: impl Into<String>,
+) -> ProgResult<'a> {
     use std::cell::RefCell;
     use std::io;
     use std::rc::Rc;
@@ -64,20 +69,39 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> ProgResu
             self.0.borrow_mut().flush()
         }
     }
-    let ctx = cfg::Context::from_stmt(stmt)?;
+    let ctx = cfg::ProgramContext::from_prog(arena, prog)?;
+    let ident_map = ctx._invert_ident();
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
-    let ident_map = ctx._invert_ident();
     let (instrs, type_map) = {
-        let mut instrs = format!("cfg:\n{}\ninstrs:\n", petgraph::dot::Dot::new(ctx.cfg()));
-        let ts = get_types(ctx.cfg())?;
-        // ident_map : Ident -> &str
+        let mut instrs_buf = Vec::<u8>::new();
+        for func in ctx.funcs.iter() {
+            let name = func.name.unwrap_or("<main>");
+            write!(&mut instrs_buf, "function {}/{}(", name, func.ident).unwrap();
+            for (i, arg) in func.args.iter().enumerate() {
+                // Help with pretty-printing
+                use crate::display::Wrap;
+                if i == func.args.len() - 1 {
+                    write!(&mut instrs_buf, "{}/{}", arg.name, Wrap(arg.id)).unwrap()
+                } else {
+                    write!(&mut instrs_buf, "{}/{}, ", arg.name, Wrap(arg.id)).unwrap()
+                }
+            }
+            write!(
+                &mut instrs_buf,
+                ") {{\n {}\n}}",
+                petgraph::dot::Dot::new(&func.cfg)
+            )
+            .unwrap();
+        }
+        let types::TypeInfo { var_tys, func_tys } = get_types(&ctx)?;
+        // ident_map : Ident -> &str (but only has globals)
         // ts: Ident -> Type
         //
         // We want the types of all the entries in ts that show up in ident_map.
-        let type_map: HashMap<&'a str, compile::Ty> = ts
+        let type_map: HashMap<&'a str, compile::Ty> = var_tys
             .iter()
-            .flat_map(|(Ident { low, global, .. }, ty)| {
+            .flat_map(|((Ident { low, global, .. }, _, _), ty)| {
                 ident_map
                     .get(&Ident {
                         low: *low,
@@ -88,9 +112,14 @@ pub(crate) fn run_stmt<'a>(stmt: Stmt<'a>, stdin: impl Into<String>) -> ProgResu
             })
             .collect();
         let mut interp = compile::bytecode(&ctx, std::io::Cursor::new(stdin), stdout.clone())?;
-        for (i, inst) in interp.instrs().iter().enumerate() {
-            instrs.push_str(format!("[{:2}] {:?}\n", i, inst).as_str());
+        for (i, func) in interp.instrs().iter().enumerate() {
+            write!(&mut instrs_buf, "function {} {{\n", i).unwrap();
+            for (j, inst) in func.iter().enumerate() {
+                write!(&mut instrs_buf, "\t[{:2}] {:?}\n", j, inst).unwrap();
+            }
+            write!(&mut instrs_buf, "}}\n").unwrap();
         }
+        let mut instrs = String::from_utf8(instrs_buf).unwrap();
         interp.run()?;
         (instrs, type_map)
     };

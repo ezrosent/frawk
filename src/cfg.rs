@@ -1,3 +1,4 @@
+use crate::arena;
 use crate::ast::{self, Binop, Expr, Stmt, Unop};
 use crate::builtins;
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result};
@@ -11,14 +12,28 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-// TODO: rename context to something more descriptive. Make it `ProgramContext`
+// TODO add Call/Return to bytecode, wire into compile
+//  - currently the types have a map from Vec<state>,Ident -> state
+//  - does the `flatten` map to Vec<Ty>,Ident -> Ty "conform" in the appropriate way? It should...
+//    It should be easy enough to check in-flight. If they conflict, we of course want the "more
+//    concrete" one, but we should at least think about if them not
+//    matching points to a bug of some kind. We can do the conversion
+//    when building the map. (done)
+//    (NOTE we may want to take the "right adjoint" here by mapping all the args to a compile::Ty
+//    then mapping them back, then running everything again)
+//
+//    Registers will now have to be indexed by <Vec<Ty>, Ident> in the same way as types.
+//
+//    Then during compilation we can have a new set of function identifiers, indexed by arg types.
+//    per-type stacks. per-type "return registers". That will be enough to implement function
+//    calls.
+// TODO add a Return PrimStmt (? -- maybe just to the bytecode)
 
-// consider making this just "by number" and putting branch instructions elsewhere.
-// need to verify the order
-// Use VecDequeue to support things like prepending definitions and phi statements to blocks during
-// SSA conversion.
 #[derive(Debug, Default)]
-pub(crate) struct BasicBlock<'a>(pub VecDeque<PrimStmt<'a>>);
+pub(crate) struct BasicBlock<'a> {
+    pub q: VecDeque<PrimStmt<'a>>,
+    pub sealed: bool,
+}
 
 // None indicates `else`
 #[derive(Debug, Default)]
@@ -32,45 +47,69 @@ impl<'a> Transition<'a> {
         Transition(None)
     }
 }
-pub(crate) use crate::cfg2::{Ident, PrimExpr, PrimStmt, PrimVal};
 
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
-// pub(crate) type Ident = (NumTy, NumTy);
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
+pub(crate) struct Ident {
+    pub(crate) low: NumTy,
+    pub(crate) sub: NumTy,
+    pub(crate) global: bool,
+}
+
+impl Ident {
+    fn new_global(low: NumTy) -> Ident {
+        Ident {
+            low,
+            sub: 0,
+            global: true,
+        }
+    }
+    fn new_local(low: NumTy) -> Ident {
+        Ident {
+            low,
+            sub: 0,
+            global: false,
+        }
+    }
+}
+
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
-// #[derive(Debug, Clone)]
-// pub(crate) enum PrimVal<'a> {
-//     Var(Ident),
-//     ILit(i64),
-//     FLit(f64),
-//     StrLit(&'a str),
-// }
-//
-// #[derive(Debug, Clone)]
-// pub(crate) enum PrimExpr<'a> {
-//     Val(PrimVal<'a>),
-//     Phi(SmallVec<(NodeIx /* pred */, Ident)>),
-//     CallBuiltin(builtins::Function, SmallVec<PrimVal<'a>>),
-//     Index(PrimVal<'a>, PrimVal<'a>),
-//
-//     // For iterating over vectors.
-//     // TODO: make these builtins? Unfortunately, IterBegin returns an iterator...
-//     IterBegin(PrimVal<'a>),
-//     HasNext(PrimVal<'a>),
-//     Next(PrimVal<'a>),
-//     LoadBuiltin(builtins::Variable),
-// }
-//
-// #[derive(Debug)]
-// pub(crate) enum PrimStmt<'a> {
-//     AsgnIndex(
-//         Ident,        /*map*/
-//         PrimVal<'a>,  /* index */
-//         PrimExpr<'a>, /* assign to */
-//     ),
-//     AsgnVar(Ident /* var */, PrimExpr<'a>),
-//     SetBuiltin(builtins::Variable, PrimExpr<'a>),
-// }
+#[derive(Debug, Clone)]
+pub(crate) enum PrimVal<'a> {
+    Var(Ident),
+    ILit(i64),
+    FLit(f64),
+    StrLit(&'a str),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PrimExpr<'a> {
+    Val(PrimVal<'a>),
+    Phi(SmallVec<(NodeIx /* pred */, Ident)>),
+    CallBuiltin(builtins::Function, SmallVec<PrimVal<'a>>),
+    CallUDF(NumTy, SmallVec<PrimVal<'a>>),
+    Index(PrimVal<'a>, PrimVal<'a>),
+
+    // For iterating over vectors.
+    // TODO: make these builtins? Unfortunately, IterBegin returns an iterator...
+    IterBegin(PrimVal<'a>),
+    HasNext(PrimVal<'a>),
+    Next(PrimVal<'a>),
+    LoadBuiltin(builtins::Variable),
+}
+
+#[derive(Debug)]
+pub(crate) enum PrimStmt<'a> {
+    AsgnIndex(
+        Ident,        /*map*/
+        PrimVal<'a>,  /* index */
+        PrimExpr<'a>, /* assign to */
+    ),
+    AsgnVar(Ident /* var */, PrimExpr<'a>),
+    SetBuiltin(builtins::Variable, PrimExpr<'a>),
+    Return(PrimVal<'a>),
+}
 
 // only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
 // Maybe also keep an auxiliary map from Var => node in graph, also allow Key(map_ident)
@@ -78,53 +117,55 @@ pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 //
 // Build up network. then solve. then use that to insert conversions when producing bytecode.
 
-// impl<'a> PrimVal<'a> {
-//     fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
-//         if let PrimVal::Var(ident) = self {
-//             *ident = update(*ident)
-//         }
-//     }
-// }
-//
-// impl<'a> PrimExpr<'a> {
-//     fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
-//         use PrimExpr::*;
-//         match self {
-//             Val(v) => v.replace(update),
-//             Phi(_) => {}
-//             CallBuiltin(_, args) => {
-//                 for a in args.iter_mut() {
-//                     a.replace(&mut update)
-//                 }
-//             }
-//             Index(v1, v2) => {
-//                 v1.replace(&mut update);
-//                 v2.replace(update);
-//             }
-//             IterBegin(v) => v.replace(update),
-//             HasNext(v) => v.replace(update),
-//             Next(v) => v.replace(update),
-//             LoadBuiltin(_) => {}
-//         }
-//     }
-// }
-//
-// impl<'a> PrimStmt<'a> {
-//     fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
-//         use PrimStmt::*;
-//         match self {
-//             AsgnIndex(ident, v, exp) => {
-//                 *ident = update(*ident);
-//                 v.replace(&mut update);
-//                 exp.replace(update);
-//             }
-//             // We handle assignments separately. Note that this is not needed for index
-//             // expressions, because assignments to m[k] are *uses* of m, not definitions.
-//             AsgnVar(_, e) => e.replace(update),
-//             SetBuiltin(_, e) => e.replace(update),
-//         }
-//     }
-// }
+impl<'a> PrimVal<'a> {
+    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+        if let PrimVal::Var(ident) = self {
+            *ident = update(*ident)
+        }
+    }
+}
+
+impl<'a> PrimExpr<'a> {
+    fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+        use PrimExpr::*;
+        match self {
+            Val(v) => v.replace(update),
+            Phi(_) => {}
+            CallBuiltin(_, args) | CallUDF(_, args) => {
+                for a in args.iter_mut() {
+                    a.replace(&mut update)
+                }
+            }
+            Index(v1, v2) => {
+                v1.replace(&mut update);
+                v2.replace(update);
+            }
+            IterBegin(v) => v.replace(update),
+            HasNext(v) => v.replace(update),
+            Next(v) => v.replace(update),
+            LoadBuiltin(_) => {}
+        }
+    }
+}
+
+impl<'a> PrimStmt<'a> {
+    // TODO: remove pub(crate) once we consolidate the cfg modules
+    pub(crate) fn replace(&mut self, mut update: impl FnMut(Ident) -> Ident) {
+        use PrimStmt::*;
+        match self {
+            AsgnIndex(ident, v, exp) => {
+                *ident = update(*ident);
+                v.replace(&mut update);
+                exp.replace(update);
+            }
+            // We handle assignments separately. Note that this is not needed for index
+            // expressions, because assignments to m[k] are *uses* of m, not definitions.
+            AsgnVar(_, e) => e.replace(update),
+            SetBuiltin(_, e) => e.replace(update),
+            Return(v) => v.replace(update),
+        }
+    }
+}
 
 fn valid_lhs<'a, 'b, I>(e: &ast::Expr<'a, 'b, I>) -> bool {
     use ast::Expr::*;
@@ -135,12 +176,142 @@ fn valid_lhs<'a, 'b, I>(e: &ast::Expr<'a, 'b, I>) -> bool {
 }
 pub(crate) struct ProgramContext<'a, I> {
     shared: GlobalContext<I>,
-    funcs: HashMap<Option<I>, Function<'a, I>>,
+    // On one level, it makes more sense to have this as a single  mapping Option<I> ->
+    // Function<I>. After all, Function contains its Ident.
+    //
+    // We add a layer of indirection because we will need to mutably borrow members of `funcs`
+    // while maintaining immutable access to the mapping from Is to numbers.
+    func_table: HashMap<Option<I>, NumTy>,
+    pub funcs: Vec<Function<'a, I>>,
+    pub main_offset: usize,
+}
+
+impl<'a, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> ProgramContext<'a, I>
+where
+    builtins::Variable: TryFrom<I>,
+    builtins::Function: TryFrom<I>,
+{
+    // for debugging: get a mapping from the raw identifiers to the synthetic ones.
+    pub(crate) fn _invert_ident(&self) -> HashMap<Ident, I> {
+        self.shared
+            .hm
+            .iter()
+            .map(|(k, v)| (v.clone(), k.clone()))
+            .collect()
+    }
+
+    pub(crate) fn from_prog<'b, 'outer>(
+        arena: &'a arena::Arena<'outer>,
+        p: &ast::Prog<'a, 'b, I>,
+    ) -> Result<Self> {
+        let mut shared: GlobalContext<I> = GlobalContext {
+            hm: Default::default(),
+            may_rename: Default::default(),
+            max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations
+            tmp_fs: None,
+        };
+        let mut func_table: HashMap<Option<I>, NumTy> = Default::default();
+        let mut funcs: Vec<Function<'a, I>> = Default::default();
+        for fundec in p.decs.iter() {
+            if let Some(_) = func_table.insert(Some(fundec.name.clone()), funcs.len() as NumTy) {
+                return err!("duplicate function found for name {}", fundec.name);
+            }
+            if let Ok(bi) = builtins::Function::try_from(fundec.name.clone()) {
+                return err!("attempted redefinition of builtin function {}", bi);
+            }
+            let mut ix = 0;
+            let mut args_map = HashMap::new();
+            let mut cfg = CFG::default();
+            let entry = cfg.add_node(Default::default());
+
+            // All exit blocks simply return the designated return node. Return statements in the
+            // AST will becode assignments to this variable followed by an unconditional jump to
+            // this block.
+            let ret = shared.fresh_local();
+            let mut exit_block = BasicBlock::default();
+            exit_block.q.push_back(PrimStmt::Return(PrimVal::Var(ret)));
+            let exit = cfg.add_node(exit_block);
+
+            let f = Function {
+                name: Some(fundec.name.clone()),
+                ident: funcs.len() as NumTy,
+                args: fundec
+                    .args
+                    .iter()
+                    .map(|i| {
+                        let name = i.clone();
+                        let id = shared.fresh_local();
+                        args_map.insert(i.clone(), ix);
+                        ix += 1;
+                        Arg { name, id }
+                    })
+                    .collect(),
+                args_map,
+                ret,
+                cfg,
+                defsites: Default::default(),
+                orig: Default::default(),
+                entry,
+                exit,
+                loop_ctx: Default::default(),
+                dt: Default::default(),
+                df: Default::default(),
+            };
+            funcs.push(f);
+        }
+        // Bind the main function
+        let main_stmt = arena.alloc_v(p.desugar(arena));
+        let mut cfg = CFG::default();
+        let entry = cfg.add_node(Default::default());
+        let exit = cfg.add_node(Default::default());
+        let mut main_func = Function {
+            name: None,
+            ident: funcs.len() as NumTy,
+            args: Default::default(),
+            args_map: Default::default(),
+            ret: View::<'a, 'a, I>::unused(),
+            cfg,
+            defsites: Default::default(),
+            orig: Default::default(),
+            entry,
+            exit,
+            loop_ctx: Default::default(),
+            dt: Default::default(),
+            df: Default::default(),
+        };
+        // Now that we have all the functions in place, it's time to fill them up and convert them
+        // to SSA.
+        View {
+            ctx: &mut shared,
+            f: &mut main_func,
+            func_table: &func_table,
+        }
+        .fill(main_stmt)?;
+        let main_offset = funcs.len();
+        func_table.insert(None, main_offset as NumTy);
+        funcs.push(main_func);
+        for fundec in p.decs.iter() {
+            let f = *func_table.get_mut(&Some(fundec.name.clone())).unwrap();
+            View {
+                ctx: &mut shared,
+                f: funcs.get_mut(f as usize).unwrap(),
+                func_table: &func_table,
+            }
+            .fill(fundec.body)?;
+        }
+        Ok(ProgramContext {
+            shared,
+            func_table,
+            funcs,
+            main_offset,
+        })
+    }
 }
 
 struct View<'a, 'b, I> {
     ctx: &'a mut GlobalContext<I>,
     f: &'a mut Function<'b, I>,
+    func_table: &'a HashMap<Option<I>, NumTy>,
 }
 
 struct GlobalContext<I> {
@@ -152,8 +323,6 @@ struct GlobalContext<I> {
     // only time, but also extra phi nodes in the IR, which eventually lead to more assignments
     // than are required.
     may_rename: Vec<Ident>,
-    defsites: HashMap<Ident, HashSet<NodeIx>>,
-    orig: HashMap<NodeIx, HashSet<Ident>>,
     max: NumTy,
 
     // variable that holds the FS variable, if needed
@@ -162,15 +331,48 @@ struct GlobalContext<I> {
     tmp_fs: Option<Ident>,
 }
 
-struct Function<'a, I> {
-    name: Option<I>,
-    ident: Option<Ident>,
-    // TODO args
-    cfg: CFG<'a>,
+impl<I> GlobalContext<I> {
+    fn fresh(&mut self) -> Ident {
+        let res = self.max;
+        self.max += 1;
+        Ident::new_global(res)
+    }
 
+    fn fresh_local(&mut self) -> Ident {
+        let res = self.max;
+        self.max += 1;
+        Ident::new_local(res)
+    }
+}
+
+pub(crate) struct Arg<I> {
+    pub name: I,
+    pub id: Ident,
+}
+
+pub(crate) struct Function<'a, I> {
+    pub name: Option<I>,
+    pub ident: NumTy,
+    pub args: SmallVec<Arg<I>>,
+    // Indexes into args, to guard against adversarially large functions.
+    args_map: HashMap<I, NumTy>,
+    ret: Ident,
+    // TODO args
+    //  * args get placed in local variables immediately?
+    //  * args are just local variables?
+    // TODO Local identifiers in addition to global ones.
+    //  * temporary variables are local?
+    //  * "Function Table" during type inference should have pointers to local variables as well,
+    //  that way you can have a map : global -> Ty, as well as local_name -> arg_tys -> ty
+    //  * We can keep the flat namespace, but add a bool (or enum) to Ident indicating global or
+    pub cfg: CFG<'a>,
+
+    defsites: HashMap<Ident, HashSet<NodeIx>>,
+    orig: HashMap<NodeIx, HashSet<Ident>>,
     entry: NodeIx,
-    // TODO populate
-    exit: NodeIx,
+    // We enforce that a single basic block has a return statement. This is to ensure that type
+    // inference infers the same type for each return site.
+    pub exit: NodeIx,
     // Stack of the entry and exit nodes for the loops within which the current statement is
     // nested.
     loop_ctx: SmallVec<(NodeIx, NodeIx)>,
@@ -178,63 +380,14 @@ struct Function<'a, I> {
     // Dominance information about `cfg`.
     dt: dom::Tree,
     df: dom::Frontier,
-
-    // TODO remove this; it was only needed for the old typechecking code.
-    num_idents: usize,
 }
 
-pub(crate) struct Context<'b, I> {
-    hm: HashMap<I, Ident>,
-
-    // Many identifiers are generated and assigned to only once by construction, so we do not add
-    // them to the work list for renaming. All named identifiers are added, as well as the ones
-    // created during evaluation of conditional expression (?:, and, or). Doing this saves us not
-    // only time, but also extra phi nodes in the IR, which eventually lead to more assignments
-    // than are required.
-    may_rename: Vec<Ident>,
-    defsites: HashMap<Ident, HashSet<NodeIx>>,
-    orig: HashMap<NodeIx, HashSet<Ident>>,
-    max: NumTy,
-    // TODO: reorg
-    //     Vec<Function?>
-    //     Input: Map<str, FunDec>
-    //     Output: Context, but with
-    //     funcs: Map<Option<str>, Function>
-    //     with funcs[None] as the toplevel function.
-    //     instead of CFG.
-    //     Function needs to include `entry`, `loop_ctx`, `dt`, `df`. We
-    //     probably want to keep the methods up here so we don't have
-    //     pointers back up to global definitions (defsites, orig,
-    //     hm). But perhaps we can just pass hm down?  Or make a
-    //     FunctionCtx struct that borrows members of the outer context.
-    // TODO: figure out how to handle returns. Implement "single return style" by adding a special
-    // "return" identifier and then jumping to a return block with a phi node at the end? For any
-    // cases where control "runs off the end" (nodes for which there is no successor), add another
-    // jmp (potentially with an assignment to null -- perhaps that's not needed?).
-    cfg: CFG<'b>,
-    entry: NodeIx,
-    // Stack of the entry and exit nodes for the loops within which the current statement is nested.
-    loop_ctx: SmallVec<(NodeIx, NodeIx)>,
-
-    // Dominance information about `cfg`.
-    dt: dom::Tree,
-    df: dom::Frontier,
-
-    // variable that holds the FS variable, if needed
-    // TODO add OFS, SUBSEP, etc. Revisit this as a technique (can it be generalized? How about any
-    // Key or value of a named variable. Implement this after we have more tests.)
-    tmp_fs: Option<Ident>,
-}
-
-impl<'b, I> Context<'b, I> {
-    pub(crate) fn cfg<'a>(&'a self) -> &'a CFG<'b> {
-        &self.cfg
+impl<'a, 'b, I> View<'a, 'b, I> {
+    pub(crate) fn cfg<'c: 'a>(&'c self) -> &'a CFG<'b> {
+        &self.f.cfg
     }
-    // pub(crate) fn num_idents(&self) -> usize {
-    //     self.num_idents
-    // }
     pub(crate) fn entry(&self) -> NodeIx {
-        self.entry
+        self.f.entry
     }
 }
 
@@ -242,95 +395,92 @@ pub(crate) fn is_unused(i: Ident) -> bool {
     i.low == 0
 }
 
-impl<'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> Context<'b, I>
+impl<'a, 'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> View<'a, 'b, I>
 where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
 {
-    // for debugging: get a mapping from the raw identifiers to the synthetic ones.
-    pub(crate) fn _invert_ident(&self) -> HashMap<Ident, I> {
-        self.hm
-            .iter()
-            .map(|(k, v)| (v.clone(), k.clone()))
-            .collect()
+    fn fill<'c>(&mut self, stmt: &'c Stmt<'c, 'b, I>) -> Result<()> {
+        // Add a CFG corresponding to `stmt`
+        let _next = self.convert_stmt(stmt, self.f.entry)?;
+        // Insert edges to the exit nodes if where they do not  exist
+        self.finish();
+        // SSA Conversion:
+        // 1. Compute the dominator tree and dominance frontiers
+        let (dt, df) = {
+            let di = dom::DomInfo::new(&self.f.cfg, self.f.entry);
+            (di.dom_tree(), di.dom_frontier())
+        };
+        self.f.dt = dt;
+        self.f.df = df;
+        // 2. Insert phi nodes where appropriate
+        self.insert_phis();
+        // 3. Rename variables
+        self.rename(self.f.entry);
+        Ok(())
     }
+
     fn field_sep(&mut self) -> Ident {
-        if let Some(id) = self.tmp_fs {
+        if let Some(id) = self.ctx.tmp_fs {
             id
         } else {
             let n = self.fresh();
-            self.tmp_fs = Some(n);
+            self.ctx.tmp_fs = Some(n);
             n
         }
     }
-    fn unused() -> Ident {
-        Ident {
-            low: 0,
-            sub: 0,
-            global: true,
+
+    // We want to make sure there is a single exit node. This method adds an unconditional branch
+    // to the end of each basic block without one already to the exit node.
+    fn finish(&mut self) {
+        for bb in self.f.cfg.node_indices() {
+            let mut found = false;
+            let mut walker = self.f.cfg.neighbors(bb).detach();
+            while let Some((e, _)) = walker.next(&self.f.cfg) {
+                if let Transition(None) = self.f.cfg.edge_weight(e).unwrap() {
+                    found = true;
+                }
+            }
+            if !found {
+                self.f.cfg.add_edge(bb, self.f.exit, Transition::null());
+            }
         }
     }
-    pub fn from_stmt<'a>(stmt: &'a Stmt<'a, 'b, I>) -> Result<Self> {
-        let mut ctx = Context {
-            hm: Default::default(),
-            may_rename: Default::default(),
-            defsites: Default::default(),
-            orig: Default::default(),
-            max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations.
-            cfg: Default::default(),
-            entry: Default::default(),
-            loop_ctx: Default::default(),
-            dt: Default::default(),
-            df: Default::default(),
-            tmp_fs: None,
-        };
-        // convert AST to CFG
-        let (start, _) = ctx.standalone_block(stmt)?;
-        ctx.entry = start;
-        // SSA conversion: compute dominator tree and dominance frontier.
-        let (dt, df) = {
-            let di = dom::DomInfo::new(ctx.cfg(), ctx.entry());
-            (di.dom_tree(), di.dom_frontier())
-        };
-        ctx.dt = dt;
-        ctx.df = df;
-        // SSA conversion: insert phi functions, and rename variables.
-        ctx.insert_phis();
-        ctx.rename(ctx.entry());
-        Ok(ctx)
+
+    fn unused() -> Ident {
+        Ident::new_global(0)
     }
 
-    fn standalone_expr<'a>(
+    fn standalone_expr<'c>(
         &mut self,
-        expr: &'a Expr<'a, 'b, I>,
+        expr: &'c Expr<'c, 'b, I>,
     ) -> Result<(NodeIx /*start*/, NodeIx /*end*/, PrimExpr<'b>)> {
-        let start = self.cfg.add_node(Default::default());
+        let start = self.f.cfg.add_node(Default::default());
         let (end, res) = self.convert_expr(expr, start)?;
         Ok((start, end, res))
     }
 
-    pub fn standalone_block<'a>(
+    pub fn standalone_block<'c>(
         &mut self,
-        stmt: &'a Stmt<'a, 'b, I>,
+        stmt: &'c Stmt<'c, 'b, I>,
     ) -> Result<(NodeIx /*start*/, NodeIx /*end*/)> {
-        let start = self.cfg.add_node(Default::default());
+        let start = self.f.cfg.add_node(Default::default());
         let end = self.convert_stmt(stmt, start)?;
         Ok((start, end))
     }
 
-    fn convert_stmt<'a>(
+    fn convert_stmt<'c>(
         &mut self,
-        stmt: &'a Stmt<'a, 'b, I>,
+        stmt: &'c Stmt<'c, 'b, I>,
         mut current_open: NodeIx,
     ) -> Result<NodeIx> /*next open */ {
         use Stmt::*;
         Ok(match stmt {
-            Return(_) => unimplemented!(),
             Expr(e) => {
                 // We need to assign to unused here, otherwise we could generate the expression but
                 // then drop it on the floor.
                 let (next, e) = self.convert_expr(e, current_open)?;
-                self.add_stmt(next, PrimStmt::AsgnVar(Self::unused(), e));
+                self.add_stmt(next, PrimStmt::AsgnVar(Self::unused(), e))?;
                 next
             }
             Block(stmts) => {
@@ -369,6 +519,13 @@ where
                     }
                 };
                 if vs.len() == 0 {
+                    // It's safe to leave these as globals, as we are writing them to $0, which is
+                    // always going to be a string. Similar logic applies to the temporaries
+                    // introduced below; they are all the result of Concat, which always returns a
+                    // string.
+                    //
+                    // TODO: this reasoning is based on the idea that  globals are "cheaper"; if
+                    // that changes, then we'll want to migrate these to `fresh_local`
                     let tmp = self.fresh();
                     self.add_stmt(
                         current_open,
@@ -379,16 +536,16 @@ where
                                 smallvec![PrimVal::ILit(0)],
                             ),
                         ),
-                    );
+                    )?;
                     self.add_stmt(
                         current_open,
                         PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
-                    );
+                    )?;
                     current_open
                 } else if vs.len() == 1 {
                     let (next, v) = self.convert_val(vs[0], current_open)?;
                     current_open = next;
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)));
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)))?;
                     current_open
                 } else {
                     const EMPTY: PrimVal<'static> = PrimVal::StrLit("");
@@ -402,7 +559,7 @@ where
                                 fs.clone(),
                                 PrimExpr::LoadBuiltin(builtins::Variable::OFS),
                             ),
-                        );
+                        )?;
                         PrimVal::Var(fs)
                     };
 
@@ -415,7 +572,7 @@ where
                     // (e.g.  how will printf work? Will we disallow dynamically computed printf
                     // strings? We probably should...)
                     let mut tmp = self.fresh();
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(tmp, PrimExpr::Val(EMPTY)));
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(tmp, PrimExpr::Val(EMPTY)))?;
                     for (i, v) in vs.iter().enumerate() {
                         let (next, v) = self.convert_val(*v, current_open)?;
                         current_open = next;
@@ -430,7 +587,7 @@ where
                                         smallvec![PrimVal::Var(tmp), fs.clone()],
                                     ),
                                 ),
-                            );
+                            )?;
                             tmp = new_tmp;
                         }
                         let new_tmp = self.fresh();
@@ -443,13 +600,13 @@ where
                                     smallvec![PrimVal::Var(tmp), v],
                                 ),
                             ),
-                        );
+                        )?;
                         tmp = new_tmp;
                     }
                     self.add_stmt(
                         current_open,
                         PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
-                    );
+                    )?;
 
                     current_open
                 }
@@ -476,56 +633,67 @@ where
                 } else {
                     (h, PrimVal::ILit(1))
                 };
-                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h_end, f, Transition::null());
+                self.f
+                    .cfg
+                    .add_edge(h_end, b_start, Transition::new(cond_val));
+                self.f.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             While(cond, body) => {
                 let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, false)?;
                 let (h_end, cond_val) = self.convert_val(cond, h)?;
-                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h_end, f, Transition::null());
+                self.f
+                    .cfg
+                    .add_edge(h_end, b_start, Transition::new(cond_val));
+                self.f.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             DoWhile(cond, body) => {
                 let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, true)?;
                 let (h_end, cond_val) = self.convert_val(cond, h)?;
-                self.cfg.add_edge(h_end, b_start, Transition::new(cond_val));
-                self.cfg.add_edge(h_end, f, Transition::null());
+                self.f
+                    .cfg
+                    .add_edge(h_end, b_start, Transition::new(cond_val));
+                self.f.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
             ForEach(v, array, body) => {
                 let v_id = self.get_identifier(v);
                 let (next, array_val) = self.convert_val(array, current_open)?;
                 current_open = next;
-                let array_iter = self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open);
+                let array_iter =
+                    self.to_val(PrimExpr::IterBegin(array_val.clone()), current_open)?;
 
                 // First, create the loop header, which checks if there are any more elements
                 // in the array.
                 let cond = PrimExpr::HasNext(array_iter.clone());
-                let cond_block = self.cfg.add_node(Default::default());
-                let cond_v = self.to_val(cond, cond_block);
-                self.cfg
+                let cond_block = self.f.cfg.add_node(Default::default());
+                let cond_v = self.to_val(cond, cond_block)?;
+                self.f
+                    .cfg
                     .add_edge(current_open, cond_block, Transition::null());
 
                 // Then add a footer to exit the loop from cond. We will add the edge after adding
                 // the edge into the loop body, as order matters.
-                let footer = self.cfg.add_node(Default::default());
+                let footer = self.f.cfg.add_node(Default::default());
 
-                self.loop_ctx.push((cond_block, footer));
+                self.f.loop_ctx.push((cond_block, footer));
 
                 // Create the body, but start by getting the next element from the iterator and
                 // assigning it to `v`
                 let update = PrimStmt::AsgnVar(v_id, PrimExpr::Next(array_iter.clone()));
-                let body_start = self.cfg.add_node(Default::default());
-                self.add_stmt(body_start, update);
+                let body_start = self.f.cfg.add_node(Default::default());
+                self.add_stmt(body_start, update)?;
                 let body_end = self.convert_stmt(body, body_start)?;
-                self.cfg
+                self.f
+                    .cfg
                     .add_edge(cond_block, body_start, Transition::new(cond_v));
-                self.cfg.add_edge(cond_block, footer, Transition::null());
-                self.cfg.add_edge(body_end, cond_block, Transition::null());
+                self.f.cfg.add_edge(cond_block, footer, Transition::null());
+                self.f
+                    .cfg
+                    .add_edge(body_end, cond_block, Transition::null());
 
-                self.loop_ctx.pop().unwrap();
+                self.f.loop_ctx.pop().unwrap();
 
                 footer
             }
@@ -534,10 +702,12 @@ where
             //
             // This should become more doable once we add more metadata to AST nodes.
             Break => {
-                match self.loop_ctx.pop() {
+                match self.f.loop_ctx.pop() {
                     Some((_, footer)) => {
                         // Break statements unconditionally jump to the end of the loop.
-                        self.cfg.add_edge(current_open, footer, Transition::null());
+                        self.f
+                            .cfg
+                            .add_edge(current_open, footer, Transition::null());
                         current_open
                     }
                     None => {
@@ -546,10 +716,12 @@ where
                 }
             }
             Continue => {
-                match self.loop_ctx.pop() {
+                match self.f.loop_ctx.pop() {
                     Some((header, _)) => {
                         // Continue statements unconditionally jump to the top of the loop.
-                        self.cfg.add_edge(current_open, header, Transition::null());
+                        self.f
+                            .cfg
+                            .add_edge(current_open, header, Transition::null());
                         current_open
                     }
                     None => {
@@ -559,12 +731,20 @@ where
                     }
                 }
             }
+            Return(ret) => {
+                let (current_open, e) = self.convert_expr(ret, current_open)?;
+                self.add_stmt(current_open, PrimStmt::AsgnVar(self.f.ret, e))?;
+                self.f
+                    .cfg
+                    .add_edge(current_open, self.f.exit, Transition::null());
+                current_open
+            }
         })
     }
 
-    fn convert_expr<'a>(
+    fn convert_expr<'c>(
         &mut self,
-        expr: &'a Expr<'a, 'b, I>,
+        expr: &'c Expr<'c, 'b, I>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
         use Expr::*;
@@ -597,12 +777,12 @@ where
                     ));
                 }
                 ITE(cond, tcase, fcase) => {
-                    let res_id = self.fresh();
-                    self.may_rename.push(res_id);
+                    let res_id = self.fresh_local();
+                    self.ctx.may_rename.push(res_id);
                     let (tstart, tend, te) = self.standalone_expr(tcase)?;
                     let (fstart, fend, fe) = self.standalone_expr(fcase)?;
-                    self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te));
-                    self.add_stmt(fend, PrimStmt::AsgnVar(res_id, fe));
+                    self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te))?;
+                    self.add_stmt(fend, PrimStmt::AsgnVar(res_id, fe))?;
                     let next = self.do_condition(
                         cond,
                         (tstart, tend),
@@ -634,14 +814,13 @@ where
                     let bi = match fname {
                         Either::Left(fname) => {
                             if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
-                                bi
+                                Either::Right(bi)
                             } else {
-                                return err!("Call to unknown function \"{}\"", fname);
+                                Either::Left(fname.clone())
                             }
                         }
-                        Either::Right(bi) => *bi,
+                        Either::Right(bi) => Either::Right(*bi),
                     };
-
                     let mut prim_args = SmallVec::with_capacity(args.len());
                     let mut open = current_open;
                     for a in args.iter() {
@@ -649,20 +828,31 @@ where
                         open = next;
                         prim_args.push(v);
                     }
-                    if let builtins::Function::Split = bi {
-                        if prim_args.len() == 2 {
-                            let fs = self.field_sep();
-                            self.add_stmt(
-                                current_open,
-                                PrimStmt::AsgnVar(
-                                    fs.clone(),
-                                    PrimExpr::LoadBuiltin(builtins::Variable::OFS),
-                                ),
-                            );
-                            prim_args.push(PrimVal::Var(fs));
+                    match bi {
+                        Either::Left(fname) => {
+                            return if let Some(i) = self.func_table.get(&Some(fname.clone())) {
+                                Ok((open, PrimExpr::CallUDF(*i, prim_args)))
+                            } else {
+                                err!("Call to unknown function \"{}\"", fname)
+                            };
+                        }
+                        Either::Right(bi) => {
+                            if let builtins::Function::Split = bi {
+                                if prim_args.len() == 2 {
+                                    let fs = self.field_sep();
+                                    self.add_stmt(
+                                        current_open,
+                                        PrimStmt::AsgnVar(
+                                            fs.clone(),
+                                            PrimExpr::LoadBuiltin(builtins::Variable::OFS),
+                                        ),
+                                    )?;
+                                    prim_args.push(PrimVal::Var(fs));
+                                }
+                            }
+                            return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
                         }
                     }
-                    return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
                 }
                 Assign(Index(arr, ix), to) => {
                     return self.do_assign_index(
@@ -679,7 +869,8 @@ where
                         ix,
                         |slf, arr_v, ix_v, open| {
                             let (next, to_v) = slf.convert_val(to, open)?;
-                            let arr_cell_v = slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), next);
+                            let arr_cell_v =
+                                slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), next)?;
                             Ok((
                                 next,
                                 PrimExpr::CallBuiltin(
@@ -714,8 +905,8 @@ where
                     };
                     let (next, pre) = if *is_post {
                         let (next, e) = self.convert_expr(x, current_open)?;
-                        let f = self.fresh();
-                        self.add_stmt(next, PrimStmt::AsgnVar(f, e));
+                        let f = self.fresh_local();
+                        self.add_stmt(next, PrimStmt::AsgnVar(f, e))?;
                         (next, Some(PrimExpr::Val(PrimVal::Var(f))))
                     } else {
                         (current_open, None)
@@ -786,9 +977,9 @@ where
             },
         ))
     }
-    fn do_assign<'a>(
+    fn do_assign<'c>(
         &mut self,
-        v: &'a Expr<'a, 'b, I>,
+        v: &'c Expr<'c, 'b, I>,
         to: impl FnOnce(&PrimVal<'b>) -> PrimExpr<'b>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
@@ -798,13 +989,13 @@ where
                 current_open,
                 if let Ok(b) = builtins::Variable::try_from(i.clone()) {
                     let res = PrimExpr::LoadBuiltin(b);
-                    let res_v = self.to_val(res.clone(), current_open);
-                    self.add_stmt(current_open, PrimStmt::SetBuiltin(b, to(&res_v)));
+                    let res_v = self.to_val(res.clone(), current_open)?;
+                    self.add_stmt(current_open, PrimStmt::SetBuiltin(b, to(&res_v)))?;
                     res
                 } else {
                     let ident = self.get_identifier(i);
                     let res_v = PrimVal::Var(ident);
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to(&res_v)));
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(ident, to(&res_v)))?;
                     PrimExpr::Val(res_v)
                 },
             )),
@@ -812,24 +1003,24 @@ where
                 use {ast::Unop::*, builtins::Function};
                 let (next, v) = self.convert_val(n, current_open)?;
                 let res = PrimExpr::CallBuiltin(Function::Unop(Column), smallvec![v.clone()]);
-                let res_v = self.to_val(res.clone(), next);
-                let to_v = self.to_val(to(&res_v), next);
+                let res_v = self.to_val(res.clone(), next)?;
+                let to_v = self.to_val(to(&res_v), next)?;
                 self.add_stmt(
                     next,
                     PrimStmt::AsgnVar(
                         Self::unused(),
                         PrimExpr::CallBuiltin(Function::Setcol, smallvec![v, to_v]),
                     ),
-                );
+                )?;
                 Ok((next, res))
             }
             _ => err!("unsupprted assignment LHS: {:?}", v),
         }
     }
-    fn do_assign_index<'a>(
+    fn do_assign_index<'c>(
         &mut self,
-        arr: &'a Expr<'a, 'b, I>,
-        ix: &'a Expr<'a, 'b, I>,
+        arr: &'c Expr<'c, 'b, I>,
+        ix: &'c Expr<'c, 'b, I>,
         mut to_f: impl FnMut(
             &mut Self,
             PrimVal<'b>,
@@ -844,8 +1035,8 @@ where
         let arr_id = if let PrimExpr::Val(PrimVal::Var(id)) = arr_e {
             id
         } else {
-            let arr_id = self.fresh();
-            self.add_stmt(next, PrimStmt::AsgnVar(arr_id, arr_e));
+            let arr_id = self.fresh_local();
+            self.add_stmt(next, PrimStmt::AsgnVar(arr_id, arr_e))?;
             arr_id
         };
 
@@ -855,13 +1046,13 @@ where
         self.add_stmt(
             next,
             PrimStmt::AsgnIndex(arr_id, ix_v.clone(), to_e.clone()),
-        );
+        )?;
         Ok((next, PrimExpr::Index(arr_v, ix_v)))
     }
 
-    fn do_condition<'a>(
+    fn do_condition<'c>(
         &mut self,
-        cond: &'a Expr<'a, 'b, I>,
+        cond: &'c Expr<'c, 'b, I>,
         tcase: (NodeIx, NodeIx),
         fcase: Option<(NodeIx, NodeIx)>,
         current_open: NodeIx,
@@ -874,38 +1065,42 @@ where
         } else {
             self.convert_val(cond, current_open)?
         };
-        let next = self.cfg.add_node(Default::default());
+        let next = self.f.cfg.add_node(Default::default());
 
         // current_open => t_start if the condition holds
-        self.cfg
+        self.f
+            .cfg
             .add_edge(current_open, t_start, Transition::new(c_val));
         // continue to next after the true case is evaluated
-        self.cfg.add_edge(t_end, next, Transition::null());
+        self.f.cfg.add_edge(t_end, next, Transition::null());
 
         if let Some((f_start, f_end)) = fcase {
             // Set up the same connections as before, this time with a null edge rather
             // than c_val.
-            self.cfg.add_edge(current_open, f_start, Transition::null());
-            self.cfg.add_edge(f_end, next, Transition::null());
+            self.f
+                .cfg
+                .add_edge(current_open, f_start, Transition::null());
+            self.f.cfg.add_edge(f_end, next, Transition::null());
         } else {
             // otherwise continue directly from current_open.
-            self.cfg.add_edge(current_open, next, Transition::null());
+            self.f.cfg.add_edge(current_open, next, Transition::null());
         }
         Ok(next)
     }
 
-    fn convert_val<'a>(
+    fn convert_val<'c>(
         &mut self,
-        expr: &'a Expr<'a, 'b, I>,
+        expr: &'c Expr<'c, 'b, I>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimVal<'b>)> {
         let (next_open, e) = self.convert_expr(expr, current_open)?;
-        Ok((next_open, self.to_val(e, next_open)))
+        Ok((next_open, self.to_val(e, next_open)?))
     }
-    fn make_loop<'a>(
+
+    fn make_loop<'c>(
         &mut self,
-        body: &'a Stmt<'a, 'b, I>,
-        update: Option<&'a Stmt<'a, 'b, I>>,
+        body: &'c Stmt<'c, 'b, I>,
+        update: Option<&'c Stmt<'c, 'b, I>>,
         current_open: NodeIx,
         is_do: bool,
     ) -> Result<(
@@ -915,9 +1110,9 @@ where
         NodeIx, // footer = next open
     )> {
         // Create header and footer nodes.
-        let h = self.cfg.add_node(Default::default());
-        let f = self.cfg.add_node(Default::default());
-        self.loop_ctx.push((h, f));
+        let h = self.f.cfg.add_node(Default::default());
+        let f = self.f.cfg.add_node(Default::default());
+        self.f.loop_ctx.push((h, f));
 
         // The body is a standalone graph.
         let (b_start, b_end) = if let Some(u) = update {
@@ -934,64 +1129,80 @@ where
             // Current => Body => Header => Body => Footer
             //                      ^       |
             //                      ^--------
-            self.cfg.add_edge(current_open, b_start, Transition::null());
+            self.f
+                .cfg
+                .add_edge(current_open, b_start, Transition::null());
         } else {
             // Current => Header => Body => Footer
             //             ^         |
             //             ^---------
-            self.cfg.add_edge(current_open, h, Transition::null());
+            self.f.cfg.add_edge(current_open, h, Transition::null());
         }
-        self.cfg.add_edge(b_end, h, Transition::null());
-        self.loop_ctx.pop().unwrap();
+        self.f.cfg.add_edge(b_end, h, Transition::null());
+        self.f.loop_ctx.pop().unwrap();
         Ok((h, b_start, b_end, f))
     }
 
-    fn to_val(&mut self, exp: PrimExpr<'b>, current_open: NodeIx) -> PrimVal<'b> {
-        if let PrimExpr::Val(v) = exp {
+    fn to_val(&mut self, exp: PrimExpr<'b>, current_open: NodeIx) -> Result<PrimVal<'b>> {
+        Ok(if let PrimExpr::Val(v) = exp {
             v
         } else {
-            let f = self.fresh();
-            self.add_stmt(current_open, PrimStmt::AsgnVar(f, exp));
+            let f = self.fresh_local();
+            self.add_stmt(current_open, PrimStmt::AsgnVar(f, exp))?;
             PrimVal::Var(f)
-        }
+        })
     }
 
     fn fresh(&mut self) -> Ident {
-        let res = self.max;
-        self.max += 1;
-        Ident {
-            low: res,
-            sub: 0,
-            global: true,
-        }
+        self.ctx.fresh()
+    }
+
+    fn fresh_local(&mut self) -> Ident {
+        self.ctx.fresh_local()
     }
 
     fn record_ident(&mut self, id: Ident, blk: NodeIx) {
-        self.defsites
+        self.f
+            .defsites
             .entry(id)
             .or_insert(HashSet::default())
             .insert(blk);
-        self.orig
+        self.f
+            .orig
             .entry(blk)
             .or_insert(HashSet::default())
             .insert(id);
     }
 
     fn get_identifier(&mut self, i: &I) -> Ident {
-        if let Some(id) = self.hm.get(i) {
+        if let Some(id) = self.ctx.hm.get(i) {
             return *id;
         }
-        let next = self.fresh();
-        self.hm.insert(i.clone(), next);
-        self.may_rename.push(next);
-        next
+        // The only identifiers that can be locals are arguments to the current function.
+        if let Some(ix) = self.f.args_map.get(i) {
+            self.f.args[*ix as usize].id
+        } else {
+            let next = self.fresh();
+            self.ctx.hm.insert(i.clone(), next);
+            self.ctx.may_rename.push(next);
+            next
+        }
     }
 
-    fn add_stmt(&mut self, at: NodeIx, stmt: PrimStmt<'b>) {
+    fn add_stmt(&mut self, at: NodeIx, stmt: PrimStmt<'b>) -> Result<()> {
         if let PrimStmt::AsgnVar(ident, _) = stmt {
             self.record_ident(ident, at);
         }
-        self.cfg.node_weight_mut(at).unwrap().0.push_back(stmt);
+        let bb = self.f.cfg.node_weight_mut(at).unwrap();
+        if bb.sealed {
+            return err!(
+                "appending to sealed basic block ({}). Last instr={:?}",
+                at.index(),
+                bb.q.back().unwrap()
+            );
+        }
+        bb.q.push_back(stmt);
+        Ok(())
     }
 
     fn insert_phis(&mut self) {
@@ -1001,9 +1212,11 @@ where
         // phis: the set of basic blocks that must have a phi node for a given variable.
         let mut phis = HashMap::<Ident, HashSet<NodeIx>>::new();
         let mut worklist = WorkList::default();
-        for ident in self.may_rename.iter().cloned() {
+        // TODO rework this iteration to explicitly intersect may_rename and defsites? That way we
+        // do O(min(|defsites|,|may_rename|)) work.
+        for ident in self.ctx.may_rename.iter().cloned() {
             // Add all defsites into the worklist.
-            let defsites = if let Some(ds) = self.defsites.get(&ident) {
+            let defsites = if let Some(ds) = self.f.defsites.get(&ident) {
                 ds
             } else {
                 continue;
@@ -1013,20 +1226,22 @@ where
                 // For all nodes on the dominance frontier without phi nodes for this identifier,
                 // create a phi node of the appropriate size and insert it at the front of the
                 // block (no renaming).
-                for d in self.df[node.index()].iter() {
+                for d in self.f.df[node.index()].iter() {
                     let d_ix = NodeIx::new(*d as usize);
                     if phis.get(&ident).map(|s| s.contains(&d_ix)) != Some(true) {
                         let phi = PrimExpr::Phi(
-                            self.cfg()
+                            self.f
+                                .cfg
                                 .neighbors_directed(d_ix, Direction::Incoming)
                                 .map(|n| (n, ident))
                                 .collect(),
                         );
                         let stmt = PrimStmt::AsgnVar(ident, phi);
-                        self.cfg
+                        self.f
+                            .cfg
                             .node_weight_mut(d_ix)
                             .expect("node in dominance frontier must be valid")
-                            .0
+                            .q
                             .push_front(stmt);
                         phis.entry(ident).or_insert(HashSet::default()).insert(d_ix);
                         if !defsites.contains(&d_ix) {
@@ -1061,7 +1276,7 @@ where
         }
 
         fn rename_recursive<'b, I>(
-            ctx: &mut Context<'b, I>,
+            f: &mut Function<'b, I>,
             cur: NodeIx,
             state: &mut Vec<RenameStack>,
         ) {
@@ -1071,18 +1286,18 @@ where
 
             // First, go through all the statements and update the variables to the highest
             // subscript (second component in Ident).
-            for stmt in &mut ctx
+            for stmt in &mut f
                 .cfg
                 .node_weight_mut(cur)
                 .expect("rename must be passed valid node indices")
-                .0
+                .q
             {
                 // Note that `replace` is specialized to our use-case in this method. It does not hit
                 // AsgnVar identifiers, and it skips Phi nodes.
-                stmt.replace(|Ident { low, .. }| Ident {
+                stmt.replace(|Ident { low, global, .. }| Ident {
                     low,
                     sub: state[low as usize].latest(),
-                    global: true,
+                    global,
                 });
                 if let PrimStmt::AsgnVar(Ident { low, sub, .. }, _) = stmt {
                     *sub = state[*low as usize].get_next();
@@ -1118,29 +1333,26 @@ where
             //
             // To fix this, we iterate over any outgoing neighbors and find phi functions that
             // point back to the current node and update the subscript accordingly.
-            let mut walker = ctx
-                .cfg
-                .neighbors_directed(cur, Direction::Outgoing)
-                .detach();
-            while let Some((edge, neigh)) = walker.next(&ctx.cfg) {
-                if let Some(PrimVal::Var(Ident { low: x, sub, .. })) =
-                    &mut ctx.cfg.edge_weight_mut(edge).unwrap().0
+            let mut walker = f.cfg.neighbors_directed(cur, Direction::Outgoing).detach();
+            while let Some((edge, neigh)) = walker.next(&f.cfg) {
+                if let Some(PrimVal::Var(Ident { low, sub, .. })) =
+                    &mut f.cfg.edge_weight_mut(edge).unwrap().0
                 {
-                    *sub = state[*x as usize].latest();
+                    *sub = state[*low as usize].latest();
                 }
-                for stmt in &mut ctx.cfg.node_weight_mut(neigh).unwrap().0 {
+                for stmt in &mut f.cfg.node_weight_mut(neigh).unwrap().q {
                     if let PrimStmt::AsgnVar(_, PrimExpr::Phi(ps)) = stmt {
-                        for (pred, Ident { low: x, sub, .. }) in ps.iter_mut() {
+                        for (pred, Ident { low, sub, .. }) in ps.iter_mut() {
                             if pred == &cur {
-                                *sub = state[*x as usize].latest();
+                                *sub = state[*low as usize].latest();
                                 break;
                             }
                         }
                     }
                 }
             }
-            for child in ctx.dt[cur.index()].clone().iter() {
-                rename_recursive(ctx, NodeIx::new(*child as usize), state);
+            for child in f.dt[cur.index()].clone().iter() {
+                rename_recursive(f, NodeIx::new(*child as usize), state);
             }
             for d in defs.into_iter() {
                 let _res = state[d as usize].stack.pop();
@@ -1152,8 +1364,8 @@ where
                 count: 0,
                 stack: smallvec![0],
             };
-            self.max as usize
+            self.ctx.max as usize
         ];
-        rename_recursive(self, cur, &mut state);
+        rename_recursive(self.f, cur, &mut state);
     }
 }
