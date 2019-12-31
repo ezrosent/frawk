@@ -4,7 +4,7 @@ use crate::builtins::{Function, Variable};
 use crate::cfg::{BasicBlock, Ident, PrimExpr, PrimStmt, PrimVal, Transition};
 use std::fmt::{self, Display, Formatter};
 
-struct Wrap(pub Ident);
+pub(crate) struct Wrap(pub Ident);
 
 impl Display for Wrap {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -24,7 +24,7 @@ impl<'a> Display for Transition<'a> {
 
 impl<'a> Display for BasicBlock<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        for i in &self.0 {
+        for i in &self.q {
             writeln!(f, "{}", i)?;
         }
         Ok(())

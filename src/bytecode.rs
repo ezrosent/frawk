@@ -345,9 +345,8 @@ fn default_of<T: Default>(n: usize) -> Storage<T> {
 }
 
 impl<'a> Interp<'a> {
-    pub(crate) fn instrs(&self) -> &Vec<Instr<'a>> {
-        // TODO remove this
-        &self.instrs[0]
+    pub(crate) fn instrs(&self) -> &Vec<Vec<Instr<'a>>> {
+        &self.instrs
     }
     pub(crate) fn new(
         instrs: Vec<Vec<Instr<'a>>>,

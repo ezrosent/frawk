@@ -1,6 +1,5 @@
 use crate::builtins;
-use crate::cfg::{self, Ident};
-use crate::cfg2::{self, Function, ProgramContext};
+use crate::cfg::{self, Function, Ident, ProgramContext};
 use crate::common::{self, NodeIx, NumTy, Result};
 use crate::compile;
 use hashbrown::{HashMap, HashSet};
@@ -401,17 +400,7 @@ impl<'a, 'b, 'c> DerefMut for View<'a, 'b, 'c> {
     }
 }
 
-pub(crate) fn get_types<'a>(cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile::Ty>> {
-    let mut tc = TypeContext::default();
-    View {
-        tc: &mut tc,
-        frame_id: 0,
-        frame_args: Default::default(),
-    }
-    .build(cfg)
-}
-
-pub(crate) fn get_types_program<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
+pub(crate) fn get_types<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
     TypeContext::default().from_prog(pc)
 }
 
@@ -594,7 +583,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             frame_args: key.args.clone(),
         };
         // Apply the arguments appropriately:
-        for (cfg2::Arg { id, .. }, state) in args.iter().zip(key.args.iter()) {
+        for (cfg::Arg { id, .. }, state) in args.iter().zip(key.args.iter()) {
             let ix = view.ident_node(id);
             let cnode = view.constant(*state);
             view.nw.add_dep(cnode, ix, Constraint::Flows(()));
@@ -614,21 +603,6 @@ impl<'b, 'c> TypeContext<'b, 'c> {
 }
 
 impl<'b, 'c, 'd> View<'b, 'c, 'd> {
-    fn build<'a>(&mut self, cfg: &cfg::CFG<'a>) -> Result<HashMap<Ident, compile::Ty>> {
-        // TODO(ezr): build in favor of program-oriented code.
-        let nodes = cfg.raw_nodes();
-        for bb in nodes {
-            for stmt in bb.weight.0.iter() {
-                self.constrain_stmt(stmt);
-            }
-        }
-        self.solve()?;
-        let mut res = HashMap::new();
-        for (Args { id, .. }, ix) in self.env.iter() {
-            res.insert(*id, flatten(concrete(*self.nw.read(*ix)))?);
-        }
-        Ok(res)
-    }
     fn add_builtin_call(&mut self, f: builtins::Function, args: SmallVec<NodeIx>, to: NodeIx) {
         f.feedback(&args[..], self);
         for arg in args.iter() {
