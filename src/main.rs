@@ -40,6 +40,10 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 fn main() {
     // TODO add a real main function
     let a = arena::Arena::default();
-    let ast3 = harness::parse_program(r#" { FS=","; print x, y, z > "/tmp/x"; }"#, &a)
-        .expect("parse ast3");
+    println!(
+        "{}",
+        harness::run_program(&a, r#"END { print "hello" }"#, "")
+            .unwrap()
+            .0
+    );
 }
