@@ -12,7 +12,7 @@ use crate::{
 use hashbrown::HashMap;
 use std::io::Write;
 
-const PRINT_DEBUG_INFO: bool = true;
+const PRINT_DEBUG_INFO: bool = false;
 
 type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
@@ -354,6 +354,30 @@ for (k in m) {
         BEGIN { print 1, id(1) }"#,
         "1 1\n"
     );
+
+    test_program!(
+        degenerate_function,
+        r#"function d(x) { a x; }
+        BEGIN { print 1, d(1) }"#,
+        "1 \n"
+    );
+
+    test_program!(
+        basic_polymorphism,
+        r#"function x(a, b) { return length(a) + b; }
+        BEGIN {
+            r0 = x(a, b)
+            m[0]=0;
+            r1 = x(m, 0)
+            r2 = x(m, 1.5)
+            r3 = x("hi", 2)
+            print r0,r1,r2,r3
+        }"#,
+        "0 1 2.5 4\n",
+        @input "",
+        @types [ r0 :: Int, r1 :: Int, r2 :: Float, r3 :: Int, m :: MapIntInt  ]
+    );
+
     // TODO add a test with a function body of the form function x(a) { a b; }
     // When we weren't parsing returns, id() had this form and caused some sort of error.
 

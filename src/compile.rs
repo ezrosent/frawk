@@ -126,29 +126,38 @@ impl<'a> ProgramGenerator<'a> {
     fn init_from_ctx(pc: &ProgramContext<'a, &'a str>) -> Result<ProgramGenerator<'a>> {
         // Type-check the code, then initialize a ProgramGenerator, assigning registers to local
         // and global variables.
+
         let mut gen = ProgramGenerator::default();
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
+        macro_rules! init_entry {
+            ($v:expr, $func_id:expr, $args:expr) => {
+                let res = gen.frames.len() as NumTy;
+                $v.insert(res);
+                let ret_ty = func_tys[&($func_id, $args.clone())];
+                let ret_reg = reg_of_ty!(gen.regs, ret_ty);
+                let mut f = Frame::default();
+                f.src_function = $func_id;
+                f.cur_ident = res;
+                gen.frames.push(f);
+                gen.func_info.push(FuncInfo { ret_reg, ret_ty });
+            };
+        }
         for (func_id, func) in pc.funcs.iter().enumerate() {
-            gen.arity.insert(func_id as NumTy, func.args.len() as NumTy);
+            let arity = func.args.len() as NumTy;
+            gen.arity.insert(func_id as NumTy, arity);
+            if arity == 0 {
+                let args: SmallVec<_> = Default::default();
+                if let Entry::Vacant(v) = gen.id_map.entry((func_id as u32, args.clone())) {
+                    init_entry!(v, func_id as u32, args);
+                }
+            }
         }
         for ((id, func_id, args), ty) in var_tys.iter() {
-            eprintln!(
-                "init_from_ctx: id={:?} func_id={} args={:?} ty={:?}",
-                id, func_id, args, ty
-            );
             let map = if id.global {
                 &mut gen.regs.globals
             } else {
                 if let Entry::Vacant(v) = gen.id_map.entry((*func_id, args.clone())) {
-                    let res = gen.frames.len() as NumTy;
-                    v.insert(res);
-                    let ret_ty = func_tys[&(*func_id, args.clone())];
-                    let ret_reg = reg_of_ty!(gen.regs, ret_ty);
-                    let mut f = Frame::default();
-                    f.src_function = *func_id;
-                    f.cur_ident = res;
-                    gen.frames.push(f);
-                    gen.func_info.push(FuncInfo { ret_reg, ret_ty });
+                    init_entry!(v, *func_id, args);
                 }
                 &mut gen.frames[gen.id_map[&(*func_id, args.clone())] as usize].locals
             };
@@ -590,9 +599,12 @@ impl<'a, 'b> View<'a, 'b> {
         macro_rules! gen_op {
             ($op:tt, $( [$ty:tt, $inst:tt]),* ) => {
                 match conv_tys[0] {
-                    $( Ty::$ty => self.push(Instr::$inst(res_reg.into(),
+                    // TODO implement better handling of "NULL" and get rid of hacks like this.
+                    $( Ty::$ty  => if res_reg != UNUSED {
+                        self.push(Instr::$inst(res_reg.into(),
                                         conv_regs[0].into(),
-                                        conv_regs[1].into())), )*
+                                        conv_regs[1].into()));
+                    }, )*
                     _ => return err!("unexpected operands for {}", stringify!($op)),
                 }
             }
@@ -730,7 +742,6 @@ impl<'a, 'b> View<'a, 'b> {
                     arg_tys.push(ty);
                 }
                 // Normalize the call
-                let info = &self.func_info[*func_id as usize];
                 let true_arity = self.arity[func_id] as usize;
                 if arg_regs.len() < true_arity {
                     // Not enough arguments; fill in the rest with nulls.
@@ -748,12 +759,8 @@ impl<'a, 'b> View<'a, 'b> {
                     arg_regs.truncate(true_arity);
                     arg_tys.truncate(true_arity);
                 }
-
-                eprintln!(
-                    "looking up {:?},{:?} in map {:?} (vs={:?}, arity={:?}, func_info={:?})",
-                    func_id, arg_tys, self.id_map, vs, true_arity, self.func_info
-                );
                 let monomorphized = self.id_map[&(*func_id, arg_tys.clone())];
+                let info = &self.func_info[monomorphized as usize];
                 // Push onto the stack in reverse order.
                 arg_regs.reverse();
                 arg_tys.reverse();
