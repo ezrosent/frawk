@@ -77,7 +77,11 @@ pub(crate) enum Constraint<T> {
     Flows(T),
     // TODO(ezr): have a shared Vec and just store a slice here?
     CallBuiltin(SmallVec<NodeIx>, builtins::Function),
-    CallUDF(SmallVec<NodeIx>, NumTy),
+    CallUDF(
+        NodeIx,           /* udf node */
+        SmallVec<NodeIx>, /* arg nodes */
+        NumTy,            /* cfg-level function ID */
+    ),
 }
 
 impl<T> Constraint<T> {
@@ -91,7 +95,9 @@ impl<T> Constraint<T> {
             Constraint::IterVal(_) => Constraint::IterVal(s),
             Constraint::Flows(_) => Constraint::Flows(s),
             Constraint::CallBuiltin(args, f) => Constraint::CallBuiltin(args.clone(), f.clone()),
-            Constraint::CallUDF(args, f) => Constraint::CallUDF(args.clone(), f.clone()),
+            Constraint::CallUDF(nix, args, f) => {
+                Constraint::CallUDF(nix.clone(), args.clone(), f.clone())
+            }
         }
     }
     fn is_flow(&self) -> bool {
@@ -149,10 +155,10 @@ impl Constraint<State> {
                     args.iter().map(|ix| tc.nw.read(*ix).clone()).collect();
                 f.step(&arg_state[..])
             }
-            Constraint::CallUDF(args, f) => {
+            Constraint::CallUDF(nix, args, f) => {
                 let arg_state: SmallVec<State> =
                     args.iter().map(|ix| tc.nw.read(*ix).clone()).collect();
-                let ret_ix = tc.get_function(&tc.func_table[*f as usize], &arg_state);
+                let ret_ix = tc.get_function(&tc.func_table[*f as usize], &arg_state, *nix);
                 Ok(tc.nw.read(ret_ix).clone())
             }
         }
@@ -172,6 +178,7 @@ struct Edge {
 enum Rule {
     Var,
     Const(State),
+    AlwaysNotify,
 }
 
 pub(crate) type State = Option<TVar<Option<BaseTy>>>;
@@ -185,7 +192,7 @@ impl Rule {
     // since the last update. this extra functionality is not yet implemented; it's unclear if we
     // can use it while still relying on petgraph, or if we'll have to (e.g.) store a priority
     // queue of edges per node ordered by modified timestamp.
-    fn step(&self, prev: &State, deps: &[State]) -> Result<State> {
+    fn step(&self, prev: &State, deps: &[State]) -> Result<(bool, State)> {
         fn value_rule(b1: BaseTy, b2: BaseTy) -> BaseTy {
             use BaseTy::*;
             match (b1, b2) {
@@ -195,7 +202,10 @@ impl Rule {
             }
         }
         if let Rule::Const(tv) = self {
-            return Ok(tv.clone());
+            return Ok((tv != prev, tv.clone()));
+        }
+        if let Rule::AlwaysNotify = self {
+            return Ok((true, None));
         }
         let mut cur = prev.clone();
         for d in deps.iter().cloned() {
@@ -246,7 +256,7 @@ impl Rule {
                 },
             };
         }
-        Ok(cur)
+        Ok((prev != &cur, cur))
     }
 }
 
@@ -381,6 +391,7 @@ pub(crate) struct TypeContext<'a, 'b> {
     env: HashMap<Args<Ident>, NodeIx>,
     funcs: HashMap<Args<NumTy>, NodeIx>,
     func_table: &'a [Function<'b, &'b str>],
+    udf_nodes: Vec<NodeIx>,
 }
 
 struct View<'a, 'b, 'c> {
@@ -424,9 +435,13 @@ impl<'b, 'c> TypeContext<'b, 'c> {
     pub(crate) fn from_prog<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
         let mut tc = TypeContext::default();
         tc.func_table = &pc.funcs[..];
+        tc.udf_nodes = (0..pc.funcs.len())
+            .map(|_| tc.nw.add_rule(Rule::AlwaysNotify))
+            .collect();
         let main = &pc.funcs[pc.main_offset];
+        let main_base = tc.udf_nodes[pc.main_offset];
         let empty: SmallVec<State> = Default::default();
-        tc.get_function(main, &empty);
+        tc.get_function(main, &empty, main_base);
         tc.solve()?;
         let mut var_tys = HashMap::new();
         let mut func_tys = HashMap::new();
@@ -465,6 +480,12 @@ impl<'b, 'c> TypeContext<'b, 'c> {
     fn solve(&mut self) -> Result<()> {
         let mut dep_indices: SmallVec<NodeIx> = Default::default();
         let mut deps: SmallVec<State> = Default::default();
+        // TODO are updates to UDFs getting "lost" somehow? It seems like it isn't just changes in
+        // arguments that could cause a change in the return type (imagine returning a global
+        // variable from within a function). How do we ensure we see those updates?
+        //  - Each call edge (or each UDF?) has its own node. Changes to return type cause that node to be
+        //  inserted into the worklist? Downside is that all callsites are woken up; but we may not
+        //  have a choice?
         while let Some(ix) = self.nw.wl.pop() {
             deps.clear();
             dep_indices.clear();
@@ -482,8 +503,8 @@ impl<'b, 'c> TypeContext<'b, 'c> {
                 }
             }
             // Compute an update value based on the newly-evaluated constraints.
-            let next = rule.step(&cur_val, &deps[..])?;
-            if next == cur_val {
+            let (changed, next) = rule.step(&cur_val, &deps[..])?;
+            if !changed {
                 continue;
             }
             if let Some(TVar::Map { .. }) = next {
@@ -555,6 +576,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             ident, cfg, args, ..
         }: &Function<'a, &'a str>,
         arg_states: &SmallVec<State>,
+        base_node: NodeIx,
     ) -> NodeIx {
         let mut key = Args {
             id: *ident,
@@ -583,6 +605,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
 
         // Create a new function.
         let res = self.nw.add_rule(Rule::Var);
+        self.nw.add_dep(res, base_node, Constraint::Flows(()));
         self.funcs.insert(key.clone(), res);
         let mut view = View {
             tc: self,
@@ -628,8 +651,9 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 .or_insert(Default::default())
                 .push(to);
         }
-        let from = self.nw.base_node;
-        self.nw.add_dep(from, to, Constraint::CallUDF(args, f));
+        let from = self.udf_nodes[f as usize];
+        self.nw
+            .add_dep(from, to, Constraint::CallUDF(from, args, f));
         self.nw.wl.insert(to);
     }
 

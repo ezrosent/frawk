@@ -1,5 +1,6 @@
 //! This file contains common type definitions and utilities used in other parts of the project.
 use hashbrown::HashSet;
+use std::collections::VecDeque;
 use std::hash::Hash;
 pub(crate) type NumTy = u32;
 pub(crate) type NodeIx = petgraph::graph::NodeIndex<NumTy>;
@@ -101,7 +102,8 @@ macro_rules! static_map {
 
 pub(crate) struct WorkList<T> {
     set: HashSet<T>,
-    mem: Vec<T>,
+    // TODO: switch back to Vec?
+    mem: VecDeque<T>,
 }
 
 impl<T: Hash + Eq> Default for WorkList<T> {
@@ -116,7 +118,7 @@ impl<T: Hash + Eq> Default for WorkList<T> {
 impl<T: Clone + Hash + Eq> WorkList<T> {
     pub(crate) fn insert(&mut self, t: T) {
         if self.set.insert(t.clone()) {
-            self.mem.push(t)
+            self.mem.push_back(t)
         }
     }
     pub(crate) fn extend(&mut self, ts: impl Iterator<Item = T>) {
@@ -125,7 +127,7 @@ impl<T: Clone + Hash + Eq> WorkList<T> {
         }
     }
     pub(crate) fn pop(&mut self) -> Option<T> {
-        let next = self.mem.pop()?;
+        let next = self.mem.pop_front()?;
         let _was_there = self.set.remove(&next);
         debug_assert!(_was_there);
         Some(next)

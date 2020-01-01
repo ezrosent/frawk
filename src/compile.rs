@@ -95,6 +95,20 @@ struct FuncInfo {
     ret_ty: Ty,
 }
 
+macro_rules! dbg_reg_valid {
+    ($gen:expr, $reg:expr, $ty:expr) => {
+        #[cfg(debug_assertions)]
+        {
+            let reg = $reg;
+            let ty = $ty;
+            let count = $gen.regs.reg_counts[ty as usize];
+            if reg != UNUSED {
+                assert!(reg < count, "[{} : {:?}] vs. {}", reg, ty, count);
+            }
+        }
+    };
+}
+
 #[derive(Default)]
 struct ProgramGenerator<'a> {
     regs: Registers,
@@ -374,11 +388,13 @@ impl<'a, 'b> View<'a, 'b> {
             // TODO: remove this once there's better test coverage and we use more unsafe code.
             return (UNUSED, Ty::Int);
         }
-        if id.global {
+        let (res_reg, res_ty) = if id.global {
             self.regs.globals[id]
         } else {
             self.frame.locals[id]
-        }
+        };
+        dbg_reg_valid!(self, res_reg, res_ty);
+        (res_reg, res_ty)
     }
 
     // Move src into dst at type Ty.
@@ -387,6 +403,10 @@ impl<'a, 'b> View<'a, 'b> {
         if dst_reg == UNUSED || src_reg == UNUSED {
             return Ok(());
         }
+
+        dbg_reg_valid!(self, dst_reg, ty);
+        dbg_reg_valid!(self, src_reg, ty);
+
         let res = match ty {
             Int => Instr::MovInt(dst_reg.into(), src_reg.into()),
             Float => Instr::MovFloat(dst_reg.into(), src_reg.into()),
@@ -438,6 +458,9 @@ impl<'a, 'b> View<'a, 'b> {
         if dst_reg == src_reg && dst_ty == src_ty {
             return Ok(());
         }
+        dbg_reg_valid!(self, dst_reg, dst_ty);
+        dbg_reg_valid!(self, src_reg, src_ty);
+
         let res = match (dst_ty, src_ty) {
             (Float, Int) => Instr::IntToFloat(dst_reg.into(), src_reg.into()),
             (Str, Int) => Instr::IntToStr(dst_reg.into(), src_reg.into()),
@@ -470,6 +493,7 @@ impl<'a, 'b> View<'a, 'b> {
 
     // Store values into a register at a given type, converting if necessary.
     fn store(&mut self, dst_reg: u32, dst_ty: Ty, src: &PrimVal<'a>) -> Result<()> {
+        dbg_reg_valid!(self, dst_reg, dst_ty);
         match src {
             PrimVal::Var(id2) => {
                 let (src_reg, src_ty) = self.reg_of_ident(id2);
@@ -518,6 +542,8 @@ impl<'a, 'b> View<'a, 'b> {
         if dst_reg == UNUSED {
             return Ok(());
         }
+        dbg_reg_valid!(self, dst_reg, dst_ty);
+        dbg_reg_valid!(self, arr_reg, arr_ty);
         // Convert `key` if necessary.
         let target_ty = arr_ty.key()?;
         let (mut key_reg, key_ty) = self.get_reg(key)?;
@@ -569,9 +595,10 @@ impl<'a, 'b> View<'a, 'b> {
             args_regs.push(reg);
             args_tys.push(ty);
         }
+        dbg_reg_valid!(self, dst_reg, dst_ty);
 
         // Now, perform any necessary conversions if input types do not match the argument types.
-        let mut conv_regs: cfg::SmallVec<_> = smallvec![!0u32; args.len()];
+        let mut conv_regs: cfg::SmallVec<_> = smallvec![UNUSED; args.len()];
         let (conv_tys, res_ty) = bf.type_sig(&args_tys[..])?;
 
         for (areg, (aty, (creg, cty))) in args_regs.iter().cloned().zip(
@@ -589,15 +616,17 @@ impl<'a, 'b> View<'a, 'b> {
             }
         }
 
-        let res_reg = if dst_ty == res_ty {
-            reg_of_ty!(self.regs, res_ty)
-        } else {
+        let mut res_reg = if dst_ty == res_ty {
             dst_reg
+        } else {
+            reg_of_ty!(self.regs, res_ty)
         };
+
+        dbg_reg_valid!(self, res_reg, res_ty);
 
         // Helper macro for generating code for binary operators
         macro_rules! gen_op {
-            ($op:tt, $( [$ty:tt, $inst:tt]),* ) => {
+            ($op:tt, $([$ty:tt, $inst:tt]),* ) => {
                 match conv_tys[0] {
                     // TODO implement better handling of "NULL" and get rid of hacks like this.
                     $( Ty::$ty  => if res_reg != UNUSED {
@@ -650,23 +679,28 @@ impl<'a, 'b> View<'a, 'b> {
             ReadErrStdin => self.push(Instr::ReadErrStdin(res_reg.into())),
             NextlineStdin => self.push(Instr::NextLineStdin(res_reg.into())),
             Setcol => self.push(Instr::SetColumn(conv_regs[0].into(), conv_regs[1].into())),
-            Split => self.push(if conv_tys[1] == Ty::MapIntStr {
-                Instr::SplitInt(
-                    res_reg.into(),
-                    conv_regs[0].into(),
-                    conv_regs[1].into(),
-                    conv_regs[2].into(),
-                )
-            } else if conv_tys[1] == Ty::MapStrStr {
-                Instr::SplitStr(
-                    res_reg.into(),
-                    conv_regs[0].into(),
-                    conv_regs[1].into(),
-                    conv_regs[2].into(),
-                )
-            } else {
-                return err!("invalid input types to split: {:?}", &conv_tys[..]);
-            }),
+            Split => {
+                if res_reg == UNUSED {
+                    res_reg = reg_of_ty!(self.regs, res_ty);
+                }
+                self.push(if conv_tys[1] == Ty::MapIntStr {
+                    Instr::SplitInt(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                        conv_regs[2].into(),
+                    )
+                } else if conv_tys[1] == Ty::MapStrStr {
+                    Instr::SplitStr(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                        conv_regs[2].into(),
+                    )
+                } else {
+                    return err!("invalid input types to split: {:?}", &conv_tys[..]);
+                })
+            }
             Length => self.push(match conv_tys[0] {
                 Ty::MapIntInt => Instr::LenIntInt(res_reg.into(), conv_regs[0].into()),
                 Ty::MapIntStr => Instr::LenIntStr(res_reg.into(), conv_regs[0].into()),
