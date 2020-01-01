@@ -522,7 +522,7 @@ where
                     //
                     // TODO: this reasoning is based on the idea that  globals are "cheaper"; if
                     // that changes, then we'll want to migrate these to `fresh_local`
-                    let tmp = self.fresh();
+                    let tmp = self.fresh_local();
                     self.add_stmt(
                         current_open,
                         PrimStmt::AsgnVar(
@@ -567,13 +567,13 @@ where
                     //
                     // (e.g.  how will printf work? Will we disallow dynamically computed printf
                     // strings? We probably should...)
-                    let mut tmp = self.fresh();
+                    let mut tmp = self.fresh_local();
                     self.add_stmt(current_open, PrimStmt::AsgnVar(tmp, PrimExpr::Val(EMPTY)))?;
                     for (i, v) in vs.iter().enumerate() {
                         let (next, v) = self.convert_val(*v, current_open)?;
                         current_open = next;
                         if i != 0 {
-                            let new_tmp = self.fresh();
+                            let new_tmp = self.fresh_local();
                             self.add_stmt(
                                 current_open,
                                 PrimStmt::AsgnVar(
@@ -586,7 +586,7 @@ where
                             )?;
                             tmp = new_tmp;
                         }
-                        let new_tmp = self.fresh();
+                        let new_tmp = self.fresh_local();
                         self.add_stmt(
                             current_open,
                             PrimStmt::AsgnVar(
@@ -1175,12 +1175,12 @@ where
     }
 
     fn get_identifier(&mut self, i: &I) -> Ident {
-        if let Some(id) = self.ctx.hm.get(i) {
-            return *id;
-        }
-        // The only identifiers that can be locals are arguments to the current function.
+        // Look for any local variables with this name first, then search the global scope, then
+        // create a fresh global variable.
         if let Some(ix) = self.f.args_map.get(i) {
             self.f.args[*ix as usize].id
+        } else if let Some(id) = self.ctx.hm.get(i) {
+            *id
         } else {
             let next = self.fresh();
             self.ctx.hm.insert(i.clone(), next);

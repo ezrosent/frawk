@@ -12,7 +12,7 @@ use crate::{
 use hashbrown::HashMap;
 use std::io::Write;
 
-const PRINT_DEBUG_INFO: bool = false;
+const PRINT_DEBUG_INFO: bool = true;
 
 type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
@@ -73,7 +73,7 @@ pub(crate) fn run_prog<'a>(
     }
     let ctx = cfg::ProgramContext::from_prog(arena, prog)?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
-    // a limited capacity for locals, but it would require.
+    // a limited capacity for locals, but it would require a lt more bookkeeping.
     let ident_map = ctx._invert_ident();
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
@@ -98,7 +98,7 @@ pub(crate) fn run_prog<'a>(
             )
             .unwrap();
         }
-        let types::TypeInfo { var_tys, .. } = get_types(&ctx)?;
+        let types::TypeInfo { var_tys, func_tys } = get_types(&ctx)?;
         // ident_map : Ident -> &str (but only has globals)
         // ts: Ident -> Type
         //
@@ -125,6 +125,10 @@ pub(crate) fn run_prog<'a>(
         }
         let instrs = String::from_utf8(instrs_buf).unwrap();
         if PRINT_DEBUG_INFO {
+            eprintln!(
+                "func_tys={:?}\nvar_tys={:?}\n=========\n",
+                func_tys, var_tys
+            );
             eprintln!("{}", instrs);
         }
         interp.run()?;
@@ -169,7 +173,8 @@ mod tests {
                                 assert_eq!(
                                     ts.get(stringify!($i)).cloned(),
                                     Some($ty),
-                                    "Types: {:?}\n{}\n", ts, instrs,
+                                    "Expected identifier {} to have type {:?}. Types: {:?}\n{}\n",
+                                    stringify!($i), $ty, ts, instrs,
                                 );
                             )*
                         }
@@ -378,8 +383,8 @@ for (k in m) {
         @types [ r0 :: Int, r1 :: Int, r2 :: Float, r3 :: Int, m :: MapIntInt  ]
     );
 
-    // TODO add a test with a function body of the form function x(a) { a b; }
-    // When we weren't parsing returns, id() had this form and caused some sort of error.
-
+    // TODO test functions
+    // - recursion
+    // - assigning to global variables from within different function invocations
     // TODO test more operators
 }
