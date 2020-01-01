@@ -150,10 +150,8 @@ impl Constraint<State> {
                 f.step(&arg_state[..])
             }
             Constraint::CallUDF(args, f) => {
-                eprintln!("calludf({:?}, {:?})", f, args);
                 let arg_state: SmallVec<State> =
                     args.iter().map(|ix| tc.nw.read(*ix).clone()).collect();
-                eprintln!("arg_state={:?}", arg_state);
                 let ret_ix = tc.get_function(&tc.func_table[*f as usize], &arg_state);
                 Ok(tc.nw.read(ret_ix).clone())
             }
@@ -432,40 +430,34 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         tc.solve()?;
         let mut var_tys = HashMap::new();
         let mut func_tys = HashMap::new();
+        for (Args { id, args, .. }, ix) in tc.funcs.iter() {
+            let mut flat_args = SmallVec::new();
+            for a in args.iter().cloned() {
+                flat_args.push(flatten(concrete(a))?);
+            }
+            if let hashbrown::hash_map::Entry::Vacant(v) = func_tys.entry((*id, flat_args)) {
+                v.insert(flatten(concrete(*tc.nw.read(*ix)))?);
+            }
+        }
         for (Args { id, func_id, args }, ix) in tc.env.iter() {
             let mut flat_args = SmallVec::new();
             for a in args.iter().cloned() {
                 flat_args.push(flatten(concrete(a))?);
             }
             let v = flatten(concrete(*tc.nw.read(*ix)))?;
-            if !id.global {
-                let func_id = func_id.expect("local variable must have func_id set");
-                if let hashbrown::hash_map::Entry::Vacant(v) =
-                    func_tys.entry((func_id, flat_args.clone()))
-                {
-                    let arg = Args {
-                        id: func_id,
-                        func_id: None,
-                        args: args.clone(),
-                    };
-                    eprintln!(
-                        "id={:?} arg={:?}, flat_args={:?}, funcs={:?}",
-                        id, arg, flat_args, tc.funcs
-                    );
-                    v.insert(flatten(concrete(*tc.nw.read(tc.funcs[&arg])))?);
-                }
-            }
 
             // We won't use the function id if id.global, so setting it to 0 should be fine.
             // TODO clean up some of this to make it less misleading
             if let Some(prev) = var_tys.insert((*id, func_id.unwrap_or(0), flat_args), v) {
-                return err!(
-                    "coherence violation! {:?} in args {:?}, we get both {:?} and {:?}",
-                    id,
-                    args,
-                    v,
-                    prev
-                );
+                if prev != v {
+                    return err!(
+                        "coherence violation! {:?} in args {:?}, we get both {:?} and {:?}",
+                        id,
+                        args,
+                        v,
+                        prev
+                    );
+                }
             }
         }
         Ok(TypeInfo { var_tys, func_tys })
@@ -551,7 +543,6 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         }
     }
     pub(crate) fn get_node(&mut self, key: Args<Ident>) -> NodeIx {
-        eprintln!("get_node: {:?}", key);
         self.env
             .entry(key)
             .or_insert(self.nw.add_rule(Rule::Var))
@@ -580,12 +571,6 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         if args.len() < key.args.len() {
             key.args.truncate(args.len());
         }
-        eprintln!(
-            "get_function: id={:?}, args={:?}=>{:?}",
-            ident,
-            &arg_states[..],
-            &key.args[..]
-        );
 
         // Check if we have already created the function
         if let Some(ix) = self.funcs.get(&key) {
@@ -609,10 +594,6 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         for (cfg::Arg { id, .. }, state) in args.iter().zip(key.args.iter()) {
             let ix = view.ident_node(id);
             let cnode = view.constant(*state);
-            eprintln!(
-                "get_function: adding dep {:?}/{:?} => {:?}",
-                cnode, state, ix
-            );
             view.nw.add_dep(cnode, ix, Constraint::Flows(()));
         }
         let nodes = cfg.raw_nodes();
