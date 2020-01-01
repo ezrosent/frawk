@@ -226,9 +226,7 @@ where
             // AST will becode assignments to this variable followed by an unconditional jump to
             // this block.
             let ret = shared.fresh_local();
-            let mut exit_block = BasicBlock::default();
-            exit_block.q.push_back(PrimStmt::Return(PrimVal::Var(ret)));
-            let exit = cfg.add_node(exit_block);
+            let exit = cfg.add_node(Default::default());
 
             let f = Function {
                 name: Some(fundec.name.clone()),
@@ -425,6 +423,9 @@ where
     // to the end of each basic block without one already to the exit node.
     fn finish(&mut self) {
         for bb in self.f.cfg.node_indices() {
+            if bb == self.f.exit {
+                continue;
+            }
             let mut found = false;
             let mut walker = self.f.cfg.neighbors(bb).detach();
             while let Some((e, _)) = walker.next(&self.f.cfg) {
@@ -436,6 +437,10 @@ where
                 self.f.cfg.add_edge(bb, self.f.exit, Transition::null());
             }
         }
+        // Add a return statement to the exit node.
+        let bb = self.f.cfg.node_weight_mut(self.f.exit).unwrap();
+        bb.q.push_back(PrimStmt::Return(PrimVal::Var(self.f.ret)));
+        bb.sealed = true;
     }
 
     fn unused() -> Ident {
@@ -723,7 +728,11 @@ where
                 }
             }
             Return(ret) => {
-                let (current_open, e) = self.convert_expr(ret, current_open)?;
+                let (current_open, e) = if let Some(ret) = ret {
+                    self.convert_expr(ret, current_open)?
+                } else {
+                    (current_open, PrimExpr::Val(PrimVal::Var(Self::unused())))
+                };
                 self.add_stmt(current_open, PrimStmt::AsgnVar(self.f.ret, e))?;
                 self.f
                     .cfg

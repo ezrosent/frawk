@@ -85,6 +85,7 @@ BaseStmt: &'a Stmt<'a,'a,&'a str> = {
     "print" <pa:PrintArgs?> <re:Redirect?> => arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "break" => arena.alloc_v(Stmt::Break),
     "continue" => arena.alloc_v(Stmt::Continue),
+    "return" <Expr?> => arena.alloc_v(Stmt::Return(<>)),
     Block,
 }
 
@@ -345,5 +346,6 @@ extern {
       "delete" => Tok::Delete,
       "in" => Tok::In,
       "function" => Tok::Function,
+      "return" => Tok::Return,
   }
 }

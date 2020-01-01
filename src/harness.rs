@@ -12,6 +12,8 @@ use crate::{
 use hashbrown::HashMap;
 use std::io::Write;
 
+const PRINT_DEBUG_INFO: bool = true;
+
 type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
 type ProgResult<'a> = Result<(
@@ -70,6 +72,8 @@ pub(crate) fn run_prog<'a>(
         }
     }
     let ctx = cfg::ProgramContext::from_prog(arena, prog)?;
+    // NB the invert_ident machinery only works for global identifiers. We could get it to work in
+    // a limited capacity for locals, but it would require.
     let ident_map = ctx._invert_ident();
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
@@ -77,7 +81,7 @@ pub(crate) fn run_prog<'a>(
         let mut instrs_buf = Vec::<u8>::new();
         for func in ctx.funcs.iter() {
             let name = func.name.unwrap_or("<main>");
-            write!(&mut instrs_buf, "function {}/{}(", name, func.ident).unwrap();
+            write!(&mut instrs_buf, "cfg:\nfunction {}/{}(", name, func.ident).unwrap();
             for (i, arg) in func.args.iter().enumerate() {
                 // Help with pretty-printing
                 use crate::display::Wrap;
@@ -89,7 +93,7 @@ pub(crate) fn run_prog<'a>(
             }
             write!(
                 &mut instrs_buf,
-                ") {{\n {}\n}}",
+                ") {{\n {}\n}}\nbytecode:\n",
                 petgraph::dot::Dot::new(&func.cfg)
             )
             .unwrap();
@@ -120,6 +124,9 @@ pub(crate) fn run_prog<'a>(
             write!(&mut instrs_buf, "}}\n").unwrap();
         }
         let instrs = String::from_utf8(instrs_buf).unwrap();
+        if PRINT_DEBUG_INFO {
+            eprintln!("{}", instrs);
+        }
         interp.run()?;
         (instrs, type_map)
     };
@@ -340,6 +347,15 @@ for (k in m) {
         }"#,
         "5 3\n"
     );
+
+    test_program!(
+        identity_function,
+        r#"function id(x) { return x; }
+        BEGIN { print 1, id(1) }"#,
+        "1 1\n"
+    );
+    // TODO add a test with a function body of the form function x(a) { a b; }
+    // When we weren't parsing returns, id() had this form and caused some sort of error.
 
     // TODO test more operators
 }
