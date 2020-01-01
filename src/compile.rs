@@ -79,12 +79,6 @@ impl Ty {
 
 const NUM_TYPES: usize = Ty::IterStr as usize + 1;
 
-// TODO:
-//  * Distinguish `main` function.
-//  * rewrite `run` function.
-//  * delete the duplicate code, get everything compiling.
-//  * debug debug debug (get tests passing; add new tests, etc.).
-
 // This is a macro to defeat the borrow checker when used inside methods for `Generator`.
 macro_rules! reg_of_ty {
     ($slf:expr, $ty:expr) => {{
@@ -95,8 +89,8 @@ macro_rules! reg_of_ty {
     }};
 }
 
+#[derive(Debug)]
 struct FuncInfo {
-    arity: NumTy,
     ret_reg: NumTy,
     ret_ty: Ty,
 }
@@ -113,14 +107,16 @@ struct ProgramGenerator<'a> {
         ),
         NumTy, /* bytecode-level func id */
     >,
-    // Why not just store the fields in FuncInfo in a Frame?
+    arity: HashMap<NumTy /* cfg-level func id */, NumTy>,
+    // Why not just store FuncInfo's fields in a Frame?
     // We access Frames one at a time (through a View); but we need access to function arity and
     // return types across invidual views. We expose these fields in a separate type immutably to
     // facilitate that.
     //
     // Another option would be to pass a mutable reference to `frames` for all of bytecode-building
     // functions below, but then each access to frame would have the form of
-    // self.frames[current_index], which is less efficient and (more importantly) error-prone.
+    // self.frames[current_index], which is marginally less efficient and (more importantly)
+    // error-prone.
     func_info: Vec<FuncInfo>,
     frames: Vec<Frame<'a>>,
     main_offset: usize,
@@ -132,32 +128,35 @@ impl<'a> ProgramGenerator<'a> {
         // and global variables.
         let mut gen = ProgramGenerator::default();
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
+        for (func_id, func) in pc.funcs.iter().enumerate() {
+            gen.arity.insert(func_id as NumTy, func.args.len() as NumTy);
+        }
         for ((id, func_id, args), ty) in var_tys.iter() {
-            if let Entry::Vacant(v) = gen.id_map.entry((*func_id, args.clone())) {
-                let res = gen.frames.len() as NumTy;
-                v.insert(res);
-                let ret_ty = func_tys[&(*func_id, args.clone())];
-                let ret_reg = reg_of_ty!(gen.regs, ret_ty);
-                let mut f = Frame::default();
-                f.src_function = *func_id;
-                f.cur_ident = res;
-                let arity = pc.funcs[*func_id as usize].args.len() as u32;
-                gen.frames.push(f);
-                gen.func_info.push(FuncInfo {
-                    ret_reg,
-                    ret_ty,
-                    arity,
-                });
-            };
+            eprintln!(
+                "init_from_ctx: id={:?} func_id={} args={:?} ty={:?}",
+                id, func_id, args, ty
+            );
             let map = if id.global {
                 &mut gen.regs.globals
             } else {
+                if let Entry::Vacant(v) = gen.id_map.entry((*func_id, args.clone())) {
+                    let res = gen.frames.len() as NumTy;
+                    v.insert(res);
+                    let ret_ty = func_tys[&(*func_id, args.clone())];
+                    let ret_reg = reg_of_ty!(gen.regs, ret_ty);
+                    let mut f = Frame::default();
+                    f.src_function = *func_id;
+                    f.cur_ident = res;
+                    gen.frames.push(f);
+                    gen.func_info.push(FuncInfo { ret_reg, ret_ty });
+                }
                 &mut gen.frames[gen.id_map[&(*func_id, args.clone())] as usize].locals
             };
             let reg = reg_of_ty!(gen.regs, *ty);
             if let Some(old) = map.insert(*id, (reg, *ty)) {
                 return err!(
-                    "internal error: duplicate entries for same local in types {:?} vs {:?}",
+                    "internal error: duplicate entries for same local in types  at id={:?}; {:?} vs {:?}",
+                    id,
                     old,
                     (reg, *ty)
                 );
@@ -171,6 +170,7 @@ impl<'a> ProgramGenerator<'a> {
                 frame,
                 regs: &mut gen.regs,
                 id_map: &gen.id_map,
+                arity: &gen.arity,
                 func_info: &gen.func_info,
             }
             .process_function(&pc.funcs[src_func])?;
@@ -214,6 +214,7 @@ struct View<'a, 'b> {
     frame: &'b mut Frame<'a>,
     regs: &'b mut Registers,
     id_map: &'b HashMap<(NumTy, SmallVec<Ty>), NumTy>,
+    arity: &'b HashMap<NumTy, NumTy>,
     func_info: &'b Vec<FuncInfo>,
 }
 
@@ -422,7 +423,7 @@ impl<'a, 'b> View<'a, 'b> {
     // registers match this is a noop.
     fn convert(&mut self, dst_reg: u32, dst_ty: Ty, src_reg: u32, src_ty: Ty) -> Result<()> {
         use Ty::*;
-        if dst_reg == UNUSED {
+        if dst_reg == UNUSED || src_reg == UNUSED {
             return Ok(());
         }
         if dst_reg == src_reg && dst_ty == src_ty {
@@ -730,7 +731,7 @@ impl<'a, 'b> View<'a, 'b> {
                 }
                 // Normalize the call
                 let info = &self.func_info[*func_id as usize];
-                let true_arity = info.arity as usize;
+                let true_arity = self.arity[func_id] as usize;
                 if arg_regs.len() < true_arity {
                     // Not enough arguments; fill in the rest with nulls.
                     // TODO reuse registers here. This is wasteful for functions with a lot of
@@ -748,6 +749,10 @@ impl<'a, 'b> View<'a, 'b> {
                     arg_tys.truncate(true_arity);
                 }
 
+                eprintln!(
+                    "looking up {:?},{:?} in map {:?} (vs={:?}, arity={:?}, func_info={:?})",
+                    func_id, arg_tys, self.id_map, vs, true_arity, self.func_info
+                );
                 let monomorphized = self.id_map[&(*func_id, arg_tys.clone())];
                 // Push onto the stack in reverse order.
                 arg_regs.reverse();

@@ -150,8 +150,10 @@ impl Constraint<State> {
                 f.step(&arg_state[..])
             }
             Constraint::CallUDF(args, f) => {
+                eprintln!("calludf({:?}, {:?})", f, args);
                 let arg_state: SmallVec<State> =
                     args.iter().map(|ix| tc.nw.read(*ix).clone()).collect();
+                eprintln!("arg_state={:?}", arg_state);
                 let ret_ix = tc.get_function(&tc.func_table[*f as usize], &arg_state);
                 Ok(tc.nw.read(ret_ix).clone())
             }
@@ -162,7 +164,7 @@ impl Constraint<State> {
 // We distinguish Edge from Constraint because we want to add more data later.
 #[derive(Clone)]
 struct Edge {
-    // TODO: do we need a separtae edge type, or can it just be Constraint<()>
+    // TODO: do we need a separate edge type, or can it just be Constraint<()>
     constraint: Constraint<()>,
 }
 
@@ -360,7 +362,9 @@ fn make_iso(set: &mut HashSet<(NumTy, NumTy)>, n1: NodeIx, n2: NodeIx) -> bool {
 
 impl Network {
     fn add_rule(&mut self, rule: Rule) -> NodeIx {
-        self.graph.add_node(Node::new(rule))
+        let res = self.graph.add_node(Node::new(rule));
+        self.wl.insert(res);
+        res
     }
 
     fn read(&self, ix: NodeIx) -> &State {
@@ -407,7 +411,7 @@ pub(crate) fn get_types<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Args<T> {
     id: T,
-    func_id: NumTy,
+    func_id: Option<NumTy>,
     args: SmallVec<State>, // ignored when id.global
 }
 
@@ -434,17 +438,27 @@ impl<'b, 'c> TypeContext<'b, 'c> {
                 flat_args.push(flatten(concrete(a))?);
             }
             let v = flatten(concrete(*tc.nw.read(*ix)))?;
-            if let hashbrown::hash_map::Entry::Vacant(v) =
-                func_tys.entry((*func_id, flat_args.clone()))
-            {
-                let arg = Args {
-                    id: *func_id,
-                    func_id: *func_id,
-                    args: args.clone(),
-                };
-                v.insert(flatten(concrete(*tc.nw.read(tc.funcs[&arg])))?);
+            if !id.global {
+                let func_id = func_id.expect("local variable must have func_id set");
+                if let hashbrown::hash_map::Entry::Vacant(v) =
+                    func_tys.entry((func_id, flat_args.clone()))
+                {
+                    let arg = Args {
+                        id: func_id,
+                        func_id: None,
+                        args: args.clone(),
+                    };
+                    eprintln!(
+                        "id={:?} arg={:?}, flat_args={:?}, funcs={:?}",
+                        id, arg, flat_args, tc.funcs
+                    );
+                    v.insert(flatten(concrete(*tc.nw.read(tc.funcs[&arg])))?);
+                }
             }
-            if let Some(prev) = var_tys.insert((*id, *func_id, flat_args), v) {
+
+            // We won't use the function id if id.global, so setting it to 0 should be fine.
+            // TODO clean up some of this to make it less misleading
+            if let Some(prev) = var_tys.insert((*id, func_id.unwrap_or(0), flat_args), v) {
                 return err!(
                     "coherence violation! {:?} in args {:?}, we get both {:?} and {:?}",
                     id,
@@ -505,10 +519,8 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             for n in self.nw.graph.neighbors(ix) {
                 self.nw.wl.insert(n);
             }
-            if let Some(calls) = self.nw.call_deps.get(&ix) {
-                for c in calls.iter() {
-                    self.nw.wl.insert(*c);
-                }
+            for c in self.nw.call_deps.get(&ix).iter().flat_map(|c| c.iter()) {
+                self.nw.wl.insert(*c);
             }
         }
         Ok(())
@@ -539,6 +551,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         }
     }
     pub(crate) fn get_node(&mut self, key: Args<Ident>) -> NodeIx {
+        eprintln!("get_node: {:?}", key);
         self.env
             .entry(key)
             .or_insert(self.nw.add_rule(Rule::Var))
@@ -554,7 +567,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
     ) -> NodeIx {
         let mut key = Args {
             id: *ident,
-            func_id: *ident,
+            func_id: None,
             args: arg_states.clone(),
         };
         // First we want to normalize the provided arguments. If we provide too few arguments, the
@@ -567,22 +580,39 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         if args.len() < key.args.len() {
             key.args.truncate(args.len());
         }
+        eprintln!(
+            "get_function: id={:?}, args={:?}=>{:?}",
+            ident,
+            &arg_states[..],
+            &key.args[..]
+        );
 
         // Check if we have already created the function
         if let Some(ix) = self.funcs.get(&key) {
             return *ix;
         }
+        // Just return a new node for the return value. We will infer return types by looking up
+        // this node later and adding dependencies when we encounter a `Return` stmt.
+        //
+        // TODO: this means we do some duplicate work in rewriting returns in the cfg module.
 
         // Create a new function.
+        let res = self.nw.add_rule(Rule::Var);
+        self.funcs.insert(key.clone(), res);
         let mut view = View {
             tc: self,
             frame_id: *ident,
             frame_args: key.args.clone(),
         };
+
         // Apply the arguments appropriately:
         for (cfg::Arg { id, .. }, state) in args.iter().zip(key.args.iter()) {
             let ix = view.ident_node(id);
             let cnode = view.constant(*state);
+            eprintln!(
+                "get_function: adding dep {:?}/{:?} => {:?}",
+                cnode, state, ix
+            );
             view.nw.add_dep(cnode, ix, Constraint::Flows(()));
         }
         let nodes = cfg.raw_nodes();
@@ -591,12 +621,6 @@ impl<'b, 'c> TypeContext<'b, 'c> {
                 view.constrain_stmt(stmt);
             }
         }
-        // Just return a new node for the return value. We will infer return types by looking up
-        // this node later and adding dependencies when we encounter a `Return` stmt.
-        //
-        // TODO: this means we do some duplicate work in rewriting returns in the cfg module.
-        let res = view.nw.add_rule(Rule::Var);
-        self.funcs.insert(key, res);
         res
     }
 }
@@ -648,7 +672,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 let v_ix = self.val_node(v);
                 let cur_func_key = Args {
                     id: self.frame_id,
-                    func_id: self.frame_id,
+                    func_id: None,
                     args: self.frame_args.clone(),
                 };
                 let ret_ix = self.tc.funcs[&cur_func_key];
@@ -723,7 +747,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
     fn ident_node(&mut self, id: &Ident) -> NodeIx {
         let key = Args {
             id: *id,
-            func_id: self.frame_id,
+            func_id: if id.global { None } else { Some(self.frame_id) },
             args: if id.global {
                 Default::default()
             } else {

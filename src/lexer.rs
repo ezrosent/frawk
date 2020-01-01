@@ -70,6 +70,7 @@ pub enum Tok<'a> {
     In,
     Delete,
     Function,
+    Return,
 
     Ident(&'a str),
     StrLit(&'a str),
@@ -132,6 +133,7 @@ static_map!(
     [":", Tok::COLON],
     ["delete", Tok::Delete],
     ["function", Tok::Function],
+    ["return", Tok::Return],
     ["$", Tok::Dollar]
 );
 
