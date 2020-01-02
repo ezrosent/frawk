@@ -405,9 +405,6 @@ impl<'a, 'b> View<'a, 'b> {
             self.frame.locals[id]
         };
         dbg_reg_valid!(self, res_reg, res_ty);
-        if id.low == 3 && id.global {
-            eprintln!("reg for {:?} => {:?}", id, (res_reg, res_ty));
-        }
         (res_reg, res_ty)
     }
 

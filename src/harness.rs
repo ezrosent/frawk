@@ -422,6 +422,11 @@ for (k in m) {
     // We can also issue "phantom writes" based on the content of a function after a call. Phantom
     // writes "compile down" to nothing, but they point back to the spot in a function to rename a
     // given variable, and they propagate up to main.
+    //
+    // Every function has a list of def sites ((global) ident, function, nodeix, index into bb),
+    // along with a list of functions that are called.
+    //  Q: do we have to duplicate functions? (e.g. one per call?)
+    //  - I hope not! It raises a lot of questions (about like polymorphism, etc.)
     test_program!(
         global_from_function,
         r#"function setx(a) { x=a; }
