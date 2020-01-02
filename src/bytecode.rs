@@ -1221,15 +1221,28 @@ fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) 
     );
 }
 
-// TODO: test, then benchmark with get_unchecked()
+// TODO: Add a pass that does checking of indexes once, then benchmark with it on, and checked set
+// to false.
+const CHECKED: bool = true;
 
 #[inline]
 fn index<'a, T>(Storage { regs, .. }: &'a Storage<T>, reg: &Reg<T>) -> &'a T {
-    &regs[reg.index()]
+    if CHECKED {
+        &regs[reg.index()]
+    } else {
+        debug_assert!(reg.index() < regs.len());
+        unsafe { regs.get_unchecked(reg.index()) }
+    }
 }
+
 #[inline]
 fn index_mut<'a, T>(Storage { regs, .. }: &'a mut Storage<T>, reg: &Reg<T>) -> &'a mut T {
-    &mut regs[reg.index()]
+    if CHECKED {
+        &mut regs[reg.index()]
+    } else {
+        debug_assert!(reg.index() < regs.len());
+        unsafe { regs.get_unchecked_mut(reg.index()) }
+    }
 }
 
 #[inline]

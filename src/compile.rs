@@ -242,37 +242,47 @@ struct View<'a, 'b> {
 }
 
 impl<'a, 'b> View<'a, 'b> {
+    fn push_var(&mut self, reg: NumTy, ty: Ty) -> Result<()> {
+        use Ty::*;
+        self.push(match ty {
+            Int => Instr::PushInt(reg.into()),
+            Float => Instr::PushFloat(reg.into()),
+            Str => Instr::PushStr(reg.into()),
+            MapIntInt => Instr::PushIntInt(reg.into()),
+            MapIntFloat => Instr::PushIntFloat(reg.into()),
+            MapIntStr => Instr::PushIntStr(reg.into()),
+            MapStrInt => Instr::PushStrInt(reg.into()),
+            MapStrFloat => Instr::PushStrFloat(reg.into()),
+            MapStrStr => Instr::PushStrStr(reg.into()),
+            IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
+        });
+        Ok(())
+    }
+    fn pop_var(&mut self, reg: NumTy, ty: Ty) -> Result<()> {
+        use Ty::*;
+        self.push(match ty {
+            Int => Instr::PopInt(reg.into()),
+            Float => Instr::PopFloat(reg.into()),
+            Str => Instr::PopStr(reg.into()),
+            MapIntInt => Instr::PopIntInt(reg.into()),
+            MapIntFloat => Instr::PopIntFloat(reg.into()),
+            MapIntStr => Instr::PopIntStr(reg.into()),
+            MapStrInt => Instr::PopStrInt(reg.into()),
+            MapStrFloat => Instr::PopStrFloat(reg.into()),
+            MapStrStr => Instr::PopStrStr(reg.into()),
+            IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
+        });
+        Ok(())
+    }
     fn process_function(&mut self, func: &Function<'a, &'a str>) -> Result<()> {
         // No logic in this method relies on this directly, but it is an
         // invariant of the broader module.
         assert_eq!(self.frame.src_function, func.ident);
 
-        // Pop any arguments off the stack.
-        for arg in func.args.iter() {
-            use Ty::*;
+        // Pop any arguments off the stack in reverse order.
+        for arg in func.args.iter().rev() {
             let (reg, ty) = self.reg_of_ident(&arg.id);
-            self.push(match ty {
-                Int => Instr::PopInt(reg.into()),
-                Float => Instr::PopFloat(reg.into()),
-                Str => Instr::PopStr(reg.into()),
-                MapIntInt => Instr::PopIntInt(reg.into()),
-                MapIntFloat => Instr::PopIntFloat(reg.into()),
-                MapIntStr => Instr::PopIntStr(reg.into()),
-                MapStrInt => Instr::PopStrInt(reg.into()),
-                MapStrFloat => Instr::PopStrFloat(reg.into()),
-                MapStrStr => Instr::PopStrStr(reg.into()),
-                IterInt | IterStr => {
-                    return err!(
-                        "unsupported argument type for function {}: {:?}",
-                        if let Some(name) = func.name {
-                            name
-                        } else {
-                            "<main>"
-                        },
-                        ty
-                    )
-                }
-            });
+            self.pop_var(reg, ty)?;
         }
         self.frame.bb_to_instr = vec![0; func.cfg.node_count()];
 
@@ -388,12 +398,16 @@ impl<'a, 'b> View<'a, 'b> {
             // TODO: remove this once there's better test coverage and we use more unsafe code.
             return (UNUSED, Ty::Int);
         }
+
         let (res_reg, res_ty) = if id.global {
             self.regs.globals[id]
         } else {
             self.frame.locals[id]
         };
         dbg_reg_valid!(self, res_reg, res_ty);
+        if id.low == 3 && id.global {
+            eprintln!("reg for {:?} => {:?}", id, (res_reg, res_ty));
+        }
         (res_reg, res_ty)
     }
 
@@ -795,25 +809,32 @@ impl<'a, 'b> View<'a, 'b> {
                 }
                 let monomorphized = self.id_map[&(*func_id, arg_tys.clone())];
                 let info = &self.func_info[monomorphized as usize];
-                // Push onto the stack in reverse order.
-                arg_regs.reverse();
-                arg_tys.reverse();
+                // Save all local variables onto the stack.
+                //
+                // TODO Optimize this to only save the clobbered registers?
+                let mut locals: SmallVec<_> = self.frame.locals.values().cloned().collect();
+                for (reg, ty) in locals.iter().cloned() {
+                    self.push_var(reg, ty)?;
+                }
+                // Push onto the stack in the given order; we pop them off in reverse in
+                // `process_function`.
                 for (reg, ty) in arg_regs.iter().cloned().zip(arg_tys.iter().cloned()) {
-                    use Ty::*;
-                    self.push(match ty {
-                        Int => Instr::PushInt(reg.into()),
-                        Float => Instr::PushFloat(reg.into()),
-                        Str => Instr::PushStr(reg.into()),
-                        MapIntInt => Instr::PushIntInt(reg.into()),
-                        MapIntFloat => Instr::PushIntFloat(reg.into()),
-                        MapIntStr => Instr::PushIntStr(reg.into()),
-                        MapStrInt => Instr::PushStrInt(reg.into()),
-                        MapStrFloat => Instr::PushStrFloat(reg.into()),
-                        MapStrStr => Instr::PushStrStr(reg.into()),
-                        IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
-                    });
+                    self.push_var(reg, ty)?;
                 }
                 self.push(Instr::Call(monomorphized as usize));
+                // We've returned. Restore any local variables that we saved on the stack and that
+                // could have gotten clobbered in the meantime.
+                locals.reverse();
+                for (reg, ty) in locals.iter().cloned() {
+                    self.pop_var(reg, ty)?;
+                }
+
+                // Move the function's return value into the destination.
+                //
+                // XXX can we always count on this emitting an instruction? We rely on returns
+                // jumping back one instruction after the call. Is there always such an
+                // instruction? It seems like a "yes"; you need a Halt or Return to end an
+                // instruction stream.
                 self.convert(dst_reg, dst_ty, info.ret_reg, info.ret_ty)?;
             }
             PrimExpr::Index(arr, k) => {

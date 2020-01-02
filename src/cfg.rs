@@ -159,7 +159,7 @@ impl<'a> PrimStmt<'a> {
                 exp.replace(update);
             }
             // We handle assignments separately. Note that this is not needed for index
-            // expressions, because assignments to m[k] are *uses* of m, not definitions.
+            // expressions, because assignments to m[k] are *uses* of m; it doesn't assign to it.
             AsgnVar(_, e) => e.replace(update),
             SetBuiltin(_, e) => e.replace(update),
             Return(v) => v.replace(update),
@@ -226,6 +226,7 @@ where
             // AST will becode assignments to this variable followed by an unconditional jump to
             // this block.
             let ret = shared.fresh_local();
+            shared.may_rename.push(ret);
             let exit = cfg.add_node(Default::default());
 
             let f = Function {
@@ -318,6 +319,7 @@ struct GlobalContext<I> {
     // created during evaluation of conditional expression (?:, and, or). Doing this saves us not
     // only time, but also extra phi nodes in the IR, which eventually lead to more assignments
     // than are required.
+    // TODO: make may_rename per-function for local variables.
     may_rename: Vec<Ident>,
     max: NumTy,
 
@@ -392,8 +394,8 @@ where
     fn fill<'c>(&mut self, stmt: &'c Stmt<'c, 'b, I>) -> Result<()> {
         // Add a CFG corresponding to `stmt`
         let _next = self.convert_stmt(stmt, self.f.entry)?;
-        // Insert edges to the exit nodes if where they do not  exist
-        self.finish();
+        // Insert edges to the exit nodes if where they do not exist
+        self.finish()?;
         // SSA Conversion:
         // 1. Compute the dominator tree and dominance frontiers
         let (dt, df) = {
@@ -421,7 +423,7 @@ where
 
     // We want to make sure there is a single exit node. This method adds an unconditional branch
     // to the end of each basic block without one already to the exit node.
-    fn finish(&mut self) {
+    fn finish(&mut self) -> Result<()> {
         for bb in self.f.cfg.node_indices() {
             if bb == self.f.exit {
                 continue;
@@ -438,9 +440,7 @@ where
             }
         }
         // Add a return statement to the exit node.
-        let bb = self.f.cfg.node_weight_mut(self.f.exit).unwrap();
-        bb.q.push_back(PrimStmt::Return(PrimVal::Var(self.f.ret)));
-        bb.sealed = true;
+        self.add_stmt(self.f.exit, PrimStmt::Return(PrimVal::Var(self.f.ret)))
     }
 
     fn unused() -> Ident {
@@ -704,6 +704,7 @@ where
                         self.f
                             .cfg
                             .add_edge(current_open, footer, Transition::null());
+                        self.seal(current_open);
                         current_open
                     }
                     None => {
@@ -718,6 +719,7 @@ where
                         self.f
                             .cfg
                             .add_edge(current_open, header, Transition::null());
+                        self.seal(current_open);
                         current_open
                     }
                     None => {
@@ -737,6 +739,7 @@ where
                 self.f
                     .cfg
                     .add_edge(current_open, self.f.exit, Transition::null());
+                self.seal(current_open);
                 current_open
             }
         })
@@ -977,6 +980,14 @@ where
             },
         ))
     }
+
+    fn guarded_else(&mut self, from: NodeIx, to: NodeIx) {
+        if self.f.cfg.node_weight(from).unwrap().sealed {
+            return;
+        }
+        self.f.cfg.add_edge(from, to, Transition::null());
+    }
+
     fn do_assign<'c>(
         &mut self,
         v: &'c Expr<'c, 'b, I>,
@@ -1071,8 +1082,8 @@ where
         self.f
             .cfg
             .add_edge(current_open, t_start, Transition::new(c_val));
-        // continue to next after the true case is evaluated
-        self.f.cfg.add_edge(t_end, next, Transition::null());
+        // continue to next after the true case is evaluated, unless we are returning.
+        self.guarded_else(t_end, next);
 
         if let Some((f_start, f_end)) = fcase {
             // Set up the same connections as before, this time with a null edge rather
@@ -1083,7 +1094,7 @@ where
             self.f.cfg.add_edge(f_end, next, Transition::null());
         } else {
             // otherwise continue directly from current_open.
-            self.f.cfg.add_edge(current_open, next, Transition::null());
+            self.guarded_else(current_open, next);
         }
         Ok(next)
     }
@@ -1203,6 +1214,10 @@ where
         }
         bb.q.push_back(stmt);
         Ok(())
+    }
+
+    fn seal(&mut self, at: NodeIx) {
+        self.f.cfg.node_weight_mut(at).unwrap().sealed = true;
     }
 
     fn insert_phis(&mut self) {
