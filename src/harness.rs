@@ -414,6 +414,14 @@ for (k in m) {
     );
 
     // This test fails, for rather problematic reasons.
+    // Should we add CFG edges to callsites? (This will create spurious paths across call-sites,
+    // maybe we want to do it incrementally?)
+    // We may need some handling of this form to get LLVM's handling of globals appropriate, but we
+    // also want to accomodate awk programs that do not use functions at all.
+    //
+    // We can also issue "phantom writes" based on the content of a function after a call. Phantom
+    // writes "compile down" to nothing, but they point back to the spot in a function to rename a
+    // given variable, and they propagate up to main.
     test_program!(
         global_from_function,
         r#"function setx(a) { x=a; }
