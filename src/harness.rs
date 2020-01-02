@@ -12,7 +12,7 @@ use crate::{
 use hashbrown::HashMap;
 use std::io::Write;
 
-const PRINT_DEBUG_INFO: bool = true;
+const PRINT_DEBUG_INFO: bool = false;
 
 type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
@@ -383,8 +383,51 @@ for (k in m) {
         @types [ r0 :: Int, r1 :: Int, r2 :: Float, r3 :: Int, m :: MapIntInt  ]
     );
 
+    test_program!(
+        recursion,
+        r#"function fib(n) {
+            if (n == 0 || n == 1) return n;
+            return fib(n-1) + fib(n-2);
+        }
+        END {
+        for (i=0; i<8; i++) {
+            print fib(i);
+        }
+        }"#,
+        "0\n1\n1\n2\n3\n5\n8\n13\n"
+    );
+
+    test_program!(
+        polymorphic_recursion,
+        r#"function X(a, b) {
+            if (length(a) > 0) {
+                return X("", 5.0+b);
+            }
+            return length(a) + b*b;
+        }
+        END {
+            m[0]=0;
+            print X(m, 2);
+        }
+        "#,
+        "49.0\n"
+    );
+
+    // This test fails, for rather problematic reasons.
+    test_program!(
+        global_from_function,
+        r#"function setx(a) { x=a; }
+        END {
+        setx(1); setx("2"); setx(3.5);
+        print x;
+        }
+        "#,
+        "3.5\n",
+        @input "",
+        @types [x :: Str]
+    );
+
     // TODO test functions
-    // - recursion
     // - assigning to global variables from within different function invocations
     // TODO test more operators
 }

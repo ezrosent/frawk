@@ -428,6 +428,7 @@ where
 }
 
 // AWK arrays are inherently shared and mutable, so we have to do this, even if it is a code smell.
+#[derive(Debug)]
 pub(crate) struct SharedMap<K, V>(Rc<RefCell<HashMap<K, V>>>);
 
 impl<K, V> Default for SharedMap<K, V> {

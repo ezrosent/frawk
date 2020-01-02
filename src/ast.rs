@@ -25,8 +25,6 @@ pub struct FunDec<'a, 'b, I> {
 }
 
 pub struct Prog<'a, 'b, I> {
-    // TODO: Add variants for CallFunction in PrimExpr, Return in PrimStmt, (make sure to handle
-    // the loop stack appropriately as well).
     pub decs: Vec<FunDec<'a, 'b, I>>,
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
     pub end: Option<&'a Stmt<'a, 'b, I>>,
@@ -105,12 +103,12 @@ pub enum Binop {
 //
 // TODO add support for "next"; just continue to the toplevel loop -- annotate while loop?
 // TODO add "close", make cache for regexes LRU.
-// TODO trig functions
+// TODO trig functions, !=, any missing operators.
 // TODO printf
-// TODO add UDFs
 // TODO CLI
 // TODO multiple files
 // TODO backend
+//
 //
 // TVar is the variable?
 

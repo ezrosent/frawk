@@ -47,7 +47,7 @@ Begin: &'a Stmt<'a,'a,&'a str> = {
 }
 
 End: &'a Stmt<'a,'a,&'a str> = {
-    "END" NL <Block> => <>
+    "END" NL <Block> NL => <>
 }
 
 PatAction: (Option<&'a Expr<'a,'a,&'a str>>, Option<&'a Stmt<'a,'a,&'a str>>) = {
