@@ -283,7 +283,6 @@ pub(crate) enum Instr<'a> {
 
     Call(usize),
     Ret,
-    // TODO use registers to store results and load them.
 }
 
 impl<T> Reg<T> {
