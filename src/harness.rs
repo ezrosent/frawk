@@ -413,20 +413,6 @@ for (k in m) {
         "49.0\n"
     );
 
-    // This test fails, for rather problematic reasons.
-    // Should we add CFG edges to callsites? (This will create spurious paths across call-sites,
-    // maybe we want to do it incrementally?)
-    // We may need some handling of this form to get LLVM's handling of globals appropriate, but we
-    // also want to accomodate awk programs that do not use functions at all.
-    //
-    // We can also issue "phantom writes" based on the content of a function after a call. Phantom
-    // writes "compile down" to nothing, but they point back to the spot in a function to rename a
-    // given variable, and they propagate up to main.
-    //
-    // Every function has a list of def sites ((global) ident, function, nodeix, index into bb),
-    // along with a list of functions that are called.
-    //  Q: do we have to duplicate functions? (e.g. one per call?)
-    //  - I hope not! It raises a lot of questions (about like polymorphism, etc.)
     test_program!(
         global_from_function,
         r#"function setx(a) { x=a; }
@@ -440,7 +426,5 @@ for (k in m) {
         @types [x :: Str]
     );
 
-    // TODO test functions
-    // - assigning to global variables from within different function invocations
-    // TODO test more operators
+    // TODO test more operators, consider more edge cases around functions
 }
