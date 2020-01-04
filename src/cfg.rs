@@ -12,23 +12,6 @@ use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-// TODO add Call/Return to bytecode, wire into compile
-//  - currently the types have a map from Vec<state>,Ident -> state
-//  - does the `flatten` map to Vec<Ty>,Ident -> Ty "conform" in the appropriate way? It should...
-//    It should be easy enough to check in-flight. If they conflict, we of course want the "more
-//    concrete" one, but we should at least think about if them not
-//    matching points to a bug of some kind. We can do the conversion
-//    when building the map. (done)
-//    (NOTE we may want to take the "right adjoint" here by mapping all the args to a compile::Ty
-//    then mapping them back, then running everything again)
-//
-//    Registers will now have to be indexed by <Vec<Ty>, Ident> in the same way as types.
-//
-//    Then during compilation we can have a new set of function identifiers, indexed by arg types.
-//    per-type stacks. per-type "return registers". That will be enough to implement function
-//    calls.
-// TODO add a Return PrimStmt (? -- maybe just to the bytecode)
-
 #[derive(Debug, Default)]
 pub(crate) struct BasicBlock<'a> {
     pub q: VecDeque<PrimStmt<'a>>,
@@ -204,6 +187,7 @@ where
     ) -> Result<Self> {
         let mut shared: GlobalContext<I> = GlobalContext {
             hm: Default::default(),
+            local_globals: Default::default(),
             may_rename: Default::default(),
             max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations
             tmp_fs: None,
@@ -312,7 +296,11 @@ struct View<'a, 'b, I> {
 
 #[derive(Debug)]
 struct GlobalContext<I> {
+    // Map the identifiers from the AST to this IR's Idents.
     hm: HashMap<I, Ident>,
+    // Global identifiers to rewrite global => local. We only store the `low` field of the
+    // identifier.
+    local_globals: HashSet<NumTy>,
 
     // Many identifiers are generated and assigned to only once by construction, so we do not add
     // them to the work list for renaming. All named identifiers are added, as well as the ones
@@ -1173,6 +1161,8 @@ where
     }
 
     fn record_ident(&mut self, id: Ident, blk: NodeIx) {
+        // TODO: add a new set to the global context indicating which functions write to `id`, if
+        // it is a global. That will then be used to rewrite it as a local.
         self.f
             .defsites
             .entry(id)
@@ -1191,11 +1181,19 @@ where
         if let Some(ix) = self.f.args_map.get(i) {
             self.f.args[*ix as usize].id
         } else if let Some(id) = self.ctx.hm.get(i) {
+            // We have found a global identifier that is not in main. Make sure it is not marked as
+            // local.
+            if id.global && self.f.name.is_some() {
+                self.ctx.local_globals.remove(&id.low);
+            }
             *id
         } else {
             let next = self.fresh();
             self.ctx.hm.insert(i.clone(), next);
             self.ctx.may_rename.push(next);
+            if self.f.name.is_none() {
+                self.ctx.local_globals.insert(next.low);
+            }
             next
         }
     }
@@ -1230,6 +1228,9 @@ where
         // TODO rework this iteration to explicitly intersect may_rename and defsites? That way we
         // do O(min(|defsites|,|may_rename|)) work.
         for ident in self.ctx.may_rename.iter().cloned() {
+            if ident.global && self.ctx.local_globals.get(&ident.low).is_none() {
+                continue;
+            }
             // Add all defsites into the worklist.
             let defsites = if let Some(ds) = self.f.defsites.get(&ident) {
                 ds
@@ -1269,24 +1270,41 @@ where
     }
 
     fn rename(&mut self, cur: NodeIx) {
+        // TODO mark elements of renamestack as ones that do not progress, thereby changing the
+        // behavior or get_next and latest
         #[derive(Clone)]
         struct RenameStack {
+            // global variables do not get renamed and have no phi functions.
+            global: bool,
             count: NumTy,
             stack: SmallVec<NumTy>,
         }
 
         impl RenameStack {
             fn latest(&self) -> NumTy {
-                *self
-                    .stack
-                    .last()
-                    .expect("variable stack should never be empty")
+                if self.global {
+                    0
+                } else {
+                    *self
+                        .stack
+                        .last()
+                        .expect("variable stack should never be empty")
+                }
             }
             fn get_next(&mut self) -> NumTy {
-                let next = self.count + 1;
-                self.count = next;
-                self.stack.push(next);
-                next
+                if self.global {
+                    0
+                } else {
+                    let next = self.count + 1;
+                    self.count = next;
+                    self.stack.push(next);
+                    next
+                }
+            }
+            fn pop(&mut self) {
+                if !self.global {
+                    self.stack.pop().unwrap();
+                }
             }
         }
 
@@ -1370,17 +1388,22 @@ where
                 rename_recursive(f, NodeIx::new(*child as usize), state);
             }
             for d in defs.into_iter() {
-                let _res = state[d as usize].stack.pop();
-                debug_assert!(_res.is_some());
+                state[d as usize].pop();
             }
         }
         let mut state = vec![
             RenameStack {
+                global: false,
                 count: 0,
                 stack: smallvec![0],
             };
             self.ctx.max as usize
         ];
+        for id in self.ctx.hm.values() {
+            if id.global && self.ctx.local_globals.get(&id.low).is_none() {
+                state[id.low as usize].global = true;
+            }
+        }
         rename_recursive(self.f, cur, &mut state);
     }
 }

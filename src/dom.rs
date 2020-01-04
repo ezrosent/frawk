@@ -277,6 +277,7 @@ impl NodeInfo {
         self.dfsnum != NODEINFO_UNINIT
     }
 }
+
 const NODEINFO_UNINIT: NumTy = !0;
 
 #[cfg(test)]
