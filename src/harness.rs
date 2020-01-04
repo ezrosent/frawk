@@ -426,5 +426,13 @@ for (k in m) {
         @types [x :: Str]
     );
 
+    test_program!(
+        local_globals,
+        r#"END { x = "hi"; x = 1; y = x; }"#,
+        "",
+        @input "",
+        @types [y :: Int]
+    );
+
     // TODO test more operators, consider more edge cases around functions
 }
