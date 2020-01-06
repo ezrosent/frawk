@@ -73,7 +73,7 @@ pub(crate) fn run_prog<'a>(
     }
     let ctx = cfg::ProgramContext::from_prog(arena, prog)?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
-    // a limited capacity for locals, but it would require a lt more bookkeeping.
+    // a limited capacity for locals, but it would require a lot more bookkeeping.
     let ident_map = ctx._invert_ident();
     let stdin = stdin.into();
     let stdout = FakeStdout::default();

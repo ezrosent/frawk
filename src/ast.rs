@@ -108,6 +108,7 @@ pub enum Binop {
 // TODO CLI
 // TODO multiple files
 // TODO backend
+// TODO full /pat1/../pat2/ patterns
 //
 //
 // TVar is the variable?
