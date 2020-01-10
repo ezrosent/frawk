@@ -341,18 +341,10 @@ pub(crate) struct Arg<I> {
 pub(crate) struct Function<'a, I> {
     pub name: Option<I>,
     pub ident: NumTy,
-    pub args: SmallVec<Arg<I>>,
-    // Indexes into args, to guard against adversarially large functions.
+    // args_map maps from ast-level ident to an index into args.
     args_map: HashMap<I, NumTy>,
+    pub args: SmallVec<Arg<I>>,
     ret: Ident,
-    // TODO args
-    //  * args get placed in local variables immediately?
-    //  * args are just local variables?
-    // TODO Local identifiers in addition to global ones.
-    //  * temporary variables are local?
-    //  * "Function Table" during type inference should have pointers to local variables as well,
-    //  that way you can have a map : global -> Ty, as well as local_name -> arg_tys -> ty
-    //  * We can keep the flat namespace, but add a bool (or enum) to Ident indicating global or
     pub cfg: CFG<'a>,
 
     defsites: HashMap<Ident, HashSet<NodeIx>>,
