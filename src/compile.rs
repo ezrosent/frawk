@@ -370,9 +370,8 @@ impl<'a, 'b> View<'a, 'b> {
                 }
             }
             if is_end {
-                // TODO This should only happen in `main`, we should just allow main to have return
-                // statements and not use Halt here at all.
-                // block.
+                // TODO Halt is no longer emitted; we may want to remove it now that there's
+                // Return.
                 self.push(Instr::Halt);
             }
         }
