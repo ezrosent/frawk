@@ -1,6 +1,4 @@
 #![feature(test)]
-#![feature(unboxed_closures)]
-#![feature(fn_traits)]
 #[macro_use]
 pub mod common;
 pub mod arena;
@@ -13,6 +11,7 @@ mod display;
 pub mod dom;
 pub mod harness;
 pub mod lexer;
+pub mod llvm;
 pub mod runtime;
 pub mod types;
 extern crate elsa;
@@ -21,6 +20,7 @@ extern crate jemallocator;
 extern crate lalrpop_util;
 extern crate lazy_static;
 extern crate libc;
+extern crate llvm_sys;
 extern crate petgraph;
 extern crate rand;
 extern crate regex;
@@ -54,7 +54,11 @@ const PROGRAM_4: &'static str = r#"
 END { for (i=0; i<1000000; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
 
 fn main() {
+    unsafe { llvm::test_codegen() };
     // TODO add a real main function
-    let a = arena::Arena::default();
-    println!("{}", harness::run_program(&a, PROGRAM_4, "").unwrap().0);
+    if false {
+        let a = arena::Arena::default();
+        println!("{}", harness::run_program(&a, PROGRAM_4, "").unwrap().0);
+    }
+    eprintln!("exiting cleanly");
 }
