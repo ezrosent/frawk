@@ -28,18 +28,21 @@ pub unsafe fn test_codegen() {
     // LLVM boilerplate
     //   * figure out issues with module verification.
     // Compilation metadata
-    //   * For each bytecode function have a set of (type, register) pairs and for each one
+    //  x* For each bytecode function have a set of (type, register) pairs and for each one
     //   indicate
     //      - if it is local  (normal local variable)
     //      - if it is global (passed as additional parameter)
     //      - if it is a return (ignored)
-    //   * For each bytecode function, indicate how many arguments it has, and of what type args
+    //  x* For each bytecode function, indicate how many arguments it has, and of what type args
     //     and returns are (we should already have this lying around)
-    //   * For each bytecode function, have a mapping from Call and Return to arguments and
+    //  x* For each bytecode function, have a mapping from Call and Return to arguments and
     //     returns. Call mappings should also include the register (i.e. local or global variable,
     //     or return) in which to store the result.
-    //   * Keys for all these mappings can be *const pointers. That should simplify a number of
+    //  x* Keys for all these mappings can be *const pointers. That should simplify a number of
     //     things. For one, it means we wont have to alter what bytecode does.
+    //   * Figure out CFG reconstruction. Can you do it on-the-fly, or do we want to invert the
+    //     mapping we create when flattening it out.
+    //
     // Runtime
     //   * Figure out extern-C-able versions of the runtime.
     //   * Make sure main uses all functions somehow.
@@ -53,6 +56,7 @@ pub unsafe fn test_codegen() {
     //   * Functions get relevant globals as arguments. Ints and Floats do just
     //     fine, though we still have to figure out that the plan is for Maps.
     //     Globals and locals are aloca'd in the entry block (of main only, for globals).
+    //     * Computing relevant globals will require some sort of call graph traveral.
     //   * We need to figure out what to do about Str.
     //      - We may need a custom Rc that we can store in a pointer (having the ref-count "one
     //        word back" or some-such; then expose everything using that).
