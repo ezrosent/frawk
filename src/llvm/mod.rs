@@ -38,8 +38,6 @@ pub unsafe fn test_codegen() {
     //   * For each bytecode function, have a mapping from Call and Return to arguments and
     //     returns. Call mappings should also include the register (i.e. local or global variable,
     //     or return) in which to store the result.
-    //     TODO we need to think some of this through a little more re: return registers, etc.
-    //     In particular, we may have to convert the destination register.
     //   * Keys for all these mappings can be *const pointers. That should simplify a number of
     //     things. For one, it means we wont have to alter what bytecode does.
     // Runtime

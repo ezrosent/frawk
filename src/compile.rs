@@ -275,8 +275,15 @@ struct Frame<'a> {
     instrs: Vec<Instr<'a>>,
 
     // Used for codegen only.
-    calls: HashMap<usize /* index into instrs*/, SmallVec<(NumTy /*reg*/, Ty)>>,
-    rets: HashMap<usize /*  */, Option<(NumTy /*reg*/, Ty)>>,
+    calls: HashMap<
+        usize, /* index into instrs*/
+        (
+            NumTy, /*return reg*/
+            Ty,
+            SmallVec<(NumTy /*arg reg*/, Ty)>,
+        ),
+    >,
+    rets: HashMap<usize, Option<(NumTy /*return reg*/, Ty)>>,
 }
 
 struct View<'a, 'b> {
@@ -868,15 +875,14 @@ impl<'a, 'b> View<'a, 'b> {
                 for (reg, ty) in locals.iter().cloned() {
                     self.push_var(reg, ty)?;
                 }
-                let mut call_info = SmallVec::with_capacity(arg_regs.len());
+                let mut arg_info = SmallVec::with_capacity(arg_regs.len());
                 // Push onto the stack in the given order; we pop them off in reverse in
                 // `process_function`.
                 for (reg, ty) in arg_regs.iter().cloned().zip(arg_tys.iter().cloned()) {
                     self.push_var(reg, ty)?;
-                    call_info.push((reg, ty));
+                    arg_info.push((reg, ty));
                 }
                 let call_index = self.push_with_len(Instr::Call(monomorphized as usize));
-                self.frame.calls.insert(call_index, call_info);
 
                 // We've returned. Restore any local variables that we saved on the stack and that
                 // could have gotten clobbered in the meantime.
@@ -886,12 +892,23 @@ impl<'a, 'b> View<'a, 'b> {
                 }
 
                 // Move the function's return value into the destination.
-                //
-                // XXX can we always count on this emitting an instruction? We rely on returns
-                // jumping back one instruction after the call. Is there always such an
-                // instruction? It seems like a "yes"; you need a Halt or Return to end an
-                // instruction stream.
-                self.convert(dst_reg, dst_ty, info.ret_reg, info.ret_ty)?;
+                // For insertion into into `calls` map.
+                let mut call_reg = dst_reg;
+                let ret_ty = info.ret_ty;
+                let (src_reg, src_ty) = if ret_ty != dst_ty {
+                    // For code generation, we need to have a register in our frame that is the
+                    // same type as the return register. Allocate one if necessary.
+                    let inter_reg = reg_of_ty!(self.regs, ret_ty);
+                    self.mov(inter_reg, info.ret_reg, ret_ty)?;
+                    call_reg = inter_reg;
+                    (inter_reg, ret_ty)
+                } else {
+                    (info.ret_reg, info.ret_ty)
+                };
+                self.convert(dst_reg, dst_ty, src_reg, src_ty)?;
+                self.frame
+                    .calls
+                    .insert(call_index, (call_reg, ret_ty, arg_info));
             }
             PrimExpr::Index(arr, k) => {
                 let (arr_reg, arr_ty) = if let PrimVal::Var(arr_id) = arr {
