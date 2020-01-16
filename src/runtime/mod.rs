@@ -14,7 +14,7 @@ pub mod str_impl;
 pub mod strton;
 pub mod utf8;
 
-pub(crate) use str_impl::Str;
+pub use str_impl::Str;
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.

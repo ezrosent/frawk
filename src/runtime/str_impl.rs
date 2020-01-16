@@ -21,7 +21,7 @@ struct Branch<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Str<'a>(RefCell<Inner<'a>>);
+pub struct Str<'a>(RefCell<Inner<'a>>);
 impl<'a> Default for Str<'a> {
     fn default() -> Str<'a> {
         Str(RefCell::new(Inner::Literal("")))
