@@ -7,6 +7,8 @@ use llvm::{
     LLVMLinkage,
 };
 
+pub mod runtime;
+
 use std::ffi::CStr;
 use std::mem::{self, MaybeUninit};
 use std::ptr;
