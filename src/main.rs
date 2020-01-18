@@ -55,6 +55,8 @@ END { for (i=0; i<1000000; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
 
 fn main() {
     unsafe { llvm::test_codegen() };
+    let p = llvm::__test_print as *mut u8;
+    let _ = unsafe { std::ptr::read_volatile(p) };
     // TODO add a real main function
     if false {
         let a = arena::Arena::default();
