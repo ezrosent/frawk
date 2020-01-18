@@ -297,6 +297,15 @@ struct Storage<T> {
     stack: Vec<T>,
 }
 
+impl<T: Default> Storage<T> {
+    fn reset(&mut self) {
+        self.stack.clear();
+        for i in self.regs.iter_mut() {
+            *i = Default::default();
+        }
+    }
+}
+
 // TODO: Want a Vec<Vec<Instr>> indexed by function.
 // TODO: Can we use the Rust stack to do calls? We should probably have a stack of (function index,
 // instr index) to store the continuation. That'll make tail calls easier later on if we want to
@@ -347,6 +356,26 @@ impl<'a> Interp<'a> {
     pub(crate) fn instrs(&self) -> &Vec<Vec<Instr<'a>>> {
         &self.instrs
     }
+
+    pub(crate) fn reset(&mut self) {
+        self.stack = Default::default();
+        self.vars = Default::default();
+        self.line = "".into();
+        self.split_line = LazyVec::new();
+        self.regexes = Default::default();
+        self.floats.reset();
+        self.ints.reset();
+        self.strs.reset();
+        self.maps_int_int.reset();
+        self.maps_int_float.reset();
+        self.maps_int_str.reset();
+        self.maps_str_int.reset();
+        self.maps_str_float.reset();
+        self.maps_str_str.reset();
+        self.iters_int.reset();
+        self.iters_str.reset();
+    }
+
     pub(crate) fn new(
         instrs: Vec<Vec<Instr<'a>>>,
         main_func: usize,

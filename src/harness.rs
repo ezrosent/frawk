@@ -4,13 +4,32 @@
 use crate::{
     arena::Arena,
     ast,
+    bytecode::Interp,
     cfg::{self, Ident},
     common::Result,
     compile, lexer, syntax,
     types::{self, get_types},
 };
 use hashbrown::HashMap;
+use std::cell::RefCell;
+use std::io;
 use std::io::Write;
+use std::rc::Rc;
+#[derive(Clone, Default)]
+struct FakeStdout(Rc<RefCell<Vec<u8>>>);
+impl io::Write for FakeStdout {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.borrow_mut().flush()
+    }
+}
+impl FakeStdout {
+    fn clear(&self) {
+        self.0.borrow_mut().truncate(0);
+    }
+}
 
 const PRINT_DEBUG_INFO: bool = false;
 
@@ -29,6 +48,13 @@ pub(crate) fn run_program<'a>(
 ) -> ProgResult<'a> {
     let stmt = parse_program(prog, a)?;
     run_prog(a, stmt, stdin)
+}
+
+pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>) -> Result<String> {
+    let a = Arena::default();
+    let stmt = parse_program(prog, &a)?;
+    let (mut interp, stdout) = compile_program(&a, stmt, stdin)?;
+    run_prog_nodebug(&mut interp, stdout)
 }
 
 pub(crate) fn parse_program<'a, 'inp, 'outer>(
@@ -53,24 +79,36 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     }
 }
 
+fn compile_program<'a, 'inp, 'outer>(
+    a: &'a Arena<'outer>,
+    prog: Prog<'a>,
+    stdin: impl Into<String>,
+) -> Result<(Interp<'a>, FakeStdout)> {
+    let ctx = cfg::ProgramContext::from_prog(a, prog)?;
+    let stdin = stdin.into();
+    let stdout = FakeStdout::default();
+    Ok((
+        compile::bytecode(&ctx, std::io::Cursor::new(stdin), stdout.clone())?,
+        stdout,
+    ))
+}
+
+fn run_prog_nodebug<'a>(interp: &mut Interp<'a>, stdout: FakeStdout) -> Result<String /*output*/> {
+    interp.run()?;
+    let v = match Rc::try_unwrap(stdout.0) {
+        Ok(v) => v.into_inner(),
+        Err(rc) => rc.borrow().clone(),
+    };
+    match String::from_utf8(v) {
+        Ok(s) => Ok(s),
+        Err(e) => err!("program produced invalid unicode: {}", e),
+    }
+}
 pub(crate) fn run_prog<'a>(
     arena: &'a Arena,
     prog: Prog<'a>,
     stdin: impl Into<String>,
 ) -> ProgResult<'a> {
-    use std::cell::RefCell;
-    use std::io;
-    use std::rc::Rc;
-    #[derive(Clone, Default)]
-    struct FakeStdout(Rc<RefCell<Vec<u8>>>);
-    impl io::Write for FakeStdout {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.borrow_mut().write(buf)
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            self.0.borrow_mut().flush()
-        }
-    }
     let ctx = cfg::ProgramContext::from_prog(arena, prog)?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
     // a limited capacity for locals, but it would require a lot more bookkeeping.
@@ -147,7 +185,9 @@ pub(crate) fn run_prog<'a>(
 
 #[cfg(test)]
 mod tests {
+    extern crate test;
     use super::*;
+    use test::{black_box, Bencher};
 
     macro_rules! test_program {
         ($desc:ident, $e:expr, $out:expr) => {
@@ -435,4 +475,58 @@ for (k in m) {
     );
 
     // TODO test more operators, consider more edge cases around functions
+
+    // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,
+    // because "reset" does not work on stdin today.
+    macro_rules! bench_program {
+        ($desc:ident, $e:expr) => {
+            bench_program!($desc, $e, @input "");
+        };
+        ($desc:ident, $e:expr, @input $inp:expr) => {
+            mod $desc {
+                use super::*;
+                #[bench]
+                fn end_to_end(b: &mut Bencher) {
+                    b.iter(|| {
+                        black_box(bench_program($e, $inp).unwrap());
+                    });
+                }
+                #[bench]
+                fn program_only(b: &mut Bencher) {
+                    let a = Arena::default();
+                    let prog = parse_program($e, &a).unwrap();
+                    let (mut interp, stdout) = compile_program(&a, prog, $inp).unwrap();
+                    b.iter(|| {
+                        black_box(run_prog_nodebug(&mut interp, stdout.clone()).unwrap());
+                        interp.reset();
+                        stdout.clear();
+                    });
+                }
+            }
+        };
+    }
+
+    bench_program!(
+        sum_integer_10k,
+        r#"END { for (i=0; i<10000; i++) {SUM += i;}; print SUM }"#
+    );
+    bench_program!(
+        sum_integer_hist_10k,
+        r#"END { for (i=0; i<10000; i++) {SUMS[i]++; SUM += i;}; print SUM }"#
+    );
+    bench_program!(
+        sum_integer_str_hist_10k,
+        r#"END { for (i=0; i<10000; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#
+    );
+    bench_program!(
+        recursive_fib_15,
+        r#"
+function fib(n) {
+if (n == 0 || n == 1) {
+return n;
+}
+return fib(n-1) + fib(n-2);
+}
+END { print fib(15); }"#
+    );
 }
