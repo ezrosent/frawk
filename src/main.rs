@@ -59,8 +59,7 @@ fn main() {
     let _ = unsafe { std::ptr::read_volatile(p) };
     // TODO add a real main function
     if false {
-        let a = arena::Arena::default();
-        println!("{}", harness::run_program(&a, PROGRAM_4, "").unwrap().0);
+        println!("{}", harness::bench_program(PROGRAM_4, "").unwrap());
     }
     eprintln!("exiting cleanly");
 }
