@@ -10,9 +10,10 @@ use std::any::Any;
 use std::fmt;
 use std::rc::Rc;
 
+#[repr(C)]
 pub(crate) struct Shared<T: ?Sized> {
-    base: Rc<dyn Any>,
     trans: *const T,
+    base: Rc<dyn Any>,
 }
 
 impl<T: 'static + ?Sized> fmt::Debug for Shared<T>

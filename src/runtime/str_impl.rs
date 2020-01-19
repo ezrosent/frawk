@@ -5,6 +5,149 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+mod new {
+    use std::cell::Cell;
+    use std::marker::PhantomData;
+    use std::mem;
+    use std::rc::Rc;
+
+    #[repr(C)]
+    struct SharedStr {
+        start: *const u8,
+        len: usize,
+        base: Rc<String>,
+    }
+
+    #[repr(C)]
+    struct Literal<'a> {
+        ptr: *const u8,
+        len: usize,
+        marker: PhantomData<&'a str>,
+    }
+
+    struct ConcatInner<'a> {
+        len: u32,
+        left: Str<'a>,
+        right: Str<'a>,
+    }
+
+    const EMPTY: usize = 0;
+    const SHARED: usize = 1;
+    const LITERAL: usize = 2;
+    const CONCAT: usize = 3;
+    const NUM_VARIANTS: usize = 4;
+
+    #[repr(transparent)]
+    struct Inner<'a>(usize, PhantomData<&'a ()>);
+
+    impl<'a> Default for Inner<'a> {
+        fn default() -> Inner<'a> {
+            Inner(0, PhantomData)
+        }
+    }
+
+    impl<'a> From<Rc<SharedStr>> for Inner<'a> {
+        fn from(s: Rc<SharedStr>) -> Inner<'a> {
+            unsafe {
+                Inner(
+                    mem::transmute::<Rc<SharedStr>, usize>(s) | SHARED,
+                    PhantomData,
+                )
+            }
+        }
+    }
+
+    impl<'a> From<Rc<ConcatInner<'a>>> for Inner<'a> {
+        fn from(s: Rc<ConcatInner<'a>>) -> Inner<'a> {
+            unsafe {
+                Inner(
+                    mem::transmute::<Rc<ConcatInner>, usize>(s) | CONCAT,
+                    PhantomData,
+                )
+            }
+        }
+    }
+    impl<'a> From<Rc<Literal<'a>>> for Inner<'a> {
+        fn from(lit: Rc<Literal<'a>>) -> Inner<'a> {
+            unsafe {
+                Inner(
+                    mem::transmute::<Rc<Literal<'a>>, usize>(lit) | LITERAL,
+                    PhantomData,
+                )
+            }
+        }
+    }
+
+    impl<'a> From<String> for Inner<'a> {
+        fn from(s: String) -> Inner<'a> {
+            if s.len() == 0 {
+                return Inner::default();
+            }
+            let rcd = Rc::new(s);
+            Rc::new(SharedStr {
+                start: rcd.as_ptr(),
+                len: rcd.len(),
+                base: rcd.clone(),
+            })
+            .into()
+        }
+    }
+
+    impl<'a> From<&'a str> for Inner<'a> {
+        fn from(s: &'a str) -> Inner<'a> {
+            Rc::new(Literal {
+                ptr: s.as_ptr(),
+                len: s.len(),
+                marker: PhantomData,
+            })
+            .into()
+        }
+    }
+
+    impl<'a> Clone for Inner<'a> {
+        fn clone(&self) -> Inner<'a> {
+            let tag = self.0 & 0x7;
+            let addr = self.0 & !(0x7);
+            debug_assert!(tag < NUM_VARIANTS);
+            unsafe {
+                match tag {
+                    SHARED => mem::transmute::<usize, Rc<SharedStr>>(addr).clone().into(),
+                    // for completeness. This drop should be trivial
+                    LITERAL => mem::transmute::<usize, Rc<Literal<'a>>>(addr)
+                        .clone()
+                        .into(),
+                    CONCAT => mem::transmute::<usize, Rc<ConcatInner<'a>>>(addr)
+                        .clone()
+                        .into(),
+                    EMPTY => Inner::default(),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    impl<'a> Drop for Inner<'a> {
+        fn drop(&mut self) {
+            let tag = self.0 & 0x7;
+            let addr = self.0 & !(0x7);
+            debug_assert!(tag < NUM_VARIANTS);
+            unsafe {
+                match tag {
+                    // TODO fix
+                    SHARED => mem::drop(mem::transmute::<usize, Rc<SharedStr>>(addr)),
+                    // for completeness. This drop should be trivial
+                    LITERAL => mem::drop(mem::transmute::<usize, Rc<Literal<'a>>>(addr)),
+                    CONCAT => mem::drop(mem::transmute::<usize, Rc<ConcatInner<'a>>>(addr)),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[repr(transparent)]
+    struct Str<'a>(Cell<Inner<'a>>);
+}
+
 #[derive(Clone, Debug)]
 enum Inner<'a> {
     Literal(&'a str),
@@ -187,6 +330,7 @@ impl<'a> Str<'a> {
 #[cfg(test)]
 mod string_tests {
     use super::*;
+
     #[test]
     fn concat_test() {
         let s1 = Str::from("hi there fellow");
