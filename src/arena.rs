@@ -38,7 +38,9 @@ impl Chunk {
     }
     unsafe fn alloc_inner<T>(&self, n: usize) -> Option<*mut T> {
         let size = mem::size_of::<T>() * n;
-        let align = mem::align_of::<T>();
+        // We plan to do some pointer-tagging elsewhere in the stack. Malloc will hand us back
+        // 8-byte aligned addresses; let's make sure to do the same.
+        let align = std::cmp::min(8, mem::align_of::<T>());
         let len = self.len.get();
         let cap = CHUNK_SIZE;
 
