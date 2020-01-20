@@ -8,6 +8,7 @@ use std::io::{self, BufWriter, Write};
 use std::iter::FromIterator;
 use std::rc::Rc;
 
+pub mod bytes_rc;
 pub mod shared;
 pub mod splitter;
 pub mod str_impl;
