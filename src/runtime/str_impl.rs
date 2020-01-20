@@ -4,29 +4,19 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-
+/*
 mod new {
     use std::cell::Cell;
     use std::marker::PhantomData;
     use std::mem;
     use std::rc::Rc;
 
-    #[repr(C)]
-    struct SharedStr {
-        start: *const u8,
-        len: usize,
-        base: Rc<String>,
-    }
+    // for shared, we encode start and end as u32s, with the tagged pointer as the second u64.
 
-    #[repr(C)]
-    struct Literal<'a> {
-        ptr: *const u8,
-        len: usize,
-        marker: PhantomData<&'a str>,
-    }
+    #[repr(transparent)]
+    struct Literal<'a>(*const u8, PhantomData<&'a str>)
 
     struct ConcatInner<'a> {
-        len: u32,
         left: Str<'a>,
         right: Str<'a>,
     }
@@ -35,48 +25,56 @@ mod new {
     const SHARED: usize = 1;
     const LITERAL: usize = 2;
     const CONCAT: usize = 3;
-    const NUM_VARIANTS: usize = 4;
+    // used only when a string is >=2^32 in size
+    const BOXED: usize = 4;
+    const NUM_VARIANTS: usize = 5;
 
-    #[repr(transparent)]
-    struct Inner<'a>(usize, PhantomData<&'a ()>);
+    #[repr(C)]
+    struct Inner<'a> {
+        // Usually length
+        hi: usize,
+        // Usually pointer
+        lo: usize,
+        marker: PhantomData<&'a ()>,
+    };
 
     impl<'a> Default for Inner<'a> {
         fn default() -> Inner<'a> {
-            Inner(0, PhantomData)
+            Inner{hi: 0, lo: 0, marker: PhantomData, }
         }
     }
 
-    impl<'a> From<Rc<SharedStr>> for Inner<'a> {
-        fn from(s: Rc<SharedStr>) -> Inner<'a> {
-            unsafe {
-                Inner(
-                    mem::transmute::<Rc<SharedStr>, usize>(s) | SHARED,
-                    PhantomData,
-                )
-            }
-        }
-    }
+    // impl<'a> From<Rc<SharedStr>> for Inner<'a> {
+    //     fn from(s: Rc<SharedStr>) -> Inner<'a> {
+    //         unsafe {
+    //             Inner(
+    //                 mem::transmute::<Rc<SharedStr>, usize>(s) | SHARED,
+    //                 PhantomData,
+    //             )
+    //         }
+    //     }
+    // }
 
-    impl<'a> From<Rc<ConcatInner<'a>>> for Inner<'a> {
-        fn from(s: Rc<ConcatInner<'a>>) -> Inner<'a> {
-            unsafe {
-                Inner(
-                    mem::transmute::<Rc<ConcatInner>, usize>(s) | CONCAT,
-                    PhantomData,
-                )
-            }
-        }
-    }
-    impl<'a> From<Rc<Literal<'a>>> for Inner<'a> {
-        fn from(lit: Rc<Literal<'a>>) -> Inner<'a> {
-            unsafe {
-                Inner(
-                    mem::transmute::<Rc<Literal<'a>>, usize>(lit) | LITERAL,
-                    PhantomData,
-                )
-            }
-        }
-    }
+    // impl<'a> From<Rc<ConcatInner<'a>>> for Inner<'a> {
+    //     fn from(s: Rc<ConcatInner<'a>>) -> Inner<'a> {
+    //         unsafe {
+    //             Inner(
+    //                 mem::transmute::<Rc<ConcatInner>, usize>(s) | CONCAT,
+    //                 PhantomData,
+    //             )
+    //         }
+    //     }
+    // }
+    // impl<'a> From<Rc<Literal<'a>>> for Inner<'a> {
+    //     fn from(lit: Rc<Literal<'a>>) -> Inner<'a> {
+    //         unsafe {
+    //             Inner(
+    //                 mem::transmute::<Rc<Literal<'a>>, usize>(lit) | LITERAL,
+    //                 PhantomData,
+    //             )
+    //         }
+    //     }
+    // }
 
     impl<'a> From<String> for Inner<'a> {
         fn from(s: String) -> Inner<'a> {
@@ -84,6 +82,7 @@ mod new {
                 return Inner::default();
             }
             let rcd = Rc::new(s);
+            let ptr = mem::transmute<Rc<String>, usize>(rcd) | SHARED;
             Rc::new(SharedStr {
                 start: rcd.as_ptr(),
                 len: rcd.len(),
@@ -146,7 +145,7 @@ mod new {
 
     #[repr(transparent)]
     struct Str<'a>(Cell<Inner<'a>>);
-}
+} */
 
 #[derive(Clone, Debug)]
 enum Inner<'a> {
