@@ -9,6 +9,12 @@ use std::rc::Rc;
 use std::slice;
 use std::str;
 
+// TODO: Inline strings:
+//  * If tag matches, then last byte shifted by 3 contains length of string, using up to the
+//  remaining 15 bytes. That's 5 bits to store the length, which is plenty.
+// TODO: add some macros to make "pattern matching" less error-prone (and to force errors if we add
+// new variants and forget a case?)
+
 const EMPTY: usize = 0;
 const SHARED: usize = 1;
 const LITERAL: usize = 2;
