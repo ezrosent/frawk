@@ -15,7 +15,8 @@ pub mod str_impl;
 pub mod strton;
 pub mod utf8;
 
-pub use str_impl::Str;
+pub use bytes_rc::Str;
+// pub use str_impl::Str;
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.
@@ -293,7 +294,7 @@ impl FileRead {
     }
     pub(crate) fn get_line_stdin<'a>(&mut self, pat: &Regex) -> Str<'a> {
         match &mut self.stdin {
-            Some(s) => s.read_line(pat),
+            Some(s) => s.read_line(pat).upcast(),
             None => "".into(),
         }
     }
@@ -304,7 +305,7 @@ impl FileRead {
             .unwrap_or(splitter::ReaderState::EOF as Int)
     }
     pub(crate) fn get_line<'a>(&mut self, path: &Str<'a>, pat: &Regex) -> Result<Str<'a>> {
-        self.with_file(path, |reader| Ok(reader.read_line(pat)))
+        self.with_file(path, |reader| Ok(reader.read_line(pat).upcast()))
     }
     pub(crate) fn read_err<'a>(&mut self, path: &Str<'a>) -> Result<Int> {
         self.with_file(path, |reader| Ok(reader.read_state()))
@@ -331,7 +332,7 @@ pub(crate) struct Registry<T> {
     // We could be fine having duplicates for Regex. We could also also intern strings
     // as we go by swapping out one Rc for another as we encounter them. That would keep the
     // fast path fast, but we would have to make sure we weren't keeping any Refs alive.
-    cached: HashMap<Rc<str>, T>,
+    cached: HashMap<Str<'static>, T>,
 }
 impl<T> Default for Registry<T> {
     fn default() -> Self {
@@ -357,13 +358,15 @@ impl<T> Registry<T> {
         getter: impl FnOnce(&mut T) -> Result<R>,
     ) -> Result<R> {
         use hashbrown::hash_map::Entry;
-        let k_str = s.clone_str();
+        let k_str = s.clone().unmoor();
         match self.cached.entry(k_str) {
             Entry::Occupied(mut o) => getter(o.get_mut()),
             Entry::Vacant(v) => {
-                let raw_str = &*v.key();
-                let mut val = new(raw_str)?;
-                let res = getter(&mut val);
+                let (val, res) = v.key().with_str(|raw_str| {
+                    let mut val = new(raw_str)?;
+                    let res = getter(&mut val);
+                    Ok((val, res))
+                })?;
                 v.insert(val);
                 res
             }

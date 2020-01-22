@@ -1,3 +1,4 @@
+#![feature(pattern)]
 #![feature(test)]
 #[macro_use]
 pub mod common;

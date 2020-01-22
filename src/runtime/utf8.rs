@@ -12,7 +12,7 @@ pub(crate) fn parse_utf8(bs: &[u8]) -> Option<&str> {
     }
 }
 
-fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
+pub(crate) fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         #[inline]

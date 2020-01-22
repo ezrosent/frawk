@@ -1,13 +1,15 @@
+use crate::regex::Regex;
 use crate::smallvec::SmallVec;
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::cell::{Cell, UnsafeCell};
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
 use std::rc::Rc;
 use std::slice;
-use std::str;
+use std::str::{self, pattern::Pattern};
 
 // TODO: Inline strings:
 //  * If tag matches, then last byte shifted by 3 contains length of string, using up to the
@@ -65,15 +67,6 @@ struct StrRep<'a> {
     low: u64,
     hi: usize,
     _marker: PhantomData<&'a ()>,
-}
-
-impl<'a> PartialEq for Str<'a> {
-    fn eq(&self, other: &Str<'a>) -> bool {
-        if unsafe { &*self.0.get() == &*other.0.get() } {
-            return true;
-        }
-        self.with_str(|s1| other.with_str(|s2| s1 == s2))
-    }
 }
 
 impl<'a> StrRep<'a> {
@@ -148,29 +141,20 @@ impl<'a> Drop for StrRep<'a> {
     }
 }
 
-impl<'a> From<&'a str> for Str<'a> {
-    fn from(s: &'a str) -> Str<'a> {
+impl<'a> From<String> for Str<'a> {
+    fn from(s: String) -> Str<'a> {
         if s.len() == 0 {
             return Default::default();
         }
-        if s.as_ptr() as usize & 0x7 != 0 {
-            // Strings are not guaranteed to be word aligned. Copy over strings that aren't. This
-            // is more important for tests; most of the places that literals can come from in an
-            // awk program will hand out aligned pointers.
-            let buf = Buf::read_from_str(s);
-            let boxed = Boxed {
-                len: s.len() as u64,
-                buf,
-            };
-            Str::from_rep(boxed.into())
-        } else {
-            let literal = Literal {
-                len: s.len() as u64,
-                ptr: s.as_ptr(),
-                _marker: PhantomData,
-            };
-            Str::from_rep(literal.into())
-        }
+        // Strings are not guaranteed to be word aligned. Copy over strings that aren't. This
+        // is more important for tests; most of the places that literals can come from in an
+        // awk program will hand out aligned pointers.
+        let buf = Buf::read_from_str(s.as_str());
+        let boxed = Boxed {
+            len: s.len() as u64,
+            buf,
+        };
+        Str::from_rep(boxed.into())
     }
 }
 
@@ -182,7 +166,33 @@ impl<'a> From<&'a str> for Str<'a> {
 pub struct Str<'a>(UnsafeCell<StrRep<'a>>);
 
 impl<'a> Str<'a> {
-    fn len(&self) -> usize {
+    pub fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>)) {
+        unimplemented!()
+        // TODO check if with_str ever assigns to .0 after setup
+        // TODO grrr this doesn't compile! May need to do pointer arithmetic?
+        // self.with_str(|s| {
+        //     let mut start = 0;
+        //     for (i, j) in s.match_indices(pat) {
+        //         push(self.slice(start, i));
+        //         start = i + j.len();
+        //     }
+        // });
+        // TODO: this is going to be different than before. Shared made this pretty easy, but we no
+        // longer have that luxury.
+        //
+        // We want to iterate over match_indices
+        //
+        // 1. EMPTY, LITERAL, are both easy. (CONCAT forced away)
+        // 2. BOXED and SHARED will need to iterate over match_indices and essentially just
+        //    inverting it. Use slice to do the scary overflow stuff.
+        // unsafe {
+        //     let rep = &mut *self.0.get();
+        //     match rep.get_tag() {
+        //         EMPTY =>
+        //     }
+        // }
+    }
+    pub fn len(&self) -> usize {
         let rep = unsafe { &mut *self.0.get() };
         rep.len()
     }
@@ -351,7 +361,7 @@ impl<'a> Str<'a> {
         };
         *unsafe { &mut *self.0.get() } = new_rep;
     }
-    pub fn with_str<R>(&self, mut f: impl FnMut(&str) -> R) -> R {
+    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
         let rep = unsafe { &mut *self.0.get() };
         let tag = rep.get_tag();
         unsafe {
@@ -377,6 +387,20 @@ impl<'a> Str<'a> {
             }
         }
     }
+    pub fn unmoor(self) -> Str<'static> {
+        let rep = unsafe { &mut *self.0.get() };
+        let tag = rep.get_tag();
+        if let LITERAL = tag {
+            let new_rep = unsafe {
+                rep.view_as(|lit: &Literal| {
+                    let buf = Buf::read_from_raw(lit.ptr, lit.len as usize);
+                    Boxed { len: lit.len, buf }.into()
+                })
+            };
+            *rep = new_rep;
+        }
+        unsafe { mem::transmute::<Str<'a>, Str<'static>>(self) }
+    }
 }
 
 impl<'a> Clone for Str<'a> {
@@ -393,6 +417,57 @@ impl<'a> Clone for Str<'a> {
             }
         };
         Str(UnsafeCell::new(cloned_rep))
+    }
+}
+
+impl<'a> PartialEq for Str<'a> {
+    fn eq(&self, other: &Str<'a>) -> bool {
+        if unsafe { &*self.0.get() == &*other.0.get() } {
+            return true;
+        }
+        self.with_str(|s1| other.with_str(|s2| s1 == s2))
+    }
+}
+
+impl<'a> Eq for Str<'a> {}
+
+impl<'a> Hash for Str<'a> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.with_str(|s| s.hash(state))
+    }
+}
+
+impl<'a> From<&'a str> for Str<'a> {
+    fn from(s: &'a str) -> Str<'a> {
+        if s.len() == 0 {
+            return Default::default();
+        }
+        if s.as_ptr() as usize & 0x7 != 0 {
+            // Strings are not guaranteed to be word aligned. Copy over strings that aren't. This
+            // is more important for tests; most of the places that literals can come from in an
+            // awk program will hand out aligned pointers.
+            let buf = Buf::read_from_str(s);
+            let boxed = Boxed {
+                len: s.len() as u64,
+                buf,
+            };
+            Str::from_rep(boxed.into())
+        } else {
+            let literal = Literal {
+                len: s.len() as u64,
+                ptr: s.as_ptr(),
+                _marker: PhantomData,
+            };
+            Str::from_rep(literal.into())
+        }
+    }
+}
+
+impl Str<'static> {
+    // Why have this? Parts of the runtime hold onto a Str<'static> to avoid adding a lifetime
+    // parameter to the struct.
+    pub fn upcast<'a>(self) -> Str<'a> {
+        unsafe { mem::transmute::<Str<'static>, Str<'a>>(self) }
     }
 }
 
@@ -480,8 +555,21 @@ impl UniqueBuf {
 }
 
 impl Buf {
+    // Unsafe because it assumes valid utf8.
+    pub unsafe fn into_str<'a>(self) -> Str<'a> {
+        Str::from_rep(
+            Boxed {
+                len: self.len() as u64,
+                buf: self,
+            }
+            .into(),
+        )
+    }
+    pub fn len(&self) -> usize {
+        unsafe { &(*self.0) }.size
+    }
     pub fn as_bytes(&self) -> &[u8] {
-        let size = unsafe { &(*self.0) }.size;
+        let size = self.len();
         unsafe { slice::from_raw_parts(self.as_ptr(), size) }
     }
 
