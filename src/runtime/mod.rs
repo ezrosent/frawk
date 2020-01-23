@@ -9,14 +9,11 @@ use std::iter::FromIterator;
 use std::rc::Rc;
 
 pub mod bytes_rc;
-pub mod shared;
 pub mod splitter;
-pub mod str_impl;
 pub mod strton;
 pub mod utf8;
 
 pub use bytes_rc::Str;
-// pub use str_impl::Str;
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.
