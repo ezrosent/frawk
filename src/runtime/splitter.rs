@@ -122,9 +122,9 @@ impl<R: Read> Reader<R> {
                     };
                 }
                 None => {
-                    let cur: Str = self.cur.clone().into();
+                    let cur: Str = self.cur.clone();
                     handle_err!(self.advance(self.cur.len()));
-                    prefix = Str::concat(prefix, cur.into());
+                    prefix = Str::concat(prefix, cur);
                     if self.is_eof() {
                         // All done! Just return the rest of the buffer.
                         return prefix;
@@ -133,10 +133,6 @@ impl<R: Read> Reader<R> {
             }
         }
     }
-
-    // fn get(&self) -> &str {
-    //     self.cur.get()
-    // }
 
     fn advance(&mut self, n: usize) -> Result<()> {
         let len = self.cur.len();
@@ -194,7 +190,7 @@ impl<R: Read> Reader<R> {
         if done {
             self.state = ReaderState::EOF;
         }
-        Ok(unsafe { data.into_buf().into_str() })
+        Ok(unsafe { data.into_buf().into_str() }.slice(0, ulen))
     }
 }
 
@@ -220,9 +216,10 @@ mod test {
     #[test]
     fn test_line_split() {
         use std::io::Cursor;
-        let bs = String::from_utf8(bytes(1 << 18, 0.001, 0.05)).unwrap();
+        let chunk_size = 1 << 9;
+        let bs: String = crate::test_string_constants::PRIDE_PREJUDICE_CH2.into();
         let c = Cursor::new(bs.clone());
-        let mut rdr = super::Reader::new(c, 1 << 9).unwrap();
+        let mut rdr = super::Reader::new(c, chunk_size).unwrap();
         let mut lines = Vec::new();
         while !rdr.is_eof() {
             let line = rdr.read_line(&*LINE).upcast();

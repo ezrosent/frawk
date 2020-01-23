@@ -9,7 +9,7 @@ use std::mem;
 use std::ptr;
 use std::rc::Rc;
 use std::slice;
-use std::str::{self, pattern::Pattern};
+use std::str;
 
 // TODO: Inline strings:
 //  * If tag matches, then last byte shifted by 3 contains length of string, using up to the
@@ -91,8 +91,20 @@ macro_rules! impl_tagged_from {
 
 impl_tagged_from!(Shared, SHARED);
 impl_tagged_from!(Concat<'a>, CONCAT);
-impl_tagged_from!(Literal<'a>, LITERAL);
 impl_tagged_from!(Boxed, BOXED);
+
+impl<'a> From<Literal<'a>> for StrRep<'a> {
+    fn from(s: Literal<'a>) -> StrRep<'a> {
+        if s.ptr as usize & 0x7 == 0 {
+            let mut rep = unsafe { mem::transmute::<Literal<'a>, StrRep>(s) };
+            rep.hi |= LITERAL;
+            rep
+        } else {
+            let buf = unsafe { Buf::read_from_raw(s.ptr, s.len as usize) };
+            Boxed { len: s.len, buf }.into()
+        }
+    }
+}
 
 impl<'a> StrRep<'a> {
     fn len(&mut self) -> usize {
@@ -167,30 +179,21 @@ pub struct Str<'a>(UnsafeCell<StrRep<'a>>);
 
 impl<'a> Str<'a> {
     pub fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>)) {
-        unimplemented!()
-        // TODO check if with_str ever assigns to .0 after setup
-        // TODO grrr this doesn't compile! May need to do pointer arithmetic?
-        // self.with_str(|s| {
-        //     let mut start = 0;
-        //     for (i, j) in s.match_indices(pat) {
-        //         push(self.slice(start, i));
-        //         start = i + j.len();
-        //     }
-        // });
-        // TODO: this is going to be different than before. Shared made this pretty easy, but we no
-        // longer have that luxury.
-        //
-        // We want to iterate over match_indices
-        //
-        // 1. EMPTY, LITERAL, are both easy. (CONCAT forced away)
-        // 2. BOXED and SHARED will need to iterate over match_indices and essentially just
-        //    inverting it. Use slice to do the scary overflow stuff.
-        // unsafe {
-        //     let rep = &mut *self.0.get();
-        //     match rep.get_tag() {
-        //         EMPTY =>
-        //     }
-        // }
+        self.with_str(|s| {
+            // AWK stips empty leading fields.
+            let mut leading_empty = true;
+            // XXX hacks because we do not have match_indices right now...
+            let base = s.as_ptr() as usize;
+            for sub in pat.split(s) {
+                if leading_empty && sub.len() == 0 {
+                    continue;
+                }
+                leading_empty = false;
+                let sub_base = sub.as_ptr() as usize;
+                let start = sub_base - base;
+                push(self.slice(start, start + sub.len()))
+            }
+        });
     }
     pub fn len(&self) -> usize {
         let rep = unsafe { &mut *self.0.get() };
@@ -236,9 +239,11 @@ impl<'a> Str<'a> {
                 .into()
             }),
             LITERAL => rep.view_as(|l: &Literal| {
+                let new_ptr = l.ptr.offset(from as isize);
+                let new_len = (to - from) as u64;
                 Literal {
-                    len: (to - from) as u64,
-                    ptr: l.ptr.offset(from as isize),
+                    len: new_len,
+                    ptr: new_ptr,
                     _marker: PhantomData,
                 }
                 .into()
@@ -250,8 +255,17 @@ impl<'a> Str<'a> {
 
     pub fn slice(&self, from: usize, to: usize) -> Str<'a> {
         assert!(from <= to);
+        if from == to {
+            return Default::default();
+        }
         let len = self.len();
-        assert!(to < len);
+        assert!(
+            to <= len,
+            "invalid args to slice: range [{},{}) with len {}",
+            from,
+            to,
+            len
+        );
         let new_len = to - from;
         let tag = unsafe { &mut *self.0.get() }.get_tag();
         let u32_max = u32::max_value() as usize;
@@ -273,7 +287,7 @@ impl<'a> Str<'a> {
             // TODO: We can optimize cases when we are getting suffixes of Literal values
             // by creating new ones with offset pointers. This doesn't seem worth optimizing right
             // now, but we may want to in the future.
-            self.force();
+            unsafe { self.force() };
             let rep = unsafe { &mut *self.0.get() };
             let tag = rep.get_tag();
             unsafe {
@@ -293,14 +307,28 @@ impl<'a> Str<'a> {
 
         // Force concat up here so we don't have to worry about aliasing `rep` in slice_nooverflow.
         if let CONCAT = tag {
-            self.force();
+            unsafe { self.force() };
         }
         unsafe { self.slice_nooverflow(from, to) }
     }
 
-    fn force(&self) {
+    // Why is [with_str] safe and [force] unsafe? Let's go case-by-case for the state of `self`
+    // EMPTY:  no data is passed into `f`.
+    // BOXED:  The function signature ensures that no string references can "escape" `f`, and `self`
+    //         will persist for the function body, which will keep the underlying buffer alive.
+    // CONCAT: We `force` these strings, so they will be BOXED.
+    // SHARED: This one is tricky. It may seem to be covered by the BOXED case, but the difference
+    //         is that shared strings give up there references to the underlying buffer if they get
+    //         forced. So if we did s.with_str(|x| { /* force s */; *x}), then *x is a
+    //         use-after-free!
+    //
+    //         This is why [force] is unsafe. As written, no safe method will force a SHARED Str.
+    //         If we add force to a public API (e.g. for garbage collection), we'll need to ensure
+    //         that we don't call with_str around it, or clone the string before forcing.
+
+    unsafe fn force(&self) {
         let (tag, len) = {
-            let rep = unsafe { &mut *self.0.get() };
+            let rep = &mut *self.0.get();
             (rep.get_tag(), rep.len())
         };
         if let LITERAL | BOXED | EMPTY = tag {
@@ -325,67 +353,70 @@ impl<'a> Str<'a> {
         let mut todos = SmallVec::<[Str<'a>; 16]>::new();
         let mut cur: Str<'a> = self.clone();
         let new_rep: StrRep<'a> = 'outer: loop {
-            unsafe {
-                let rep = &mut (*cur.0.get());
-                let tag = rep.get_tag();
-                cur = loop {
-                    match tag {
-                        EMPTY => {}
-                        LITERAL => rep.view_as(|l: &Literal| {
-                            push_bytes!(l.ptr, l.len as usize);
-                        }),
-                        BOXED => rep.view_as(|b: &Boxed| {
-                            push_bytes!(b.buf.as_bytes(), [0, b.len as usize]);
-                        }),
-                        SHARED => rep.view_as(|s: &Shared| {
-                            push_bytes!(s.buf.as_bytes(), [s.start as usize, s.end as usize]);
-                        }),
-                        CONCAT => {
-                            break rep.view_as(|c: &Concat| {
-                                todos.push(c.inner.right.clone());
-                                c.inner.left.clone()
-                            })
-                        }
-                        _ => unreachable!(),
+            let rep = &mut (*cur.0.get());
+            let tag = rep.get_tag();
+            cur = loop {
+                match tag {
+                    EMPTY => {}
+                    LITERAL => rep.view_as(|l: &Literal| {
+                        push_bytes!(l.ptr, l.len as usize);
+                    }),
+                    BOXED => rep.view_as(|b: &Boxed| {
+                        push_bytes!(b.buf.as_bytes(), [0, b.len as usize]);
+                    }),
+                    SHARED => rep.view_as(|s: &Shared| {
+                        push_bytes!(s.buf.as_bytes(), [s.start as usize, s.end as usize]);
+                    }),
+                    CONCAT => {
+                        break rep.view_as(|c: &Concat| {
+                            todos.push(c.inner.right.clone());
+                            c.inner.left.clone()
+                        })
                     }
-                    if let Some(c) = todos.pop() {
-                        break c;
-                    }
-                    break 'outer Boxed {
-                        len: len as u64,
-                        buf: res.into_buf(),
-                    }
-                    .into();
-                };
-            }
+                    _ => unreachable!(),
+                }
+                if let Some(c) = todos.pop() {
+                    break c;
+                }
+                break 'outer Boxed {
+                    len: len as u64,
+                    buf: res.into_buf(),
+                }
+                .into();
+            };
         };
-        *unsafe { &mut *self.0.get() } = new_rep;
+        *self.0.get() = new_rep;
     }
-    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+
+    // Avoid using this function; subsequent immutable calls to &self can invalidate the pointer.
+    pub fn get_raw_str(&self) -> *const str {
         let rep = unsafe { &mut *self.0.get() };
         let tag = rep.get_tag();
         unsafe {
             match tag {
-                EMPTY => f(str::from_utf8_unchecked(&[])),
+                EMPTY => "",
                 LITERAL => rep.view_as(|lit: &Literal| {
-                    f(str::from_utf8_unchecked(slice::from_raw_parts(
-                        lit.ptr,
-                        lit.len as usize,
-                    )))
+                    str::from_utf8_unchecked(slice::from_raw_parts(lit.ptr, lit.len as usize))
                 }),
                 SHARED => rep.view_as(|s: &Shared| {
-                    f(str::from_utf8_unchecked(
-                        &s.buf.as_bytes()[s.start as usize..s.end as usize],
-                    ))
+                    str::from_utf8_unchecked(&s.buf.as_bytes()[s.start as usize..s.end as usize])
+                        as *const _
                 }),
-                BOXED => rep.view_as(|b: &Boxed| f(str::from_utf8_unchecked(b.buf.as_bytes()))),
+                BOXED => {
+                    rep.view_as(|b: &Boxed| str::from_utf8_unchecked(b.buf.as_bytes()) as *const _)
+                }
                 CONCAT => {
                     self.force();
-                    return self.with_str(f);
+                    self.get_raw_str()
                 }
                 _ => unreachable!(),
             }
         }
+    }
+
+    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        let raw = self.get_raw_str();
+        unsafe { f(&*raw) }
     }
     pub fn unmoor(self) -> Str<'static> {
         let rep = unsafe { &mut *self.0.get() };
@@ -589,6 +620,7 @@ impl Buf {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -619,6 +651,34 @@ mod tests {
         // Do this multiple times to play with the refcount.
         assert_eq!(s2.slice(1, 4), s3.slice(16, 19));
         assert_eq!(s2.slice(2, 6), s3.slice(17, 21));
+    }
+
+    fn test_str_split(pat: &Regex, base: &str) {
+        let s = Str::from(base);
+        let want = pat
+            .split(base)
+            .skip_while(|x| x.len() == 0)
+            .collect::<Vec<_>>();
+        let mut got = Vec::new();
+        s.split(&pat, |sub| got.push(sub));
+        let total_got = got.len();
+        let total = want.len();
+        for (g, w) in got.into_iter().zip(want.into_iter()) {
+            assert_eq!(g, Str::from(w));
+        }
+        assert_eq!(total_got, total);
+    }
+
+    #[test]
+    fn basic_splitting() {
+        let pat = Regex::new(r#"[ \t]"#).unwrap();
+        test_str_split(&pat, "what is \t up ");
+    }
+
+    #[test]
+    fn split_long_string() {
+        let pat = Regex::new(r#"[ \t]"#).unwrap();
+        test_str_split(&pat, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
     }
 }
 
