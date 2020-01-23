@@ -3,7 +3,7 @@
 //!
 //! In addition to this API, it also handles reading in chunks, with appropriate handling of UTF8
 //! characters that cross chunk boundaries, or multi-chunk "lines".
-use super::bytes_rc::{Str, UniqueBuf};
+use super::str_impl::{Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
 use crate::common::Result;
 
