@@ -3,9 +3,8 @@
 //!
 //! In addition to this API, it also handles reading in chunks, with appropriate handling of UTF8
 //! characters that cross chunk boundaries, or multi-chunk "lines".
-use super::shared::Shared;
-use super::utf8::{parse_utf8, parse_utf8_clipped};
-use super::Str;
+use super::str_impl::{Str, UniqueBuf};
+use super::utf8::{is_utf8, validate_utf8_clipped};
 use crate::common::Result;
 
 use regex::Regex;
@@ -25,7 +24,9 @@ pub(crate) struct Reader<R> {
     inner: R,
     // The "stray bytes" that will be prepended to the next buffer.
     prefix: SmallVec<[u8; 8]>,
-    cur: Shared<str>,
+    // TODO we probably want this to be a Buf, not a Str, but Buf's API gives out bytes not
+    // strings.
+    cur: Str<'static>,
     chunk_size: usize,
     state: ReaderState,
     last_len: usize,
@@ -54,16 +55,12 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
     Ok(read)
 }
 
-thread_local! {
-    static EMPTY: Shared<str> = Shared::from(Box::from(""));
-}
-
 impl<R: Read> Reader<R> {
     pub(crate) fn new(r: R, chunk_size: usize) -> Result<Self> {
         let mut res = Reader {
             inner: r,
             prefix: Default::default(),
-            cur: EMPTY.with(Clone::clone),
+            cur: Default::default(),
             chunk_size,
             state: ReaderState::OK,
             last_len: 0,
@@ -84,14 +81,14 @@ impl<R: Read> Reader<R> {
         }
     }
     pub(crate) fn is_eof(&self) -> bool {
-        self.get().len() == 0 && self.state == ReaderState::EOF
+        self.cur.len() == 0 && self.state == ReaderState::EOF
     }
-    pub(crate) fn read_line<'a>(&mut self, pat: &Regex) -> Str<'a> {
+    pub(crate) fn read_line(&mut self, pat: &Regex) -> Str<'static> {
         let res = self.read_line_inner(pat);
         self.last_len = res.len();
         res
     }
-    fn read_line_inner<'a>(&mut self, pat: &Regex) -> Str<'a> {
+    fn read_line_inner(&mut self, pat: &Regex) -> Str<'static> {
         macro_rules! handle_err {
             ($e:expr) => {
                 if let Ok(e) = $e {
@@ -103,14 +100,17 @@ impl<R: Read> Reader<R> {
             };
         }
         self.state = ReaderState::OK;
-        let mut prefix: Str = "".into();
+        let mut prefix: Str<'static> = Default::default();
         loop {
             // Why this map invocation? Match objects hold a reference to the substring, which
             // makes it harder for us to call mutable methods like advance in the body, so just get
             // the start and end pointers.
-            match pat.find(self.get()).map(|m| (m.start(), m.end())) {
+            match self
+                .cur
+                .with_str(|s| pat.find(s).map(|m| (m.start(), m.end())))
+            {
                 Some((start, end)) => {
-                    let res = self.cur.extend(|s| &s[0..start]);
+                    let res = self.cur.slice(0, start);
                     // NOTE if we get a read error here, then we will stop one line early.
                     // That seems okay, but we could find out that it actually isn't, in which case
                     // we would want some more complicated error handling here.
@@ -122,9 +122,9 @@ impl<R: Read> Reader<R> {
                     };
                 }
                 None => {
-                    let cur: Str = self.cur.clone().into();
-                    handle_err!(self.advance(self.get().len()));
-                    prefix = Str::concat(prefix, cur.into());
+                    let cur: Str = self.cur.clone();
+                    handle_err!(self.advance(self.cur.len()));
+                    prefix = Str::concat(prefix, cur);
                     if self.is_eof() {
                         // All done! Just return the rest of the buffer.
                         return prefix;
@@ -133,17 +133,15 @@ impl<R: Read> Reader<R> {
             }
         }
     }
-    fn get(&self) -> &str {
-        self.cur.get()
-    }
+
     fn advance(&mut self, n: usize) -> Result<()> {
-        let len = self.get().len();
+        let len = self.cur.len();
         if len > n {
-            self.cur = self.cur.extend(|s| &s[n..]);
+            self.cur = self.cur.slice(n, len);
             return Ok(());
         }
         if self.is_eof() {
-            self.cur = EMPTY.with(Clone::clone);
+            self.cur = Default::default();
             return Ok(());
         }
 
@@ -151,31 +149,33 @@ impl<R: Read> Reader<R> {
         self.cur = self.get_next_buf()?;
         self.advance(residue)
     }
-    fn get_next_buf(&mut self) -> Result<Shared<str>> {
+    fn get_next_buf(&mut self) -> Result<Str<'static>> {
         let mut done = false;
-        // Copy the last few bytes over to `data`, if there were any.
-        let mut data = vec![0u8; self.chunk_size];
+        // NB: UniqueBuf fills the allocation with zeros.
+        let mut data = UniqueBuf::new(self.chunk_size);
+        let mut bytes = data.as_mut_bytes();
         for (i, b) in self.prefix.iter().cloned().enumerate() {
-            data[i] = b;
+            bytes[i] = b;
         }
         let plen = self.prefix.len();
         self.prefix.clear();
         // Try to fill up the rest of `data` with new bytes.
-        let bytes_read = plen + read_to_slice(&mut self.inner, &mut data[plen..])?;
+        let bytes_read = plen + read_to_slice(&mut self.inner, &mut bytes[plen..])?;
         self.prefix.clear();
-
         if bytes_read != self.chunk_size {
             done = true;
-            data.truncate(bytes_read);
+            bytes = &mut bytes[..bytes_read];
         }
 
-        // Read the data into a Shared buffer, then parse it into utf8.
-        let bytes = Shared::<[u8]>::from(Box::from(data));
-        let utf8 = {
+        let ulen = {
             let opt = if done {
-                bytes.extend_opt(|bs| parse_utf8(bs))
+                if is_utf8(bytes) {
+                    Some(bytes.len())
+                } else {
+                    None
+                }
             } else {
-                bytes.extend_opt(|bs| parse_utf8_clipped(bs))
+                validate_utf8_clipped(bytes)
             };
             if let Some(u) = opt {
                 u
@@ -183,15 +183,14 @@ impl<R: Read> Reader<R> {
                 return err!("invalid UTF8");
             }
         };
-        let ulen = utf8.get().len();
         if !done && ulen != bytes_read {
             // We clipped a utf8 character at the end of the buffer. Add it to prefix.
-            self.prefix.extend_from_slice(&bytes.get()[ulen..]);
+            self.prefix.extend_from_slice(&bytes[ulen..]);
         }
         if done {
             self.state = ReaderState::EOF;
         }
-        Ok(utf8)
+        Ok(unsafe { data.into_buf().into_str() }.slice(0, ulen))
     }
 }
 
@@ -199,6 +198,7 @@ impl<R: Read> Reader<R> {
 mod test {
     // need to benchmark batched splitting vs. regular splitting to get a feel for things.
     extern crate test;
+    use super::Str;
     use lazy_static::lazy_static;
     use regex::Regex;
     use test::{black_box, Bencher};
@@ -208,26 +208,31 @@ mod test {
         static ref SPACE: Regex = Regex::new(" ").unwrap();
     }
 
+    // Helps type inference along.
+    fn ref_str<'a>(s: &'a str) -> Str<'a> {
+        s.into()
+    }
+
     #[test]
     fn test_line_split() {
-        use super::Str;
         use std::io::Cursor;
-        let bs = String::from_utf8(bytes(1 << 18, 0.001, 0.05)).unwrap();
+        let chunk_size = 1 << 9;
+        let bs: String = crate::test_string_constants::PRIDE_PREJUDICE_CH2.into();
         let c = Cursor::new(bs.clone());
-        let mut rdr = super::Reader::new(c, 1 << 9).unwrap();
+        let mut rdr = super::Reader::new(c, chunk_size).unwrap();
         let mut lines = Vec::new();
         while !rdr.is_eof() {
-            let line = rdr.read_line(&*LINE);
+            let line = rdr.read_line(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
-        let expected: Vec<_> = LINE.split(bs.as_str()).map(|x| Str::from(x)).collect();
+
+        let expected: Vec<_> = LINE.split(bs.as_str()).map(ref_str).collect();
         assert_eq!(lines, expected);
     }
 
     #[test]
     fn test_clipped_chunk_split() {
-        use super::Str;
         use std::io::Cursor;
 
         let corpus_size = 1 << 18;
@@ -246,11 +251,11 @@ mod test {
         let mut rdr = super::Reader::new(c, chunk_size).unwrap();
         let mut lines = Vec::new();
         while !rdr.is_eof() {
-            let line = rdr.read_line(&*LINE);
+            let line = rdr.read_line(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
-        let expected: Vec<_> = LINE.split(s.as_str()).map(|x| Str::from(x)).collect();
+        let expected: Vec<_> = LINE.split(s.as_str()).map(ref_str).collect();
         assert_eq!(lines, expected);
     }
 

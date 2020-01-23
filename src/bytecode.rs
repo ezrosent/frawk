@@ -297,15 +297,6 @@ struct Storage<T> {
     stack: Vec<T>,
 }
 
-impl<T: Default> Storage<T> {
-    fn reset(&mut self) {
-        self.stack.clear();
-        for i in self.regs.iter_mut() {
-            *i = Default::default();
-        }
-    }
-}
-
 // TODO: Want a Vec<Vec<Instr>> indexed by function.
 // TODO: Can we use the Rust stack to do calls? We should probably have a stack of (function index,
 // instr index) to store the continuation. That'll make tail calls easier later on if we want to
@@ -356,26 +347,6 @@ impl<'a> Interp<'a> {
     pub(crate) fn instrs(&self) -> &Vec<Vec<Instr<'a>>> {
         &self.instrs
     }
-
-    pub(crate) fn reset(&mut self) {
-        self.stack = Default::default();
-        self.vars = Default::default();
-        self.line = "".into();
-        self.split_line = LazyVec::new();
-        self.regexes = Default::default();
-        self.floats.reset();
-        self.ints.reset();
-        self.strs.reset();
-        self.maps_int_int.reset();
-        self.maps_int_float.reset();
-        self.maps_int_str.reset();
-        self.maps_str_int.reset();
-        self.maps_str_float.reset();
-        self.maps_str_str.reset();
-        self.iters_int.reset();
-        self.iters_str.reset();
-    }
-
     pub(crate) fn new(
         instrs: Vec<Vec<Instr<'a>>>,
         main_func: usize,
@@ -1249,8 +1220,8 @@ fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) 
     );
 }
 
-// TODO: Add a pass that does checking of indexes once, then benchmark with it on, and checked set
-// to false.
+// TODO: Add a pass that does checking of indexes once.
+// That could justify no checking during interpretation.
 const CHECKED: bool = true;
 
 #[inline]
@@ -1341,3 +1312,37 @@ impl_all!(runtime::StrMap<'a, Int>, maps_str_int);
 impl_all!(runtime::StrMap<'a, Str<'a>>, maps_str_str);
 impl_get!(runtime::Iter<Int>, iters_int);
 impl_get!(runtime::Iter<Str<'a>>, iters_str);
+
+// Used in benchmarking code.
+
+#[cfg(test)]
+impl<T: Default> Storage<T> {
+    fn reset(&mut self) {
+        self.stack.clear();
+        for i in self.regs.iter_mut() {
+            *i = Default::default();
+        }
+    }
+}
+
+#[cfg(test)]
+impl<'a> Interp<'a> {
+    pub(crate) fn reset(&mut self) {
+        self.stack = Default::default();
+        self.vars = Default::default();
+        self.line = "".into();
+        self.split_line = LazyVec::new();
+        self.regexes = Default::default();
+        self.floats.reset();
+        self.ints.reset();
+        self.strs.reset();
+        self.maps_int_int.reset();
+        self.maps_int_float.reset();
+        self.maps_int_str.reset();
+        self.maps_str_int.reset();
+        self.maps_str_float.reset();
+        self.maps_str_str.reset();
+        self.iters_int.reset();
+        self.iters_str.reset();
+    }
+}

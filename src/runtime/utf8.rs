@@ -4,7 +4,10 @@
 // TODO: support AVX2 or neon?
 use std::str;
 
-pub(crate) fn parse_utf8(bs: &[u8]) -> Option<&str> {
+// These functions could also be used in a standalone library.
+
+#[cfg(test)]
+fn parse_utf8(bs: &[u8]) -> Option<&str> {
     if is_utf8(bs) {
         Some(unsafe { str::from_utf8_unchecked(bs) })
     } else {
@@ -12,7 +15,12 @@ pub(crate) fn parse_utf8(bs: &[u8]) -> Option<&str> {
     }
 }
 
-fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
+#[cfg(test)]
+fn parse_utf8_clipped(bs: &[u8]) -> Option<&str> {
+    validate_utf8_clipped(bs).map(|off| unsafe { str::from_utf8_unchecked(&bs[..off]) })
+}
+
+pub(crate) fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         #[inline]
@@ -76,11 +84,6 @@ fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
         validate_utf8_fallback(bs)
     }
 }
-
-pub(crate) fn parse_utf8_clipped(bs: &[u8]) -> Option<&str> {
-    validate_utf8_clipped(bs).map(|off| unsafe { str::from_utf8_unchecked(&bs[..off]) })
-}
-
 fn validate_utf8_fallback(bs: &[u8]) -> Option<usize> {
     match str::from_utf8(bs) {
         Ok(res) => Some(res.len()),
@@ -628,27 +631,9 @@ mod x86 {
         fn test_utf8() {
             unsafe {
                 if is_x86_feature_detected!("sse2") {
+                    use crate::test_string_constants::VIRGIL;
                     assert!(validate_utf8(&[]));
                     assert!(validate_utf8("short ascii".as_bytes()));
-                    const VIRGIL: &'static str = r"
-Arms, and the man I sing, who, forc'd by fate,
-And haughty Juno's unrelenting hate,
-Expell'd and exil'd, left the Trojan shore.
-Long labors, both by sea and land, he bore,
-And in the doubtful war, before he won
-The Latian realm, and built the destin'd town;
-His banish'd gods restor'd to rites divine,
-And settled sure succession in his line,
-From whence the race of Alban fathers come,
-And the long glories of majestic Rome.
-O Muse! the causes and the crimes relate;
-What goddess was provok'd, and whence her hate;
-For what offense the Queen of Heav'n began
-To persecute so brave, so just a man;
-Involv'd his anxious life in endless cares,
-Expos'd to wants, and hurried into wars!
-Can heav'nly minds such high resentment show,
-Or exercise their spite in human woe?";
                     assert!(validate_utf8(VIRGIL.as_bytes()));
                     assert!(validate_ascii(VIRGIL.as_bytes()));
                     // Selection from the Analects quoted from the Chinese Text Project
