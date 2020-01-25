@@ -1,8 +1,9 @@
 use std::marker::PhantomData;
 
 use crate::builtins::Variable;
-use crate::common::Result;
+use crate::common::{NumTy, Result};
 use crate::compile;
+use crate::hashbrown::HashSet;
 use crate::runtime::{self, Float, Int, LazyVec, Str};
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
@@ -1222,7 +1223,7 @@ fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) 
 
 // TODO: Add a pass that does checking of indexes once.
 // That could justify no checking during interpretation.
-const CHECKED: bool = true;
+const CHECKED: bool = false;
 
 #[inline]
 fn index<'a, T>(Storage { regs, .. }: &'a Storage<T>, reg: &Reg<T>) -> &'a T {
@@ -1255,6 +1256,11 @@ fn pop<'a, T: Clone>(s: &'a mut Storage<T>) -> T {
     s.stack.pop().expect("pop must be called on nonempty stack")
 }
 
+// For accumulating register-specific metadata
+pub(crate) trait Accum {
+    fn accum(&self, f: impl FnMut(NumTy, compile::Ty));
+}
+
 macro_rules! impl_pop {
     ($t:ty, $fld:ident) => {
         impl<'a> Pop<$t> for Interp<'a> {
@@ -1269,8 +1275,26 @@ macro_rules! impl_pop {
     };
 }
 
+macro_rules! impl_accum  {
+    ($t:ty, $ty:tt, $($lt:tt),+) => {
+        impl<$($lt),*> Accum for Reg<$t> {
+            fn accum(&self, mut f: impl FnMut(NumTy, compile::Ty)) {
+                f(self.index() as NumTy, compile::Ty::$ty);
+            }
+        }
+    };
+    ($t:ty, $ty:tt,) => {
+        impl Accum for Reg<$t> {
+            fn accum(&self, mut f: impl FnMut(NumTy, compile::Ty)) {
+                f(self.index() as NumTy, compile::Ty::$ty);
+            }
+        }
+    };
+}
+
 macro_rules! impl_get {
-    ($t:ty, $fld:ident) => {
+    ($t:ty, $fld:ident, $ty:tt $(,$lt:tt)*) => {
+        impl_accum!($t, $ty, $($lt),*);
         impl<'a> Get<$t> for Interp<'a> {
             fn get(&self, r: Reg<$t>) -> &$t {
                 #[cfg(debug_assertions)]
@@ -1295,23 +1319,23 @@ macro_rules! impl_get {
 }
 
 macro_rules! impl_all {
-    ($t:ty, $fld:ident) => {
-        impl_get!($t, $fld);
+    ($t:ty, $fld:ident, $ty:tt $(,$lt:tt)*) => {
+        impl_get!($t, $fld, $ty $(,$lt)* );
         impl_pop!($t, $fld);
     };
 }
 
-impl_all!(Int, ints);
-impl_all!(Str<'a>, strs);
-impl_all!(Float, floats);
-impl_all!(runtime::IntMap<Float>, maps_int_float);
-impl_all!(runtime::IntMap<Int>, maps_int_int);
-impl_all!(runtime::IntMap<Str<'a>>, maps_int_str);
-impl_all!(runtime::StrMap<'a, Float>, maps_str_float);
-impl_all!(runtime::StrMap<'a, Int>, maps_str_int);
-impl_all!(runtime::StrMap<'a, Str<'a>>, maps_str_str);
-impl_get!(runtime::Iter<Int>, iters_int);
-impl_get!(runtime::Iter<Str<'a>>, iters_str);
+impl_all!(Int, ints, Int);
+impl_all!(Str<'a>, strs, Str, 'a);
+impl_all!(Float, floats, Float);
+impl_all!(runtime::IntMap<Float>, maps_int_float, MapIntFloat);
+impl_all!(runtime::IntMap<Int>, maps_int_int, MapIntInt);
+impl_all!(runtime::IntMap<Str<'a>>, maps_int_str, MapIntStr, 'a);
+impl_all!(runtime::StrMap<'a, Float>, maps_str_float, MapStrFloat, 'a);
+impl_all!(runtime::StrMap<'a, Int>, maps_str_int, MapStrInt, 'a);
+impl_all!(runtime::StrMap<'a, Str<'a>>, maps_str_str, MapStrStr, 'a);
+impl_get!(runtime::Iter<Int>, iters_int, IterInt);
+impl_get!(runtime::Iter<Str<'a>>, iters_str, IterStr, 'a);
 
 // Used in benchmarking code.
 
