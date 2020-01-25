@@ -1,8 +1,8 @@
-use hashbrown::{hash_map::Entry, HashMap};
+use hashbrown::{hash_map::Entry, HashMap, HashSet};
 use smallvec::smallvec;
 
 use crate::builtins::{self, Variable};
-use crate::bytecode::{self, Instr, Interp};
+use crate::bytecode::{self, Accum, Instr, Interp};
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{NodeIx, NumTy, Result};
 use crate::types::{self, SmallVec};
@@ -91,10 +91,10 @@ macro_rules! reg_of_ty {
 
 #[derive(Debug, Copy, Clone)]
 enum RegStatus {
+    // Arg?
     Local,
     Global,
     Ret,
-    Undefined,
 }
 
 #[derive(Default, Debug)]
@@ -112,7 +112,7 @@ impl RegStatuses {
         self.0[ty as usize].len() as NumTy
     }
 
-    fn get_status(&mut self, reg: NumTy, ty: Ty) -> RegStatus {
+    fn get_status(&self, reg: NumTy, ty: Ty) -> RegStatus {
         self.0[ty as usize][reg as usize]
     }
 }
@@ -241,6 +241,185 @@ impl<'a> ProgramGenerator<'a> {
             .process_function(&pc.funcs[src_func])?;
         }
         Ok(gen)
+    }
+
+    fn var_refs(
+        &self,
+        // do we want to monomorphize this? I guess not, because we only care about globals.
+    ) -> Vec<
+        /* indexed by byte-code level function */
+        /* globals */ HashSet<(NumTy, Ty)>,
+    > {
+        let mut res = Vec::new();
+        for (i, frame) in self.frames.iter().enumerate() {
+            let mut globals = HashSet::new();
+            let mut f = |reg, ty| {
+                if let RegStatus::Global = self.regs.reg_stats.get_status(reg, ty) {
+                    globals.insert((reg, ty));
+                }
+            };
+            // TODO: make this generic, put it in bytecode or elsewhere
+            // TODO: figure out a story for args (need to map them to locals; maybe make them a
+            // separate register status?)
+            // TODO: create mapping for basic blocks
+            for instr in frame.instrs.iter() {
+                use Instr::*;
+                match instr {
+                    StoreConstStr(sr, _s) => sr.accum(&mut f),
+                    StoreConstInt(ir, _i) => ir.accum(&mut f),
+                    StoreConstFloat(fr, _f) => fr.accum(&mut f),
+                    IntToStr(sr, ir) => {
+                        sr.accum(&mut f);
+                        ir.accum(&mut f)
+                    }
+                    FloatToStr(sr, fr) => {
+                        sr.accum(&mut f);
+                        fr.accum(&mut f);
+                    }
+                    StrToInt(ir, sr) => {
+                        ir.accum(&mut f);
+                        sr.accum(&mut f);
+                    }
+                    StrToFloat(fr, sr) => {
+                        fr.accum(&mut f);
+                        sr.accum(&mut f);
+                    }
+                    FloatToInt(ir, fr) => {
+                        ir.accum(&mut f);
+                        fr.accum(&mut f);
+                    }
+                    IntToFloat(fr, ir) => {
+                        fr.accum(&mut f);
+                        ir.accum(&mut f);
+                    }
+                    AddInt(res, l, r) => {
+                        res.accum(&mut f);
+                        l.accum(&mut f);
+                        r.accum(&mut f);
+                    }
+                    AddFloat(res, l, r) => unimplemented!(),
+                    MulInt(res, l, r) => unimplemented!(),
+                    MulFloat(res, l, r) => unimplemented!(),
+                    MinusInt(res, l, r) => unimplemented!(),
+                    MinusFloat(res, l, r) => unimplemented!(),
+                    ModInt(res, l, r) => unimplemented!(),
+                    ModFloat(res, l, r) => unimplemented!(),
+                    Div(res, l, r) => unimplemented!(),
+                    Not(res, ir) => unimplemented!(),
+                    NotStr(res, sr) => unimplemented!(),
+                    NegInt(res, ir) => unimplemented!(),
+                    NegFloat(res, fr) => unimplemented!(),
+                    Concat(res, l, r) => unimplemented!(),
+                    Match(res, l, r) => unimplemented!(),
+                    LenStr(res, s) => unimplemented!(),
+                    LTFloat(res, l, r) => unimplemented!(),
+                    LTInt(res, l, r) => unimplemented!(),
+                    LTStr(res, l, r) => unimplemented!(),
+                    GTFloat(res, l, r) => unimplemented!(),
+                    GTInt(res, l, r) => unimplemented!(),
+                    GTStr(res, l, r) => unimplemented!(),
+                    LTEFloat(res, l, r) => unimplemented!(),
+                    LTEInt(res, l, r) => unimplemented!(),
+                    LTEStr(res, l, r) => unimplemented!(),
+                    GTEFloat(res, l, r) => unimplemented!(),
+                    GTEInt(res, l, r) => unimplemented!(),
+                    GTEStr(res, l, r) => unimplemented!(),
+                    EQFloat(res, l, r) => unimplemented!(),
+                    EQInt(res, l, r) => unimplemented!(),
+                    EQStr(res, l, r) => unimplemented!(),
+                    SetColumn(dst, src) => unimplemented!(),
+                    GetColumn(dst, src) => unimplemented!(),
+                    SplitInt(flds, to_split, arr, pat) => unimplemented!(),
+                    SplitStr(flds, to_split, arr, pat) => unimplemented!(),
+                    PrintStdout(txt) => unimplemented!(),
+                    Print(txt, out, append) => unimplemented!(),
+                    LookupIntInt(res, arr, k) => unimplemented!(),
+                    LookupIntStr(res, arr, k) => unimplemented!(),
+                    LookupIntFloat(res, arr, k) => unimplemented!(),
+                    LookupStrInt(res, arr, k) => unimplemented!(),
+                    LookupStrStr(res, arr, k) => unimplemented!(),
+                    LookupStrFloat(res, arr, k) => unimplemented!(),
+                    ContainsIntInt(res, arr, k) => unimplemented!(),
+                    ContainsIntStr(res, arr, k) => unimplemented!(),
+                    ContainsIntFloat(res, arr, k) => unimplemented!(),
+                    ContainsStrInt(res, arr, k) => unimplemented!(),
+                    ContainsStrStr(res, arr, k) => unimplemented!(),
+                    ContainsStrFloat(res, arr, k) => unimplemented!(),
+                    DeleteIntInt(arr, k) => unimplemented!(),
+                    DeleteIntFloat(arr, k) => unimplemented!(),
+                    DeleteIntStr(arr, k) => unimplemented!(),
+                    DeleteStrInt(arr, k) => unimplemented!(),
+                    DeleteStrFloat(arr, k) => unimplemented!(),
+                    DeleteStrStr(arr, k) => unimplemented!(),
+                    LenIntInt(res, arr) => unimplemented!(),
+                    LenIntFloat(res, arr) => unimplemented!(),
+                    LenIntStr(res, arr) => unimplemented!(),
+                    LenStrInt(res, arr) => unimplemented!(),
+                    LenStrFloat(res, arr) => unimplemented!(),
+                    LenStrStr(res, arr) => unimplemented!(),
+                    StoreIntInt(arr, k, v) => unimplemented!(),
+                    StoreIntFloat(arr, k, v) => unimplemented!(),
+                    StoreIntStr(arr, k, v) => unimplemented!(),
+                    StoreStrInt(arr, k, v) => unimplemented!(),
+                    StoreStrFloat(arr, k, v) => unimplemented!(),
+                    StoreStrStr(arr, k, v) => unimplemented!(),
+                    LoadVarStr(dst, var) => unimplemented!(),
+                    StoreVarStr(var, src) => unimplemented!(),
+                    LoadVarInt(dst, var) => unimplemented!(),
+                    StoreVarInt(var, src) => unimplemented!(),
+                    LoadVarIntMap(dst, var) => unimplemented!(),
+                    StoreVarIntMap(var, src) => unimplemented!(),
+                    IterBeginIntInt(dst, arr) => unimplemented!(),
+                    IterBeginIntFloat(dst, arr) => unimplemented!(),
+                    IterBeginIntStr(dst, arr) => unimplemented!(),
+                    IterBeginStrInt(dst, arr) => unimplemented!(),
+                    IterBeginStrFloat(dst, arr) => unimplemented!(),
+                    IterBeginStrStr(dst, arr) => unimplemented!(),
+                    IterHasNextInt(dst, iter) => unimplemented!(),
+                    IterHasNextStr(dst, iter) => unimplemented!(),
+                    IterGetNextInt(dst, iter) => unimplemented!(),
+                    IterGetNextStr(dst, iter) => unimplemented!(),
+                    MovInt(dst, src) => unimplemented!(),
+                    MovFloat(dst, src) => unimplemented!(),
+                    MovStr(dst, src) => unimplemented!(),
+                    MovMapIntInt(dst, src) => unimplemented!(),
+                    MovMapIntFloat(dst, src) => unimplemented!(),
+                    MovMapIntStr(dst, src) => unimplemented!(),
+                    MovMapStrInt(dst, src) => unimplemented!(),
+                    MovMapStrFloat(dst, src) => unimplemented!(),
+                    MovMapStrStr(dst, src) => unimplemented!(),
+                    ReadErr(dst, file) => unimplemented!(),
+                    NextLine(dst, file) => unimplemented!(),
+                    ReadErrStdin(dst) => unimplemented!(),
+                    NextLineStdin(dst) => unimplemented!(),
+                    JmpIf(cond, lbl) => unimplemented!(),
+                    Jmp(lbl) => unimplemented!(),
+                    PushInt(reg) => unimplemented!(),
+                    PushFloat(reg) => unimplemented!(),
+                    PushStr(reg) => unimplemented!(),
+                    PushIntInt(reg) => unimplemented!(),
+                    PushIntFloat(reg) => unimplemented!(),
+                    PushIntStr(reg) => unimplemented!(),
+                    PushStrInt(reg) => unimplemented!(),
+                    PushStrFloat(reg) => unimplemented!(),
+                    PushStrStr(reg) => unimplemented!(),
+                    PopInt(reg) => unimplemented!(),
+                    PopFloat(reg) => unimplemented!(),
+                    PopStr(reg) => unimplemented!(),
+                    PopIntInt(reg) => unimplemented!(),
+                    PopIntFloat(reg) => unimplemented!(),
+                    PopIntStr(reg) => unimplemented!(),
+                    PopStrInt(reg) => unimplemented!(),
+                    PopStrFloat(reg) => unimplemented!(),
+                    PopStrStr(reg) => unimplemented!(),
+                    Call(func) => unimplemented!(),
+                    Ret => unimplemented!(),
+                    Halt => unimplemented!(),
+                };
+            }
+            res.push(globals);
+        }
+        res
     }
 
     fn into_interp(
