@@ -11,7 +11,7 @@ use crate::types::{self, SmallVec};
 //    * avoid excessive moves (unless those come from the cfg?)
 //    * don't emit jumps that just point to the next instruction.
 
-const UNUSED: u32 = u32::max_value();
+pub(crate) const UNUSED: u32 = u32::max_value();
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum Ty {
@@ -35,7 +35,7 @@ impl Default for Ty {
 }
 
 impl Ty {
-    fn of_var(v: Variable) -> Ty {
+    pub(crate) fn of_var(v: Variable) -> Ty {
         use Variable::*;
         match v {
             ARGC | FS | OFS | RS | FILENAME => Ty::Str,
@@ -44,7 +44,7 @@ impl Ty {
         }
     }
 
-    fn iter(self) -> Result<Ty> {
+    pub(crate) fn iter(self) -> Result<Ty> {
         use Ty::*;
         match self {
             IterInt => Ok(Int),
@@ -54,7 +54,7 @@ impl Ty {
         }
     }
 
-    fn key(self) -> Result<Ty> {
+    pub(crate) fn key(self) -> Result<Ty> {
         use Ty::*;
         match self {
             MapIntInt | MapIntFloat | MapIntStr => Ok(Int),
@@ -64,7 +64,7 @@ impl Ty {
             }
         }
     }
-    fn val(self) -> Result<Ty> {
+    pub(crate) fn val(self) -> Result<Ty> {
         use Ty::*;
         match self {
             MapStrInt | MapIntInt => Ok(Int),
@@ -77,7 +77,7 @@ impl Ty {
     }
 }
 
-const NUM_TYPES: usize = Ty::IterStr as usize + 1;
+pub(crate) const NUM_TYPES: usize = Ty::IterStr as usize + 1;
 
 // This is a macro to defeat the borrow checker when used inside methods for `Generator`.
 macro_rules! reg_of_ty {

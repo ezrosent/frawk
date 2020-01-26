@@ -15,6 +15,7 @@ pub mod llvm;
 pub mod runtime;
 #[cfg(test)]
 mod test_string_constants;
+pub mod typed_ir;
 pub mod types;
 extern crate elsa;
 extern crate hashbrown;
