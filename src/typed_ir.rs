@@ -9,6 +9,15 @@ use crate::types;
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
 use std::mem;
 
+pub(crate) fn bytecode<'a>(
+    ctx: &cfg::ProgramContext<'a, &'a str>,
+    // default to std::io::stdin()
+    reader: impl std::io::Read + 'static,
+    // default to std::io::BufWriter::new(std::io::stdout())
+    writer: impl std::io::Write + 'static,
+) -> Result<bytecode::Interp<'a>> {
+    Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
+}
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 enum HighLevel {
@@ -60,7 +69,7 @@ impl RegStatuses {
 
 type LL<'a> = bytecode::Instr<'a>;
 type Instr<'a> = Either<LL<'a>, HighLevel>;
-type CFG<'a> = Graph<Vec<Instr<'a>>, Option<(NumTy, Ty)>>;
+type CFG<'a> = Graph<Vec<Instr<'a>>, Option<NumTy /* Int register */>>;
 
 #[derive(Default)]
 struct Typer<'a> {
@@ -88,7 +97,229 @@ struct Typer<'a> {
     main_offset: usize,
 }
 
+#[derive(Debug)]
+struct FuncInfo {
+    ret_ty: Ty,
+    // For bytecode, we pop into each of these registers at the specified type.
+    arg_tys: SmallVec<Ty>,
+}
+
+#[derive(Default)]
+struct Frame<'a> {
+    src_function: NumTy,
+    cur_ident: NumTy,
+    locals: HashMap<Ident, (u32, Ty)>,
+    arg_regs: SmallVec<NumTy>,
+    cfg: CFG<'a>,
+}
+
+struct View<'a, 'b> {
+    frame: &'b mut Frame<'a>,
+    regs: &'b mut Registers,
+    id_map: &'b HashMap<(NumTy, SmallVec<Ty>), NumTy>,
+    arity: &'b HashMap<NumTy, NumTy>,
+    func_info: &'b Vec<FuncInfo>,
+    // The current basic block being filled; It'll be swaped into `frame.cfg` as we translate a
+    // given function cfg.
+    stream: &'b mut Vec<Instr<'a>>,
+}
+
+fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
+    use Ty::*;
+    instrs.push(match ty {
+        Int => LL::PopInt(reg.into()),
+        Float => LL::PopFloat(reg.into()),
+        Str => LL::PopStr(reg.into()),
+        MapIntInt => LL::PopIntInt(reg.into()),
+        MapIntFloat => LL::PopIntFloat(reg.into()),
+        MapIntStr => LL::PopIntStr(reg.into()),
+        MapStrInt => LL::PopStrInt(reg.into()),
+        MapStrFloat => LL::PopStrFloat(reg.into()),
+        MapStrStr => LL::PopStrStr(reg.into()),
+        IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
+    });
+    Ok(())
+}
+
+fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
+    use Ty::*;
+    instrs.push(match ty {
+        Int => LL::PushInt(reg.into()),
+        Float => LL::PushFloat(reg.into()),
+        Str => LL::PushStr(reg.into()),
+        MapIntInt => LL::PushIntInt(reg.into()),
+        MapIntFloat => LL::PushIntFloat(reg.into()),
+        MapIntStr => LL::PushIntStr(reg.into()),
+        MapStrInt => LL::PushStrInt(reg.into()),
+        MapStrFloat => LL::PushStrFloat(reg.into()),
+        MapStrStr => LL::PushStrStr(reg.into()),
+        IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
+    });
+    Ok(())
+}
+
+fn mov<'a>(dst_reg: u32, src_reg: u32, ty: Ty) -> Result<Option<LL<'a>>> {
+    use Ty::*;
+    if dst_reg == UNUSED || src_reg == UNUSED {
+        return Ok(None);
+    }
+
+    let res = match ty {
+        Int => LL::MovInt(dst_reg.into(), src_reg.into()),
+        Float => LL::MovFloat(dst_reg.into(), src_reg.into()),
+        Str => LL::MovStr(dst_reg.into(), src_reg.into()),
+
+        MapIntInt => LL::MovMapIntInt(dst_reg.into(), src_reg.into()),
+        MapIntFloat => LL::MovMapIntFloat(dst_reg.into(), src_reg.into()),
+        MapIntStr => LL::MovMapIntStr(dst_reg.into(), src_reg.into()),
+
+        MapStrInt => LL::MovMapStrInt(dst_reg.into(), src_reg.into()),
+        MapStrFloat => LL::MovMapStrFloat(dst_reg.into(), src_reg.into()),
+        MapStrStr => LL::MovMapStrStr(dst_reg.into(), src_reg.into()),
+
+        IterInt | IterStr => return err!("attempt to move values of type {:?}", ty),
+    };
+    Ok(Some(res))
+}
+
 impl<'a> Typer<'a> {
+    fn to_interp(
+        &mut self,
+        reader: impl std::io::Read + 'static,
+        writer: impl std::io::Write + 'static,
+    ) -> Result<bytecode::Interp<'a>> {
+        let instrs = self.to_bytecode()?;
+        Ok(bytecode::Interp::new(
+            instrs,
+            self.main_offset,
+            |ty| self.regs.stats.count(ty) as usize,
+            reader,
+            writer,
+        ))
+    }
+    fn to_bytecode(&mut self) -> Result<Vec<Vec<LL<'a>>>> {
+        let mut res = vec![vec![]; self.frames.len()];
+        let mut ret_regs: Vec<_> = (0..self.frames.len())
+            .map(|i| {
+                let ret_ty = self.func_info[i].ret_ty;
+                self.regs.stats.reg_of_ty(ret_ty)
+            })
+            .collect();
+        let mut bb_map: Vec<usize> = Vec::new();
+        let mut jmps: Vec<usize> = Vec::new();
+        let mut args: Vec<(NumTy, Ty)> = Vec::new();
+        for (i, frame) in self.frames.iter().enumerate() {
+            let mut instrs = &mut res[i];
+            bb_map.clear();
+            bb_map.reserve(frame.cfg.node_count());
+            jmps.clear();
+
+            // Start by popping any args off of the stack.
+            args.extend(
+                frame
+                    .arg_regs
+                    .iter()
+                    .cloned()
+                    .zip(self.func_info[i].arg_tys.iter().cloned()),
+            );
+            args.reverse();
+            for (a_reg, a_ty) in args.drain(..) {
+                pop_var(instrs, a_reg, a_ty)?;
+            }
+
+            for (i, n) in frame.cfg.raw_nodes().iter().enumerate() {
+                bb_map[i] = instrs.len();
+                use HighLevel::*;
+                for stmt in n.weight.iter() {
+                    match stmt {
+                        Either::Left(ll) => instrs.push(ll.clone()),
+                        Either::Right(Call {
+                            func_id,
+                            dst_reg,
+                            dst_ty,
+                            args,
+                        }) => {
+                            // args have already been normalized, and return type already matches.
+                            // All we need to do is push local variables (to avoid clobbers) and
+                            // push args onto the stack.
+                            for (reg, ty) in frame.locals.values().cloned() {
+                                push_var(instrs, reg, ty)?;
+                            }
+                            for (reg, ty) in args.iter().cloned() {
+                                push_var(instrs, reg, ty)?;
+                            }
+                            let callee = *func_id as usize;
+                            instrs.push(LL::Call(callee));
+
+                            // Restore local variables
+                            for (reg, ty) in frame.locals.values().cloned() {
+                                pop_var(instrs, reg, ty)?;
+                            }
+                            let ret_reg = ret_regs[callee];
+                            debug_assert_eq!(self.func_info[callee].ret_ty, *dst_ty);
+                            if let Some(inst) = mov(*dst_reg, ret_reg, *dst_ty)? {
+                                instrs.push(inst);
+                            }
+                        }
+                        Either::Right(Ret(reg, ty)) => {
+                            debug_assert_eq!(self.func_info[i].ret_ty, *ty);
+                            if let Some(inst) = mov(ret_regs[i], *reg, *ty)? {
+                                instrs.push(inst);
+                            }
+                        }
+                        // handles by the predecessor.
+                        Either::Right(Phi(reg, ty, preds)) => {}
+                    }
+                }
+
+                let ix = NodeIx::new(i);
+                // Now handle phi nodes
+                for neigh in frame.cfg.neighbors(ix) {
+                    for stmt in frame.cfg.node_weight(neigh).unwrap() {
+                        if let Either::Right(Phi(reg, ty, preds)) = stmt {
+                            for (pred, src_reg) in preds.iter() {
+                                if pred == &ix {
+                                    if let Some(inst) = mov(*reg, *src_reg, *ty)? {
+                                        instrs.push(inst);
+                                    }
+                                    break;
+                                }
+                            }
+                        } else {
+                            // Phis are all at the top;
+                            break;
+                        }
+                    }
+                }
+                // And then jumps
+                let mut walker = frame.cfg.neighbors(ix).detach();
+                let mut edges = SmallVec::new();
+                while let Some(eix) = walker.next_edge(&frame.cfg) {
+                    edges.push(eix)
+                }
+                edges.reverse();
+                for eix in edges.iter().cloned() {
+                    let dst = frame.cfg.edge_endpoints(eix).unwrap().1.index();
+                    if let Some(reg) = frame.cfg.edge_weight(eix).unwrap().clone() {
+                        jmps.push(instrs.len());
+                        instrs.push(LL::JmpIf(reg.into(), dst.into()));
+                    } else if dst != i + 1 {
+                        jmps.push(instrs.len());
+                        instrs.push(LL::Jmp(dst.into()));
+                    }
+                }
+            }
+            // Now rewrite jumps
+            for j in jmps.iter() {
+                match &mut instrs[*j] {
+                    LL::Jmp(bb) | LL::JmpIf(_, bb) => *bb = bb_map[bb.0 as usize].into(),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        Ok(res)
+    }
+
     fn init_from_ctx(pc: &ProgramContext<'a, &'a str>) -> Result<Typer<'a>> {
         // Type-check the code, then initialize a Typer, assigning registers to local
         // and global variables.
@@ -166,33 +397,6 @@ impl<'a> Typer<'a> {
     }
 }
 
-#[derive(Debug)]
-struct FuncInfo {
-    ret_ty: Ty,
-    // For bytecode, we pop into each of these registers at the specified type.
-    arg_tys: SmallVec<Ty>,
-}
-
-#[derive(Default)]
-struct Frame<'a> {
-    src_function: NumTy,
-    cur_ident: NumTy,
-    locals: HashMap<Ident, (u32, Ty)>,
-    arg_regs: SmallVec<NumTy>,
-    cfg: CFG<'a>,
-}
-
-struct View<'a, 'b> {
-    frame: &'b mut Frame<'a>,
-    regs: &'b mut Registers,
-    id_map: &'b HashMap<(NumTy, SmallVec<Ty>), NumTy>,
-    arity: &'b HashMap<NumTy, NumTy>,
-    func_info: &'b Vec<FuncInfo>,
-    // The current basic block being filled; It'll be swaped into `frame.cfg` as we translate a
-    // given function cfg.
-    stream: &'b mut Vec<Instr<'a>>,
-}
-
 impl<'a, 'b> View<'a, 'b> {
     fn process_function(&mut self, func: &Function<'a, &'a str>) -> Result<()> {
         // Record registers for arguments.
@@ -220,7 +424,24 @@ impl<'a, 'b> View<'a, 'b> {
             for eix in branches.iter().cloned() {
                 let transition = func.cfg.edge_weight(eix).unwrap();
                 let edge = match &transition.0 {
-                    Some(val) => Some(self.get_reg(val)?),
+                    Some(val) => {
+                        let (mut reg, ty) = self.get_reg(val)?;
+                        match ty {
+                            Ty::Int => {}
+                            Ty::Float => {
+                                let dst = self.regs.stats.reg_of_ty(Ty::Int);
+                                self.convert(dst, Ty::Int, reg, Ty::Float)?;
+                                reg = dst;
+                            }
+                            Ty::Str => {
+                                let dst = self.regs.stats.reg_of_ty(Ty::Int);
+                                self.pushl(LL::LenStr(dst.into(), reg.into()));
+                                reg = dst;
+                            }
+                            _ => return err!("invalid type for branch: {:?} :: {:?}", val, ty),
+                        }
+                        Some(reg)
+                    }
                     None => None,
                 };
                 let (src, dst) = func.cfg.edge_endpoints(eix).unwrap();
@@ -292,27 +513,10 @@ impl<'a, 'b> View<'a, 'b> {
 
     // Move src into dst at type Ty.
     fn mov(&mut self, dst_reg: u32, src_reg: u32, ty: Ty) -> Result<()> {
-        use Ty::*;
-        if dst_reg == UNUSED || src_reg == UNUSED {
-            return Ok(());
+        if let Some(inst) = mov(dst_reg, src_reg, ty)? {
+            self.pushl(inst);
         }
-
-        let res = match ty {
-            Int => LL::MovInt(dst_reg.into(), src_reg.into()),
-            Float => LL::MovFloat(dst_reg.into(), src_reg.into()),
-            Str => LL::MovStr(dst_reg.into(), src_reg.into()),
-
-            MapIntInt => LL::MovMapIntInt(dst_reg.into(), src_reg.into()),
-            MapIntFloat => LL::MovMapIntFloat(dst_reg.into(), src_reg.into()),
-            MapIntStr => LL::MovMapIntStr(dst_reg.into(), src_reg.into()),
-
-            MapStrInt => LL::MovMapStrInt(dst_reg.into(), src_reg.into()),
-            MapStrFloat => LL::MovMapStrFloat(dst_reg.into(), src_reg.into()),
-            MapStrStr => LL::MovMapStrStr(dst_reg.into(), src_reg.into()),
-
-            IterInt | IterStr => return err!("attempt to move values of type {:?}", ty),
-        };
-        Ok(self.pushl(res))
+        Ok(())
     }
 
     fn convert(&mut self, dst_reg: u32, dst_ty: Ty, src_reg: u32, src_ty: Ty) -> Result<()> {
