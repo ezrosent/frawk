@@ -85,7 +85,7 @@ impl<T> Copy for Reg<T> {}
 // Next: (1) finish interpreter (2) implement translator (3) implement parser (4) add
 // functions/union type.
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Instr<'a> {
     // By default, instructions have destination first, and src(s) second.
     StoreConstStr(Reg<Str<'a>>, Str<'a>),
