@@ -1,11 +1,11 @@
 use crate::builtins::{self, Variable};
 use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
-use crate::common::{Either, Graph, NodeIx, NumTy, Result};
+use crate::common::{Either, Graph, NodeIx, NumTy, Result, WorkList};
 use crate::smallvec::{self, smallvec};
 use crate::types;
 
-use hashbrown::{hash_map::Entry, HashMap};
+use hashbrown::{hash_map::Entry, HashMap, HashSet};
 use std::mem;
 
 pub(crate) const UNUSED: u32 = u32::max_value();
@@ -141,6 +141,7 @@ impl RegStatuses {
 type LL<'a> = bytecode::Instr<'a>;
 type Instr<'a> = Either<LL<'a>, HighLevel>;
 type CFG<'a> = Graph<Vec<Instr<'a>>, Option<NumTy /* Int register */>>;
+type CallGraph = Graph<HashSet<(NumTy, Ty)>, ()>;
 
 #[derive(Default)]
 struct Typer<'a> {
@@ -166,6 +167,9 @@ struct Typer<'a> {
     func_info: Vec<FuncInfo>,
     frames: Vec<Frame<'a>>,
     main_offset: usize,
+
+    // Not used for bytecode generation.
+    callgraph: Graph<HashSet<(NumTy, Ty)>, ()>,
 }
 
 #[derive(Debug)]
@@ -187,6 +191,7 @@ struct Frame<'a> {
 struct View<'a, 'b> {
     frame: &'b mut Frame<'a>,
     regs: &'b mut Registers,
+    cg: &'b mut CallGraph,
     id_map: &'b HashMap<(NumTy, SmallVec<Ty>), NumTy>,
     arity: &'b HashMap<NumTy, NumTy>,
     func_info: &'b Vec<FuncInfo>,
@@ -251,6 +256,26 @@ fn mov<'a>(dst_reg: u32, src_reg: u32, ty: Ty) -> Result<Option<LL<'a>>> {
         IterInt | IterStr => return err!("attempt to move values of type {:?}", ty),
     };
     Ok(Some(res))
+}
+
+fn accum<'a>(inst: &Instr<'a>, mut f: impl FnMut(NumTy, Ty)) {
+    use {Either::*, HighLevel::*};
+    match inst {
+        Left(ll) => ll.accum(f),
+        Right(Call {
+            dst_reg,
+            dst_ty,
+            args,
+            ..
+        }) => {
+            f(*dst_reg, *dst_ty);
+            for (reg, ty) in args.iter().cloned() {
+                f(reg, ty)
+            }
+        }
+        Right(Ret(reg, ty)) => f(*reg, *ty),
+        Right(Phi(reg, ty, _preds)) => f(*reg, *ty),
+    }
 }
 
 impl<'a> Typer<'a> {
@@ -400,7 +425,7 @@ impl<'a> Typer<'a> {
             // Now rewrite jumps
             for j in jmps.iter() {
                 match &mut instrs[*j] {
-                    LL::Jmp(bb) | LL::JmpIf(_, bb) => *bb = bb_map[bb.0 as usize].into(),
+                    LL::Jmp(bb) | LL::JmpIf(_, bb) => *bb = bb_map[bb.0].into(),
                     _ => unreachable!(),
                 }
             }
@@ -423,6 +448,7 @@ impl<'a> Typer<'a> {
                 f.src_function = $func_id;
                 f.cur_ident = res;
                 gen.frames.push(f);
+                gen.callgraph.add_node(Default::default());
                 gen.func_info.push(FuncInfo {
                     ret_ty,
                     // Want to allocate registers for args here, $args just contains the types.
@@ -474,6 +500,7 @@ impl<'a> Typer<'a> {
             View {
                 frame,
                 regs: &mut gen.regs,
+                cg: &mut gen.callgraph,
                 id_map: &gen.id_map,
                 arity: &gen.arity,
                 func_info: &gen.func_info,
@@ -482,6 +509,83 @@ impl<'a> Typer<'a> {
             .process_function(&pc.funcs[src_func])?;
         }
         Ok(gen)
+    }
+
+    fn get_refs(
+        &mut self,
+    ) -> (
+        Vec<HashSet<(NumTy, Ty)>>, /* locals */
+        Vec<HashSet<(NumTy, Ty)>>, /* globals */
+    ) {
+        let mut locals = vec![HashSet::new(); self.frames.len()];
+        let mut globals = vec![HashSet::new(); self.frames.len()];
+        // First, accumulate all the local and global registers referenced in all the functions.
+        // We need these for LLVM because relevant globals are passed as function parameterse, and
+        // locals need to be allocated explicitly at the top of each function.
+        for (i, frame) in self.frames.iter().enumerate() {
+            // Manually borrow fields so that  we do not mutably borrow all of `self` in the
+            // closure.
+            let stats = &self.regs.stats;
+            let cg = &mut self.callgraph;
+            for bb in frame.cfg.raw_nodes() {
+                for stmt in bb.weight.iter() {
+                    accum(stmt, |reg, ty| match stats.get_status(reg, ty) {
+                        RegStatus::Local => {
+                            locals[i].insert((reg, ty));
+                        }
+                        RegStatus::Global => {
+                            cg.node_weight_mut(NodeIx::new(i))
+                                .unwrap()
+                                .insert((reg, ty));
+                        }
+                        RegStatus::Ret => {}
+                    });
+                }
+            }
+        }
+
+        // We use a simple iterative fixed-point algorithm for computing which globals are
+        // referenced by a given function. The globals we have found so far only list the globals
+        // directly referenced by a function, but we need the ones referenced transitively by all
+        // functions that a given function calls.
+        //
+        // TODO I think the traditional technique here is to use a bit set rather than a hash set.
+        // That's probably the right choice here, because there wont be that many globals and
+        // global references aren't likely to be sparse (which is the case where hash sets win).
+        //
+        // If this ever becomes a problem, that's the obvious optimization to make. Unions for
+        // bitsets should be a good deal faster than for hash sets so long as the sets are
+        // sufficiently dense.
+        let mut wl = WorkList::default();
+        wl.extend(0..self.frames.len());
+        while let Some(frame) = wl.pop() {
+            // All callees of a function inherit its globals.
+            use petgraph::Direction;
+            let frame_ix = NodeIx::new(frame);
+            let mut walker = self
+                .callgraph
+                .neighbors_directed(frame_ix, Direction::Incoming)
+                .detach();
+            while let Some(callee) = walker.next_node(&self.callgraph) {
+                if callee == frame_ix {
+                    continue;
+                }
+                let (cur_globals, callee_globals) =
+                    self.callgraph.index_twice_mut(frame_ix, callee);
+                let mut added = false;
+                for g in callee_globals.iter().cloned() {
+                    added = cur_globals.insert(g) || added;
+                }
+                if added {
+                    wl.insert(callee.index());
+                }
+            }
+        }
+        for (i, set) in globals.iter_mut().enumerate() {
+            mem::swap(set, self.callgraph.node_weight_mut(NodeIx::new(i)).unwrap())
+        }
+
+        (locals, globals)
     }
 }
 
@@ -571,6 +675,18 @@ impl<'a, 'b> View<'a, 'b> {
     }
 
     fn pushr(&mut self, i: HighLevel) {
+        if let HighLevel::Call { func_id, .. } = i {
+            // We do not annotate the edges in the callgraph with call sites or anything, so we
+            // only need one edge between each node.
+            // NB we can only do this here because calls to pushr always have `stream` matching
+            // `frame`. This is not true for pushl, where we swap the stream around in order to fix
+            // up type conversions ahead of a Phi node.
+            self.cg.update_edge(
+                NodeIx::new(self.frame.cur_ident as usize),
+                NodeIx::new(func_id as usize),
+                (),
+            );
+        }
         self.stream.push(Either::Right(i))
     }
 
