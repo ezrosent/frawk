@@ -6,9 +6,8 @@ use crate::compile;
 use crate::hashbrown::HashSet;
 use crate::runtime::{self, Float, Int, LazyVec, Str};
 
-// TODO make this usize; Instr is pretty large as it is.
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
-pub(crate) struct Label(pub u32);
+pub(crate) struct Label(pub usize);
 
 impl std::fmt::Debug for Label {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -16,15 +15,9 @@ impl std::fmt::Debug for Label {
     }
 }
 
-impl From<u32> for Label {
-    fn from(u: u32) -> Label {
-        Label(u)
-    }
-}
-
 impl From<usize> for Label {
     fn from(u: usize) -> Label {
-        Label(u as u32)
+        Label(u)
     }
 }
 
@@ -1143,7 +1136,7 @@ impl<'a> Interp<'a> {
                         self.pop(reg)
                     }
                     Call(func) => {
-                        self.stack.push((cur_fn, Label(cur as u32 + 1)));
+                        self.stack.push((cur_fn, Label(cur + 1)));
                         cur_fn = *func;
                         instrs = &mut self.instrs[*func];
                         break 0;
