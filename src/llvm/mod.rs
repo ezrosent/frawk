@@ -30,20 +30,10 @@ pub unsafe fn test_codegen() {
     // LLVM boilerplate
     //   * figure out issues with module verification.
     // Compilation metadata
-    //  x* For each bytecode function have a set of (type, register) pairs and for each one
-    //   indicate
-    //      - if it is local  (normal local variable)
-    //      - if it is global (passed as additional parameter)
-    //      - if it is a return (ignored)
-    //  x* For each bytecode function, indicate how many arguments it has, and of what type args
-    //     and returns are (we should already have this lying around)
-    //  x* For each bytecode function, have a mapping from Call and Return to arguments and
-    //     returns. Call mappings should also include the register (i.e. local or global variable,
-    //     or return) in which to store the result.
-    //  x* Keys for all these mappings can be *const pointers. That should simplify a number of
-    //     things. For one, it means we wont have to alter what bytecode does.
-    //   * Figure out CFG reconstruction. Can you do it on-the-fly, or do we want to invert the
-    //     mapping we create when flattening it out.
+    //  * build set of globals and locals used per function. Build up call-graph during
+    //    construction. Use globals to get fixed point.
+    //  * Use "typed ir" to first declare all relevant functions, storing their declarations in a
+    //    map, then going through each instruction piecemeal.
     //
     // Runtime
     //   * Figure out extern-C-able versions of the runtime.

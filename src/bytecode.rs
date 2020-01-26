@@ -6,6 +6,7 @@ use crate::compile;
 use crate::hashbrown::HashSet;
 use crate::runtime::{self, Float, Int, LazyVec, Str};
 
+// TODO make this usize; Instr is pretty large as it is.
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct Label(pub u32);
 
@@ -46,44 +47,6 @@ impl<T> Clone for Reg<T> {
     }
 }
 impl<T> Copy for Reg<T> {}
-
-// TODO: figure out if we need nulls, and hence unions. That's another refactor, but not a hard
-// one. Maybe look at MLSub for inspiration as well? (we wont need it to start)
-// TODO: we will want a macro of some kind to eliminate some boilerplate. Play around with it some,
-// but with a restricted set of instructions.
-// TODO: implement runtime.
-//   [x] * Strings (on the heap for now?)
-//   [x] * Regexes (use rust syntax for now)
-//   [ ] * Printf (skip for now?, see if we can use libc?)
-//   [x] * Files
-//          - Current plan:
-//              - have a Bufreader in main thread: reads until current line separator, then calls
-//                split for field separator and sets $0. (That's in the bytecode).
-//              - Build up map from file name to output file ID. Send on channel to background thread
-//                with file ID and payload. (but if we send the files over a channel, can we avoid
-//                excessive allocations? I suppose allocations are the least of our worries if we are
-//                also going to be writing output)
-//   [x] * Conversions:
-//          - Current plan: do pass with regex, then use simdjson (or stdlib). Benchmark with both.
-//   [x] * HashMaps:
-//          - For now, wrap hashbrown, but add in explicit handling for iteration to allow
-//            insertions: wrap in refcell (needed anyway): add potential for stack of
-//            modifications. (complex)
-//          - Alternative: just clone the keys ahead of time. (issue: deletion? it actually looks
-//            like gawk and mawk do this; deleting the key has it still show up in the iterator)
-//          - Alternative: use and "ordmap" where keys actually index into a slice, etc...
-//          - Decision: clone for now, but look at doing an optimization allowing for faster
-//            iteration when there are no map accesses within the loop (also look at what others
-//            are doing).
-//   [x] * Line Splitting:
-//          - Define trait for splitting lines, one that does splitting in larger batches, one that
-//          does it line by line. Choose which one it is based on program behavior (do you set FS
-//          after BEGIN?)
-//          - Perhaps make this an enum and just add a Freeze instruction or
-//          somethign?
-//          - This may require adding instructions (ReadLineAndSplit?).
-// Next: (1) finish interpreter (2) implement translator (3) implement parser (4) add
-// functions/union type.
 
 #[derive(Debug, Clone)]
 pub(crate) enum Instr<'a> {
@@ -1225,7 +1188,7 @@ fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) 
 // That could justify no checking during interpretation.
 const CHECKED: bool = false;
 
-#[inline]
+#[inline(always)]
 fn index<'a, T>(Storage { regs, .. }: &'a Storage<T>, reg: &Reg<T>) -> &'a T {
     if CHECKED {
         &regs[reg.index()]
@@ -1235,7 +1198,7 @@ fn index<'a, T>(Storage { regs, .. }: &'a Storage<T>, reg: &Reg<T>) -> &'a T {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn index_mut<'a, T>(Storage { regs, .. }: &'a mut Storage<T>, reg: &Reg<T>) -> &'a mut T {
     if CHECKED {
         &mut regs[reg.index()]
@@ -1245,13 +1208,13 @@ fn index_mut<'a, T>(Storage { regs, .. }: &'a mut Storage<T>, reg: &Reg<T>) -> &
     }
 }
 
-#[inline]
+#[inline(always)]
 fn push<'a, T: Clone>(s: &'a mut Storage<T>, reg: &Reg<T>) {
     let v = index(s, reg).clone();
     s.stack.push(v);
 }
 
-#[inline]
+#[inline(always)]
 fn pop<'a, T: Clone>(s: &'a mut Storage<T>) -> T {
     s.stack.pop().expect("pop must be called on nonempty stack")
 }
@@ -1264,9 +1227,11 @@ pub(crate) trait Accum {
 macro_rules! impl_pop {
     ($t:ty, $fld:ident) => {
         impl<'a> Pop<$t> for Interp<'a> {
+            #[inline(always)]
             fn push(&mut self, r: Reg<$t>) {
                 push(&mut self.$fld, &r)
             }
+            #[inline(always)]
             fn pop(&mut self, r: Reg<$t>) {
                 let v = pop(&mut self.$fld);
                 *self.get_mut(r) = v;
@@ -1296,6 +1261,7 @@ macro_rules! impl_get {
     ($t:ty, $fld:ident, $ty:tt $(,$lt:tt)*) => {
         impl_accum!($t, $ty, $($lt),*);
         impl<'a> Get<$t> for Interp<'a> {
+            #[inline(always)]
             fn get(&self, r: Reg<$t>) -> &$t {
                 #[cfg(debug_assertions)]
                 _dbg_check_index(
@@ -1305,6 +1271,7 @@ macro_rules! impl_get {
                 );
                 index(&self.$fld, &r)
             }
+            #[inline(always)]
             fn get_mut(&mut self, r: Reg<$t>) -> &mut $t {
                 #[cfg(debug_assertions)]
                 _dbg_check_index(
@@ -1414,10 +1381,22 @@ impl<'a> Instr<'a> {
                 l.accum(&mut f);
                 r.accum(&mut f);
             }
-            Not(res, ir) => unimplemented!(),
-            NotStr(res, sr) => unimplemented!(),
-            NegInt(res, ir) => unimplemented!(),
-            NegFloat(res, fr) => unimplemented!(),
+            Not(res, ir) => {
+                res.accum(&mut f);
+                ir.accum(&mut f)
+            }
+            NotStr(res, sr) => {
+                res.accum(&mut f);
+                sr.accum(&mut f)
+            }
+            NegInt(res, ir) => {
+                res.accum(&mut f);
+                ir.accum(&mut f)
+            }
+            NegFloat(res, fr) => {
+                res.accum(&mut f);
+                fr.accum(&mut f)
+            }
             Concat(res, l, r) => {
                 res.accum(&mut f);
                 l.accum(&mut f);
@@ -1428,7 +1407,10 @@ impl<'a> Instr<'a> {
                 l.accum(&mut f);
                 r.accum(&mut f);
             }
-            LenStr(res, s) => unimplemented!(),
+            LenStr(res, s) => {
+                res.accum(&mut f);
+                s.accum(&mut f)
+            }
             LTFloat(res, l, r) => {
                 res.accum(&mut f);
                 l.accum(&mut f);
