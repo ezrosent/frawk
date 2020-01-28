@@ -143,8 +143,10 @@ type Instr<'a> = Either<LL<'a>, HighLevel>;
 type CFG<'a> = Graph<Vec<Instr<'a>>, Option<NumTy /* Int register */>>;
 type CallGraph = Graph<HashSet<(NumTy, Ty)>, ()>;
 
+// Typer contains much of the state necessary for generating a typed CFG, which in turn can
+// generate bytecode or LLVM.
 #[derive(Default)]
-struct Typer<'a> {
+pub(crate) struct Typer<'a> {
     regs: Registers,
     id_map: HashMap<
         // TODO: make newtypes for these different Ids?
@@ -164,23 +166,23 @@ struct Typer<'a> {
     // functions below, but then each access to frame would have the form of
     // self.frames[current_index], which is marginally less efficient and (more importantly)
     // error-prone.
-    func_info: Vec<FuncInfo>,
-    frames: Vec<Frame<'a>>,
-    main_offset: usize,
+    pub func_info: Vec<FuncInfo>,
+    pub frames: Vec<Frame<'a>>,
+    pub main_offset: usize,
 
     // Not used for bytecode generation.
     callgraph: Graph<HashSet<(NumTy, Ty)>, ()>,
 }
 
 #[derive(Debug)]
-struct FuncInfo {
-    ret_ty: Ty,
+pub(crate) struct FuncInfo {
+    pub ret_ty: Ty,
     // For bytecode, we pop into each of these registers at the specified type.
-    arg_tys: SmallVec<Ty>,
+    pub arg_tys: SmallVec<Ty>,
 }
 
 #[derive(Default)]
-struct Frame<'a> {
+pub(crate) struct Frame<'a> {
     src_function: NumTy,
     cur_ident: NumTy,
     locals: HashMap<Ident, (u32, Ty)>,

@@ -1,17 +1,24 @@
-use crate::common::raw_guard;
+use crate::common::{raw_guard, Result};
+use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
 use crate::llvm_sys as llvm;
+use crate::runtime as frawk_runtime;
 use llvm::{
     analysis::{LLVMVerifierFailureAction, LLVMVerifyModule},
-    prelude::LLVMValueRef,
+    core::*,
+    execution_engine::*,
+    prelude::*,
+    target::*,
     LLVMLinkage,
 };
 
 pub mod runtime;
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::mem::{self, MaybeUninit};
 use std::ptr;
+
+type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 // TODO make sure we use this function in main, otherwise linker may decide to get rid of it.
 #[no_mangle]
@@ -19,13 +26,158 @@ pub extern "C" fn __test_print() {
     println!("hello! this is rust code called from llvm");
 }
 
+struct Function {
+    // TODO consider dropping `name`. Unclear if we need it. LLVM seems to take ownership, so we
+    // might be able to give the memory back at construction time (or share a single string and
+    // avoid the allocations).
+    name: CString,
+    val: LLVMValueRef,
+    builder: LLVMBuilderRef,
+}
+
+impl Drop for Function {
+    fn drop(&mut self) {
+        unsafe {
+            LLVMDisposeBuilder(self.builder);
+        }
+    }
+}
+
+struct Generator<'a, 'b> {
+    types: &'b Typer<'a>,
+    ctx: LLVMContextRef,
+    module: LLVMModuleRef,
+    engine: LLVMExecutionEngineRef,
+    pass_manager: LLVMPassManagerRef,
+    decls: Vec<Function>,
+    type_map: [LLVMTypeRef; compile::NUM_TYPES],
+}
+
+impl<'a, 'b> Drop for Generator<'a, 'b> {
+    fn drop(&mut self) {
+        unsafe {
+            LLVMDisposeModule(self.module);
+            LLVMDisposePassManager(self.pass_manager);
+        }
+    }
+}
+
+impl<'a, 'b> Generator<'a, 'b> {
+    pub unsafe fn init(types: &'b Typer<'a>) -> Result<Generator<'a, 'b>> {
+        if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
+            return err!("failed to load in-process library");
+        }
+        let ctx = LLVMContextCreate();
+        let module = LLVMModuleCreateWithNameInContext(c_str!("frawk_main"), ctx);
+        // JIT-specific initialization.
+        LLVM_InitializeNativeTarget();
+        LLVM_InitializeNativeAsmPrinter();
+        LLVMLinkInMCJIT();
+        let mut maybe_engine = MaybeUninit::<LLVMExecutionEngineRef>::uninit();
+        let mut err: *mut c_char = ptr::null_mut();
+        if LLVMCreateExecutionEngineForModule(maybe_engine.as_mut_ptr(), module, &mut err) != 0 {
+            let res = err!(
+                "failed to create program: {}",
+                CStr::from_ptr(err).to_str().unwrap()
+            );
+            LLVMDisposeMessage(err);
+            return res;
+        }
+        let engine = maybe_engine.assume_init();
+        let pass_manager = LLVMCreateFunctionPassManagerForModule(module);
+        {
+            use llvm::transforms::scalar::*;
+            llvm::transforms::util::LLVMAddPromoteMemoryToRegisterPass(pass_manager);
+            LLVMAddConstantPropagationPass(pass_manager);
+            LLVMAddInstructionCombiningPass(pass_manager);
+            LLVMAddReassociatePass(pass_manager);
+            LLVMAddGVNPass(pass_manager);
+            LLVMAddCFGSimplificationPass(pass_manager);
+            LLVMInitializeFunctionPassManager(pass_manager);
+        }
+        let mut res = Generator {
+            types,
+            ctx,
+            module,
+            engine,
+            pass_manager,
+            decls: Vec::with_capacity(types.frames.len()),
+            type_map: [ptr::null_mut(); compile::NUM_TYPES],
+        };
+        res.build_map();
+        res.build_decls();
+        Ok(res)
+    }
+    unsafe fn build_map(&mut self) {
+        use mem::size_of;
+        // TODO: make this a void* instead?
+        let uintptr = LLVMIntTypeInContext(self.ctx, (size_of::<usize>() * 8) as libc::c_uint);
+        self.type_map[Ty::Int as usize] = LLVMIntTypeInContext(
+            self.ctx,
+            (size_of::<frawk_runtime::Int>() * 8) as libc::c_uint,
+        );
+        self.type_map[Ty::Float as usize] = LLVMDoubleTypeInContext(self.ctx);
+        self.type_map[Ty::Str as usize] = LLVMIntTypeInContext(self.ctx, 128 as libc::c_uint);
+        self.type_map[Ty::MapIntInt as usize] = uintptr;
+        self.type_map[Ty::MapIntFloat as usize] = uintptr;
+        self.type_map[Ty::MapIntStr as usize] = uintptr;
+        self.type_map[Ty::MapStrInt as usize] = uintptr;
+        self.type_map[Ty::MapStrFloat as usize] = uintptr;
+        self.type_map[Ty::MapStrStr as usize] = uintptr;
+        // TODO: handle iterators.
+        self.type_map[Ty::IterInt as usize] = ptr::null_mut();
+        self.type_map[Ty::IterStr as usize] = ptr::null_mut();
+    }
+
+    fn llvm_ty(&self, ty: Ty) -> LLVMTypeRef {
+        self.type_map[ty as usize]
+    }
+
+    // TODO: add globals to decls. Store the number of parameters (as it is different for llvm,
+    //       because it includes globals)
+    // TODO: get a big loop together for translating basic blocks
+    //       - skip phis until next stage
+    //       - allocate the relevant locals
+    //       - for main, allocate globals.
+    //       - Get scalar instructions done, but stub out runtime for now.
+    // TODO: control flow
+    //       - read up on this more, get the instructions down. structure should follow bytecode
+    //       translation closely.
+    // TODO: runtime
+    //       - fill in runtime, figure out where to allocate it in main. It probably needs to be
+    //       passed as a a param to every function (if so, just make it the last? or first?).
+
+    unsafe fn build_decls(&mut self) {
+        let mut arg_tys = SmallVec::new();
+        for (i, info) in self.types.func_info.iter().enumerate() {
+            let name = CString::new(if i == self.types.main_offset {
+                format!("_frawk_main")
+            } else {
+                format!("_frawk_udf_{}", i)
+            })
+            .unwrap();
+            arg_tys.extend(info.arg_tys.iter().map(|ty| self.llvm_ty(*ty)));
+            // TODO globals. Have a hashmap from <Reg, Ty> => c_uint, for feeding to LLVMGetParam.
+            let ty = LLVMFunctionType(
+                self.llvm_ty(info.ret_ty),
+                arg_tys.as_mut_ptr(),
+                arg_tys.len() as u32,
+                /*IsVarArg=*/ 0,
+            );
+            let val = LLVMAddFunction(self.module, name.as_ptr(), ty);
+            let builder = LLVMCreateBuilderInContext(self.ctx);
+            let block = LLVMAppendBasicBlockInContext(self.ctx, val, c_str!(""));
+            LLVMPositionBuilderAtEnd(builder, block);
+            self.decls.push(Function { name, val, builder });
+            arg_tys.clear();
+        }
+    }
+}
+
 pub unsafe fn test_codegen() {
     if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
         panic!("failed to load in-process library");
     }
-    use llvm::core::*;
-    use llvm::execution_engine::*;
-    use llvm::target::*;
     // TODO:
     // LLVM boilerplate
     //   * figure out issues with module verification.
