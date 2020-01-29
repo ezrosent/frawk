@@ -1,4 +1,4 @@
-use crate::common::{raw_guard, Result};
+use crate::common::{raw_guard, NumTy, Result};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
 use crate::llvm_sys as llvm;
@@ -11,6 +11,8 @@ use llvm::{
     target::*,
     LLVMLinkage,
 };
+
+use hashbrown::HashMap;
 
 pub mod runtime;
 
@@ -33,6 +35,8 @@ struct Function {
     name: CString,
     val: LLVMValueRef,
     builder: LLVMBuilderRef,
+    globals: HashMap<(NumTy, Ty), usize>,
+    num_args: usize,
 }
 
 impl Drop for Function {
@@ -43,14 +47,30 @@ impl Drop for Function {
     }
 }
 
+#[derive(Copy, Clone)]
+struct TypeRef {
+    base: LLVMTypeRef,
+    ptr: LLVMTypeRef,
+}
+
+impl TypeRef {
+    fn null() -> TypeRef {
+        TypeRef {
+            base: ptr::null_mut(),
+            ptr: ptr::null_mut(),
+        }
+    }
+}
+
 struct Generator<'a, 'b> {
-    types: &'b Typer<'a>,
+    types: &'b mut Typer<'a>,
     ctx: LLVMContextRef,
     module: LLVMModuleRef,
     engine: LLVMExecutionEngineRef,
     pass_manager: LLVMPassManagerRef,
     decls: Vec<Function>,
-    type_map: [LLVMTypeRef; compile::NUM_TYPES],
+    type_map: [TypeRef; compile::NUM_TYPES],
+    runtime_ty: LLVMTypeRef,
 }
 
 impl<'a, 'b> Drop for Generator<'a, 'b> {
@@ -63,7 +83,7 @@ impl<'a, 'b> Drop for Generator<'a, 'b> {
 }
 
 impl<'a, 'b> Generator<'a, 'b> {
-    pub unsafe fn init(types: &'b Typer<'a>) -> Result<Generator<'a, 'b>> {
+    pub unsafe fn init(types: &'b mut Typer<'a>) -> Result<Generator<'a, 'b>> {
         if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
             return err!("failed to load in-process library");
         }
@@ -95,46 +115,54 @@ impl<'a, 'b> Generator<'a, 'b> {
             LLVMAddCFGSimplificationPass(pass_manager);
             LLVMInitializeFunctionPassManager(pass_manager);
         }
+        let nframes = types.frames.len();
         let mut res = Generator {
             types,
             ctx,
             module,
             engine,
             pass_manager,
-            decls: Vec::with_capacity(types.frames.len()),
-            type_map: [ptr::null_mut(); compile::NUM_TYPES],
+            decls: Vec::with_capacity(nframes),
+            type_map: [TypeRef::null(); compile::NUM_TYPES],
+            runtime_ty: LLVMPointerType(LLVMVoidTypeInContext(ctx), 0),
         };
         res.build_map();
         res.build_decls();
         Ok(res)
     }
+
     unsafe fn build_map(&mut self) {
         use mem::size_of;
         // TODO: make this a void* instead?
+        let make = |ty| TypeRef {
+            base: ty,
+            ptr: LLVMPointerType(ty, 0),
+        };
         let uintptr = LLVMIntTypeInContext(self.ctx, (size_of::<usize>() * 8) as libc::c_uint);
-        self.type_map[Ty::Int as usize] = LLVMIntTypeInContext(
+        self.type_map[Ty::Int as usize] = make(LLVMIntTypeInContext(
             self.ctx,
             (size_of::<frawk_runtime::Int>() * 8) as libc::c_uint,
-        );
-        self.type_map[Ty::Float as usize] = LLVMDoubleTypeInContext(self.ctx);
-        self.type_map[Ty::Str as usize] = LLVMIntTypeInContext(self.ctx, 128 as libc::c_uint);
-        self.type_map[Ty::MapIntInt as usize] = uintptr;
-        self.type_map[Ty::MapIntFloat as usize] = uintptr;
-        self.type_map[Ty::MapIntStr as usize] = uintptr;
-        self.type_map[Ty::MapStrInt as usize] = uintptr;
-        self.type_map[Ty::MapStrFloat as usize] = uintptr;
-        self.type_map[Ty::MapStrStr as usize] = uintptr;
+        ));
+        self.type_map[Ty::Float as usize] = make(LLVMDoubleTypeInContext(self.ctx));
+        self.type_map[Ty::Str as usize] = make(LLVMIntTypeInContext(self.ctx, 128 as libc::c_uint));
+        self.type_map[Ty::MapIntInt as usize] = make(uintptr);
+        self.type_map[Ty::MapIntFloat as usize] = make(uintptr);
+        self.type_map[Ty::MapIntStr as usize] = make(uintptr);
+        self.type_map[Ty::MapStrInt as usize] = make(uintptr);
+        self.type_map[Ty::MapStrFloat as usize] = make(uintptr);
+        self.type_map[Ty::MapStrStr as usize] = make(uintptr);
         // TODO: handle iterators.
-        self.type_map[Ty::IterInt as usize] = ptr::null_mut();
-        self.type_map[Ty::IterStr as usize] = ptr::null_mut();
+        self.type_map[Ty::IterInt as usize] = TypeRef::null();
+        self.type_map[Ty::IterStr as usize] = TypeRef::null();
     }
 
     fn llvm_ty(&self, ty: Ty) -> LLVMTypeRef {
-        self.type_map[ty as usize]
+        self.type_map[ty as usize].base
+    }
+    fn llvm_ptr_ty(&self, ty: Ty) -> LLVMTypeRef {
+        self.type_map[ty as usize].ptr
     }
 
-    // TODO: add globals to decls. Store the number of parameters (as it is different for llvm,
-    //       because it includes globals)
     // TODO: get a big loop together for translating basic blocks
     //       - skip phis until next stage
     //       - allocate the relevant locals
@@ -148,16 +176,33 @@ impl<'a, 'b> Generator<'a, 'b> {
     //       passed as a a param to every function (if so, just make it the last? or first?).
 
     unsafe fn build_decls(&mut self) {
+        let global_refs = self.types.get_global_refs();
+        debug_assert_eq!(global_refs.len(), self.types.func_info.len());
         let mut arg_tys = SmallVec::new();
-        for (i, info) in self.types.func_info.iter().enumerate() {
+        for (i, (info, refs)) in self
+            .types
+            .func_info
+            .iter()
+            .zip(global_refs.iter())
+            .enumerate()
+        {
+            let mut globals = HashMap::new();
             let name = CString::new(if i == self.types.main_offset {
                 format!("_frawk_main")
             } else {
                 format!("_frawk_udf_{}", i)
             })
             .unwrap();
+            // First, we add the listed function parameters.
             arg_tys.extend(info.arg_tys.iter().map(|ty| self.llvm_ty(*ty)));
-            // TODO globals. Have a hashmap from <Reg, Ty> => c_uint, for feeding to LLVMGetParam.
+            // Then, we add on the referenced globals.
+            for (reg, ty) in refs.iter().cloned() {
+                let ix = arg_tys.len();
+                arg_tys.push(self.llvm_ptr_ty(ty));
+                globals.insert((reg, ty), ix);
+            }
+            // Finally, we add a pointer to the runtime; always the last parameter.
+            arg_tys.push(self.runtime_ty);
             let ty = LLVMFunctionType(
                 self.llvm_ty(info.ret_ty),
                 arg_tys.as_mut_ptr(),
@@ -168,7 +213,13 @@ impl<'a, 'b> Generator<'a, 'b> {
             let builder = LLVMCreateBuilderInContext(self.ctx);
             let block = LLVMAppendBasicBlockInContext(self.ctx, val, c_str!(""));
             LLVMPositionBuilderAtEnd(builder, block);
-            self.decls.push(Function { name, val, builder });
+            self.decls.push(Function {
+                name,
+                val,
+                builder,
+                globals,
+                num_args: arg_tys.len(),
+            });
             arg_tys.clear();
         }
     }
