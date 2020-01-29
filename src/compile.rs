@@ -513,13 +513,7 @@ impl<'a> Typer<'a> {
         Ok(gen)
     }
 
-    fn get_refs(
-        &mut self,
-    ) -> (
-        Vec<HashSet<(NumTy, Ty)>>, /* locals */
-        Vec<HashSet<(NumTy, Ty)>>, /* globals */
-    ) {
-        let mut locals = vec![HashSet::new(); self.frames.len()];
+    pub(crate) fn get_global_refs(&mut self) -> Vec<HashSet<(NumTy, Ty)>> {
         let mut globals = vec![HashSet::new(); self.frames.len()];
         // First, accumulate all the local and global registers referenced in all the functions.
         // We need these for LLVM because relevant globals are passed as function parameterse, and
@@ -532,15 +526,12 @@ impl<'a> Typer<'a> {
             for bb in frame.cfg.raw_nodes() {
                 for stmt in bb.weight.iter() {
                     accum(stmt, |reg, ty| match stats.get_status(reg, ty) {
-                        RegStatus::Local => {
-                            locals[i].insert((reg, ty));
-                        }
                         RegStatus::Global => {
                             cg.node_weight_mut(NodeIx::new(i))
                                 .unwrap()
                                 .insert((reg, ty));
                         }
-                        RegStatus::Ret => {}
+                        RegStatus::Ret | RegStatus::Local => {}
                     });
                 }
             }
@@ -587,7 +578,7 @@ impl<'a> Typer<'a> {
             mem::swap(set, self.callgraph.node_weight_mut(NodeIx::new(i)).unwrap())
         }
 
-        (locals, globals)
+        globals
     }
 }
 
