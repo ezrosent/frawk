@@ -302,6 +302,13 @@ impl<'a, 'b> Generator<'a, 'b> {
 }
 
 impl Function {
+    fn get_local(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
+        if let Some(v) = self.locals.get(&local) {
+            Ok(*v)
+        } else {
+            err!("unbound local variable {:?}", local)
+        }
+    }
     // TODO, pass in fields from Generator as needed.
     unsafe fn gen_ll_inst<'a>(&mut self, inst: &compile::LL<'a>, tmap: &TypeMap) -> Result<()> {
         use crate::bytecode::Instr::*;
@@ -333,7 +340,12 @@ impl Function {
             StrToFloat(fr, sr) => unimplemented!(),
             FloatToInt(ir, fr) => unimplemented!(),
             IntToFloat(fr, ir) => unimplemented!(),
-            AddInt(res, l, r) => unimplemented!(),
+            AddInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildAdd(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
             AddFloat(res, l, r) => unimplemented!(),
             MulInt(res, l, r) => unimplemented!(),
             MulFloat(res, l, r) => unimplemented!(),
