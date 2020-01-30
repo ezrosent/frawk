@@ -243,7 +243,7 @@ pub(crate) enum Instr<'a> {
 }
 
 impl<T> Reg<T> {
-    fn index(&self) -> usize {
+    pub(crate) fn index(&self) -> usize {
         self.0 as usize
     }
 }
@@ -1214,7 +1214,11 @@ fn pop<'a, T: Clone>(s: &'a mut Storage<T>) -> T {
 
 // For accumulating register-specific metadata
 pub(crate) trait Accum {
-    fn accum(&self, f: impl FnMut(NumTy, compile::Ty));
+    fn reflect(&self) -> (NumTy, compile::Ty);
+    fn accum(&self, f: impl FnMut(NumTy, compile::Ty)) {
+        let (reg, ty) = self.reflect();
+        f(reg, ty)
+    }
 }
 
 macro_rules! impl_pop {
@@ -1236,15 +1240,15 @@ macro_rules! impl_pop {
 macro_rules! impl_accum  {
     ($t:ty, $ty:tt, $($lt:tt),+) => {
         impl<$($lt),*> Accum for Reg<$t> {
-            fn accum(&self, mut f: impl FnMut(NumTy, compile::Ty)) {
-                f(self.index() as NumTy, compile::Ty::$ty);
+            fn reflect(&self) -> (NumTy, compile::Ty) {
+                (self.index() as NumTy, compile::Ty::$ty)
             }
         }
     };
     ($t:ty, $ty:tt,) => {
         impl Accum for Reg<$t> {
-            fn accum(&self, mut f: impl FnMut(NumTy, compile::Ty)) {
-                f(self.index() as NumTy, compile::Ty::$ty);
+            fn reflect(&self) -> (NumTy, compile::Ty) {
+                (self.index() as NumTy, compile::Ty::$ty)
             }
         }
     };

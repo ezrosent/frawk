@@ -178,6 +178,10 @@ impl<'a> From<String> for Str<'a> {
 pub struct Str<'a>(UnsafeCell<StrRep<'a>>);
 
 impl<'a> Str<'a> {
+    // leaks `self` unless you transmute it back. This is used in LLVM codegen
+    pub fn into_bits(self) -> u128 {
+        unsafe { mem::transmute::<Str<'a>, u128>(self) }
+    }
     pub fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>)) {
         self.with_str(|s| {
             // AWK stips empty leading fields.

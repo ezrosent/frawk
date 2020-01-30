@@ -1,4 +1,5 @@
-use crate::common::{raw_guard, NumTy, Result};
+use crate::bytecode::Accum;
+use crate::common::{raw_guard, Either, NumTy, Result};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
 use crate::llvm_sys as llvm;
@@ -36,6 +37,7 @@ struct Function {
     val: LLVMValueRef,
     builder: LLVMBuilderRef,
     globals: HashMap<(NumTy, Ty), usize>,
+    locals: HashMap<(NumTy, Ty), LLVMValueRef>,
     num_args: usize,
 }
 
@@ -62,6 +64,37 @@ impl TypeRef {
     }
 }
 
+struct TypeMap {
+    table: [TypeRef; compile::NUM_TYPES],
+    runtime_ty: LLVMTypeRef,
+}
+
+impl TypeMap {
+    fn new(ctx: LLVMContextRef) -> TypeMap {
+        unsafe {
+            TypeMap {
+                table: [TypeRef::null(); compile::NUM_TYPES],
+                runtime_ty: LLVMPointerType(LLVMVoidTypeInContext(ctx), 0),
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn init(&mut self, ty: Ty, r: TypeRef) {
+        self.table[ty as usize] = r;
+    }
+
+    #[inline(always)]
+    fn get_ty(&self, ty: Ty) -> LLVMTypeRef {
+        self.table[ty as usize].base
+    }
+
+    #[inline(always)]
+    fn get_ptr_ty(&self, ty: Ty) -> LLVMTypeRef {
+        self.table[ty as usize].ptr
+    }
+}
+
 struct Generator<'a, 'b> {
     types: &'b mut Typer<'a>,
     ctx: LLVMContextRef,
@@ -69,8 +102,7 @@ struct Generator<'a, 'b> {
     engine: LLVMExecutionEngineRef,
     pass_manager: LLVMPassManagerRef,
     decls: Vec<Function>,
-    type_map: [TypeRef; compile::NUM_TYPES],
-    runtime_ty: LLVMTypeRef,
+    type_map: TypeMap,
 }
 
 impl<'a, 'b> Drop for Generator<'a, 'b> {
@@ -123,8 +155,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             engine,
             pass_manager,
             decls: Vec::with_capacity(nframes),
-            type_map: [TypeRef::null(); compile::NUM_TYPES],
-            runtime_ty: LLVMPointerType(LLVMVoidTypeInContext(ctx), 0),
+            type_map: TypeMap::new(ctx),
         };
         res.build_map();
         res.build_decls();
@@ -139,28 +170,35 @@ impl<'a, 'b> Generator<'a, 'b> {
             ptr: LLVMPointerType(ty, 0),
         };
         let uintptr = LLVMIntTypeInContext(self.ctx, (size_of::<usize>() * 8) as libc::c_uint);
-        self.type_map[Ty::Int as usize] = make(LLVMIntTypeInContext(
-            self.ctx,
-            (size_of::<frawk_runtime::Int>() * 8) as libc::c_uint,
-        ));
-        self.type_map[Ty::Float as usize] = make(LLVMDoubleTypeInContext(self.ctx));
-        self.type_map[Ty::Str as usize] = make(LLVMIntTypeInContext(self.ctx, 128 as libc::c_uint));
-        self.type_map[Ty::MapIntInt as usize] = make(uintptr);
-        self.type_map[Ty::MapIntFloat as usize] = make(uintptr);
-        self.type_map[Ty::MapIntStr as usize] = make(uintptr);
-        self.type_map[Ty::MapStrInt as usize] = make(uintptr);
-        self.type_map[Ty::MapStrFloat as usize] = make(uintptr);
-        self.type_map[Ty::MapStrStr as usize] = make(uintptr);
+        self.type_map.init(
+            Ty::Int,
+            make(LLVMIntTypeInContext(
+                self.ctx,
+                (size_of::<frawk_runtime::Int>() * 8) as libc::c_uint,
+            )),
+        );
+        self.type_map
+            .init(Ty::Float, make(LLVMDoubleTypeInContext(self.ctx)));
+        self.type_map.init(
+            Ty::Str,
+            make(LLVMIntTypeInContext(self.ctx, 128 as libc::c_uint)),
+        );
+        self.type_map.init(Ty::MapIntInt, make(uintptr));
+        self.type_map.init(Ty::MapIntFloat, make(uintptr));
+        self.type_map.init(Ty::MapIntStr, make(uintptr));
+        self.type_map.init(Ty::MapStrInt, make(uintptr));
+        self.type_map.init(Ty::MapStrFloat, make(uintptr));
+        self.type_map.init(Ty::MapStrStr, make(uintptr));
         // TODO: handle iterators.
-        self.type_map[Ty::IterInt as usize] = TypeRef::null();
-        self.type_map[Ty::IterStr as usize] = TypeRef::null();
+        self.type_map.init(Ty::IterInt, TypeRef::null());
+        self.type_map.init(Ty::IterStr, TypeRef::null());
     }
 
     fn llvm_ty(&self, ty: Ty) -> LLVMTypeRef {
-        self.type_map[ty as usize].base
+        self.type_map.get_ty(ty)
     }
     fn llvm_ptr_ty(&self, ty: Ty) -> LLVMTypeRef {
-        self.type_map[ty as usize].ptr
+        self.type_map.get_ptr_ty(ty)
     }
 
     // TODO: get a big loop together for translating basic blocks
@@ -202,7 +240,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                 globals.insert((reg, ty), ix);
             }
             // Finally, we add a pointer to the runtime; always the last parameter.
-            arg_tys.push(self.runtime_ty);
+            arg_tys.push(self.type_map.runtime_ty);
             let ty = LLVMFunctionType(
                 self.llvm_ty(info.ret_ty),
                 arg_tys.as_mut_ptr(),
@@ -218,10 +256,195 @@ impl<'a, 'b> Generator<'a, 'b> {
                 val,
                 builder,
                 globals,
+                locals: Default::default(),
                 num_args: arg_tys.len(),
             });
             arg_tys.clear();
         }
+    }
+
+    unsafe fn alloc_local(&self, reg: NumTy, ty: Ty) -> Result<LLVMValueRef> {
+        use Ty::*;
+        let val = match ty {
+            Int => LLVMConstInt(self.llvm_ty(Int), 0, /*sign_extend=*/ 1),
+            Float => LLVMConstReal(self.llvm_ty(Float), 0.0),
+            Str => LLVMConstInt(self.llvm_ty(Str), 0, /*sign_extend=*/ 0),
+            MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+                LLVMConstInt(self.llvm_ty(ty), 0, /*sign_extend=*/ 0)
+            }
+            IterInt | IterStr => return err!("we should not be allocating any iterators"),
+        };
+        Ok(val)
+    }
+
+    unsafe fn gen_function(&mut self, func_id: usize) -> Result<()> {
+        let frame = &self.types.frames[func_id];
+        for (local, (reg, ty)) in frame.locals.iter() {
+            debug_assert!(!local.global);
+            // implicitly-declared locals are just the ones with a subscript of 0.
+            if local.sub == 0 {
+                let val = self.alloc_local(*reg, *ty)?;
+                self.decls[func_id].locals.insert((*reg, *ty), val);
+            }
+        }
+        let info = &self.types.func_info[func_id];
+        for (i, bb) in frame.cfg.raw_nodes().iter().enumerate() {
+            let decl = &mut self.decls[func_id];
+            for inst in &bb.weight {
+                match inst {
+                    Either::Left(ll) => decl.gen_ll_inst(ll, &self.type_map)?,
+                    Either::Right(hl) => decl.gen_hl_inst(hl)?,
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Function {
+    // TODO, pass in fields from Generator as needed.
+    unsafe fn gen_ll_inst<'a>(&mut self, inst: &compile::LL<'a>, tmap: &TypeMap) -> Result<()> {
+        use crate::bytecode::Instr::*;
+        match inst {
+            StoreConstStr(sr, s) => {
+                let sc = s.clone().into_bits();
+                // There is no way to pass a 128-bit integer to LLVM directly. We have to convert
+                // it to a string first.
+                let as_hex = CString::new(format!("{:x}", sc)).unwrap();
+                let ty = tmap.get_ty(Ty::Str);
+                let v = LLVMConstIntOfString(ty, as_hex.as_ptr(), /*radix=*/ 16);
+                self.locals.insert(sr.reflect(), v);
+            }
+            StoreConstInt(ir, i) => {
+                let (reg, cty) = ir.reflect();
+                let ty = tmap.get_ty(cty);
+                let v = LLVMConstInt(ty, *i as u64, /*sign_extend=*/ 1);
+                self.locals.insert((reg, cty), v);
+            }
+            StoreConstFloat(fr, f) => {
+                let (reg, cty) = fr.reflect();
+                let ty = tmap.get_ty(cty);
+                let v = LLVMConstReal(ty, *f);
+                self.locals.insert((reg, cty), v);
+            }
+            IntToStr(sr, ir) => unimplemented!(),
+            FloatToStr(sr, fr) => unimplemented!(),
+            StrToInt(ir, sr) => unimplemented!(),
+            StrToFloat(fr, sr) => unimplemented!(),
+            FloatToInt(ir, fr) => unimplemented!(),
+            IntToFloat(fr, ir) => unimplemented!(),
+            AddInt(res, l, r) => unimplemented!(),
+            AddFloat(res, l, r) => unimplemented!(),
+            MulInt(res, l, r) => unimplemented!(),
+            MulFloat(res, l, r) => unimplemented!(),
+            MinusInt(res, l, r) => unimplemented!(),
+            MinusFloat(res, l, r) => unimplemented!(),
+            ModInt(res, l, r) => unimplemented!(),
+            ModFloat(res, l, r) => unimplemented!(),
+            Div(res, l, r) => unimplemented!(),
+            Not(res, ir) => unimplemented!(),
+            NotStr(res, sr) => unimplemented!(),
+            NegInt(res, ir) => unimplemented!(),
+            NegFloat(res, fr) => unimplemented!(),
+            Concat(res, l, r) => unimplemented!(),
+            Match(res, l, r) => unimplemented!(),
+            LenStr(res, s) => unimplemented!(),
+            LTFloat(res, l, r) => unimplemented!(),
+            LTInt(res, l, r) => unimplemented!(),
+            LTStr(res, l, r) => unimplemented!(),
+            GTFloat(res, l, r) => unimplemented!(),
+            GTInt(res, l, r) => unimplemented!(),
+            GTStr(res, l, r) => unimplemented!(),
+            LTEFloat(res, l, r) => unimplemented!(),
+            LTEInt(res, l, r) => unimplemented!(),
+            LTEStr(res, l, r) => unimplemented!(),
+            GTEFloat(res, l, r) => unimplemented!(),
+            GTEInt(res, l, r) => unimplemented!(),
+            GTEStr(res, l, r) => unimplemented!(),
+            EQFloat(res, l, r) => unimplemented!(),
+            EQInt(res, l, r) => unimplemented!(),
+            EQStr(res, l, r) => unimplemented!(),
+            SetColumn(dst, src) => unimplemented!(),
+            GetColumn(dst, src) => unimplemented!(),
+            SplitInt(flds, to_split, arr, pat) => unimplemented!(),
+            SplitStr(flds, to_split, arr, pat) => unimplemented!(),
+            PrintStdout(txt) => unimplemented!(),
+            Print(txt, out, append) => unimplemented!(),
+            LookupIntInt(res, arr, k) => unimplemented!(),
+            LookupIntStr(res, arr, k) => unimplemented!(),
+            LookupIntFloat(res, arr, k) => unimplemented!(),
+            LookupStrInt(res, arr, k) => unimplemented!(),
+            LookupStrStr(res, arr, k) => unimplemented!(),
+            LookupStrFloat(res, arr, k) => unimplemented!(),
+            ContainsIntInt(res, arr, k) => unimplemented!(),
+            ContainsIntStr(res, arr, k) => unimplemented!(),
+            ContainsIntFloat(res, arr, k) => unimplemented!(),
+            ContainsStrInt(res, arr, k) => unimplemented!(),
+            ContainsStrStr(res, arr, k) => unimplemented!(),
+            ContainsStrFloat(res, arr, k) => unimplemented!(),
+            DeleteIntInt(arr, k) => unimplemented!(),
+            DeleteIntFloat(arr, k) => unimplemented!(),
+            DeleteIntStr(arr, k) => unimplemented!(),
+            DeleteStrInt(arr, k) => unimplemented!(),
+            DeleteStrFloat(arr, k) => unimplemented!(),
+            DeleteStrStr(arr, k) => unimplemented!(),
+            LenIntInt(res, arr) => unimplemented!(),
+            LenIntFloat(res, arr) => unimplemented!(),
+            LenIntStr(res, arr) => unimplemented!(),
+            LenStrInt(res, arr) => unimplemented!(),
+            LenStrFloat(res, arr) => unimplemented!(),
+            LenStrStr(res, arr) => unimplemented!(),
+            StoreIntInt(arr, k, v) => unimplemented!(),
+            StoreIntFloat(arr, k, v) => unimplemented!(),
+            StoreIntStr(arr, k, v) => unimplemented!(),
+            StoreStrInt(arr, k, v) => unimplemented!(),
+            StoreStrFloat(arr, k, v) => unimplemented!(),
+            StoreStrStr(arr, k, v) => unimplemented!(),
+            LoadVarStr(dst, var) => unimplemented!(),
+            StoreVarStr(var, src) => unimplemented!(),
+            LoadVarInt(dst, var) => unimplemented!(),
+            StoreVarInt(var, src) => unimplemented!(),
+            LoadVarIntMap(dst, var) => unimplemented!(),
+            StoreVarIntMap(var, src) => unimplemented!(),
+            MovInt(dst, src) => unimplemented!(),
+            MovFloat(dst, src) => unimplemented!(),
+            MovStr(dst, src) => unimplemented!(),
+            MovMapIntInt(dst, src) => unimplemented!(),
+            MovMapIntFloat(dst, src) => unimplemented!(),
+            MovMapIntStr(dst, src) => unimplemented!(),
+            MovMapStrInt(dst, src) => unimplemented!(),
+            MovMapStrFloat(dst, src) => unimplemented!(),
+            MovMapStrStr(dst, src) => unimplemented!(),
+            ReadErr(dst, file) => unimplemented!(),
+            NextLine(dst, file) => unimplemented!(),
+            ReadErrStdin(dst) => unimplemented!(),
+            NextLineStdin(dst) => unimplemented!(),
+
+            IterBeginIntInt(dst, arr) => unimplemented!(),
+            IterBeginIntFloat(dst, arr) => unimplemented!(),
+            IterBeginIntStr(dst, arr) => unimplemented!(),
+            IterBeginStrInt(dst, arr) => unimplemented!(),
+            IterBeginStrFloat(dst, arr) => unimplemented!(),
+            IterBeginStrStr(dst, arr) => unimplemented!(),
+            IterHasNextInt(dst, iter) => unimplemented!(),
+            IterHasNextStr(dst, iter) => unimplemented!(),
+            IterGetNextInt(dst, iter) => unimplemented!(),
+            IterGetNextStr(dst, iter) => unimplemented!(),
+
+            PushInt(_) | PushFloat(_) | PushStr(_) | PushIntInt(_) | PushIntFloat(_)
+            | PushIntStr(_) | PushStrInt(_) | PushStrFloat(_) | PushStrStr(_) | PopInt(_)
+            | PopFloat(_) | PopStr(_) | PopIntInt(_) | PopIntFloat(_) | PopIntStr(_)
+            | PopStrInt(_) | PopStrFloat(_) | PopStrStr(_) => {
+                return err!("unexpected explicit push/pop in llvm")
+            }
+            Ret | Halt | Jmp(_) | JmpIf(_, _) | Call(_) => {
+                return err!("unexpected bytecode-level control flow")
+            }
+        };
+        Ok(())
+    }
+    unsafe fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
+        unimplemented!()
     }
 }
 
