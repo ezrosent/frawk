@@ -89,7 +89,7 @@ pub(crate) fn bytecode<'a>(
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 #[derive(Debug)]
-enum HighLevel {
+pub(crate) enum HighLevel {
     // TODO we may not strictly need Call's dst_ty and Ret's Ty field. Other information may have
     // it available.
     Call {
@@ -138,7 +138,7 @@ impl RegStatuses {
     }
 }
 
-type LL<'a> = bytecode::Instr<'a>;
+pub(crate) type LL<'a> = bytecode::Instr<'a>;
 type Instr<'a> = Either<LL<'a>, HighLevel>;
 type CFG<'a> = Graph<Vec<Instr<'a>>, Option<NumTy /* Int register */>>;
 type CallGraph = Graph<HashSet<(NumTy, Ty)>, ()>;
@@ -185,9 +185,9 @@ pub(crate) struct FuncInfo {
 pub(crate) struct Frame<'a> {
     src_function: NumTy,
     cur_ident: NumTy,
-    locals: HashMap<Ident, (u32, Ty)>,
+    pub(crate) locals: HashMap<Ident, (u32, Ty)>,
     arg_regs: SmallVec<NumTy>,
-    cfg: CFG<'a>,
+    pub(crate) cfg: CFG<'a>,
 }
 
 struct View<'a, 'b> {
