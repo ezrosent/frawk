@@ -387,6 +387,9 @@ impl Convert<Int, Float> for _Carrier {
         i as Float
     }
 }
+
+// TODO(ezr): These two perform two heap allocations, we should make this faster if possible.
+
 impl<'a> Convert<Int, Str<'a>> for _Carrier {
     fn convert(i: Int) -> Str<'a> {
         format!("{}", i).into()
@@ -429,6 +432,7 @@ where
 }
 
 // AWK arrays are inherently shared and mutable, so we have to do this, even if it is a code smell.
+#[repr(transparent)]
 #[derive(Debug)]
 pub(crate) struct SharedMap<K, V>(Rc<RefCell<HashMap<K, V>>>);
 
