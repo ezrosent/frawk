@@ -21,6 +21,9 @@ use std::ffi::{CStr, CString};
 use std::mem::{self, MaybeUninit};
 use std::ptr;
 
+type Pred = llvm::LLVMIntPredicate;
+type FPred = llvm::LLVMRealPredicate;
+
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 // TODO make sure we use this function in main, otherwise linker may decide to get rid of it.
@@ -346,35 +349,141 @@ impl Function {
                 let addv = LLVMBuildAdd(self.builder, lv, rv, c_str!(""));
                 self.locals.insert(res.reflect(), addv);
             }
-            AddFloat(res, l, r) => unimplemented!(),
-            MulInt(res, l, r) => unimplemented!(),
-            MulFloat(res, l, r) => unimplemented!(),
-            MinusInt(res, l, r) => unimplemented!(),
-            MinusFloat(res, l, r) => unimplemented!(),
-            ModInt(res, l, r) => unimplemented!(),
-            ModFloat(res, l, r) => unimplemented!(),
-            Div(res, l, r) => unimplemented!(),
-            Not(res, ir) => unimplemented!(),
+            AddFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildFAdd(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
+            MulInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildMul(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
+            MulFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildFMul(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
+            MinusInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildSub(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
+            MinusFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildFSub(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
+            ModInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildSRem(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
+            ModFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildFRem(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
+            Div(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let addv = LLVMBuildFDiv(self.builder, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), addv);
+            }
+            Not(res, ir) => {
+                let operand = self.get_local(ir.reflect())?;
+                let ty = tmap.get_ty(Ty::Int);
+                let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
+                let cmp = LLVMBuildICmp(self.builder, Pred::LLVMIntEQ, operand, zero, c_str!(""));
+                self.locals.insert(res.reflect(), cmp);
+            }
             NotStr(res, sr) => unimplemented!(),
-            NegInt(res, ir) => unimplemented!(),
-            NegFloat(res, fr) => unimplemented!(),
+            NegInt(res, ir) => {
+                let operand = self.get_local(ir.reflect())?;
+                let ty = tmap.get_ty(Ty::Int);
+                let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
+                let neg = LLVMBuildSub(self.builder, zero, operand, c_str!(""));
+                self.locals.insert(res.reflect(), neg);
+            }
+            NegFloat(res, fr) => {
+                let operand = self.get_local(fr.reflect())?;
+                let neg = LLVMBuildFNeg(self.builder, operand, c_str!(""));
+                self.locals.insert(res.reflect(), neg);
+            }
             Concat(res, l, r) => unimplemented!(),
             Match(res, l, r) => unimplemented!(),
             LenStr(res, s) => unimplemented!(),
-            LTFloat(res, l, r) => unimplemented!(),
-            LTInt(res, l, r) => unimplemented!(),
+            LTFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOLT, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
+            LTInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSLT, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
             LTStr(res, l, r) => unimplemented!(),
-            GTFloat(res, l, r) => unimplemented!(),
-            GTInt(res, l, r) => unimplemented!(),
+            GTFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOGT, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
+            GTInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSGT, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
             GTStr(res, l, r) => unimplemented!(),
-            LTEFloat(res, l, r) => unimplemented!(),
-            LTEInt(res, l, r) => unimplemented!(),
+            LTEFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOLE, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
+            LTEInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSLE, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
             LTEStr(res, l, r) => unimplemented!(),
-            GTEFloat(res, l, r) => unimplemented!(),
-            GTEInt(res, l, r) => unimplemented!(),
+            GTEFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOGE, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
+            GTEInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSGE, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
             GTEStr(res, l, r) => unimplemented!(),
-            EQFloat(res, l, r) => unimplemented!(),
-            EQInt(res, l, r) => unimplemented!(),
+            EQFloat(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOEQ, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
+            EQInt(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntEQ, lv, rv, c_str!(""));
+                self.locals.insert(res.reflect(), ltv);
+            }
             EQStr(res, l, r) => unimplemented!(),
             SetColumn(dst, src) => unimplemented!(),
             GetColumn(dst, src) => unimplemented!(),
