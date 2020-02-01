@@ -3,7 +3,7 @@ use crate::common::{raw_guard, Either, NumTy, Result};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
 use crate::llvm_sys as llvm;
-use crate::runtime as frawk_runtime;
+use crate::runtime;
 use llvm::{
     analysis::{LLVMVerifierFailureAction, LLVMVerifyModule},
     core::*,
@@ -15,7 +15,7 @@ use llvm::{
 
 use hashbrown::HashMap;
 
-pub mod runtime;
+pub mod intrinsics;
 
 use std::ffi::{CStr, CString};
 use std::mem::{self, MaybeUninit};
@@ -177,7 +177,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             Ty::Int,
             make(LLVMIntTypeInContext(
                 self.ctx,
-                (size_of::<frawk_runtime::Int>() * 8) as libc::c_uint,
+                (size_of::<runtime::Int>() * 8) as libc::c_uint,
             )),
         );
         self.type_map
