@@ -645,7 +645,7 @@ impl<'a> Interp<'a> {
                         let pat = index(&self.strs, pat);
                         let old_len = arr.len();
                         self.regexes.split_regex_strmap(&pat, &to_split, &arr)?;
-                        let res = (arr.len() - old_len) as i64;
+                        let res = (arr.len() - old_len) as Int;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
                     }

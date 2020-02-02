@@ -341,7 +341,9 @@ impl Function {
             FloatToStr(sr, fr) => unimplemented!(),
             StrToInt(ir, sr) => unimplemented!(),
             StrToFloat(fr, sr) => unimplemented!(),
+            // use fptosi instruction
             FloatToInt(ir, fr) => unimplemented!(),
+            // use sitofp instruction
             IntToFloat(fr, ir) => unimplemented!(),
             AddInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
