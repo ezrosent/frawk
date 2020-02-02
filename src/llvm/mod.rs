@@ -106,6 +106,7 @@ struct Generator<'a, 'b> {
     pass_manager: LLVMPassManagerRef,
     decls: Vec<Function>,
     type_map: TypeMap,
+    intrinsics: HashMap<&'static str, LLVMValueRef>,
 }
 
 impl<'a, 'b> Drop for Generator<'a, 'b> {
@@ -159,6 +160,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             pass_manager,
             decls: Vec::with_capacity(nframes),
             type_map: TypeMap::new(ctx),
+            intrinsics: intrinsics::register(module, ctx),
         };
         res.build_map();
         res.build_decls();
@@ -198,7 +200,11 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     fn llvm_ty(&self, ty: Ty) -> LLVMTypeRef {
-        self.type_map.get_ty(ty)
+        if let Ty::Str = ty {
+            self.type_map.get_ptr_ty(ty)
+        } else {
+            self.type_map.get_ty(ty)
+        }
     }
     fn llvm_ptr_ty(&self, ty: Ty) -> LLVMTypeRef {
         self.type_map.get_ptr_ty(ty)
@@ -266,12 +272,23 @@ impl<'a, 'b> Generator<'a, 'b> {
         }
     }
 
-    unsafe fn alloc_local(&self, reg: NumTy, ty: Ty) -> Result<LLVMValueRef> {
+    unsafe fn alloc_local(
+        &self,
+        builder: LLVMBuilderRef,
+        reg: NumTy,
+        ty: Ty,
+    ) -> Result<LLVMValueRef> {
         use Ty::*;
         let val = match ty {
             Int => LLVMConstInt(self.llvm_ty(Int), 0, /*sign_extend=*/ 1),
             Float => LLVMConstReal(self.llvm_ty(Float), 0.0),
-            Str => LLVMConstInt(self.llvm_ty(Str), 0, /*sign_extend=*/ 0),
+            Str => {
+                let str_ty = self.type_map.get_ty(Str);
+                let v = LLVMConstInt(str_ty, 0, /*sign_extend=*/ 0);
+                let v_loc = LLVMBuildAlloca(builder, str_ty, c_str!(""));
+                LLVMBuildStore(builder, v, v_loc);
+                v_loc
+            }
             MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
                 LLVMConstInt(self.llvm_ty(ty), 0, /*sign_extend=*/ 0)
             }
@@ -286,16 +303,17 @@ impl<'a, 'b> Generator<'a, 'b> {
             debug_assert!(!local.global);
             // implicitly-declared locals are just the ones with a subscript of 0.
             if local.sub == 0 {
-                let val = self.alloc_local(*reg, *ty)?;
+                let val = self.alloc_local(self.decls[func_id].builder, *reg, *ty)?;
                 self.decls[func_id].locals.insert((*reg, *ty), val);
             }
         }
         let info = &self.types.func_info[func_id];
         for (i, bb) in frame.cfg.raw_nodes().iter().enumerate() {
             let decl = &mut self.decls[func_id];
+            // TODO branches, etc.
             for inst in &bb.weight {
                 match inst {
-                    Either::Left(ll) => decl.gen_ll_inst(ll, &self.type_map)?,
+                    Either::Left(ll) => decl.gen_ll_inst(ll, &self.type_map, &self.intrinsics)?,
                     Either::Right(hl) => decl.gen_hl_inst(hl)?,
                 }
             }
@@ -313,7 +331,12 @@ impl Function {
         }
     }
     // TODO, pass in fields from Generator as needed.
-    unsafe fn gen_ll_inst<'a>(&mut self, inst: &compile::LL<'a>, tmap: &TypeMap) -> Result<()> {
+    unsafe fn gen_ll_inst<'a>(
+        &mut self,
+        inst: &compile::LL<'a>,
+        tmap: &TypeMap,
+        intrinsics: &HashMap<&'static str, LLVMValueRef>,
+    ) -> Result<()> {
         use crate::bytecode::Instr::*;
         match inst {
             StoreConstStr(sr, s) => {
@@ -323,7 +346,9 @@ impl Function {
                 let as_hex = CString::new(format!("{:x}", sc)).unwrap();
                 let ty = tmap.get_ty(Ty::Str);
                 let v = LLVMConstIntOfString(ty, as_hex.as_ptr(), /*radix=*/ 16);
-                self.locals.insert(sr.reflect(), v);
+                let local = LLVMBuildAlloca(self.builder, ty, c_str!(""));
+                LLVMBuildStore(self.builder, v, local);
+                self.locals.insert(sr.reflect(), local);
             }
             StoreConstInt(ir, i) => {
                 let (reg, cty) = ir.reflect();
@@ -337,8 +362,36 @@ impl Function {
                 let v = LLVMConstReal(ty, *f);
                 self.locals.insert((reg, cty), v);
             }
-            IntToStr(sr, ir) => unimplemented!(),
-            FloatToStr(sr, fr) => unimplemented!(),
+            IntToStr(sr, ir) => {
+                let str_ty = tmap.get_ty(Ty::Str);
+                let mut arg = self.get_local(ir.reflect())?;
+                let res_loc = LLVMBuildAlloca(self.builder, str_ty, c_str!(""));
+                let conv = intrinsics["int_to_str"];
+                let res = LLVMBuildCall(
+                    self.builder,
+                    conv,
+                    &mut arg,
+                    /*num_args=*/ 1,
+                    c_str!(""),
+                );
+                LLVMBuildStore(self.builder, res, res_loc);
+                self.locals.insert(sr.reflect(), res_loc);
+            }
+            FloatToStr(sr, fr) => {
+                let str_ty = tmap.get_ty(Ty::Str);
+                let mut arg = self.get_local(fr.reflect())?;
+                let res_loc = LLVMBuildAlloca(self.builder, str_ty, c_str!(""));
+                let conv = intrinsics["float_to_str"];
+                let res = LLVMBuildCall(
+                    self.builder,
+                    conv,
+                    &mut arg,
+                    /*num_args=*/ 1,
+                    c_str!(""),
+                );
+                LLVMBuildStore(self.builder, res, res_loc);
+                self.locals.insert(sr.reflect(), res_loc);
+            }
             StrToInt(ir, sr) => unimplemented!(),
             StrToFloat(fr, sr) => unimplemented!(),
             // use fptosi instruction

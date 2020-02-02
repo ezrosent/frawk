@@ -61,7 +61,7 @@ pub unsafe fn register(
     let void_ty = LLVMVoidType();
     let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
     let rt_ty = LLVMPointerType(void_ty, 0);
-    let str_ref_ty = rt_ty;
+    let str_ref_ty = LLVMPointerType(str_ty, 0);
     let mut table: HashMap<&'static str, LLVMValueRef> = Default::default();
     macro_rules! register_inner {
         ($name:ident, [ $($param:expr),* ], $ret:expr) => { {
