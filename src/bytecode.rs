@@ -1215,7 +1215,7 @@ fn pop<'a, T: Clone>(s: &'a mut Storage<T>) -> T {
 // For accumulating register-specific metadata
 pub(crate) trait Accum {
     fn reflect(&self) -> (NumTy, compile::Ty);
-    fn accum(&self, f: impl FnMut(NumTy, compile::Ty)) {
+    fn accum(&self, mut f: impl FnMut(NumTy, compile::Ty)) {
         let (reg, ty) = self.reflect();
         f(reg, ty)
     }
