@@ -323,11 +323,46 @@ impl<'a, 'b> Generator<'a, 'b> {
 }
 
 impl Function {
-    fn get_local(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
+    unsafe fn get_local(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
         if let Some(v) = self.locals.get(&local) {
             Ok(*v)
+        } else if let Some(ix) = self.globals.get(&local) {
+            let gv = LLVMGetParam(self.val, *ix as libc::c_uint);
+            // TODO lifetimes, (similar to bind_val)
+            unimplemented!()
+        // Ok(if let Ty::Str = local.1 {
+        //     // no point in loading the string directly. We manipulate them as pointers.
+        //     // Or do we want to ref them?
+        //     gv
+        // } else {
+        //     unimplemented!()
+        // })
         } else {
             err!("unbound local variable {:?}", local)
+        }
+    }
+    unsafe fn bind_val(&mut self, val: (NumTy, Ty), to: LLVMValueRef, tmap: &TypeMap) {
+        // if val is global, then find the relevant parameter and store it directly.
+        // if val is an existing local, fail
+        // if val.ty is a string, alloca a new string, store it, then bind the result.
+        // otherwise, just bind the result directly.
+        if let Some(ix) = self.globals.get(&val) {
+            // TODO Lifetimes.
+            // We want to do the below, but issue the correct refs/drops where necessary.
+            // (probably ref to, drop from,then store, for the relevant types).
+            unimplemented!()
+            // let param = LLVMGetParam(self.val, *ix as libc::c_uint);
+            // LLVMBuildStore(self.builder, to, param);
+            // return;
+        }
+        debug_assert!(self.locals.get(&val).is_none());
+        if let Ty::Str = val.1 {
+            let str_ty = tmap.get_ty(Ty::Str);
+            let loc = LLVMBuildAlloca(self.builder, str_ty, c_str!(""));
+            LLVMBuildStore(self.builder, to, loc);
+            self.locals.insert(val, loc);
+        } else {
+            self.locals.insert(val, to);
         }
     }
     // TODO, pass in fields from Generator as needed.
@@ -346,26 +381,22 @@ impl Function {
                 let as_hex = CString::new(format!("{:x}", sc)).unwrap();
                 let ty = tmap.get_ty(Ty::Str);
                 let v = LLVMConstIntOfString(ty, as_hex.as_ptr(), /*radix=*/ 16);
-                let local = LLVMBuildAlloca(self.builder, ty, c_str!(""));
-                LLVMBuildStore(self.builder, v, local);
-                self.locals.insert(sr.reflect(), local);
+                self.bind_val(sr.reflect(), v, tmap);
             }
             StoreConstInt(ir, i) => {
                 let (reg, cty) = ir.reflect();
                 let ty = tmap.get_ty(cty);
                 let v = LLVMConstInt(ty, *i as u64, /*sign_extend=*/ 1);
-                self.locals.insert((reg, cty), v);
+                self.bind_val((reg, cty), v, tmap);
             }
             StoreConstFloat(fr, f) => {
                 let (reg, cty) = fr.reflect();
                 let ty = tmap.get_ty(cty);
                 let v = LLVMConstReal(ty, *f);
-                self.locals.insert((reg, cty), v);
+                self.bind_val((reg, cty), v, tmap);
             }
             IntToStr(sr, ir) => {
-                let str_ty = tmap.get_ty(Ty::Str);
                 let mut arg = self.get_local(ir.reflect())?;
-                let res_loc = LLVMBuildAlloca(self.builder, str_ty, c_str!(""));
                 let conv = intrinsics["int_to_str"];
                 let res = LLVMBuildCall(
                     self.builder,
@@ -374,13 +405,10 @@ impl Function {
                     /*num_args=*/ 1,
                     c_str!(""),
                 );
-                LLVMBuildStore(self.builder, res, res_loc);
-                self.locals.insert(sr.reflect(), res_loc);
+                self.bind_val(sr.reflect(), res, tmap);
             }
             FloatToStr(sr, fr) => {
-                let str_ty = tmap.get_ty(Ty::Str);
                 let mut arg = self.get_local(fr.reflect())?;
-                let res_loc = LLVMBuildAlloca(self.builder, str_ty, c_str!(""));
                 let conv = intrinsics["float_to_str"];
                 let res = LLVMBuildCall(
                     self.builder,
@@ -389,75 +417,104 @@ impl Function {
                     /*num_args=*/ 1,
                     c_str!(""),
                 );
-                LLVMBuildStore(self.builder, res, res_loc);
-                self.locals.insert(sr.reflect(), res_loc);
+                self.bind_val(sr.reflect(), res, tmap);
             }
-            StrToInt(ir, sr) => unimplemented!(),
-            StrToFloat(fr, sr) => unimplemented!(),
-            // use fptosi instruction
-            FloatToInt(ir, fr) => unimplemented!(),
-            // use sitofp instruction
-            IntToFloat(fr, ir) => unimplemented!(),
+            StrToInt(ir, sr) => {
+                let mut str_ref = self.get_local(sr.reflect())?;
+                let conv = intrinsics["str_to_int"];
+                let res = LLVMBuildCall(
+                    self.builder,
+                    conv,
+                    &mut str_ref,
+                    /*num_args=*/ 1,
+                    c_str!(""),
+                );
+                self.bind_val(ir.reflect(), res, tmap);
+            }
+            StrToFloat(fr, sr) => {
+                let mut str_ref = self.get_local(sr.reflect())?;
+                let conv = intrinsics["str_to_float"];
+                let res = LLVMBuildCall(
+                    self.builder,
+                    conv,
+                    &mut str_ref,
+                    /*num_args=*/ 1,
+                    c_str!(""),
+                );
+                self.bind_val(fr.reflect(), res, tmap);
+            }
+            FloatToInt(ir, fr) => {
+                let fv = self.get_local(fr.reflect())?;
+                let dst_ty = tmap.get_ty(Ty::Int);
+                let res = LLVMBuildFPToSI(self.builder, fv, dst_ty, c_str!(""));
+                self.bind_val(ir.reflect(), res, tmap);
+            }
+            IntToFloat(fr, ir) => {
+                let iv = self.get_local(ir.reflect())?;
+                let dst_ty = tmap.get_ty(Ty::Float);
+                let res = LLVMBuildSIToFP(self.builder, iv, dst_ty, c_str!(""));
+                self.bind_val(fr.reflect(), res, tmap);
+            }
             AddInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildAdd(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             AddFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildFAdd(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             MulInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildMul(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             MulFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildFMul(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             MinusInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildSub(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             MinusFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildFSub(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             ModInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildSRem(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             ModFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildFRem(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             Div(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildFDiv(self.builder, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), addv);
+                self.bind_val(res.reflect(), addv, tmap);
             }
             Not(res, ir) => {
                 let operand = self.get_local(ir.reflect())?;
                 let ty = tmap.get_ty(Ty::Int);
                 let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
                 let cmp = LLVMBuildICmp(self.builder, Pred::LLVMIntEQ, operand, zero, c_str!(""));
-                self.locals.insert(res.reflect(), cmp);
+                self.bind_val(res.reflect(), cmp, tmap);
             }
             NotStr(res, sr) => unimplemented!(),
             NegInt(res, ir) => {
@@ -465,79 +522,93 @@ impl Function {
                 let ty = tmap.get_ty(Ty::Int);
                 let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
                 let neg = LLVMBuildSub(self.builder, zero, operand, c_str!(""));
-                self.locals.insert(res.reflect(), neg);
+                self.bind_val(res.reflect(), neg, tmap);
             }
             NegFloat(res, fr) => {
                 let operand = self.get_local(fr.reflect())?;
                 let neg = LLVMBuildFNeg(self.builder, operand, c_str!(""));
-                self.locals.insert(res.reflect(), neg);
+                self.bind_val(res.reflect(), neg, tmap);
             }
-            Concat(res, l, r) => unimplemented!(),
+            Concat(res, l, r) => {
+                let str_ty = tmap.get_ty(Ty::Str);
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let concat = intrinsics["concat"];
+                let mut args = [lv, rv];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    concat,
+                    args.as_mut_ptr(),
+                    /*num_args=*/ args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(res.reflect(), resv, tmap);
+            }
             Match(res, l, r) => unimplemented!(),
             LenStr(res, s) => unimplemented!(),
             LTFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOLT, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             LTInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSLT, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             LTStr(res, l, r) => unimplemented!(),
             GTFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOGT, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             GTInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSGT, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             GTStr(res, l, r) => unimplemented!(),
             LTEFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOLE, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             LTEInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSLE, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             LTEStr(res, l, r) => unimplemented!(),
             GTEFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOGE, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             GTEInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSGE, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             GTEStr(res, l, r) => unimplemented!(),
             EQFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildFCmp(self.builder, FPred::LLVMRealOEQ, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             EQInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntEQ, lv, rv, c_str!(""));
-                self.locals.insert(res.reflect(), ltv);
+                self.bind_val(res.reflect(), ltv, tmap);
             }
             EQStr(res, l, r) => unimplemented!(),
             SetColumn(dst, src) => unimplemented!(),
@@ -620,6 +691,7 @@ impl Function {
         Ok(())
     }
     unsafe fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
+        // NB Phis skip the drop?
         unimplemented!()
     }
 }
