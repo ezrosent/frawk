@@ -53,7 +53,7 @@ impl<'a> Runtime<'a> {
 pub unsafe fn register(
     module: LLVMModuleRef,
     ctx: LLVMContextRef,
-) -> HashMap<*mut () /* function address */, LLVMValueRef> {
+) -> HashMap<&'static str, LLVMValueRef> {
     use llvm::core::*;
     let usize_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint);
     let int_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Int>() * 8) as libc::c_uint);
@@ -62,16 +62,20 @@ pub unsafe fn register(
     let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
     let rt_ty = LLVMPointerType(void_ty, 0);
     let str_ref_ty = rt_ty;
-    let mut table: HashMap<*mut (), LLVMValueRef> = Default::default();
+    let mut table: HashMap<&'static str, LLVMValueRef> = Default::default();
     macro_rules! register_inner {
         ($name:ident, [ $($param:expr),* ], $ret:expr) => { {
             // Try and make sure the linker doesn't strip the function out.
-            std::ptr::read_volatile($name as *const u8);
+            {
+                let slice = &[$name];
+                let len = slice.len();
+                std::ptr::read_volatile(&len);
+            }
             let mut params = [$($param),*];
             let ty = LLVMFunctionType($ret, params.as_mut_ptr(), params.len() as u32, 0);
             let func = LLVMAddFunction(module, c_str!(stringify!($name)), ty);
             LLVMSetLinkage(func, llvm::LLVMLinkage::LLVMExternalLinkage);
-            if let Some(_) = table.insert($name as *mut (), func) {
+            if let Some(_) = table.insert(stringify!($name), func) {
                 panic!("Duplicate registration for intrinsic {}", stringify!($name));
             }
         }};
@@ -106,22 +110,103 @@ pub unsafe fn register(
         split_str(rt_ty, str_ref_ty, usize_ty, str_ref_ty) -> int_ty;
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
+        read_err(rt_ty, str_ref_ty) -> int_ty;
+        read_err_stdin(rt_ty) -> int_ty;
+        next_line(rt_ty, str_ref_ty) -> str_ty;
+        next_line_stdin(rt_ty) -> str_ty;
         str_lt(str_ref_ty, str_ref_ty) -> int_ty;
         str_gt(str_ref_ty, str_ref_ty) -> int_ty;
         str_lte(str_ref_ty, str_ref_ty) -> int_ty;
         str_gte(str_ref_ty, str_ref_ty) -> int_ty;
         str_eq(str_ref_ty, str_ref_ty) -> int_ty;
+
+        len_intint(usize_ty) -> int_ty;
+        lookup_intint(usize_ty, int_ty) -> int_ty;
+        contains_intint(usize_ty, int_ty) -> int_ty;
+        insert_intint(usize_ty, int_ty, int_ty);
+        delete_intint(usize_ty, int_ty);
+
+        len_intfloat(usize_ty) -> int_ty;
+        lookup_intfloat(usize_ty, int_ty) -> float_ty;
+        contains_intfloat(usize_ty, int_ty) -> int_ty;
+        insert_intfloat(usize_ty, int_ty, float_ty);
+        delete_intfloat(usize_ty, int_ty);
+
+        len_intstr(usize_ty) -> int_ty;
+        lookup_intstr(usize_ty, int_ty) -> str_ty;
+        contains_intstr(usize_ty, int_ty) -> int_ty;
+        insert_intstr(usize_ty, int_ty, str_ref_ty);
+        delete_intstr(usize_ty, int_ty);
+
+        len_strint(usize_ty) -> int_ty;
+        lookup_strint(usize_ty, str_ref_ty) -> int_ty;
+        contains_strint(usize_ty, str_ref_ty) -> int_ty;
+        insert_strint(usize_ty, str_ref_ty, int_ty);
+        delete_strint(usize_ty, str_ref_ty);
+
+        len_strfloat(usize_ty) -> int_ty;
+        lookup_strfloat(usize_ty, str_ref_ty) -> float_ty;
+        contains_strfloat(usize_ty, str_ref_ty) -> int_ty;
+        insert_strfloat(usize_ty, str_ref_ty, float_ty);
+        delete_strfloat(usize_ty, str_ref_ty);
+
+        len_strstr(usize_ty) -> int_ty;
+        lookup_strstr(usize_ty, str_ref_ty) -> str_ty;
+        contains_strstr(usize_ty, str_ref_ty) -> int_ty;
+        insert_strstr(usize_ty, str_ref_ty, str_ref_ty);
+        delete_strstr(usize_ty, str_ref_ty);
     };
     table
 }
 
-// TODO: Map Lookup, Contains, Delete, Insert, Len, etc.
-// TODO: Line handling
 // TODO: Iterators
 // TODO: IO Errors.
 //  - we need to exit cleanly. Add a "checkIOerror" builtin to main? set a variable in the runtime
 //    and exit cleanly?
 //  - get this working along with iterators after everything else is working.
+//  - in gawk: redirecting to an output file that fails creates an error; but presumably we want to
+//    handle stdout being closed gracefully.
+
+#[no_mangle]
+pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> Int {
+    let runtime = &mut *(runtime as *mut Runtime);
+    let res = match runtime.read_files.read_err(&*(file as *mut Str)) {
+        Ok(res) => res,
+        Err(e) => fail!("unexpected error when reading error status of file: {}", e),
+    };
+    res
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
+    let runtime = &mut *(runtime as *mut Runtime);
+    runtime.read_files.read_err_stdin()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
+    let runtime = &mut *(runtime as *mut Runtime);
+    match runtime
+        .regexes
+        .get_line_stdin(&runtime.vars.rs, &mut runtime.read_files)
+    {
+        Ok(res) => mem::transmute::<Str, u128>(res),
+        Err(err) => fail!("unexpected error when reading line from stdin: {}", err),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> u128 {
+    let runtime = &mut *(runtime as *mut Runtime);
+    let file = &*(file as *mut Str);
+    match runtime
+        .regexes
+        .get_line(file, &runtime.vars.rs, &mut runtime.read_files)
+    {
+        Ok(res) => mem::transmute::<Str, u128>(res),
+        Err(_) => mem::transmute::<Str, u128>("".into()),
+    }
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn print_stdout(runtime: *mut c_void, txt: *mut c_void) {
@@ -356,9 +441,105 @@ macro_rules! str_compare {
 }
 
 str_compare! {
-    str_lt(<);
-    str_gt(>);
-    str_lte(<=);
-    str_gte(>=);
-    str_eq(==);
+    str_lt(<); str_gt(>); str_lte(<=); str_gte(>=); str_eq(==);
+}
+
+trait InTy {
+    type In;
+    type Out;
+    fn convert_in(x: &Self::In) -> &Self;
+    fn convert_out(x: Self) -> Self::Out;
+}
+
+impl<'a> InTy for Str<'a> {
+    type In = *mut c_void;
+    type Out = u128;
+    fn convert_in(i: &*mut c_void) -> &Str<'a> {
+        unsafe { &*((*i) as *mut Str<'a>) }
+    }
+    fn convert_out(s: Str<'a>) -> u128 {
+        unsafe { mem::transmute::<Str, u128>(s) }
+    }
+}
+impl InTy for Int {
+    type In = Int;
+    type Out = Int;
+    fn convert_in(i: &Int) -> &Int {
+        i
+    }
+    fn convert_out(i: Int) -> Int {
+        i
+    }
+}
+
+impl InTy for Float {
+    type In = Float;
+    type Out = Float;
+    fn convert_in(f: &Float) -> &Float {
+        f
+    }
+    fn convert_out(f: Float) -> Float {
+        f
+    }
+}
+
+macro_rules! map_impl_inner {
+    ($lookup:ident, $len:ident, $insert:ident, $delete:ident, $contains:ident, $k:ty, $v:ty) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $len(map: usize) -> Int {
+            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+            let res = map.len();
+            mem::forget(map);
+            res as Int
+        }
+        #[no_mangle]
+        pub unsafe extern "C" fn $lookup(map: usize, k: <$k as InTy>::In) -> <$v as InTy>::Out {
+            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+            let key = <$k as InTy>::convert_in(&k);
+            let res = map.get(key).unwrap_or_else(Default::default);
+            mem::forget(map);
+            <$v as InTy>::convert_out(res)
+        }
+        #[no_mangle]
+        pub unsafe extern "C" fn $contains(map: usize, k: <$k as InTy>::In) -> Int {
+            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+            let key = <$k as InTy>::convert_in(&k);
+            let res = map.get(key).is_some() as Int;
+            mem::forget(map);
+            res
+        }
+        #[no_mangle]
+        pub unsafe extern "C" fn $insert(map: usize, k: <$k as InTy>::In, v: <$v as InTy>::In) {
+            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+            let key = <$k as InTy>::convert_in(&k);
+            let val = <$v as InTy>::convert_in(&v);
+            map.insert(key.clone(), val.clone());
+            mem::forget(map);
+        }
+        #[no_mangle]
+        pub unsafe extern "C" fn $delete(map: usize, k: <$k as InTy>::In) {
+            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+            let key = <$k as InTy>::convert_in(&k);
+            map.delete(key);
+            mem::forget(map);
+        }
+    };
+}
+
+macro_rules! map_impl {
+    ($($len:ident, $lookup:ident,
+       $insert:ident, $delete:ident, $contains:ident, < $k:ty, $v:ty >;)*) => {
+        $(
+        map_impl_inner!($lookup, $len,$insert,$delete,$contains, $k, $v);
+        )*
+    }
+}
+
+map_impl! {
+    len_intint, lookup_intint, insert_intint, delete_intint, contains_intint, <Int, Int>;
+    len_intfloat, lookup_intfloat, insert_intfloat, delete_intfloat, contains_intfloat, <Int, Float>;
+    len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str<'static>>;
+    len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str<'static>, Int>;
+    len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str<'static>, Float>;
+    len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str<'static>, Str<'static>>;
 }
