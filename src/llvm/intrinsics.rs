@@ -114,6 +114,7 @@ pub unsafe fn register(
         read_err_stdin(rt_ty) -> int_ty;
         next_line(rt_ty, str_ref_ty) -> str_ty;
         next_line_stdin(rt_ty) -> str_ty;
+
         str_lt(str_ref_ty, str_ref_ty) -> int_ty;
         str_gt(str_ref_ty, str_ref_ty) -> int_ty;
         str_lte(str_ref_ty, str_ref_ty) -> int_ty;

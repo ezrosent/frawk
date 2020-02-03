@@ -26,7 +26,7 @@ type FPred = llvm::LLVMRealPredicate;
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
-// TODO make sure we use this function in main, otherwise linker may decide to get rid of it.
+// TODO add checking to ensure that no function gets a number of args greater than u32::max
 #[no_mangle]
 pub extern "C" fn __test_print() {
     println!("hello! this is rust code called from llvm");
@@ -328,19 +328,22 @@ impl Function {
             Ok(*v)
         } else if let Some(ix) = self.globals.get(&local) {
             let gv = LLVMGetParam(self.val, *ix as libc::c_uint);
-            // TODO lifetimes, (similar to bind_val)
-            unimplemented!()
-        // Ok(if let Ty::Str = local.1 {
-        //     // no point in loading the string directly. We manipulate them as pointers.
-        //     // Or do we want to ref them?
-        //     gv
-        // } else {
-        //     unimplemented!()
-        // })
+            Ok(if let Ty::Str = local.1 {
+                // no point in loading the string directly. We manipulate them as pointers.
+                gv
+            } else {
+                LLVMBuildLoad(self.builder, gv, c_str!(""))
+            })
         } else {
-            err!("unbound local variable {:?}", local)
+            // We'll see if we need to be careful about iteration order here. We may want to do a
+            // DFS starting at entry.
+            err!(
+                "unbound variable {:?} (must call bind_val on it before)",
+                local
+            )
         }
     }
+
     unsafe fn bind_val(&mut self, val: (NumTy, Ty), to: LLVMValueRef, tmap: &TypeMap) {
         // if val is global, then find the relevant parameter and store it directly.
         // if val is an existing local, fail
@@ -365,6 +368,11 @@ impl Function {
             self.locals.insert(val, to);
         }
     }
+
+    unsafe fn runtime_val(&self) -> LLVMValueRef {
+        LLVMGetParam(self.val, self.num_args as libc::c_uint - 1)
+    }
+
     // TODO, pass in fields from Generator as needed.
     unsafe fn gen_ll_inst<'a>(
         &mut self,
@@ -516,7 +524,15 @@ impl Function {
                 let cmp = LLVMBuildICmp(self.builder, Pred::LLVMIntEQ, operand, zero, c_str!(""));
                 self.bind_val(res.reflect(), cmp, tmap);
             }
-            NotStr(res, sr) => unimplemented!(),
+            NotStr(res, sr) => {
+                let mut sv = self.get_local(sr.reflect())?;
+                let strlen = intrinsics["str_len"];
+                let lenv = LLVMBuildCall(self.builder, strlen, &mut sv, 1, c_str!(""));
+                let ty = tmap.get_ty(Ty::Int);
+                let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
+                let cmp = LLVMBuildICmp(self.builder, Pred::LLVMIntEQ, lenv, zero, c_str!(""));
+                self.bind_val(res.reflect(), cmp, tmap);
+            }
             NegInt(res, ir) => {
                 let operand = self.get_local(ir.reflect())?;
                 let ty = tmap.get_ty(Ty::Int);
@@ -530,7 +546,6 @@ impl Function {
                 self.bind_val(res.reflect(), neg, tmap);
             }
             Concat(res, l, r) => {
-                let str_ty = tmap.get_ty(Ty::Str);
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let concat = intrinsics["concat"];
@@ -544,8 +559,27 @@ impl Function {
                 );
                 self.bind_val(res.reflect(), resv, tmap);
             }
-            Match(res, l, r) => unimplemented!(),
-            LenStr(res, s) => unimplemented!(),
+            Match(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let rt = self.runtime_val();
+                let mut args = [rt, lv, rv];
+                let match_pat = intrinsics["match_pat"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    match_pat,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(res.reflect(), resv, tmap);
+            }
+            LenStr(res, s) => {
+                let mut sv = self.get_local(s.reflect())?;
+                let strlen = intrinsics["str_len"];
+                let lenv = LLVMBuildCall(self.builder, strlen, &mut sv, 1, c_str!(""));
+                self.bind_val(res.reflect(), lenv, tmap);
+            }
             LTFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
@@ -558,7 +592,20 @@ impl Function {
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSLT, lv, rv, c_str!(""));
                 self.bind_val(res.reflect(), ltv, tmap);
             }
-            LTStr(res, l, r) => unimplemented!(),
+            LTStr(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let mut args = [lv, rv];
+                let opf = intrinsics["str_lt"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    opf,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(res.reflect(), resv, tmap);
+            }
             GTFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
@@ -571,7 +618,20 @@ impl Function {
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSGT, lv, rv, c_str!(""));
                 self.bind_val(res.reflect(), ltv, tmap);
             }
-            GTStr(res, l, r) => unimplemented!(),
+            GTStr(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let mut args = [lv, rv];
+                let opf = intrinsics["str_gt"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    opf,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(res.reflect(), resv, tmap);
+            }
             LTEFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
@@ -584,7 +644,20 @@ impl Function {
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSLE, lv, rv, c_str!(""));
                 self.bind_val(res.reflect(), ltv, tmap);
             }
-            LTEStr(res, l, r) => unimplemented!(),
+            LTEStr(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let mut args = [lv, rv];
+                let opf = intrinsics["str_lte"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    opf,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(res.reflect(), resv, tmap);
+            }
             GTEFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
@@ -597,7 +670,20 @@ impl Function {
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntSGE, lv, rv, c_str!(""));
                 self.bind_val(res.reflect(), ltv, tmap);
             }
-            GTEStr(res, l, r) => unimplemented!(),
+            GTEStr(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let mut args = [lv, rv];
+                let opf = intrinsics["str_gte"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    opf,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(res.reflect(), resv, tmap);
+            }
             EQFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
@@ -610,13 +696,145 @@ impl Function {
                 let ltv = LLVMBuildICmp(self.builder, Pred::LLVMIntEQ, lv, rv, c_str!(""));
                 self.bind_val(res.reflect(), ltv, tmap);
             }
-            EQStr(res, l, r) => unimplemented!(),
-            SetColumn(dst, src) => unimplemented!(),
-            GetColumn(dst, src) => unimplemented!(),
-            SplitInt(flds, to_split, arr, pat) => unimplemented!(),
-            SplitStr(flds, to_split, arr, pat) => unimplemented!(),
-            PrintStdout(txt) => unimplemented!(),
-            Print(txt, out, append) => unimplemented!(),
+            EQStr(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let mut args = [lv, rv];
+                let opf = intrinsics["str_eq"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    opf,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(res.reflect(), resv, tmap);
+            }
+            SetColumn(dst, src) => {
+                let dv = self.get_local(dst.reflect())?;
+                let sv = self.get_local(src.reflect())?;
+                let mut args = [self.runtime_val(), dv, sv];
+                let setcol = intrinsics["set_col"];
+                LLVMBuildCall(
+                    self.builder,
+                    setcol,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+            }
+            GetColumn(dst, src) => {
+                let sv = self.get_local(src.reflect())?;
+                let mut args = [self.runtime_val(), sv];
+                let getcol = intrinsics["get_col"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    getcol,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(dst.reflect(), resv, tmap);
+            }
+            SplitInt(flds, to_split, arr, pat) => {
+                let rt = self.runtime_val();
+                let tsv = self.get_local(to_split.reflect())?;
+                let arrv = self.get_local(arr.reflect())?;
+                let patv = self.get_local(pat.reflect())?;
+                let mut args = [rt, tsv, arrv, patv];
+                let split = intrinsics["split_int"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    split,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(flds.reflect(), resv, tmap);
+            }
+            SplitStr(flds, to_split, arr, pat) => {
+                let rt = self.runtime_val();
+                let tsv = self.get_local(to_split.reflect())?;
+                let arrv = self.get_local(arr.reflect())?;
+                let patv = self.get_local(pat.reflect())?;
+                let mut args = [rt, tsv, arrv, patv];
+                let split = intrinsics["split_str"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    split,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(flds.reflect(), resv, tmap);
+            }
+            PrintStdout(txt) => {
+                let txtv = self.get_local(txt.reflect())?;
+                let mut args = [self.runtime_val(), txtv];
+                let print = intrinsics["print_stdout"];
+                LLVMBuildCall(
+                    self.builder,
+                    print,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+            }
+            Print(txt, out, append) => {
+                let int_ty = tmap.get_ty(Ty::Int);
+                let appv = LLVMConstInt(int_ty, *append as u64, /*sign_extend=*/ 1);
+                let txtv = self.get_local(txt.reflect())?;
+                let outv = self.get_local(out.reflect())?;
+                let mut args = [self.runtime_val(), txtv, outv, appv];
+                let print = intrinsics["print"];
+                LLVMBuildCall(
+                    self.builder,
+                    print,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+            }
+
+            ReadErr(dst, file) => {
+                let filev = self.get_local(file.reflect())?;
+                let mut args = [self.runtime_val(), filev];
+                let readerr = intrinsics["read_err"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    readerr,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(dst.reflect(), resv, tmap);
+            }
+            NextLine(dst, file) => {
+                let filev = self.get_local(file.reflect())?;
+                let mut args = [self.runtime_val(), filev];
+                let nextline = intrinsics["next_line"];
+                let resv = LLVMBuildCall(
+                    self.builder,
+                    nextline,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val(dst.reflect(), resv, tmap);
+            }
+            ReadErrStdin(dst) => {
+                let mut rt = self.runtime_val();
+                let readerr = intrinsics["read_err_stdin"];
+                let resv = LLVMBuildCall(self.builder, readerr, &mut rt, 1, c_str!(""));
+                self.bind_val(dst.reflect(), resv, tmap);
+            }
+            NextLineStdin(dst) => {
+                let mut rt = self.runtime_val();
+                let nextline = intrinsics["next_line_stdin"];
+                let resv = LLVMBuildCall(self.builder, nextline, &mut rt, 1, c_str!(""));
+                self.bind_val(dst.reflect(), resv, tmap);
+            }
+
             LookupIntInt(res, arr, k) => unimplemented!(),
             LookupIntStr(res, arr, k) => unimplemented!(),
             LookupIntFloat(res, arr, k) => unimplemented!(),
@@ -662,11 +880,6 @@ impl Function {
             MovMapStrInt(dst, src) => unimplemented!(),
             MovMapStrFloat(dst, src) => unimplemented!(),
             MovMapStrStr(dst, src) => unimplemented!(),
-            ReadErr(dst, file) => unimplemented!(),
-            NextLine(dst, file) => unimplemented!(),
-            ReadErrStdin(dst) => unimplemented!(),
-            NextLineStdin(dst) => unimplemented!(),
-
             IterBeginIntInt(dst, arr) => unimplemented!(),
             IterBeginIntFloat(dst, arr) => unimplemented!(),
             IterBeginIntStr(dst, arr) => unimplemented!(),
