@@ -445,7 +445,7 @@ str_compare! {
     str_lt(<); str_gt(>); str_lte(<=); str_gte(>=); str_eq(==);
 }
 
-trait InTy {
+pub trait InTy {
     type In;
     type Out;
     fn convert_in(x: &Self::In) -> &Self;

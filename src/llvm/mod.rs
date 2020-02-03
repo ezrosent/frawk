@@ -344,19 +344,97 @@ impl Function {
         }
     }
 
+    unsafe fn ref_reg(
+        &mut self,
+        reg: (NumTy, Ty),
+        intrinsics: &HashMap<&'static str, LLVMValueRef>,
+    ) -> Result<()> {
+        let val = self.get_local(reg)?;
+        self.ref_val(val, reg.1, intrinsics)
+    }
+
+    unsafe fn ref_val(
+        &mut self,
+        mut val: LLVMValueRef,
+        ty: Ty,
+        intrinsics: &HashMap<&'static str, LLVMValueRef>,
+    ) -> Result<()> {
+        use Ty::*;
+        match ty {
+            MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+                let func = intrinsics["ref_map"];
+                LLVMBuildCall(self.builder, func, &mut val, 1, c_str!(""));
+            }
+            Str => {
+                let func = intrinsics["ref_str"];
+                LLVMBuildCall(self.builder, func, &mut val, 1, c_str!(""));
+            }
+            _ => {}
+        };
+        Ok(())
+    }
+
+    unsafe fn drop_reg(
+        &mut self,
+        reg: (NumTy, Ty),
+        intrinsics: &HashMap<&'static str, LLVMValueRef>,
+    ) -> Result<()> {
+        let val = self.get_local(reg)?;
+        self.drop_val(val, reg.1, intrinsics)
+    }
+
+    unsafe fn drop_val(
+        &mut self,
+        mut val: LLVMValueRef,
+        ty: Ty,
+        intrinsics: &HashMap<&'static str, LLVMValueRef>,
+    ) -> Result<()> {
+        use Ty::*;
+        match ty {
+            MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+                let func = intrinsics["drop_map"];
+                LLVMBuildCall(self.builder, func, &mut val, 1, c_str!(""));
+            }
+            Str => {
+                let func = intrinsics["drop_str"];
+                LLVMBuildCall(self.builder, func, &mut val, 1, c_str!(""));
+            }
+            _ => {}
+        };
+        Ok(())
+    }
+
+    // TODO move intrinsics and tmap into some kind of view datastructure; too much param passing.
     unsafe fn bind_val(&mut self, val: (NumTy, Ty), to: LLVMValueRef, tmap: &TypeMap) {
         // if val is global, then find the relevant parameter and store it directly.
         // if val is an existing local, fail
         // if val.ty is a string, alloca a new string, store it, then bind the result.
         // otherwise, just bind the result directly.
+        #[cfg(debug_assertions)]
+        {
+            if let Ty::Str = val.1 {
+                use llvm::LLVMTypeKind::*;
+                // make sure we are passing string values, not pointers here.
+                assert_eq!(LLVMGetTypeKind(LLVMTypeOf(to)), LLVMIntegerTypeKind);
+            }
+        }
         if let Some(ix) = self.globals.get(&val) {
-            // TODO Lifetimes.
             // We want to do the below, but issue the correct refs/drops where necessary.
             // (probably ref to, drop from,then store, for the relevant types).
-            unimplemented!()
-            // let param = LLVMGetParam(self.val, *ix as libc::c_uint);
+            // TODO:
+            //  - if Str, call drop, store, then ref on the global pointer directly.
+            //  - if Map, load the value, drop it, ref `to` then store it
+            //  - otherwise, just store it directly
+            let param = LLVMGetParam(self.val, *ix as libc::c_uint);
+            use Ty::*;
+            match val.1 {
+                MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+                    unimplemented!()
+                }
+                Str => unimplemented!(),
+                _ => unimplemented!(),
+            };
             // LLVMBuildStore(self.builder, to, param);
-            // return;
         }
         debug_assert!(self.locals.get(&val).is_none());
         if let Ty::Str = val.1 {
@@ -367,6 +445,17 @@ impl Function {
         } else {
             self.locals.insert(val, to);
         }
+    }
+
+    unsafe fn lookup_map(
+        &mut self,
+        map: (NumTy, Ty),
+        key: (NumTy, Ty),
+        dst: (NumTy, Ty),
+        tmap: &TypeMap,
+        intrinsics: &HashMap<&'static str, LLVMValueRef>,
+    ) {
+        unimplemented!()
     }
 
     unsafe fn runtime_val(&self) -> LLVMValueRef {
