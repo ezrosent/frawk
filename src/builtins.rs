@@ -200,14 +200,14 @@ impl Function {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Variable {
-    ARGC,
-    ARGV,
-    OFS,
-    FS,
-    RS,
-    NF,
-    NR,
-    FILENAME,
+    ARGC = 0,
+    ARGV = 1,
+    OFS = 2,
+    FS = 3,
+    RS = 4,
+    NF = 5,
+    NR = 6,
+    FILENAME = 7,
 }
 
 impl Variable {
@@ -249,6 +249,24 @@ impl<'a> TryFrom<&'a str> for Variable {
         match VARIABLES.get(value) {
             Some(v) => Ok(*v),
             None => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<usize> for Variable {
+    type Error = (); // error means not found
+    fn try_from(value: usize) -> std::result::Result<Variable, ()> {
+        use Variable::*;
+        match value {
+            0 => Ok(ARGC),
+            1 => Ok(ARGV),
+            2 => Ok(OFS),
+            3 => Ok(FS),
+            4 => Ok(RS),
+            5 => Ok(NF),
+            6 => Ok(NR),
+            7 => Ok(FILENAME),
+            _ => Err(()),
         }
     }
 }

@@ -1,3 +1,4 @@
+use crate::builtins::Variable;
 use crate::bytecode::{self, Accum};
 use crate::common::{raw_guard, Either, NumTy, Result};
 use crate::compile::{self, Ty, Typer};
@@ -76,6 +77,7 @@ impl TypeRef {
 struct TypeMap {
     table: [TypeRef; compile::NUM_TYPES],
     runtime_ty: LLVMTypeRef,
+    var_ty: LLVMTypeRef,
 }
 
 impl TypeMap {
@@ -84,6 +86,7 @@ impl TypeMap {
             TypeMap {
                 table: [TypeRef::null(); compile::NUM_TYPES],
                 runtime_ty: LLVMPointerType(LLVMVoidTypeInContext(ctx), 0),
+                var_ty: LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint),
             }
         }
     }
@@ -355,6 +358,10 @@ impl<'a> View<'a> {
         }
     }
 
+    unsafe fn var_val(&self, v: &Variable) -> LLVMValueRef {
+        LLVMConstInt(self.tmap.var_ty, *v as u64, /*sign_extend=*/ 0)
+    }
+
     unsafe fn ref_reg(&mut self, reg: (NumTy, Ty)) -> Result<()> {
         let val = self.get_local(reg)?;
         self.ref_val(val, reg.1)
@@ -412,7 +419,7 @@ impl<'a> View<'a> {
     where
         bytecode::Reg<T>: Accum,
     {
-        self.bind_reg(r, to);
+        self.bind_val(r.reflect(), to);
     }
 
     // TODO move intrinsics and tmap into some kind of view datastructure; too much param passing.
@@ -430,22 +437,30 @@ impl<'a> View<'a> {
             }
         }
         if let Some(ix) = self.f.globals.get(&val) {
-            // We want to do the below, but issue the correct refs/drops where necessary.
-            // (probably ref to, drop from,then store, for the relevant types).
-            // TODO:
+            // We're storing into a global variable. If it's a string or map, that means we have to
+            // alter the reference counts appropriately.
             //  - if Str, call drop, store, then ref on the global pointer directly.
             //  - if Map, load the value, drop it, ref `to` then store it
             //  - otherwise, just store it directly
             let param = LLVMGetParam(self.f.val, *ix as libc::c_uint);
+            let new_global = to;
             use Ty::*;
             match val.1 {
                 MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
-                    unimplemented!()
+                    let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
+                    self.call("drop_map", &mut [prev_global]);
+                    self.call("ref_map", &mut [new_global]);
+                    LLVMBuildStore(self.f.builder, new_global, param);
                 }
-                Str => unimplemented!(),
-                _ => unimplemented!(),
+                Str => {
+                    self.call("drop_str", &mut [param]);
+                    LLVMBuildStore(self.f.builder, new_global, param);
+                    self.call("ref_str", &mut [param]);
+                }
+                _ => {
+                    LLVMBuildStore(self.f.builder, new_global, param);
+                }
             };
-            // LLVMBuildStore(self.f.builder, to, param);
         }
         debug_assert!(self.f.locals.get(&val).is_none());
         if let Ty::Str = val.1 {
@@ -458,8 +473,113 @@ impl<'a> View<'a> {
         }
     }
 
-    unsafe fn lookup_map(&mut self, map: (NumTy, Ty), key: (NumTy, Ty), dst: (NumTy, Ty)) {
-        unimplemented!()
+    unsafe fn lookup_map(
+        &mut self,
+        map: (NumTy, Ty),
+        key: (NumTy, Ty),
+        dst: (NumTy, Ty),
+    ) -> Result<()> {
+        assert_eq!(map.1.key()?, key.1);
+        assert_eq!(map.1.val()?, dst.1);
+        use Ty::*;
+        let func = match map.1 {
+            MapIntInt => "lookup_intint",
+            MapIntFloat => "lookup_intfloat",
+            MapIntStr => "lookup_intstr",
+            MapStrInt => "lookup_strint",
+            MapStrFloat => "lookup_strfloat",
+            MapStrStr => "lookup_strstr",
+            _ => unreachable!(),
+        };
+        let mapv = self.get_local(map)?;
+        let keyv = self.get_local(key)?;
+        let resv = self.call(func, &mut [mapv, keyv]);
+        self.bind_val(dst, resv);
+        Ok(())
+    }
+
+    unsafe fn delete_map(&mut self, map: (NumTy, Ty), key: (NumTy, Ty)) -> Result<()> {
+        assert_eq!(map.1.key()?, key.1);
+        use Ty::*;
+        let func = match map.1 {
+            MapIntInt => "delete_intint",
+            MapIntFloat => "delete_intfloat",
+            MapIntStr => "delete_intstr",
+            MapStrInt => "delete_strint",
+            MapStrFloat => "delete_strfloat",
+            MapStrStr => "delete_strstr",
+            _ => unreachable!(),
+        };
+        let mapv = self.get_local(map)?;
+        let keyv = self.get_local(key)?;
+        self.call(func, &mut [mapv, keyv]);
+        Ok(())
+    }
+
+    unsafe fn contains_map(
+        &mut self,
+        map: (NumTy, Ty),
+        key: (NumTy, Ty),
+        dst: (NumTy, Ty),
+    ) -> Result<()> {
+        assert_eq!(map.1.key()?, key.1);
+        use Ty::*;
+        let func = match map.1 {
+            MapIntInt => "contains_intint",
+            MapIntFloat => "contains_intfloat",
+            MapIntStr => "contains_intstr",
+            MapStrInt => "contains_strint",
+            MapStrFloat => "contains_strfloat",
+            MapStrStr => "contains_strstr",
+            _ => unreachable!(),
+        };
+        let mapv = self.get_local(map)?;
+        let keyv = self.get_local(key)?;
+        let resv = self.call(func, &mut [mapv, keyv]);
+        self.bind_val(dst, resv);
+        Ok(())
+    }
+
+    unsafe fn len_map(&mut self, map: (NumTy, Ty), dst: (NumTy, Ty)) -> Result<()> {
+        use Ty::*;
+        let func = match map.1 {
+            MapIntInt => "len_intint",
+            MapIntFloat => "len_intfloat",
+            MapIntStr => "len_intstr",
+            MapStrInt => "len_strint",
+            MapStrFloat => "len_strfloat",
+            MapStrStr => "len_strstr",
+            _ => unreachable!(),
+        };
+        let mapv = self.get_local(map)?;
+        let resv = self.call(func, &mut [mapv]);
+        self.bind_val(dst, resv);
+        Ok(())
+    }
+
+    unsafe fn store_map(
+        &mut self,
+        map: (NumTy, Ty),
+        key: (NumTy, Ty),
+        val: (NumTy, Ty),
+    ) -> Result<()> {
+        assert_eq!(map.1.key()?, key.1);
+        assert_eq!(map.1.val()?, val.1);
+        use Ty::*;
+        let func = match map.1 {
+            MapIntInt => "insert_intint",
+            MapIntFloat => "insert_intfloat",
+            MapIntStr => "insert_intstr",
+            MapStrInt => "insert_strint",
+            MapStrFloat => "insert_strfloat",
+            MapStrStr => "insert_strstr",
+            _ => unreachable!(),
+        };
+        let mapv = self.get_local(map)?;
+        let keyv = self.get_local(key)?;
+        let valv = self.get_local(val)?;
+        let resv = self.call(func, &mut [mapv, keyv, valv]);
+        Ok(())
     }
 
     unsafe fn runtime_val(&self) -> LLVMValueRef {
@@ -770,51 +890,100 @@ impl<'a> View<'a> {
                 self.bind_reg(dst, resv);
             }
 
-            LookupIntInt(res, arr, k) => unimplemented!(),
-            LookupIntStr(res, arr, k) => unimplemented!(),
-            LookupIntFloat(res, arr, k) => unimplemented!(),
-            LookupStrInt(res, arr, k) => unimplemented!(),
-            LookupStrStr(res, arr, k) => unimplemented!(),
-            LookupStrFloat(res, arr, k) => unimplemented!(),
-            ContainsIntInt(res, arr, k) => unimplemented!(),
-            ContainsIntStr(res, arr, k) => unimplemented!(),
-            ContainsIntFloat(res, arr, k) => unimplemented!(),
-            ContainsStrInt(res, arr, k) => unimplemented!(),
-            ContainsStrStr(res, arr, k) => unimplemented!(),
-            ContainsStrFloat(res, arr, k) => unimplemented!(),
-            DeleteIntInt(arr, k) => unimplemented!(),
-            DeleteIntFloat(arr, k) => unimplemented!(),
-            DeleteIntStr(arr, k) => unimplemented!(),
-            DeleteStrInt(arr, k) => unimplemented!(),
-            DeleteStrFloat(arr, k) => unimplemented!(),
-            DeleteStrStr(arr, k) => unimplemented!(),
-            LenIntInt(res, arr) => unimplemented!(),
-            LenIntFloat(res, arr) => unimplemented!(),
-            LenIntStr(res, arr) => unimplemented!(),
-            LenStrInt(res, arr) => unimplemented!(),
-            LenStrFloat(res, arr) => unimplemented!(),
-            LenStrStr(res, arr) => unimplemented!(),
-            StoreIntInt(arr, k, v) => unimplemented!(),
-            StoreIntFloat(arr, k, v) => unimplemented!(),
-            StoreIntStr(arr, k, v) => unimplemented!(),
-            StoreStrInt(arr, k, v) => unimplemented!(),
-            StoreStrFloat(arr, k, v) => unimplemented!(),
-            StoreStrStr(arr, k, v) => unimplemented!(),
-            LoadVarStr(dst, var) => unimplemented!(),
-            StoreVarStr(var, src) => unimplemented!(),
-            LoadVarInt(dst, var) => unimplemented!(),
-            StoreVarInt(var, src) => unimplemented!(),
-            LoadVarIntMap(dst, var) => unimplemented!(),
-            StoreVarIntMap(var, src) => unimplemented!(),
-            MovInt(dst, src) => unimplemented!(),
-            MovFloat(dst, src) => unimplemented!(),
-            MovStr(dst, src) => unimplemented!(),
-            MovMapIntInt(dst, src) => unimplemented!(),
-            MovMapIntFloat(dst, src) => unimplemented!(),
-            MovMapIntStr(dst, src) => unimplemented!(),
-            MovMapStrInt(dst, src) => unimplemented!(),
-            MovMapStrFloat(dst, src) => unimplemented!(),
-            MovMapStrStr(dst, src) => unimplemented!(),
+            LookupIntInt(res, arr, k) => {
+                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            LookupIntStr(res, arr, k) => {
+                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            LookupIntFloat(res, arr, k) => {
+                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            LookupStrInt(res, arr, k) => {
+                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            LookupStrStr(res, arr, k) => {
+                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            LookupStrFloat(res, arr, k) => {
+                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            ContainsIntInt(res, arr, k) => {
+                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            ContainsIntStr(res, arr, k) => {
+                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            ContainsIntFloat(res, arr, k) => {
+                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            ContainsStrInt(res, arr, k) => {
+                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            ContainsStrStr(res, arr, k) => {
+                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            ContainsStrFloat(res, arr, k) => {
+                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
+            }
+            DeleteIntInt(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
+            DeleteIntFloat(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
+            DeleteIntStr(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
+            DeleteStrInt(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
+            DeleteStrFloat(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
+            DeleteStrStr(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
+            LenIntInt(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
+            LenIntFloat(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
+            LenIntStr(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
+            LenStrInt(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
+            LenStrFloat(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
+            LenStrStr(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
+            StoreIntInt(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
+            StoreIntFloat(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
+            StoreIntStr(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
+            StoreStrInt(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
+            StoreStrFloat(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
+            StoreStrStr(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
+            LoadVarStr(dst, var) => {
+                let v = self.var_val(var);
+                let res = self.call("load_var_str", &mut [v]);
+                self.bind_reg(dst, res);
+            }
+            StoreVarStr(var, src) => {
+                let v = self.var_val(var);
+                let sv = self.get_local(src.reflect())?;
+                self.call("store_var_str", &mut [v, sv]);
+            }
+            LoadVarInt(dst, var) => {
+                let v = self.var_val(var);
+                let res = self.call("load_var_int", &mut [v]);
+                self.bind_reg(dst, res);
+            }
+            StoreVarInt(var, src) => {
+                let v = self.var_val(var);
+                let sv = self.get_local(src.reflect())?;
+                self.call("store_var_int", &mut [v, sv]);
+            }
+            LoadVarIntMap(dst, var) => {
+                let v = self.var_val(var);
+                let res = self.call("load_var_intmap", &mut [v]);
+                self.bind_reg(dst, res);
+            }
+            StoreVarIntMap(var, src) => {
+                let v = self.var_val(var);
+                let sv = self.get_local(src.reflect())?;
+                self.call("store_var_intmap", &mut [v, sv]);
+            }
+            // TODO(ezr): does this work?
+            MovInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovMapIntInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovMapIntFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovMapIntStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovMapStrInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovMapStrFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovMapStrStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             IterBeginIntInt(dst, arr) => unimplemented!(),
             IterBeginIntFloat(dst, arr) => unimplemented!(),
             IterBeginIntStr(dst, arr) => unimplemented!(),

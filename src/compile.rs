@@ -51,7 +51,7 @@ impl Ty {
         }
     }
 
-    fn key(self) -> Result<Ty> {
+    pub(crate) fn key(self) -> Result<Ty> {
         use Ty::*;
         match self {
             MapIntInt | MapIntFloat | MapIntStr => Ok(Int),
@@ -62,7 +62,7 @@ impl Ty {
         }
     }
 
-    fn val(self) -> Result<Ty> {
+    pub(crate) fn val(self) -> Result<Ty> {
         use Ty::*;
         match self {
             MapStrInt | MapIntInt => Ok(Int),
