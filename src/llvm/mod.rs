@@ -358,6 +358,10 @@ impl<'a> View<'a> {
         }
     }
 
+    fn is_global(&self, reg: (NumTy, Ty)) -> bool {
+        self.f.globals.get(&reg).is_some()
+    }
+
     unsafe fn var_val(&self, v: &Variable) -> LLVMValueRef {
         LLVMConstInt(self.tmap.var_ty, *v as u64, /*sign_extend=*/ 0)
     }
@@ -586,7 +590,6 @@ impl<'a> View<'a> {
         LLVMGetParam(self.f.val, self.f.num_args as libc::c_uint - 1)
     }
 
-    // TODO, pass in fields from Generator as needed.
     unsafe fn gen_ll_inst<'b>(&mut self, inst: &compile::LL<'b>) -> Result<()> {
         use crate::bytecode::Instr::*;
         match inst {
@@ -947,7 +950,17 @@ impl<'a> View<'a> {
             LoadVarStr(dst, var) => {
                 let v = self.var_val(var);
                 let res = self.call("load_var_str", &mut [v]);
-                self.bind_reg(dst, res);
+                let dreg = dst.reflect();
+                self.bind_val(dreg, res);
+                // The "load_var_" function refs the result for the common case that we are binding
+                // the result to a local variable. If we are storing it directly into a global,
+                // then bind_val would have already reffed it, so we decrement the count again.
+                //
+                // NB: We could do this as an extra parameter to the intrinsics. This makes the
+                // code a bit cleaner, but it's worth revisiting in the future.
+                if self.is_global(dreg) {
+                    self.drop_reg(dreg)?;
+                }
             }
             StoreVarStr(var, src) => {
                 let v = self.var_val(var);
@@ -967,7 +980,12 @@ impl<'a> View<'a> {
             LoadVarIntMap(dst, var) => {
                 let v = self.var_val(var);
                 let res = self.call("load_var_intmap", &mut [v]);
-                self.bind_reg(dst, res);
+                // See the comment in the LoadVarStr case.
+                let dreg = dst.reflect();
+                self.bind_val(dreg, res);
+                if self.is_global(dreg) {
+                    self.drop_reg(dreg)?;
+                }
             }
             StoreVarIntMap(var, src) => {
                 let v = self.var_val(var);
