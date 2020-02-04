@@ -2,6 +2,7 @@ use super::llvm::{
     self,
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMValueRef},
 };
+use crate::builtins::Variable;
 use crate::compile;
 use crate::libc::c_void;
 use crate::runtime::{
@@ -10,6 +11,7 @@ use crate::runtime::{
 };
 use hashbrown::HashMap;
 
+use std::convert::TryFrom;
 use std::mem;
 
 macro_rules! fail {
@@ -114,6 +116,13 @@ pub unsafe fn register(
         read_err_stdin(rt_ty) -> int_ty;
         next_line(rt_ty, str_ref_ty) -> str_ty;
         next_line_stdin(rt_ty) -> str_ty;
+
+        load_var_str(rt_ty, usize_ty) -> str_ty;
+        store_var_str(rt_ty, usize_ty, str_ref_ty);
+        load_var_int(rt_ty, usize_ty) -> int_ty;
+        store_var_int(rt_ty, usize_ty, int_ty);
+        load_var_intmap(rt_ty, usize_ty) -> usize_ty;
+        store_var_intmap(rt_ty, usize_ty, usize_ty);
 
         str_lt(str_ref_ty, str_ref_ty) -> int_ty;
         str_gt(str_ref_ty, str_ref_ty) -> int_ty;
@@ -425,6 +434,116 @@ pub unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
     res
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> u128 {
+    let rt = &*(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        use Variable::*;
+        let res = match var {
+            FS => rt.vars.fs.clone(),
+            OFS => rt.vars.ofs.clone(),
+            RS => rt.vars.rs.clone(),
+            FILENAME => rt.vars.filename.clone(),
+            ARGC | ARGV | NF | NR => fail!("non-string var={:?}", var),
+        };
+        mem::transmute::<Str, u128>(res)
+    } else {
+        fail!("invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) {
+    let rt = &mut *(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        let s = (&*(s as *mut Str)).clone();
+        use Variable::*;
+        match var {
+            FS => rt.vars.fs = s,
+            OFS => rt.vars.ofs = s,
+            RS => rt.vars.rs = s,
+            FILENAME => rt.vars.filename = s,
+            ARGC | ARGV | NF | NR => fail!("non-string var={:?}", var),
+        };
+    } else {
+        fail!("invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
+    let rt = &mut *(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        use Variable::*;
+        match var {
+            ARGC => rt.vars.argc,
+            NF => {
+                if rt.split_line.len() == 0 {
+                    if let Err(e) =
+                        rt.regexes
+                            .split_regex(&rt.vars.fs, &rt.line, &mut rt.split_line)
+                    {
+                        fail!("failed to split line: {}", e);
+                    }
+                    rt.vars.nf = rt.split_line.len() as Int;
+                }
+                rt.vars.nf
+            }
+            NR => rt.vars.nr,
+            OFS | FS | RS | FILENAME | ARGV => fail!("non-int variable {}", var),
+        }
+    } else {
+        fail!("invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
+    let rt = &mut *(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        use Variable::*;
+        match var {
+            ARGC => rt.vars.argc = i,
+            NF => rt.vars.nf = i,
+            NR => rt.vars.nr = i,
+            OFS | FS | RS | FILENAME | ARGV => fail!("non-int variable {}", var),
+        };
+    } else {
+        fail!("invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> usize {
+    let rt = &*(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        use Variable::*;
+        let res = match var {
+            ARGV => rt.vars.argv.clone(),
+            OFS | ARGC | NF | NR | FS | RS | FILENAME => fail!("non intmap-var={:?}", var),
+        };
+        mem::transmute::<IntMap<_>, usize>(res)
+    } else {
+        fail!("invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: usize) {
+    let rt = &mut *(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        use Variable::*;
+        let map = mem::transmute::<usize, IntMap<Str>>(map);
+        match var {
+            ARGV => rt.vars.argv = map.clone(),
+            OFS | ARGC | NF | NR | FS | RS | FILENAME => fail!("non intmap-var={:?}", var),
+        };
+        mem::forget(map);
+    } else {
+        fail!("invalid variable code={}", var)
+    }
+}
+
 macro_rules! str_compare_inner {
     ($name:ident, $op:tt) => {
         #[no_mangle]
@@ -444,6 +563,9 @@ macro_rules! str_compare {
 str_compare! {
     str_lt(<); str_gt(>); str_lte(<=); str_gte(>=); str_eq(==);
 }
+
+// And now for the shenanigans for implementing map operations. There are 30 functions here; we use
+// a mixture of traits and macros to implement them.
 
 pub trait InTy {
     type In;
