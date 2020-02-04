@@ -3,7 +3,6 @@ use std::marker::PhantomData;
 use crate::builtins::Variable;
 use crate::common::{NumTy, Result};
 use crate::compile;
-use crate::hashbrown::HashSet;
 use crate::runtime::{self, Float, Int, LazyVec, Str};
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
