@@ -1,6 +1,6 @@
 use crate::builtins::Variable;
 use crate::bytecode::{self, Accum};
-use crate::common::{raw_guard, Either, NumTy, Result};
+use crate::common::{raw_guard, Either, NodeIx, NumTy, Result};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
 use crate::llvm_sys as llvm;
@@ -14,7 +14,8 @@ use llvm::{
     LLVMLinkage,
 };
 
-use hashbrown::HashMap;
+use crate::smallvec::{self, smallvec};
+use hashbrown::{HashMap, HashSet};
 
 pub mod intrinsics;
 
@@ -38,15 +39,23 @@ struct Function {
     // might be able to give the memory back at construction time (or share a single string and
     // avoid the allocations).
     name: CString,
+    // TODO remove from this struct
     val: LLVMValueRef,
     builder: LLVMBuilderRef,
-    globals: HashMap<(NumTy, Ty), usize>,
     locals: HashMap<(NumTy, Ty), LLVMValueRef>,
+    skip_drop: HashSet<(NumTy, Ty)>,
+    id: usize,
+}
+
+struct FuncInfo {
+    val: LLVMValueRef,
+    globals: HashMap<(NumTy, Ty), usize>,
     num_args: usize,
 }
 
 struct View<'a> {
     f: &'a mut Function,
+    decls: &'a Vec<FuncInfo>,
     tmap: &'a TypeMap,
     intrinsics: &'a HashMap<&'static str, LLVMValueRef>,
 }
@@ -113,7 +122,8 @@ struct Generator<'a, 'b> {
     module: LLVMModuleRef,
     engine: LLVMExecutionEngineRef,
     pass_manager: LLVMPassManagerRef,
-    decls: Vec<Function>,
+    decls: Vec<FuncInfo>,
+    funcs: Vec<Function>,
     type_map: TypeMap,
     intrinsics: HashMap<&'static str, LLVMValueRef>,
 }
@@ -168,6 +178,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             engine,
             pass_manager,
             decls: Vec::with_capacity(nframes),
+            funcs: Vec::with_capacity(nframes),
             type_map: TypeMap::new(ctx),
             intrinsics: intrinsics::register(module, ctx),
         };
@@ -178,11 +189,11 @@ impl<'a, 'b> Generator<'a, 'b> {
 
     unsafe fn build_map(&mut self) {
         use mem::size_of;
-        // TODO: make this a void* instead?
         let make = |ty| TypeRef {
             base: ty,
             ptr: LLVMPointerType(ty, 0),
         };
+        // TODO: make this a void* instead?
         let uintptr = LLVMIntTypeInContext(self.ctx, (size_of::<usize>() * 8) as libc::c_uint);
         self.type_map.init(
             Ty::Int,
@@ -219,17 +230,9 @@ impl<'a, 'b> Generator<'a, 'b> {
         self.type_map.get_ptr_ty(ty)
     }
 
-    // TODO: get a big loop together for translating basic blocks
-    //       - skip phis until next stage
-    //       - allocate the relevant locals
-    //       - for main, allocate globals.
-    //       - Get scalar instructions done, but stub out runtime for now.
-    // TODO: control flow
-    //       - read up on this more, get the instructions down. structure should follow bytecode
-    //       translation closely.
-    // TODO: runtime
-    //       - fill in runtime, figure out where to allocate it in main. It probably needs to be
-    //       passed as a a param to every function (if so, just make it the last? or first?).
+    // TODO control flow in gen_function. (maybe make it a helper?)
+    // TODO make "actual main" a wrapper function that takes the runtime, allocates the globals,
+    // and passes all of that to the inner "main" function.
 
     unsafe fn build_decls(&mut self) {
         let global_refs = self.types.get_global_refs();
@@ -243,7 +246,8 @@ impl<'a, 'b> Generator<'a, 'b> {
             .enumerate()
         {
             let mut globals = HashMap::new();
-            let name = CString::new(if i == self.types.main_offset {
+            let is_main = i == self.types.main_offset;
+            let name = CString::new(if is_main {
                 format!("_frawk_main")
             } else {
                 format!("_frawk_udf_{}", i)
@@ -255,6 +259,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             for (reg, ty) in refs.iter().cloned() {
                 let ix = arg_tys.len();
                 arg_tys.push(self.llvm_ptr_ty(ty));
+                // Vals are ignored if we are main.
                 globals.insert((reg, ty), ix);
             }
             // Finally, we add a pointer to the runtime; always the last parameter.
@@ -267,15 +272,19 @@ impl<'a, 'b> Generator<'a, 'b> {
             );
             let val = LLVMAddFunction(self.module, name.as_ptr(), ty);
             let builder = LLVMCreateBuilderInContext(self.ctx);
-            let block = LLVMAppendBasicBlockInContext(self.ctx, val, c_str!(""));
-            LLVMPositionBuilderAtEnd(builder, block);
-            self.decls.push(Function {
+            let id = self.funcs.len();
+            self.decls.push(FuncInfo {
+                val,
+                globals,
+                num_args: arg_tys.len(),
+            });
+            self.funcs.push(Function {
                 name,
                 val,
                 builder,
-                globals,
                 locals: Default::default(),
-                num_args: arg_tys.len(),
+                skip_drop: Default::default(),
+                id,
             });
             arg_tys.clear();
         }
@@ -307,30 +316,92 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     unsafe fn gen_function(&mut self, func_id: usize) -> Result<()> {
+        use compile::HighLevel::*;
         let frame = &self.types.frames[func_id];
+        let builder = self.funcs[func_id].builder;
+        let mut bbs = Vec::with_capacity(frame.cfg.node_count());
+        for _ in 0..frame.cfg.node_count() {
+            let bb = LLVMAppendBasicBlockInContext(self.ctx, self.funcs[func_id].val, c_str!(""));
+            bbs.push(bb);
+        }
+        LLVMPositionBuilderAtEnd(builder, bbs[0]);
         for (local, (reg, ty)) in frame.locals.iter() {
             debug_assert!(!local.global);
             // implicitly-declared locals are just the ones with a subscript of 0.
             if local.sub == 0 {
-                let val = self.alloc_local(self.decls[func_id].builder, *reg, *ty)?;
-                self.decls[func_id].locals.insert((*reg, *ty), val);
+                let val = self.alloc_local(self.funcs[func_id].builder, *reg, *ty)?;
+                self.funcs[func_id].locals.insert((*reg, *ty), val);
             }
         }
-        let info = &self.types.func_info[func_id];
+
+        // As of writing; we'll only ever have a single return statement for a given function, but
+        // we do not lose very much by having this function support multiple returns if we decide
+        // to refactor some of the higher-level code in the future.
+        let mut exits = Vec::with_capacity(1);
+        let mut phis = Vec::new();
+        let f = &mut self.funcs[func_id];
+        let mut view = View {
+            f,
+            tmap: &self.type_map,
+            intrinsics: &self.intrinsics,
+            decls: &self.decls,
+        };
         for (i, bb) in frame.cfg.raw_nodes().iter().enumerate() {
-            let decl = &mut self.decls[func_id];
-            let mut view = View {
-                f: decl,
-                tmap: &self.type_map,
-                intrinsics: &self.intrinsics,
-            };
-            // TODO branches, etc.
-            for inst in &bb.weight {
+            LLVMPositionBuilderAtEnd(view.f.builder, bbs[i]);
+            for (j, inst) in bb.weight.iter().enumerate() {
                 match inst {
                     Either::Left(ll) => view.gen_ll_inst(ll)?,
-                    Either::Right(hl) => view.gen_hl_inst(hl)?,
+                    Either::Right(hl) => {
+                        view.gen_hl_inst(hl)?;
+                        match hl {
+                            Ret(_, _) => exits.push((i, j)),
+                            Phi(_, _, _) => phis.push((i, j)),
+                            Call { .. } => {}
+                        }
+                    }
                 }
             }
+        }
+
+        // TODO: branches.
+        // Go over each node, collect its edges in reverse, issue the branch instrs.
+        // TODO: main.
+
+        // We don't do return statements when we find them, because returns are responsible for
+        // dropping all local variables, and we aren't guaranteed that our traversal will visit the
+        // exit block last.
+
+        let node_weight = |bb, inst| &frame.cfg.node_weight(NodeIx::new(bb)).unwrap()[inst];
+        for (exit_bb, return_inst) in exits.into_iter() {
+            LLVMPositionBuilderAtEnd(view.f.builder, bbs[exit_bb]);
+            if let Either::Right(Ret(reg, ty)) = node_weight(exit_bb, return_inst) {
+                view.ret((*reg, *ty))?
+            } else {
+                unreachable!()
+            }
+        }
+
+        // Now that we have initialized all local variables, we can wire in predecessors to phis.
+        let mut preds = SmallVec::new();
+        let mut blocks = SmallVec::new();
+        for (phi_bb, phi_inst) in phis.into_iter() {
+            if let Either::Right(Phi(reg, ty, ps)) = node_weight(phi_bb, phi_inst) {
+                let phi_node = view.get_local((*reg, *ty))?;
+                for (pred_bb, pred_reg) in ps.iter() {
+                    preds.push(view.get_local((*pred_reg, *ty))?);
+                    blocks.push(bbs[pred_bb.index()]);
+                }
+                LLVMAddIncoming(
+                    phi_node,
+                    preds.as_mut_ptr(),
+                    blocks.as_mut_ptr(),
+                    preds.len() as libc::c_uint,
+                );
+            } else {
+                unreachable!()
+            }
+            preds.clear();
+            blocks.clear();
         }
         Ok(())
     }
@@ -340,7 +411,7 @@ impl<'a> View<'a> {
     unsafe fn get_local(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
         if let Some(v) = self.f.locals.get(&local) {
             Ok(*v)
-        } else if let Some(ix) = self.f.globals.get(&local) {
+        } else if let Some(ix) = self.decls[self.f.id].globals.get(&local) {
             let gv = LLVMGetParam(self.f.val, *ix as libc::c_uint);
             Ok(if let Ty::Str = local.1 {
                 // no point in loading the string directly. We manipulate them as pointers.
@@ -359,7 +430,7 @@ impl<'a> View<'a> {
     }
 
     fn is_global(&self, reg: (NumTy, Ty)) -> bool {
-        self.f.globals.get(&reg).is_some()
+        self.decls[self.f.id].globals.get(&reg).is_some()
     }
 
     unsafe fn var_val(&self, v: &Variable) -> LLVMValueRef {
@@ -440,7 +511,8 @@ impl<'a> View<'a> {
                 assert_eq!(LLVMGetTypeKind(LLVMTypeOf(to)), LLVMIntegerTypeKind);
             }
         }
-        if let Some(ix) = self.f.globals.get(&val) {
+        use Ty::*;
+        if let Some(ix) = self.decls[self.f.id].globals.get(&val) {
             // We're storing into a global variable. If it's a string or map, that means we have to
             // alter the reference counts appropriately.
             //  - if Str, call drop, store, then ref on the global pointer directly.
@@ -448,7 +520,6 @@ impl<'a> View<'a> {
             //  - otherwise, just store it directly
             let param = LLVMGetParam(self.f.val, *ix as libc::c_uint);
             let new_global = to;
-            use Ty::*;
             match val.1 {
                 MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
                     let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
@@ -465,16 +536,24 @@ impl<'a> View<'a> {
                     LLVMBuildStore(self.f.builder, new_global, param);
                 }
             };
+            return;
         }
         debug_assert!(self.f.locals.get(&val).is_none());
-        if let Ty::Str = val.1 {
-            let str_ty = self.tmap.get_ty(Ty::Str);
-            let loc = LLVMBuildAlloca(self.f.builder, str_ty, c_str!(""));
-            LLVMBuildStore(self.f.builder, to, loc);
-            self.f.locals.insert(val, loc);
-        } else {
-            self.f.locals.insert(val, to);
+        match val.1 {
+            MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+                self.call("ref_map", &mut [to]);
+            }
+            Str => {
+                let str_ty = self.tmap.get_ty(Ty::Str);
+                let loc = LLVMBuildAlloca(self.f.builder, str_ty, c_str!(""));
+                LLVMBuildStore(self.f.builder, to, loc);
+                self.call("ref_str", &mut [loc]);
+                self.f.locals.insert(val, loc);
+                return;
+            }
+            _ => {}
         }
+        self.f.locals.insert(val, to);
     }
 
     unsafe fn lookup_map(
@@ -582,12 +661,15 @@ impl<'a> View<'a> {
         let mapv = self.get_local(map)?;
         let keyv = self.get_local(key)?;
         let valv = self.get_local(val)?;
-        let resv = self.call(func, &mut [mapv, keyv, valv]);
+        self.call(func, &mut [mapv, keyv, valv]);
         Ok(())
     }
 
     unsafe fn runtime_val(&self) -> LLVMValueRef {
-        LLVMGetParam(self.f.val, self.f.num_args as libc::c_uint - 1)
+        LLVMGetParam(
+            self.f.val,
+            self.decls[self.f.id].num_args as libc::c_uint - 1,
+        )
     }
 
     unsafe fn gen_ll_inst<'b>(&mut self, inst: &compile::LL<'b>) -> Result<()> {
@@ -892,7 +974,6 @@ impl<'a> View<'a> {
                 let resv = self.call("next_line_stdin", &mut [self.runtime_val()]);
                 self.bind_reg(dst, resv);
             }
-
             LookupIntInt(res, arr, k) => {
                 self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
             }
@@ -992,10 +1073,13 @@ impl<'a> View<'a> {
                 let sv = self.get_local(src.reflect())?;
                 self.call("store_var_intmap", &mut [v, sv]);
             }
-            // TODO(ezr): does this work?
             MovInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
+            MovStr(dst, src) => {
+                let sv = self.get_local(src.reflect())?;
+                let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
+                self.bind_reg(dst, loaded);
+            }
             MovMapIntInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovMapIntFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovMapIntStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
@@ -1026,9 +1110,76 @@ impl<'a> View<'a> {
         Ok(())
     }
 
+    unsafe fn ret(&mut self, val: (NumTy, Ty)) -> Result<()> {
+        let to_return = self.get_local(val)?;
+        let locals = mem::replace(&mut self.f.locals, Default::default());
+        for ((reg, ty), llval) in locals.iter() {
+            let (reg, ty) = (*reg, *ty);
+            if self.f.skip_drop.contains(&(reg, ty)) || (reg, ty) == val {
+                continue;
+            }
+            self.drop_val(*llval, ty)?;
+        }
+        LLVMBuildRet(self.f.builder, to_return);
+        let _old_locals = mem::replace(&mut self.f.locals, locals);
+        debug_assert_eq!(_old_locals.len(), 0);
+        Ok(())
+    }
+
     unsafe fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
-        // NB Phis skip the drop?
-        unimplemented!()
+        use compile::HighLevel::*;
+        match inst {
+            Call {
+                func_id,
+                dst_reg,
+                dst_ty,
+                args,
+            } => {
+                let source = &self.decls[self.f.id];
+                let target = &self.decls[*func_id as usize];
+                // Allocate room for and insert regular params, globals, and the runtime.
+                let mut argvs: SmallVec<LLVMValueRef> =
+                    smallvec![ptr::null_mut(); args.len() + target.globals.len() + 1];
+                for (i, arg) in args.iter().cloned().enumerate() {
+                    argvs[i] = self.get_local(arg)?;
+                }
+                for (global, ix) in target.globals.iter() {
+                    let cur_ix = source
+                        .globals
+                        .get(global)
+                        .cloned()
+                        .expect("callee must have all globals");
+                    argvs[*ix] = LLVMGetParam(self.f.val, cur_ix as libc::c_uint);
+                }
+                let rt_ix = argvs.len() - 1;
+                debug_assert_eq!(rt_ix + 1, target.num_args);
+                argvs[rt_ix] = self.runtime_val();
+                let resv = LLVMBuildCall(
+                    self.f.builder,
+                    target.val,
+                    argvs.as_mut_ptr(),
+                    argvs.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_val((*dst_reg, *dst_ty), resv);
+            }
+            // Returns are handled elsewhere
+            Ret(reg, ty) => {}
+            Phi(reg, ty, _preds) => {
+                self.f.skip_drop.insert((*reg, *ty));
+                let res = LLVMBuildPhi(
+                    self.f.builder,
+                    if ty == &Ty::Str {
+                        self.tmap.get_ptr_ty(*ty)
+                    } else {
+                        self.tmap.get_ty(*ty)
+                    },
+                    c_str!(""),
+                );
+                self.bind_val((*reg, *ty), res);
+            }
+        };
+        Ok(())
     }
 }
 
