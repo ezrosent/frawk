@@ -28,7 +28,7 @@ macro_rules! fail {
     }}
 }
 
-struct Runtime<'a> {
+pub(crate) struct Runtime<'a> {
     vars: Variables<'a>,
     line: Str<'a>,
     split_line: LazyVec<Str<'a>>,
@@ -130,36 +130,42 @@ pub unsafe fn register(
         str_gte(str_ref_ty, str_ref_ty) -> int_ty;
         str_eq(str_ref_ty, str_ref_ty) -> int_ty;
 
+        alloc_intint() -> usize_ty;
         len_intint(usize_ty) -> int_ty;
         lookup_intint(usize_ty, int_ty) -> int_ty;
         contains_intint(usize_ty, int_ty) -> int_ty;
         insert_intint(usize_ty, int_ty, int_ty);
         delete_intint(usize_ty, int_ty);
 
+        alloc_intfloat() -> usize_ty;
         len_intfloat(usize_ty) -> int_ty;
         lookup_intfloat(usize_ty, int_ty) -> float_ty;
         contains_intfloat(usize_ty, int_ty) -> int_ty;
         insert_intfloat(usize_ty, int_ty, float_ty);
         delete_intfloat(usize_ty, int_ty);
 
+        alloc_intstr() -> usize_ty;
         len_intstr(usize_ty) -> int_ty;
         lookup_intstr(usize_ty, int_ty) -> str_ty;
         contains_intstr(usize_ty, int_ty) -> int_ty;
         insert_intstr(usize_ty, int_ty, str_ref_ty);
         delete_intstr(usize_ty, int_ty);
 
+        alloc_strint() -> usize_ty;
         len_strint(usize_ty) -> int_ty;
         lookup_strint(usize_ty, str_ref_ty) -> int_ty;
         contains_strint(usize_ty, str_ref_ty) -> int_ty;
         insert_strint(usize_ty, str_ref_ty, int_ty);
         delete_strint(usize_ty, str_ref_ty);
 
+        alloc_strfloat() -> usize_ty;
         len_strfloat(usize_ty) -> int_ty;
         lookup_strfloat(usize_ty, str_ref_ty) -> float_ty;
         contains_strfloat(usize_ty, str_ref_ty) -> int_ty;
         insert_strfloat(usize_ty, str_ref_ty, float_ty);
         delete_strfloat(usize_ty, str_ref_ty);
 
+        alloc_strstr() -> usize_ty;
         len_strstr(usize_ty) -> int_ty;
         lookup_strstr(usize_ty, str_ref_ty) -> str_ty;
         contains_strstr(usize_ty, str_ref_ty) -> int_ty;
@@ -223,9 +229,11 @@ pub unsafe extern "C" fn print_stdout(runtime: *mut c_void, txt: *mut c_void) {
     let newline: Str<'static> = "\n".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let txt = &*(txt as *mut Str);
-    runtime.write_files.write_str_stdout(txt);
+    if runtime.write_files.write_str_stdout(txt).is_err() {
+        fail!("TODO: handle errors in file writing!")
+    }
     if runtime.write_files.write_str_stdout(&newline).is_err() {
-        fail!("handle errors in file writing!")
+        fail!("TODO: handle errors in file writing!")
     }
 }
 
@@ -607,7 +615,12 @@ impl InTy for Float {
 }
 
 macro_rules! map_impl_inner {
-    ($lookup:ident, $len:ident, $insert:ident, $delete:ident, $contains:ident, $k:ty, $v:ty) => {
+    ($alloc:ident, $lookup:ident, $len:ident, $insert:ident, $delete:ident, $contains:ident, $k:ty, $v:ty) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $alloc() -> usize {
+            let res: runtime::SharedMap<$k, $v> = Default::default();
+            mem::transmute::<runtime::SharedMap<$k, $v>, usize>(res)
+        }
         #[no_mangle]
         pub unsafe extern "C" fn $len(map: usize) -> Int {
             let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
@@ -650,19 +663,19 @@ macro_rules! map_impl_inner {
 }
 
 macro_rules! map_impl {
-    ($($len:ident, $lookup:ident,
+    ($($alloc:ident, $len:ident, $lookup:ident,
        $insert:ident, $delete:ident, $contains:ident, < $k:ty, $v:ty >;)*) => {
         $(
-        map_impl_inner!($lookup, $len,$insert,$delete,$contains, $k, $v);
+        map_impl_inner!($alloc, $lookup, $len,$insert,$delete,$contains, $k, $v);
         )*
     }
 }
 
 map_impl! {
-    len_intint, lookup_intint, insert_intint, delete_intint, contains_intint, <Int, Int>;
-    len_intfloat, lookup_intfloat, insert_intfloat, delete_intfloat, contains_intfloat, <Int, Float>;
-    len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str<'static>>;
-    len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str<'static>, Int>;
-    len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str<'static>, Float>;
-    len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str<'static>, Str<'static>>;
+    alloc_intint, len_intint, lookup_intint, insert_intint, delete_intint, contains_intint, <Int, Int>;
+    alloc_intfloat, len_intfloat, lookup_intfloat, insert_intfloat, delete_intfloat, contains_intfloat, <Int, Float>;
+    alloc_intstr, len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str<'static>>;
+    alloc_strint, len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str<'static>, Int>;
+    alloc_strfloat, len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str<'static>, Float>;
+    alloc_strstr, len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str<'static>, Str<'static>>;
 }

@@ -83,7 +83,9 @@ impl TypeRef {
     }
 }
 
+// Common LLVM types used in code generation.
 struct TypeMap {
+    // Map from compile::Ty => TypeRef
     table: [TypeRef; compile::NUM_TYPES],
     runtime_ty: LLVMTypeRef,
     var_ty: LLVMTypeRef,
@@ -97,7 +99,7 @@ impl TypeMap {
                 table: [TypeRef::null(); compile::NUM_TYPES],
                 runtime_ty: LLVMPointerType(LLVMVoidTypeInContext(ctx), 0),
                 var_ty: LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint),
-                bool_ty: LLVMIntTypeInContext(ctx, 1 as libc::c_uint),
+                bool_ty: LLVMIntTypeInContext(ctx, 1),
             }
         }
     }
@@ -186,7 +188,31 @@ impl<'a, 'b> Generator<'a, 'b> {
         };
         res.build_map();
         res.build_decls();
+        for i in 0..nframes {
+            res.gen_function(i)?;
+        }
         Ok(res)
+    }
+
+    pub unsafe fn dump_mod(&mut self) {
+        if let Err(e) = self.gen_main() {
+            eprintln!("error generating main: {}", e);
+            return;
+        }
+        LLVMDumpModule(self.module);
+    }
+
+    pub unsafe fn run_main(
+        &mut self,
+        stdin: impl std::io::Read + 'static,
+        stdout: impl std::io::Write + 'static,
+    ) -> Result<()> {
+        let mut rt = intrinsics::Runtime::new(stdin, stdout);
+        self.gen_main()?;
+        let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
+        let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
+        main_fn((&mut rt) as *mut _ as *mut libc::c_void);
+        Ok(())
     }
 
     unsafe fn build_map(&mut self) {
@@ -292,12 +318,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         }
     }
 
-    unsafe fn alloc_local(
-        &self,
-        builder: LLVMBuilderRef,
-        reg: NumTy,
-        ty: Ty,
-    ) -> Result<LLVMValueRef> {
+    unsafe fn alloc_local(&self, builder: LLVMBuilderRef, ty: Ty) -> Result<LLVMValueRef> {
         use Ty::*;
         let val = match ty {
             Int => LLVMConstInt(self.llvm_ty(Int), 0, /*sign_extend=*/ 1),
@@ -310,11 +331,70 @@ impl<'a, 'b> Generator<'a, 'b> {
                 v_loc
             }
             MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
-                LLVMConstInt(self.llvm_ty(ty), 0, /*sign_extend=*/ 0)
+                let fname = match ty {
+                    MapIntInt => "alloc_intint",
+                    MapIntFloat => "alloc_intfloat",
+                    MapIntStr => "alloc_intstr",
+                    MapStrInt => "alloc_strint",
+                    MapStrFloat => "alloc_strfloat",
+                    MapStrStr => "alloc_strstr",
+                    _ => unreachable!(),
+                };
+                LLVMBuildCall(
+                    builder,
+                    self.intrinsics[fname],
+                    ptr::null_mut(),
+                    0,
+                    c_str!(""),
+                )
             }
-            IterInt | IterStr => return err!("we should not be allocating any iterators"),
+            IterInt | IterStr => return err!("we should not be default-allocating any iterators"),
         };
         Ok(val)
+    }
+
+    unsafe fn gen_main(&mut self) -> Result<()> {
+        let ty = LLVMFunctionType(
+            LLVMVoidType(),
+            &mut self.type_map.runtime_ty,
+            1,
+            /*IsVarArg=*/ 0,
+        );
+        let decl = LLVMAddFunction(self.module, c_str!("__frawk_main"), ty);
+        let builder = LLVMCreateBuilderInContext(self.ctx);
+        let bb = LLVMAppendBasicBlockInContext(self.ctx, decl, c_str!(""));
+        LLVMPositionBuilderAtEnd(builder, bb);
+
+        // We need to allocate all of the global variables that our main function uses, and then
+        // pass them as arguments, along with the runtime.
+        let main_info = &self.decls[self.types.main_offset];
+        let mut args = SmallVec::with_capacity(main_info.num_args);
+        for ((_reg, ty), arg_ix) in main_info.globals.iter() {
+            let local = self.alloc_local(builder, *ty)?;
+            let param = if let Ty::Str = ty {
+                // Already a pointer; we're good to go!
+                local
+            } else {
+                let loc = LLVMBuildAlloca(builder, self.llvm_ty(*ty), c_str!(""));
+                LLVMBuildStore(builder, local, loc);
+                loc
+            };
+            args[*arg_ix] = param;
+        }
+
+        // Pass the runtime last.
+        args[main_info.num_args - 1] = LLVMGetParam(decl, 0);
+        LLVMBuildCall(
+            builder,
+            main_info.val,
+            args.as_mut_ptr(),
+            args.len() as libc::c_uint,
+            c_str!(""),
+        );
+        LLVMBuildRetVoid(builder);
+        LLVMRunFunctionPassManager(self.pass_manager, decl);
+        LLVMDisposeBuilder(builder);
+        Ok(())
     }
 
     unsafe fn gen_function(&mut self, func_id: usize) -> Result<()> {
@@ -331,7 +411,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             debug_assert!(!local.global);
             // implicitly-declared locals are just the ones with a subscript of 0.
             if local.sub == 0 {
-                let val = self.alloc_local(self.funcs[func_id].builder, *reg, *ty)?;
+                let val = self.alloc_local(self.funcs[func_id].builder, *ty)?;
                 self.funcs[func_id].locals.insert((*reg, *ty), val);
             }
         }
@@ -420,6 +500,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             preds.clear();
             blocks.clear();
         }
+        LLVMRunFunctionPassManager(self.pass_manager, view.f.val);
         Ok(())
     }
 }
