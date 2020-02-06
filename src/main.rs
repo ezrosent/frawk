@@ -54,14 +54,16 @@ const _PROGRAM_3: &'static str = r#"
 END { for (i=0; i<100000000; i++) {SUMS[i]++; SUM += i;}; print SUM }"#;
 const _PROGRAM_4: &'static str = r#"
 END { for (i=0; i<1000000; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
+const _PROGRAM_5: &'static str = r#"
+END { for (i=0; i<100; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
+const _PROGRAM_6: &'static str = r#"
+END { for (i=0; i<100000; i++) {CD = CD i;}; print CD }"#;
 
 fn main() {
-    unsafe { llvm::test_codegen() };
-    let p = llvm::__test_print as *mut u8;
-    let _ = unsafe { std::ptr::read_volatile(p) };
     // TODO add a real main function
     if false {
-        println!("{}", harness::bench_program(_PROGRAM_4, "").unwrap());
+        println!("{}", harness::bench_program(_PROGRAM_6, "").unwrap());
     }
+    harness::dump_llvm(_PROGRAM_5).expect("error generating llvm:");
     eprintln!("exiting cleanly");
 }

@@ -50,6 +50,13 @@ pub(crate) fn run_program<'a>(
     run_prog(a, stmt, stdin)
 }
 
+pub(crate) fn dump_llvm(prog: &str) -> Result<()> {
+    let a = Arena::default();
+    let stmt = parse_program(prog, &a)?;
+    let ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
+    compile::dump_llvm(&ctx)
+}
+
 pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
