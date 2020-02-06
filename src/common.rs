@@ -12,42 +12,6 @@ pub enum Either<L, R> {
     Right(R),
 }
 
-pub struct Guard<T: Copy, F: FnMut(T)> {
-    val: T,
-    deleter: F,
-}
-pub unsafe fn raw_guard<T: Copy>(
-    val: T,
-    deleter: unsafe extern "C" fn(T),
-) -> Guard<T, impl FnMut(T)> {
-    Guard::new(val, move |t| deleter(t))
-}
-
-impl<T: Copy, F: FnMut(T)> Guard<T, F> {
-    pub fn new(val: T, deleter: F) -> Self {
-        Guard { val, deleter }
-    }
-}
-
-impl<T: Copy, F: FnMut(T)> std::ops::Deref for Guard<T, F> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.val
-    }
-}
-
-impl<T: Copy, F: FnMut(T)> std::ops::DerefMut for Guard<T, F> {
-    fn deref_mut(&mut self) -> &mut T {
-        &mut self.val
-    }
-}
-
-impl<T: Copy, F: FnMut(T)> Drop for Guard<T, F> {
-    fn drop(&mut self) {
-        (self.deleter)(self.val)
-    }
-}
-
 // borrowed from weld project.
 macro_rules! c_str {
     ($s:expr) => {
@@ -95,15 +59,6 @@ where
             Either::Left(l) => Either::Left(l.into_iter()),
             Either::Right(r) => Either::Right(r.into_iter()),
         }
-    }
-}
-impl<L, R, T> Either<L, R>
-where
-    L: IntoIterator<Item = T>,
-    R: IntoIterator<Item = T>,
-{
-    pub(crate) fn into_iter(self) -> impl Iterator<Item = T> {
-        IntoIter(self).into_iter()
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::builtins::Variable;
 use crate::bytecode::{self, Accum};
-use crate::common::{raw_guard, Either, NodeIx, NumTy, Result};
+use crate::common::{Either, NodeIx, NumTy, Result};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
 use crate::llvm_sys as llvm;
@@ -11,7 +11,6 @@ use llvm::{
     execution_engine::*,
     prelude::*,
     target::*,
-    LLVMLinkage,
 };
 
 use crate::smallvec::{self, smallvec};
@@ -27,12 +26,6 @@ type Pred = llvm::LLVMIntPredicate;
 type FPred = llvm::LLVMRealPredicate;
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
-
-// TODO add checking to ensure that no function gets a number of args greater than u32::max
-#[no_mangle]
-pub extern "C" fn __test_print() {
-    println!("hello! this is rust code called from llvm");
-}
 
 struct Function {
     // TODO consider dropping `name`. Unclear if we need it. LLVM seems to take ownership, so we
@@ -120,7 +113,7 @@ impl TypeMap {
     }
 }
 
-struct Generator<'a, 'b> {
+pub(crate) struct Generator<'a, 'b> {
     types: &'b mut Typer<'a>,
     ctx: LLVMContextRef,
     module: LLVMModuleRef,
@@ -194,7 +187,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         Ok(res)
     }
 
-    pub unsafe fn dump_mod(&mut self) {
+    pub unsafe fn dump_module(&mut self) {
         if let Err(e) = self.gen_main() {
             eprintln!("error generating main: {}", e);
             return;
@@ -1311,83 +1304,4 @@ impl<'a> View<'a> {
         };
         Ok(())
     }
-}
-
-pub unsafe fn test_codegen() {
-    if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
-        panic!("failed to load in-process library");
-    }
-
-    // Shared data-structures
-    let ctx = LLVMContextCreate();
-    let module = raw_guard(
-        LLVMModuleCreateWithNameInContext(c_str!("main"), ctx),
-        LLVMDisposeModule,
-    );
-    let builder = raw_guard(LLVMCreateBuilderInContext(ctx), LLVMDisposeBuilder);
-    // Jit-specific setup
-    LLVM_InitializeNativeTarget();
-    LLVM_InitializeNativeAsmPrinter();
-    LLVMLinkInMCJIT();
-    let mut maybe_engine = MaybeUninit::<LLVMExecutionEngineRef>::uninit();
-    let mut err: *mut c_char = ptr::null_mut();
-    if LLVMCreateExecutionEngineForModule(maybe_engine.as_mut_ptr(), *module, &mut err) != 0 {
-        // NB: In general, want to LLVMDisposeMessage if we weren't just going to crash.
-        panic!(
-            "failed to create program: {}",
-            CStr::from_ptr(err).to_str().unwrap()
-        );
-    }
-    let engine = maybe_engine.assume_init();
-    let pass_manager = raw_guard(
-        LLVMCreateFunctionPassManagerForModule(*module),
-        LLVMDisposePassManager,
-    );
-    // Take some passes present in most of the tutorials
-    {
-        use llvm::transforms::scalar::*;
-        llvm::transforms::util::LLVMAddPromoteMemoryToRegisterPass(*pass_manager);
-        LLVMAddConstantPropagationPass(*pass_manager);
-        LLVMAddInstructionCombiningPass(*pass_manager);
-        LLVMAddReassociatePass(*pass_manager);
-        LLVMAddGVNPass(*pass_manager);
-        LLVMAddCFGSimplificationPass(*pass_manager);
-        LLVMInitializeFunctionPassManager(*pass_manager);
-    }
-
-    // Code generation for __test_print
-    let testprint = {
-        let testprint_type = LLVMFunctionType(LLVMVoidType(), ptr::null_mut(), 0, 0);
-        let tp = LLVMAddFunction(*module, c_str!("__test_print"), testprint_type);
-        LLVMSetLinkage(tp, LLVMLinkage::LLVMExternalLinkage);
-        tp
-    };
-
-    // Code generation for main
-    let i64_type = LLVMInt64TypeInContext(ctx);
-    let func_ty = LLVMFunctionType(i64_type, ptr::null_mut(), 0, /*is_var_arg=*/ 0);
-    let func = LLVMAddFunction(*module, c_str!("main"), func_ty);
-    LLVMSetLinkage(func, LLVMLinkage::LLVMExternalLinkage);
-    let block = LLVMAppendBasicBlockInContext(ctx, func, c_str!(""));
-    LLVMPositionBuilderAtEnd(*builder, block);
-    let _ = LLVMBuildCall(*builder, testprint, ptr::null_mut(), 0, c_str!(""));
-    LLVMBuildRet(*builder, LLVMConstInt(i64_type, 2, /*sign_extend=*/ 1));
-    LLVMRunFunctionPassManager(*pass_manager, func);
-    // LLVMVerifyModule(
-    //     *module,
-    //     LLVMVerifierFailureAction::LLVMAbortProcessAction,
-    //     &mut err,
-    // );
-
-    // Now, get the code and go!
-    let func_addr = LLVMGetFunctionAddress(engine, c_str!("main"));
-    if func_addr == 0 {
-        panic!("main function is just null!");
-    }
-    let jitted_func = mem::transmute::<u64, extern "C" fn() -> i64>(func_addr);
-    println!("running jitted code");
-    LLVMDumpModule(*module);
-    let res = jitted_func();
-    println!("result={}", res);
-    // LLVMBuildCall
 }

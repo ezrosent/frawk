@@ -86,6 +86,33 @@ pub(crate) fn bytecode<'a>(
 ) -> Result<bytecode::Interp<'a>> {
     Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
 }
+
+pub(crate) fn dump_llvm<'a>(ctx: &cfg::ProgramContext<'a, &'a str>) -> Result<()> {
+    use crate::llvm::Generator;
+    let mut typer = Typer::init_from_ctx(ctx)?;
+    unsafe {
+        let mut gen = Generator::init(&mut typer)?;
+        gen.dump_module();
+    }
+    Ok(())
+}
+
+pub(crate) fn run_llvm<'a>(
+    ctx: &cfg::ProgramContext<'a, &'a str>,
+    // default to std::io::stdin()
+    reader: impl std::io::Read + 'static,
+    // default to std::io::BufWriter::new(std::io::stdout())
+    writer: impl std::io::Write + 'static,
+) -> Result<()> {
+    use crate::llvm::Generator;
+    let mut typer = Typer::init_from_ctx(ctx)?;
+    unsafe {
+        let mut gen = Generator::init(&mut typer)?;
+        gen.run_main(reader, writer);
+    }
+    Ok(())
+}
+
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 #[derive(Debug)]
