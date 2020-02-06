@@ -87,6 +87,7 @@ struct TypeMap {
     table: [TypeRef; compile::NUM_TYPES],
     runtime_ty: LLVMTypeRef,
     var_ty: LLVMTypeRef,
+    bool_ty: LLVMTypeRef,
 }
 
 impl TypeMap {
@@ -96,6 +97,7 @@ impl TypeMap {
                 table: [TypeRef::null(); compile::NUM_TYPES],
                 runtime_ty: LLVMPointerType(LLVMVoidTypeInContext(ctx), 0),
                 var_ty: LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint),
+                bool_ty: LLVMIntTypeInContext(ctx, 1 as libc::c_uint),
             }
         }
     }
@@ -346,6 +348,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             intrinsics: &self.intrinsics,
             decls: &self.decls,
         };
+        // TODO: is this traversal order okay?
         for (i, bb) in frame.cfg.raw_nodes().iter().enumerate() {
             LLVMPositionBuilderAtEnd(view.f.builder, bbs[i]);
             for (j, inst) in bb.weight.iter().enumerate() {
@@ -361,11 +364,25 @@ impl<'a, 'b> Generator<'a, 'b> {
                     }
                 }
             }
+            let mut walker = frame.cfg.neighbors(NodeIx::new(i)).detach();
+            let mut tcase = None;
+            let mut ecase = None;
+            while let Some(e) = walker.next_edge(&frame.cfg) {
+                let (_, t) = frame.cfg.edge_endpoints(e).unwrap();
+                let bb = bbs[t.index()];
+                if let Some(e) = frame.cfg.edge_weight(e).unwrap().clone() {
+                    assert!(tcase.is_none());
+                    tcase = Some((e, bb));
+                } else {
+                    assert!(ecase.is_none());
+                    ecase = Some(bb);
+                }
+            }
+            // Not all nodes (e.g. rets) have outgoing edges.
+            if let Some(ecase) = ecase {
+                view.branch(tcase, ecase)?;
+            }
         }
-
-        // TODO: branches.
-        // Go over each node, collect its edges in reverse, issue the branch instrs.
-        // TODO: main.
 
         // We don't do return statements when we find them, because returns are responsible for
         // dropping all local variables, and we aren't guaranteed that our traversal will visit the
@@ -672,6 +689,38 @@ impl<'a> View<'a> {
         )
     }
 
+    unsafe fn cmp(
+        &mut self,
+        pred: Either<Pred, FPred>,
+        l: LLVMValueRef,
+        r: LLVMValueRef,
+    ) -> LLVMValueRef {
+        let res = match pred {
+            Either::Left(ipred) => LLVMBuildICmp(self.f.builder, ipred, l, r, c_str!("")),
+            Either::Right(fpred) => LLVMBuildFCmp(self.f.builder, fpred, l, r, c_str!("")),
+        };
+        // Comparisons return an `i1`; we need to zero-extend it back to an integer.
+        // This means we'll have a good amount of 'zext's followed by 'trunc's, but those should
+        // be both (a) cheap and (b) easy to optimize.
+        let int_ty = self.tmap.get_ty(Ty::Int);
+        LLVMBuildZExt(self.f.builder, res, int_ty, c_str!(""))
+    }
+
+    unsafe fn branch(
+        &mut self,
+        tcase: Option<(u32, LLVMBasicBlockRef)>,
+        fcase: LLVMBasicBlockRef,
+    ) -> Result<()> {
+        if let Some((reg, t_bb)) = tcase {
+            let val = self.get_local((reg, Ty::Int))?;
+            let val_bool = LLVMBuildTrunc(self.f.builder, val, self.tmap.bool_ty, c_str!(""));
+            LLVMBuildCondBr(self.f.builder, val_bool, t_bb, fcase);
+        } else {
+            LLVMBuildBr(self.f.builder, fcase);
+        }
+        Ok(())
+    }
+
     unsafe fn gen_ll_inst<'b>(&mut self, inst: &compile::LL<'b>) -> Result<()> {
         use crate::bytecode::Instr::*;
         match inst {
@@ -786,7 +835,7 @@ impl<'a> View<'a> {
                 let operand = self.get_local(ir.reflect())?;
                 let ty = self.tmap.get_ty(Ty::Int);
                 let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
-                let cmp = LLVMBuildICmp(self.f.builder, Pred::LLVMIntEQ, operand, zero, c_str!(""));
+                let cmp = self.cmp(Either::Left(Pred::LLVMIntEQ), operand, zero);
                 self.bind_reg(res, cmp);
             }
             NotStr(res, sr) => {
@@ -795,7 +844,7 @@ impl<'a> View<'a> {
                 let lenv = LLVMBuildCall(self.f.builder, strlen, &mut sv, 1, c_str!(""));
                 let ty = self.tmap.get_ty(Ty::Int);
                 let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
-                let cmp = LLVMBuildICmp(self.f.builder, Pred::LLVMIntEQ, lenv, zero, c_str!(""));
+                let cmp = self.cmp(Either::Left(Pred::LLVMIntEQ), lenv, zero);
                 self.bind_reg(res, cmp);
             }
             NegInt(res, ir) => {
@@ -831,13 +880,13 @@ impl<'a> View<'a> {
             LTFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildFCmp(self.f.builder, FPred::LLVMRealOLT, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Right(FPred::LLVMRealOLT), lv, rv);
                 self.bind_reg(res, ltv);
             }
             LTInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildICmp(self.f.builder, Pred::LLVMIntSLT, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Left(Pred::LLVMIntSLT), lv, rv);
                 self.bind_reg(res, ltv);
             }
             LTStr(res, l, r) => {
@@ -849,13 +898,13 @@ impl<'a> View<'a> {
             GTFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildFCmp(self.f.builder, FPred::LLVMRealOGT, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Right(FPred::LLVMRealOGT), lv, rv);
                 self.bind_reg(res, ltv);
             }
             GTInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildICmp(self.f.builder, Pred::LLVMIntSGT, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Left(Pred::LLVMIntSGT), lv, rv);
                 self.bind_reg(res, ltv);
             }
             GTStr(res, l, r) => {
@@ -867,13 +916,13 @@ impl<'a> View<'a> {
             LTEFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildFCmp(self.f.builder, FPred::LLVMRealOLE, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Right(FPred::LLVMRealOLE), lv, rv);
                 self.bind_reg(res, ltv);
             }
             LTEInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildICmp(self.f.builder, Pred::LLVMIntSLE, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Left(Pred::LLVMIntSLE), lv, rv);
                 self.bind_reg(res, ltv);
             }
             LTEStr(res, l, r) => {
@@ -885,13 +934,13 @@ impl<'a> View<'a> {
             GTEFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildFCmp(self.f.builder, FPred::LLVMRealOGE, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Right(FPred::LLVMRealOGE), lv, rv);
                 self.bind_reg(res, ltv);
             }
             GTEInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildICmp(self.f.builder, Pred::LLVMIntSGE, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Left(Pred::LLVMIntSGE), lv, rv);
                 self.bind_reg(res, ltv);
             }
             GTEStr(res, l, r) => {
@@ -903,13 +952,13 @@ impl<'a> View<'a> {
             EQFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildFCmp(self.f.builder, FPred::LLVMRealOEQ, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Right(FPred::LLVMRealOEQ), lv, rv);
                 self.bind_reg(res, ltv);
             }
             EQInt(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let ltv = LLVMBuildICmp(self.f.builder, Pred::LLVMIntEQ, lv, rv, c_str!(""));
+                let ltv = self.cmp(Either::Left(Pred::LLVMIntEQ), lv, rv);
                 self.bind_reg(res, ltv);
             }
             EQStr(res, l, r) => {
