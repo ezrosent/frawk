@@ -1317,39 +1317,6 @@ pub unsafe fn test_codegen() {
     if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
         panic!("failed to load in-process library");
     }
-    // TODO:
-    // LLVM boilerplate
-    //   * figure out issues with module verification.
-    // Compilation metadata
-    //  * build set of globals and locals used per function. Build up call-graph during
-    //    construction. Use globals to get fixed point.
-    //  * Use "typed ir" to first declare all relevant functions, storing their declarations in a
-    //    map, then going through each instruction piecemeal.
-    //
-    // Runtime
-    //   * Figure out extern-C-able versions of the runtime.
-    //   * Make sure main uses all functions somehow.
-    //   * Most of these are simple, but some things like "moving a string" could be tougher.
-    //   * They all may require a "pointer to the runtime" passed in to handle the regex maps, etc.
-    //   => We can put the string table in there.
-    //   * Make sure to look up how to convert between ints and strings in LLVM.
-    // Codegen
-    //   * With all the metadata in place, we can do kaleidoscope chapters 5, 7 to implement
-    //     everything we need?
-    //   * Functions get relevant globals as arguments. Ints and Floats do just
-    //     fine, though we still have to figure out that the plan is for Maps.
-    //     Globals and locals are aloca'd in the entry block (of main only, for globals).
-    //     * Computing relevant globals will require some sort of call graph traveral.
-    //   * We need to figure out what to do about Str.
-    //      - We may need a custom Rc that we can store in a pointer (having the ref-count "one
-    //        word back" or some-such; then expose everything using that).
-    //      - We could store all strings as offsets into a vector (a pointer to which we pass to
-    //        every function). Then string indexes could be normal u64s, and all string functions
-    //        could take the pointer as well.
-    //        > It adds an extra layer of indirection
-    //        > _but_ so does moving Rc to the toplevel, and many of the string operations are
-    //          fairly heavy-duty.
-    //        > This may be the best route.
 
     // Shared data-structures
     let ctx = LLVMContextCreate();
