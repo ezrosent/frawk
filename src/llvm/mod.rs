@@ -128,8 +128,8 @@ pub(crate) struct Generator<'a, 'b> {
 impl<'a, 'b> Drop for Generator<'a, 'b> {
     fn drop(&mut self) {
         unsafe {
-            LLVMDisposeModule(self.module);
             LLVMDisposePassManager(self.pass_manager);
+            LLVMDisposeModule(self.module);
         }
     }
 }

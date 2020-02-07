@@ -36,8 +36,8 @@ use lalrpop_util::lalrpop_mod;
 lalrpop_mod!(syntax);
 
 // TODO: put jemalloc behind a feature flag
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+// #[global_allocator]
+// static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 const _PROGRAM: &'static str = r#"
 function fib(n) {
