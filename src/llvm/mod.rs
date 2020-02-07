@@ -134,6 +134,40 @@ impl<'a, 'b> Drop for Generator<'a, 'b> {
     }
 }
 
+unsafe fn alloc_local(
+    builder: LLVMBuilderRef,
+    ty: Ty,
+    tmap: &TypeMap,
+    intrinsics: &HashMap<&'static str, LLVMValueRef>,
+) -> Result<LLVMValueRef> {
+    use Ty::*;
+    let val = match ty {
+        Int => LLVMConstInt(tmap.get_ty(Int), 0, /*sign_extend=*/ 1),
+        Float => LLVMConstReal(tmap.get_ty(Float), 0.0),
+        Str => {
+            let str_ty = tmap.get_ty(Str);
+            let v = LLVMConstInt(str_ty, 0, /*sign_extend=*/ 0);
+            let v_loc = LLVMBuildAlloca(builder, str_ty, c_str!(""));
+            LLVMBuildStore(builder, v, v_loc);
+            v_loc
+        }
+        MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+            let fname = match ty {
+                MapIntInt => "alloc_intint",
+                MapIntFloat => "alloc_intfloat",
+                MapIntStr => "alloc_intstr",
+                MapStrInt => "alloc_strint",
+                MapStrFloat => "alloc_strfloat",
+                MapStrStr => "alloc_strstr",
+                _ => unreachable!(),
+            };
+            LLVMBuildCall(builder, intrinsics[fname], ptr::null_mut(), 0, c_str!(""))
+        }
+        IterInt | IterStr => return err!("we should not be default-allocating any iterators"),
+    };
+    Ok(val)
+}
+
 impl<'a, 'b> Generator<'a, 'b> {
     pub unsafe fn init(types: &'b mut Typer<'a>) -> Result<Generator<'a, 'b>> {
         if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
@@ -312,38 +346,7 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     unsafe fn alloc_local(&self, builder: LLVMBuilderRef, ty: Ty) -> Result<LLVMValueRef> {
-        use Ty::*;
-        let val = match ty {
-            Int => LLVMConstInt(self.llvm_ty(Int), 0, /*sign_extend=*/ 1),
-            Float => LLVMConstReal(self.llvm_ty(Float), 0.0),
-            Str => {
-                let str_ty = self.type_map.get_ty(Str);
-                let v = LLVMConstInt(str_ty, 0, /*sign_extend=*/ 0);
-                let v_loc = LLVMBuildAlloca(builder, str_ty, c_str!(""));
-                LLVMBuildStore(builder, v, v_loc);
-                v_loc
-            }
-            MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
-                let fname = match ty {
-                    MapIntInt => "alloc_intint",
-                    MapIntFloat => "alloc_intfloat",
-                    MapIntStr => "alloc_intstr",
-                    MapStrInt => "alloc_strint",
-                    MapStrFloat => "alloc_strfloat",
-                    MapStrStr => "alloc_strstr",
-                    _ => unreachable!(),
-                };
-                LLVMBuildCall(
-                    builder,
-                    self.intrinsics[fname],
-                    ptr::null_mut(),
-                    0,
-                    c_str!(""),
-                )
-            }
-            IterInt | IterStr => return err!("we should not be default-allocating any iterators"),
-        };
-        Ok(val)
+        alloc_local(builder, ty, &self.type_map, &self.intrinsics)
     }
 
     unsafe fn gen_main(&mut self) -> Result<()> {
@@ -464,10 +467,21 @@ impl<'a, 'b> Generator<'a, 'b> {
         let node_weight = |bb, inst| &frame.cfg.node_weight(NodeIx::new(bb)).unwrap()[inst];
         for (exit_bb, return_inst) in exits.into_iter() {
             LLVMPositionBuilderAtEnd(view.f.builder, bbs[exit_bb]);
-            if let Either::Right(Ret(reg, ty)) = node_weight(exit_bb, return_inst) {
-                view.ret((*reg, *ty))?
+            let var = if let Either::Right(Ret(reg, ty)) = node_weight(exit_bb, return_inst) {
+                (*reg, *ty)
             } else {
                 unreachable!()
+            };
+            if view.has_var(var) {
+                view.ret(var)?
+            } else {
+                // var isn't bound.
+                // This can happen when a return-specific variable is never assigned in a given
+                // function. It probably means this function is "void"; but because you can assign
+                // to the result of a void function we need to allocate something here.
+                let ty = var.1;
+                let val = alloc_local(view.f.builder, ty, &self.type_map, &self.intrinsics)?;
+                view.ret_val(val, ty)?
             }
         }
 
@@ -499,6 +513,9 @@ impl<'a, 'b> Generator<'a, 'b> {
 }
 
 impl<'a> View<'a> {
+    unsafe fn has_var(&self, var: (NumTy, Ty)) -> bool {
+        self.f.locals.get(&var).is_some() || self.decls[self.f.id].globals.get(&var).is_some()
+    }
     unsafe fn get_local(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
         if let Some(v) = self.f.locals.get(&local) {
             Ok(*v)
@@ -513,7 +530,8 @@ impl<'a> View<'a> {
         } else {
             // We'll see if we need to be careful about iteration order here. We may want to do a
             // DFS starting at entry.
-            err!(
+            // TODO s/panic/err/
+            panic!(
                 "unbound variable {:?} (must call bind_val on it before)",
                 local
             )
@@ -1234,11 +1252,14 @@ impl<'a> View<'a> {
     }
 
     unsafe fn ret(&mut self, val: (NumTy, Ty)) -> Result<()> {
-        let to_return = self.get_local(val)?;
+        self.ret_val(self.get_local(val)?, val.1)
+    }
+
+    unsafe fn ret_val(&mut self, to_return: LLVMValueRef, ty: Ty) -> Result<()> {
         let locals = mem::replace(&mut self.f.locals, Default::default());
         for ((reg, ty), llval) in locals.iter() {
             let (reg, ty) = (*reg, *ty);
-            if self.f.skip_drop.contains(&(reg, ty)) || (reg, ty) == val {
+            if self.f.skip_drop.contains(&(reg, ty)) || llval == &to_return {
                 continue;
             }
             self.drop_val(*llval, ty)?;
@@ -1248,7 +1269,6 @@ impl<'a> View<'a> {
         debug_assert_eq!(_old_locals.len(), 0);
         Ok(())
     }
-
     unsafe fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
         use compile::HighLevel::*;
         match inst {
