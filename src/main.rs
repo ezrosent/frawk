@@ -64,7 +64,11 @@ fn main() {
     if false {
         println!("{}", harness::bench_program(_PROGRAM_6, "").unwrap());
     }
-    harness::dump_llvm(_PROGRAM_6).expect("error generating llvm:");
+    harness::dump_llvm(_PROGRAM_2).expect("error generating llvm:");
+    println!(
+        "output={}",
+        harness::run_llvm(_PROGRAM_2, "").expect("error generating llvm:")
+    );
     // To debug bytecode, look at setting PRINT_DEBUG_INFO to true and using code.
     // let a = arena::Arena::default();
     // harness::run_program(

@@ -59,6 +59,23 @@ pub(crate) fn dump_llvm(prog: &str) -> Result<()> {
     compile::dump_llvm(&mut ctx)
 }
 
+pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
+    let a = Arena::default();
+    let stmt = parse_program(prog, &a)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
+    let stdin = stdin.into();
+    let stdout = FakeStdout::default();
+    compile::run_llvm(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?;
+    let v = match Rc::try_unwrap(stdout.0) {
+        Ok(v) => v.into_inner(),
+        Err(rc) => rc.borrow().clone(),
+    };
+    match String::from_utf8(v) {
+        Ok(s) => Ok(s),
+        Err(e) => err!("program produced invalid unicode: {}", e),
+    }
+}
+
 pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;

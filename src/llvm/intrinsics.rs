@@ -57,6 +57,7 @@ struct Intrinsic {
     data: RefCell<Either<LLVMTypeRef, LLVMValueRef>>,
 }
 
+// A map of intrinsics that lazily declares them when they are used in codegen.
 pub(crate) struct IntrinsicMap {
     module: LLVMModuleRef,
     map: HashMap<&'static str, Intrinsic>,
