@@ -463,9 +463,9 @@ impl<'a, 'b> Generator<'a, 'b> {
             }
         }
 
-        // We don't do return statements when we find them, because returns are responsible for
-        // dropping all local variables, and we aren't guaranteed that our traversal will visit the
-        // exit block last.
+        // We don't do return statements when we first find them, because returns are responsible
+        // for dropping all local variables, and we aren't guaranteed that our traversal will visit
+        // the exit block last.
         let node_weight = |bb, inst| &frame.cfg.node_weight(NodeIx::new(bb)).unwrap()[inst];
         for (exit_bb, return_inst) in exits.into_iter() {
             LLVMPositionBuilderAtEnd(view.f.builder, bbs[exit_bb]);
@@ -1302,8 +1302,6 @@ impl<'a> View<'a> {
                 );
                 self.bind_val((*dst_reg, *dst_ty), resv);
             }
-            // Returns are handled elsewhere
-            Ret(reg, ty) => {}
             Phi(reg, ty, _preds) => {
                 self.f.skip_drop.insert((*reg, *ty));
                 let res = LLVMBuildPhi(
@@ -1315,8 +1313,13 @@ impl<'a> View<'a> {
                     },
                     c_str!(""),
                 );
-                self.bind_val((*reg, *ty), res);
+                // NB why not `self.bind_val((*reg, *ty), res);` ?
+                // Phis are always local, so most of the special handling can be skipped. This also
+                // allows us to avoid extra refs and drops for phi nodes containing strings.
+                self.f.locals.insert((*reg, *ty), res);
             }
+            // Returns are handled elsewhere
+            Ret(_reg, _ty) => {}
         };
         Ok(())
     }
