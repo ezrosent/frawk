@@ -16,7 +16,8 @@ use llvm::{
 use crate::smallvec::{self, smallvec};
 use hashbrown::{HashMap, HashSet};
 
-pub mod intrinsics;
+pub(crate) mod intrinsics;
+use intrinsics::IntrinsicMap;
 
 use std::ffi::{CStr, CString};
 use std::mem::{self, MaybeUninit};
@@ -50,7 +51,7 @@ struct View<'a> {
     f: &'a mut Function,
     decls: &'a Vec<FuncInfo>,
     tmap: &'a TypeMap,
-    intrinsics: &'a HashMap<&'static str, LLVMValueRef>,
+    intrinsics: &'a IntrinsicMap,
     // We keep an extra builder always pointed at the start of the function. This is because
     // binding new string values requires an `alloca`; and we do not want to call `alloca` where a
     // string variable is referenced: for example, we do not want to call alloca in a loop.
@@ -126,7 +127,7 @@ pub(crate) struct Generator<'a, 'b> {
     decls: Vec<FuncInfo>,
     funcs: Vec<Function>,
     type_map: TypeMap,
-    intrinsics: HashMap<&'static str, LLVMValueRef>,
+    intrinsics: IntrinsicMap,
 }
 
 impl<'a, 'b> Drop for Generator<'a, 'b> {
@@ -142,7 +143,7 @@ unsafe fn alloc_local(
     builder: LLVMBuilderRef,
     ty: Ty,
     tmap: &TypeMap,
-    intrinsics: &HashMap<&'static str, LLVMValueRef>,
+    intrinsics: &IntrinsicMap,
 ) -> Result<LLVMValueRef> {
     use Ty::*;
     let val = match ty {
@@ -165,7 +166,13 @@ unsafe fn alloc_local(
                 MapStrStr => "alloc_strstr",
                 _ => unreachable!(),
             };
-            LLVMBuildCall(builder, intrinsics[fname], ptr::null_mut(), 0, c_str!(""))
+            LLVMBuildCall(
+                builder,
+                intrinsics.get(fname),
+                ptr::null_mut(),
+                0,
+                c_str!(""),
+            )
         }
         IterInt | IterStr => return err!("we should not be default-allocating any iterators"),
     };
@@ -558,11 +565,11 @@ impl<'a> View<'a> {
         use Ty::*;
         match ty {
             MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
-                let func = self.intrinsics["drop_map"];
+                let func = self.intrinsics.get("drop_map");
                 LLVMBuildCall(self.f.builder, func, &mut val, 1, c_str!(""));
             }
             Str => {
-                let func = self.intrinsics["drop_str"];
+                let func = self.intrinsics.get("drop_str");
                 LLVMBuildCall(self.f.builder, func, &mut val, 1, c_str!(""));
             }
             _ => {}
@@ -571,7 +578,7 @@ impl<'a> View<'a> {
     }
 
     unsafe fn call(&mut self, func: &'static str, args: &mut [LLVMValueRef]) -> LLVMValueRef {
-        let f = self.intrinsics[func];
+        let f = self.intrinsics.get(func);
         LLVMBuildCall(
             self.f.builder,
             f,
@@ -922,7 +929,7 @@ impl<'a> View<'a> {
             }
             NotStr(res, sr) => {
                 let mut sv = self.get_local(sr.reflect())?;
-                let strlen = self.intrinsics["str_len"];
+                let strlen = self.intrinsics.get("str_len");
                 let lenv = LLVMBuildCall(self.f.builder, strlen, &mut sv, 1, c_str!(""));
                 let ty = self.tmap.get_ty(Ty::Int);
                 let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);

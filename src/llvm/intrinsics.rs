@@ -1,16 +1,16 @@
 use super::llvm::{
     self,
-    prelude::{LLVMContextRef, LLVMModuleRef, LLVMValueRef},
+    prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
 };
 use crate::builtins::Variable;
-use crate::compile;
+use crate::common::Either;
 use crate::libc::c_void;
 use crate::runtime::{
-    self, FileRead, FileWrite, Float, Int, IntMap, Iter, LazyVec, RegexCache, Str, StrMap,
-    Variables,
+    self, FileRead, FileWrite, Float, Int, IntMap, LazyVec, RegexCache, Str, StrMap, Variables,
 };
 use hashbrown::HashMap;
 
+use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::mem;
 
@@ -52,10 +52,53 @@ impl<'a> Runtime<'a> {
     }
 }
 
-pub unsafe fn register(
+struct Intrinsic {
+    name: *const libc::c_char,
+    data: RefCell<Either<LLVMTypeRef, LLVMValueRef>>,
+}
+
+pub(crate) struct IntrinsicMap {
     module: LLVMModuleRef,
-    ctx: LLVMContextRef,
-) -> HashMap<&'static str, LLVMValueRef> {
+    map: HashMap<&'static str, Intrinsic>,
+}
+
+impl IntrinsicMap {
+    fn new(module: LLVMModuleRef) -> IntrinsicMap {
+        IntrinsicMap {
+            module,
+            map: Default::default(),
+        }
+    }
+    fn register(&mut self, name: &'static str, cname: *const libc::c_char, ty: LLVMTypeRef) {
+        assert!(self
+            .map
+            .insert(
+                name,
+                Intrinsic {
+                    name: cname,
+                    data: RefCell::new(Either::Left(ty))
+                }
+            )
+            .is_none())
+    }
+
+    pub(crate) unsafe fn get(&self, name: &'static str) -> LLVMValueRef {
+        use llvm::core::*;
+        let intr = &self.map[name];
+        let mut val = intr.data.borrow_mut();
+
+        let ty = match &mut *val {
+            Either::Left(ty) => *ty,
+            Either::Right(v) => return *v,
+        };
+        let func = LLVMAddFunction(self.module, intr.name, ty);
+        LLVMSetLinkage(func, llvm::LLVMLinkage::LLVMExternalLinkage);
+        *val = Either::Right(func);
+        func
+    }
+}
+
+pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
     use llvm::core::*;
     let usize_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint);
     let int_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Int>() * 8) as libc::c_uint);
@@ -64,7 +107,7 @@ pub unsafe fn register(
     let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
     let rt_ty = LLVMPointerType(void_ty, 0);
     let str_ref_ty = LLVMPointerType(str_ty, 0);
-    let mut table: HashMap<&'static str, LLVMValueRef> = Default::default();
+    let mut table = IntrinsicMap::new(module);
     macro_rules! register_inner {
         ($name:ident, [ $($param:expr),* ], $ret:expr) => { {
             // Try and make sure the linker doesn't strip the function out.
@@ -75,11 +118,7 @@ pub unsafe fn register(
             }
             let mut params = [$($param),*];
             let ty = LLVMFunctionType($ret, params.as_mut_ptr(), params.len() as u32, 0);
-            let func = LLVMAddFunction(module, c_str!(stringify!($name)), ty);
-            LLVMSetLinkage(func, llvm::LLVMLinkage::LLVMExternalLinkage);
-            if let Some(_) = table.insert(stringify!($name), func) {
-                panic!("Duplicate registration for intrinsic {}", stringify!($name));
-            }
+            table.register(stringify!($name), c_str!(stringify!($name)), ty);
         }};
     }
     macro_rules! register {
