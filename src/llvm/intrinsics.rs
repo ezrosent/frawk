@@ -55,6 +55,7 @@ impl<'a> Runtime<'a> {
 struct Intrinsic {
     name: *const libc::c_char,
     data: RefCell<Either<LLVMTypeRef, LLVMValueRef>>,
+    _func: *mut c_void,
 }
 
 // A map of intrinsics that lazily declares them when they are used in codegen.
@@ -70,14 +71,21 @@ impl IntrinsicMap {
             map: Default::default(),
         }
     }
-    fn register(&mut self, name: &'static str, cname: *const libc::c_char, ty: LLVMTypeRef) {
+    fn register(
+        &mut self,
+        name: &'static str,
+        cname: *const libc::c_char,
+        ty: LLVMTypeRef,
+        _func: *mut c_void,
+    ) {
         assert!(self
             .map
             .insert(
                 name,
                 Intrinsic {
                     name: cname,
-                    data: RefCell::new(Either::Left(ty))
+                    data: RefCell::new(Either::Left(ty)),
+                    _func,
                 }
             )
             .is_none())
@@ -112,14 +120,9 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     macro_rules! register_inner {
         ($name:ident, [ $($param:expr),* ], $ret:expr) => { {
             // Try and make sure the linker doesn't strip the function out.
-            {
-                let slice = &[$name];
-                let len = slice.len();
-                std::ptr::read_volatile(&len);
-            }
             let mut params = [$($param),*];
             let ty = LLVMFunctionType($ret, params.as_mut_ptr(), params.len() as u32, 0);
-            table.register(stringify!($name), c_str!(stringify!($name)), ty);
+            table.register(stringify!($name), c_str!(stringify!($name)), ty, $name as *mut c_void);
         }};
     }
     macro_rules! register {
@@ -612,50 +615,65 @@ str_compare! {
     str_lt(<); str_gt(>); str_lte(<=); str_gte(>=); str_eq(==);
 }
 
-// And now for the shenanigans for implementing map operations. There are 30 functions here; we use
-// a mixture of traits and macros to implement them.
+// And now for the shenanigans for implementing map operations. There are 36 functions here; we a
+// bunch of macros to handle type-specific operations. Note: we initially had a trait for these
+// specific operations:
+//   pub trait InTy {
+//       type In;
+//       type Out;
+//       fn convert_in(x: &Self::In) -> &Self;
+//       fn convert_out(x: Self) -> Self::Out;
+//   }
+// But that didn't end up working out. We had intrinsic functions with parameter types like
+// <Int as InTy>::In, which had strange consequences like not being able to take the address of a
+// function. We need to take the address of these functions though,  otherwise the linker on some
+// platform will spuriously strip out the symbol.  Instead, we replicate this trait in the form of
+// macros that match on the input type.
 
-pub trait InTy {
-    type In;
-    type Out;
-    fn convert_in(x: &Self::In) -> &Self;
-    fn convert_out(x: Self) -> Self::Out;
+macro_rules! in_ty {
+    (Str) => { *mut c_void };
+    (Int) => { Int };
+    (Float) => { Float };
 }
 
-impl<'a> InTy for Str<'a> {
-    type In = *mut c_void;
-    type Out = u128;
-    fn convert_in(i: &*mut c_void) -> &Str<'a> {
-        unsafe { &*((*i) as *mut Str<'a>) }
-    }
-    fn convert_out(s: Str<'a>) -> u128 {
-        unsafe { mem::transmute::<Str, u128>(s) }
-    }
-}
-impl InTy for Int {
-    type In = Int;
-    type Out = Int;
-    fn convert_in(i: &Int) -> &Int {
-        i
-    }
-    fn convert_out(i: Int) -> Int {
-        i
-    }
+macro_rules! out_ty {
+    (Str) => {
+        u128
+    };
+    (Int) => {
+        Int
+    };
+    (Float) => {
+        Float
+    };
 }
 
-impl InTy for Float {
-    type In = Float;
-    type Out = Float;
-    fn convert_in(f: &Float) -> &Float {
-        f
-    }
-    fn convert_out(f: Float) -> Float {
-        f
-    }
+macro_rules! convert_in {
+    (Str, $e:expr) => {
+        &*((*$e) as *mut Str)
+    };
+    (Int, $e:expr) => {
+        $e
+    };
+    (Float, $e:expr) => {
+        $e
+    };
+}
+
+macro_rules! convert_out {
+    (Str, $e:expr) => {
+        mem::transmute::<Str, u128>($e)
+    };
+    (Int, $e:expr) => {
+        $e
+    };
+    (Float, $e:expr) => {
+        $e
+    };
 }
 
 macro_rules! map_impl_inner {
-    ($alloc:ident, $lookup:ident, $len:ident, $insert:ident, $delete:ident, $contains:ident, $k:ty, $v:ty) => {
+    ($alloc:ident, $lookup:ident, $len:ident, $insert:ident, $delete:ident, $contains:ident, $k:tt, $v:tt) => {
         #[no_mangle]
         pub unsafe extern "C" fn $alloc() -> usize {
             let res: runtime::SharedMap<$k, $v> = Default::default();
@@ -669,33 +687,33 @@ macro_rules! map_impl_inner {
             res as Int
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $lookup(map: usize, k: <$k as InTy>::In) -> <$v as InTy>::Out {
+        pub unsafe extern "C" fn $lookup(map: usize, k: in_ty!($k)) -> out_ty!($v) {
             let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
-            let key = <$k as InTy>::convert_in(&k);
+            let key = convert_in!($k, &k);
             let res = map.get(key).unwrap_or_else(Default::default);
             mem::forget(map);
-            <$v as InTy>::convert_out(res)
+            convert_out!($v, res)
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $contains(map: usize, k: <$k as InTy>::In) -> Int {
+        pub unsafe extern "C" fn $contains(map: usize, k: in_ty!($k)) -> Int {
             let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
-            let key = <$k as InTy>::convert_in(&k);
+            let key = convert_in!($k, &k);
             let res = map.get(key).is_some() as Int;
             mem::forget(map);
             res
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $insert(map: usize, k: <$k as InTy>::In, v: <$v as InTy>::In) {
+        pub unsafe extern "C" fn $insert(map: usize, k: in_ty!($k), v: in_ty!($v)) {
             let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
-            let key = <$k as InTy>::convert_in(&k);
-            let val = <$v as InTy>::convert_in(&v);
+            let key = convert_in!($k, &k);
+            let val = convert_in!($v, &v);
             map.insert(key.clone(), val.clone());
             mem::forget(map);
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $delete(map: usize, k: <$k as InTy>::In) {
+        pub unsafe extern "C" fn $delete(map: usize, k: in_ty!($k)) {
             let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
-            let key = <$k as InTy>::convert_in(&k);
+            let key = convert_in!($k, &k);
             map.delete(key);
             mem::forget(map);
         }
@@ -704,7 +722,7 @@ macro_rules! map_impl_inner {
 
 macro_rules! map_impl {
     ($($alloc:ident, $len:ident, $lookup:ident,
-       $insert:ident, $delete:ident, $contains:ident, < $k:ty, $v:ty >;)*) => {
+       $insert:ident, $delete:ident, $contains:ident, < $k:tt, $v:tt >;)*) => {
         $(
         map_impl_inner!($alloc, $lookup, $len,$insert,$delete,$contains, $k, $v);
         )*
@@ -714,8 +732,8 @@ macro_rules! map_impl {
 map_impl! {
     alloc_intint, len_intint, lookup_intint, insert_intint, delete_intint, contains_intint, <Int, Int>;
     alloc_intfloat, len_intfloat, lookup_intfloat, insert_intfloat, delete_intfloat, contains_intfloat, <Int, Float>;
-    alloc_intstr, len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str<'static>>;
-    alloc_strint, len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str<'static>, Int>;
-    alloc_strfloat, len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str<'static>, Float>;
-    alloc_strstr, len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str<'static>, Str<'static>>;
+    alloc_intstr, len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str>;
+    alloc_strint, len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str, Int>;
+    alloc_strfloat, len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str, Float>;
+    alloc_strstr, len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str, Str>;
 }
