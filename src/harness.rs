@@ -53,8 +53,8 @@ pub(crate) fn run_program<'a>(
 pub(crate) fn dump_llvm(prog: &str) -> Result<()> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
-    let ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
-    compile::dump_llvm(&ctx)
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
+    compile::dump_llvm(&mut ctx)
 }
 
 pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>) -> Result<String> {
@@ -91,11 +91,11 @@ fn compile_program<'a, 'inp, 'outer>(
     prog: Prog<'a>,
     stdin: impl Into<String>,
 ) -> Result<(Interp<'a>, FakeStdout)> {
-    let ctx = cfg::ProgramContext::from_prog(a, prog)?;
+    let mut ctx = cfg::ProgramContext::from_prog(a, prog)?;
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
     Ok((
-        compile::bytecode(&ctx, std::io::Cursor::new(stdin), stdout.clone())?,
+        compile::bytecode(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?,
         stdout,
     ))
 }
@@ -116,7 +116,7 @@ pub(crate) fn run_prog<'a>(
     prog: Prog<'a>,
     stdin: impl Into<String>,
 ) -> ProgResult<'a> {
-    let ctx = cfg::ProgramContext::from_prog(arena, prog)?;
+    let mut ctx = cfg::ProgramContext::from_prog(arena, prog)?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
     // a limited capacity for locals, but it would require a lot more bookkeeping.
     let ident_map = ctx._invert_ident();
@@ -160,7 +160,7 @@ pub(crate) fn run_prog<'a>(
                     .map(|s| (*s, ty.clone()))
             })
             .collect();
-        let mut interp = compile::bytecode(&ctx, std::io::Cursor::new(stdin), stdout.clone())?;
+        let mut interp = compile::bytecode(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?;
         for (i, func) in interp.instrs().iter().enumerate() {
             write!(&mut instrs_buf, "function {} {{\n", i).unwrap();
             for (j, inst) in func.iter().enumerate() {

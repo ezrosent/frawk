@@ -78,7 +78,7 @@ impl Ty {
 pub(crate) const NUM_TYPES: usize = Ty::IterStr as usize + 1;
 
 pub(crate) fn bytecode<'a>(
-    ctx: &cfg::ProgramContext<'a, &'a str>,
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
     // default to std::io::stdin()
     reader: impl std::io::Read + 'static,
     // default to std::io::BufWriter::new(std::io::stdout())
@@ -87,7 +87,7 @@ pub(crate) fn bytecode<'a>(
     Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
 }
 
-pub(crate) fn dump_llvm<'a>(ctx: &cfg::ProgramContext<'a, &'a str>) -> Result<()> {
+pub(crate) fn dump_llvm<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<()> {
     use crate::llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
@@ -98,7 +98,7 @@ pub(crate) fn dump_llvm<'a>(ctx: &cfg::ProgramContext<'a, &'a str>) -> Result<()
 }
 
 pub(crate) fn run_llvm<'a>(
-    ctx: &cfg::ProgramContext<'a, &'a str>,
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
     // default to std::io::stdin()
     reader: impl std::io::Read + 'static,
     // default to std::io::BufWriter::new(std::io::stdout())
@@ -108,9 +108,8 @@ pub(crate) fn run_llvm<'a>(
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
         let mut gen = Generator::init(&mut typer)?;
-        gen.run_main(reader, writer);
+        gen.run_main(reader, writer)
     }
-    Ok(())
 }
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
@@ -184,6 +183,7 @@ pub(crate) struct Typer<'a> {
         NumTy, /* bytecode-level func id */
     >,
     arity: HashMap<NumTy /* cfg-level func id */, NumTy>,
+    local_globals: HashSet<NumTy>,
     // Why not just store FuncInfo's fields in a Frame?
     // We access Frames one at a time (through a View); but we need access to function arity and
     // return types across invidual views. We expose these fields in a separate type immutably to
@@ -222,6 +222,7 @@ struct View<'a, 'b> {
     regs: &'b mut Registers,
     cg: &'b mut CallGraph,
     id_map: &'b HashMap<(NumTy, SmallVec<Ty>), NumTy>,
+    local_globals: &'b HashSet<NumTy>,
     arity: &'b HashMap<NumTy, NumTy>,
     func_info: &'b Vec<FuncInfo>,
     // The current basic block being filled; It'll be swaped into `frame.cfg` as we translate a
@@ -462,11 +463,12 @@ impl<'a> Typer<'a> {
         Ok(res)
     }
 
-    fn init_from_ctx(pc: &ProgramContext<'a, &'a str>) -> Result<Typer<'a>> {
+    fn init_from_ctx(pc: &mut ProgramContext<'a, &'a str>) -> Result<Typer<'a>> {
         // Type-check the code, then initialize a Typer, assigning registers to local
         // and global variables.
 
         let mut gen = Typer::default();
+        let local_globals = pc.local_globals();
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
         macro_rules! init_entry {
             ($v:expr, $func_id:expr, $args:expr) => {
@@ -480,7 +482,6 @@ impl<'a> Typer<'a> {
                 gen.callgraph.add_node(Default::default());
                 gen.func_info.push(FuncInfo {
                     ret_ty,
-                    // Want to allocate registers for args here, $args just contains the types.
                     arg_tys: $args.clone(),
                 });
             };
@@ -496,7 +497,7 @@ impl<'a> Typer<'a> {
             }
         }
         for ((id, func_id, args), ty) in var_tys.iter() {
-            let map = if id.global {
+            let map = if id.is_global(&local_globals) {
                 &mut gen.regs.globals
             } else {
                 if let Entry::Vacant(v) = gen.id_map.entry((*func_id, args.clone())) {
@@ -506,7 +507,7 @@ impl<'a> Typer<'a> {
             };
             let reg = gen.regs.stats.new_reg(
                 *ty,
-                if id.global {
+                if id.is_global(&local_globals) {
                     RegStatus::Global
                 } else {
                     RegStatus::Local
@@ -523,6 +524,7 @@ impl<'a> Typer<'a> {
         }
         let main_offset = gen.id_map[&(pc.main_offset as NumTy, Default::default())];
         gen.main_offset = main_offset as usize;
+        gen.local_globals = local_globals;
         for frame in gen.frames.iter_mut() {
             let src_func = frame.src_function as usize;
             let mut stream = Vec::new();
@@ -532,6 +534,7 @@ impl<'a> Typer<'a> {
                 cg: &mut gen.callgraph,
                 id_map: &gen.id_map,
                 arity: &gen.arity,
+                local_globals: &gen.local_globals,
                 func_info: &gen.func_info,
                 stream: &mut stream,
             }
@@ -552,13 +555,18 @@ impl<'a> Typer<'a> {
             let cg = &mut self.callgraph;
             for bb in frame.cfg.raw_nodes() {
                 for stmt in bb.weight.iter() {
-                    accum(stmt, |reg, ty| match stats.get_status(reg, ty) {
-                        RegStatus::Global => {
-                            cg.node_weight_mut(NodeIx::new(i))
-                                .unwrap()
-                                .insert((reg, ty));
+                    accum(stmt, |reg, ty| {
+                        if reg == UNUSED {
+                            return;
                         }
-                        RegStatus::Ret | RegStatus::Local => {}
+                        match stats.get_status(reg, ty) {
+                            RegStatus::Global => {
+                                cg.node_weight_mut(NodeIx::new(i))
+                                    .unwrap()
+                                    .insert((reg, ty));
+                            }
+                            RegStatus::Ret | RegStatus::Local => {}
+                        }
                     });
                 }
             }
@@ -682,7 +690,7 @@ impl<'a, 'b> View<'a, 'b> {
             return (UNUSED, Ty::Int, RegStatus::Local);
         }
 
-        let ((res_reg, res_ty), status) = if id.global {
+        let ((res_reg, res_ty), status) = if id.is_global(self.local_globals) {
             (self.regs.globals[id], RegStatus::Global)
         } else {
             (self.frame.locals[id], RegStatus::Local)

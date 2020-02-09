@@ -54,6 +54,10 @@ impl Ident {
             global: false,
         }
     }
+
+    pub(crate) fn is_global(&self, local_globals: &HashSet<NumTy>) -> bool {
+        self.global && local_globals.get(&self.low).is_none()
+    }
 }
 
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
@@ -172,6 +176,10 @@ where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
 {
+    pub(crate) fn local_globals(&mut self) -> HashSet<NumTy> {
+        std::mem::replace(&mut self.shared.local_globals, Default::default())
+    }
+
     // for debugging: get a mapping from the raw identifiers to the synthetic ones.
     pub(crate) fn _invert_ident(&self) -> HashMap<Ident, I> {
         self.shared
