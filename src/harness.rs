@@ -25,13 +25,15 @@ impl io::Write for FakeStdout {
         self.0.borrow_mut().flush()
     }
 }
+
+#[cfg(test)]
 impl FakeStdout {
     fn clear(&self) {
         self.0.borrow_mut().truncate(0);
     }
 }
 
-const PRINT_DEBUG_INFO: bool = false;
+const _PRINT_DEBUG_INFO: bool = false;
 
 type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
@@ -169,7 +171,7 @@ pub(crate) fn run_prog<'a>(
             write!(&mut instrs_buf, "}}\n").unwrap();
         }
         let instrs = String::from_utf8(instrs_buf).unwrap();
-        if PRINT_DEBUG_INFO {
+        if _PRINT_DEBUG_INFO {
             eprintln!(
                 "func_tys={:?}\nvar_tys={:?}\n=========\n",
                 func_tys, var_tys

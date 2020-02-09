@@ -64,7 +64,14 @@ fn main() {
     if false {
         println!("{}", harness::bench_program(_PROGRAM_6, "").unwrap());
     }
-    harness::dump_llvm(r#"BEGIN { for (i=0;i<3;i++) { print i; } }"#)
-        .expect("error generating llvm:");
+    harness::dump_llvm(_PROGRAM_6).expect("error generating llvm:");
+    // To debug bytecode, look at setting PRINT_DEBUG_INFO to true and using code.
+    // let a = arena::Arena::default();
+    // harness::run_program(
+    //     &a,
+    //     r#"BEGIN { for (i=0;i<3;i++) { x=i*i; z=i x; print z; } }"#,
+    //     "",
+    // )
+    // .expect("error running program:");
     eprintln!("exiting cleanly");
 }
