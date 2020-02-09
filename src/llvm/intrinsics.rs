@@ -441,7 +441,7 @@ pub unsafe extern "C" fn drop_str(s: *mut c_void) {
 }
 
 unsafe fn ref_map_generic<K, V>(m: usize) {
-    mem::forget(mem::transmute::<usize, runtime::SharedMap<K, V>>(m).clone())
+    mem::forget(mem::transmute::<&usize, &runtime::SharedMap<K, V>>(&m).clone())
 }
 
 unsafe fn drop_map_generic<K, V>(m: usize) {
