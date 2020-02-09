@@ -29,10 +29,6 @@ type FPred = llvm::LLVMRealPredicate;
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 struct Function {
-    // TODO consider dropping `name`. Unclear if we need it. LLVM seems to take ownership, so we
-    // might be able to give the memory back at construction time (or share a single string and
-    // avoid the allocations).
-    name: CString,
     // TODO remove from this struct
     val: LLVMValueRef,
     builder: LLVMBuilderRef,
@@ -180,6 +176,15 @@ unsafe fn alloc_local(
 }
 
 impl<'a, 'b> Generator<'a, 'b> {
+    pub unsafe fn pass_managers(
+        module: LLVMModuleRef,
+    ) -> (
+        /* function */ LLVMPassManagerRef,
+        /* module */ LLVMPassManagerRef,
+    ) {
+        // TODO: refer to optimize_mopdule in jit.rs in weld.
+        unimplemented!()
+    }
     pub unsafe fn init(types: &'b mut Typer<'a>) -> Result<Generator<'a, 'b>> {
         if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
             return err!("failed to load in-process library");
@@ -340,7 +345,6 @@ impl<'a, 'b> Generator<'a, 'b> {
                 num_args: arg_tys.len(),
             });
             self.funcs.push(Function {
-                name,
                 val,
                 builder,
                 locals: Default::default(),
