@@ -384,13 +384,13 @@ impl Network {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct TypeContext<'a, 'b> {
     pub(crate) nw: Network,
     base: HashMap<State, NodeIx>,
     env: HashMap<Args<Ident>, NodeIx>,
     funcs: HashMap<Args<NumTy>, NodeIx>,
     func_table: &'a [Function<'b, &'b str>],
+    local_globals: &'a HashSet<NumTy>,
     udf_nodes: Vec<NodeIx>,
 }
 
@@ -432,12 +432,23 @@ pub(crate) struct TypeInfo {
 }
 
 impl<'b, 'c> TypeContext<'b, 'c> {
-    pub(crate) fn from_prog<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
-        let mut tc = TypeContext::default();
-        tc.func_table = &pc.funcs[..];
+    fn from_pc(pc: &'b ProgramContext<'c, &'c str>) -> TypeContext<'b, 'c> {
+        let mut tc = TypeContext {
+            nw: Default::default(),
+            base: Default::default(),
+            env: Default::default(),
+            funcs: Default::default(),
+            func_table: &pc.funcs[..],
+            local_globals: pc.local_globals_ref(),
+            udf_nodes: Default::default(),
+        };
         tc.udf_nodes = (0..pc.funcs.len())
             .map(|_| tc.nw.add_rule(Rule::AlwaysNotify))
             .collect();
+        tc
+    }
+    pub(crate) fn from_prog<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
+        let mut tc = TypeContext::from_pc(pc);
         let main = &pc.funcs[pc.main_offset];
         let main_base = tc.udf_nodes[pc.main_offset];
         let empty: SmallVec<State> = Default::default();
@@ -684,7 +695,9 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 self.nw.add_dep(v_ix, ret_ix, Constraint::Flows(()));
             }
             // Builtins have fixed types; no constraint generation is necessary.
-            SetBuiltin(_, _) => {}
+            // For IterDrop, we do not add extra constraints because IterBegin and IterNext will be
+            // sufficient to determine the type of a given iterator.
+            IterDrop(_) | SetBuiltin(_, _) => {}
         }
     }
 
@@ -749,11 +762,16 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
         }
     }
 
+    fn is_global(&self, id: &Ident) -> bool {
+        id.is_global(&self.local_globals)
+    }
+
     fn ident_node(&mut self, id: &Ident) -> NodeIx {
+        let is_global = self.is_global(id);
         let key = Args {
             id: *id,
-            func_id: if id.global { None } else { Some(self.frame_id) },
-            args: if id.global {
+            func_id: if is_global { None } else { Some(self.frame_id) },
+            args: if is_global {
                 Default::default()
             } else {
                 self.frame_args.clone()

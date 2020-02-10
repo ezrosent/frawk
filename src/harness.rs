@@ -169,15 +169,7 @@ pub(crate) fn run_prog<'a>(
         // We want the types of all the entries in ts that show up in ident_map.
         let type_map: HashMap<&'a str, compile::Ty> = var_tys
             .iter()
-            .flat_map(|((Ident { low, global, .. }, _, _), ty)| {
-                ident_map
-                    .get(&Ident {
-                        low: *low,
-                        sub: 0,
-                        global: *global,
-                    })
-                    .map(|s| (*s, ty.clone()))
-            })
+            .flat_map(|((ident, _, _), ty)| ident_map.get(&ident._base()).map(|s| (*s, ty.clone())))
             .collect();
         let mut interp = compile::bytecode(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?;
         for (i, func) in interp.instrs().iter().enumerate() {

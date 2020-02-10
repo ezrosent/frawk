@@ -36,7 +36,9 @@ pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
 pub(crate) struct Ident {
     pub(crate) low: NumTy,
     pub(crate) sub: NumTy,
-    pub(crate) global: bool,
+    // Whether or not something is global in other modules depends on whether or not it is a "local
+    // global", i.e. a global that is only referenced from main.
+    global: bool,
 }
 
 impl Ident {
@@ -57,6 +59,15 @@ impl Ident {
 
     pub(crate) fn is_global(&self, local_globals: &HashSet<NumTy>) -> bool {
         self.global && local_globals.get(&self.low).is_none()
+    }
+
+    // used in some test programs to normalize Idents by replacing their subscript with 0
+    pub(crate) fn _base(&self) -> Ident {
+        Ident {
+            low: self.low,
+            sub: 0,
+            global: self.global,
+        }
     }
 }
 
@@ -79,7 +90,6 @@ pub(crate) enum PrimExpr<'a> {
     Index(PrimVal<'a>, PrimVal<'a>),
 
     // For iterating over vectors.
-    // TODO: make these builtins? Unfortunately, IterBegin returns an iterator...
     IterBegin(PrimVal<'a>),
     HasNext(PrimVal<'a>),
     Next(PrimVal<'a>),
@@ -96,6 +106,7 @@ pub(crate) enum PrimStmt<'a> {
     AsgnVar(Ident /* var */, PrimExpr<'a>),
     SetBuiltin(builtins::Variable, PrimExpr<'a>),
     Return(PrimVal<'a>),
+    IterDrop(PrimVal<'a>),
 }
 
 // only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
@@ -149,7 +160,7 @@ impl<'a> PrimStmt<'a> {
             // expressions, because assignments to m[k] are *uses* of m; it doesn't assign to it.
             AsgnVar(_, e) => e.replace(update),
             SetBuiltin(_, e) => e.replace(update),
-            Return(v) => v.replace(update),
+            IterDrop(v) | Return(v) => v.replace(update),
         }
     }
 }
@@ -178,6 +189,9 @@ where
 {
     pub(crate) fn local_globals(&mut self) -> HashSet<NumTy> {
         std::mem::replace(&mut self.shared.local_globals, Default::default())
+    }
+    pub(crate) fn local_globals_ref(&self) -> &HashSet<NumTy> {
+        &self.shared.local_globals
     }
 
     // for debugging: get a mapping from the raw identifiers to the synthetic ones.
@@ -660,6 +674,7 @@ where
                 // Then add a footer to exit the loop from cond. We will add the edge after adding
                 // the edge into the loop body, as order matters.
                 let footer = self.f.cfg.add_node(Default::default());
+                self.add_stmt(footer, PrimStmt::IterDrop(array_iter.clone()))?;
 
                 self.f.loop_ctx.push((cond_block, footer));
 

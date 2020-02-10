@@ -126,6 +126,7 @@ pub(crate) enum HighLevel {
     },
     Ret(NumTy, Ty),
     Phi(NumTy, Ty, SmallVec<(NodeIx /*pred*/, NumTy /*register*/)>),
+    DropIter(NumTy, Ty),
 }
 
 #[derive(Default)]
@@ -303,8 +304,7 @@ fn accum<'a>(inst: &Instr<'a>, mut f: impl FnMut(NumTy, Ty)) {
                 f(reg, ty)
             }
         }
-        Right(Ret(reg, ty)) => f(*reg, *ty),
-        Right(Phi(reg, ty, _preds)) => f(*reg, *ty),
+        Right(Ret(reg, ty)) | Right(Phi(reg, ty, _)) | Right(DropIter(reg, ty)) => f(*reg, *ty),
     }
 }
 
@@ -412,6 +412,8 @@ impl<'a> Typer<'a> {
                         }
                         // handles by the predecessor.
                         Either::Right(Phi(_, _, _)) => {}
+                        // we do not explicitly drop iterators in the bytecode interpreter.
+                        Either::Right(DropIter(_, _)) => {}
                     }
                 }
 
@@ -468,8 +470,8 @@ impl<'a> Typer<'a> {
         // and global variables.
 
         let mut gen = Typer::default();
-        let local_globals = pc.local_globals();
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
+        let local_globals = pc.local_globals();
         macro_rules! init_entry {
             ($v:expr, $func_id:expr, $args:expr) => {
                 let res = gen.frames.len() as NumTy;
@@ -1258,6 +1260,10 @@ impl<'a, 'b> View<'a, 'b> {
                 } else {
                     self.pushr(HighLevel::Ret(v_reg, v_ty));
                 }
+            }
+            PrimStmt::IterDrop(v) => {
+                let (reg, ty) = self.get_reg(v)?;
+                self.pushr(HighLevel::DropIter(reg, ty))
             }
         };
         Ok(())
