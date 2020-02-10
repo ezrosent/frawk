@@ -36,6 +36,7 @@ pub(crate) struct Runtime<'a> {
     write_files: FileWrite,
     read_files: FileRead,
 }
+
 impl<'a> Runtime<'a> {
     pub(crate) fn new(
         stdin: impl std::io::Read + 'static,
@@ -116,6 +117,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
     let rt_ty = LLVMPointerType(void_ty, 0);
     let str_ref_ty = LLVMPointerType(str_ty, 0);
+    let iter_int_ty = LLVMPointerType(int_ty, 0);
+    let iter_str_ty = LLVMPointerType(str_ty, 0);
     let mut table = IntrinsicMap::new(module);
     macro_rules! register_inner {
         ($name:ident, [ $($param:expr),* ], $ret:expr) => { {
@@ -174,6 +177,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         str_eq(str_ref_ty, str_ref_ty) -> int_ty;
 
         alloc_intint() -> usize_ty;
+        iter_intint(usize_ty) -> iter_int_ty;
+        drop_iter_intint(iter_int_ty, usize_ty);
         len_intint(usize_ty) -> int_ty;
         lookup_intint(usize_ty, int_ty) -> int_ty;
         contains_intint(usize_ty, int_ty) -> int_ty;
@@ -181,6 +186,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         delete_intint(usize_ty, int_ty);
 
         alloc_intfloat() -> usize_ty;
+        iter_intfloat(usize_ty) -> iter_int_ty;
+        drop_iter_intfloat(iter_int_ty, usize_ty);
         len_intfloat(usize_ty) -> int_ty;
         lookup_intfloat(usize_ty, int_ty) -> float_ty;
         contains_intfloat(usize_ty, int_ty) -> int_ty;
@@ -188,6 +195,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         delete_intfloat(usize_ty, int_ty);
 
         alloc_intstr() -> usize_ty;
+        iter_intstr(usize_ty) -> iter_int_ty;
+        drop_iter_intstr(iter_int_ty, usize_ty);
         len_intstr(usize_ty) -> int_ty;
         lookup_intstr(usize_ty, int_ty) -> str_ty;
         contains_intstr(usize_ty, int_ty) -> int_ty;
@@ -195,6 +204,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         delete_intstr(usize_ty, int_ty);
 
         alloc_strint() -> usize_ty;
+        iter_strint(usize_ty) -> iter_str_ty;
+        drop_iter_strint(iter_str_ty, usize_ty);
         len_strint(usize_ty) -> int_ty;
         lookup_strint(usize_ty, str_ref_ty) -> int_ty;
         contains_strint(usize_ty, str_ref_ty) -> int_ty;
@@ -202,6 +213,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         delete_strint(usize_ty, str_ref_ty);
 
         alloc_strfloat() -> usize_ty;
+        iter_strfloat(usize_ty) -> iter_str_ty;
+        drop_iter_strfloat(iter_str_ty, usize_ty);
         len_strfloat(usize_ty) -> int_ty;
         lookup_strfloat(usize_ty, str_ref_ty) -> float_ty;
         contains_strfloat(usize_ty, str_ref_ty) -> int_ty;
@@ -209,6 +222,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         delete_strfloat(usize_ty, str_ref_ty);
 
         alloc_strstr() -> usize_ty;
+        iter_strstr(usize_ty) -> iter_str_ty;
+        drop_iter_strstr(iter_str_ty, usize_ty);
         len_strstr(usize_ty) -> int_ty;
         lookup_strstr(usize_ty, str_ref_ty) -> str_ty;
         contains_strstr(usize_ty, str_ref_ty) -> int_ty;
@@ -615,7 +630,7 @@ str_compare! {
     str_lt(<); str_gt(>); str_lte(<=); str_gte(>=); str_eq(==);
 }
 
-// And now for the shenanigans for implementing map operations. There are 36 functions here; we a
+// And now for the shenanigans for implementing map operations. There are 48 functions here; we a
 // bunch of macros to handle type-specific operations. Note: we initially had a trait for these
 // specific operations:
 //   pub trait InTy {
@@ -634,6 +649,11 @@ macro_rules! in_ty {
     (Str) => { *mut c_void };
     (Int) => { Int };
     (Float) => { Float };
+}
+
+macro_rules! iter_ty {
+    (Str) => { *mut c_void };
+    (Int) => { *mut Int };
 }
 
 macro_rules! out_ty {
@@ -673,11 +693,26 @@ macro_rules! convert_out {
 }
 
 macro_rules! map_impl_inner {
-    ($alloc:ident, $lookup:ident, $len:ident, $insert:ident, $delete:ident, $contains:ident, $k:tt, $v:tt) => {
+    ($alloc:ident, $iter:ident, $drop_iter:ident, $lookup:ident, $len:ident,
+     $insert:ident, $delete:ident, $contains:ident, $k:tt, $v:tt) => {
         #[no_mangle]
         pub unsafe extern "C" fn $alloc() -> usize {
             let res: runtime::SharedMap<$k, $v> = Default::default();
             mem::transmute::<runtime::SharedMap<$k, $v>, usize>(res)
+        }
+        #[no_mangle]
+        pub unsafe extern "C" fn $iter(map: usize) -> iter_ty!($k) {
+            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+            let iter: Vec<_> = map.to_vec();
+            mem::forget(map);
+            let b = iter.into_boxed_slice();
+            Box::into_raw(b) as _
+        }
+        #[no_mangle]
+        pub unsafe extern "C" fn $drop_iter(iter: iter_ty!($k), len: usize) {
+            use std::slice;
+            let p = iter as *mut $k;
+            mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
         }
         #[no_mangle]
         pub unsafe extern "C" fn $len(map: usize) -> Int {
@@ -721,19 +756,30 @@ macro_rules! map_impl_inner {
 }
 
 macro_rules! map_impl {
-    ($($alloc:ident, $len:ident, $lookup:ident,
+    ($($drop_iter:ident, $iter:ident, $alloc:ident, $len:ident, $lookup:ident,
        $insert:ident, $delete:ident, $contains:ident, < $k:tt, $v:tt >;)*) => {
         $(
-        map_impl_inner!($alloc, $lookup, $len,$insert,$delete,$contains, $k, $v);
+            map_impl_inner!(
+                $alloc,
+                $iter,
+                $drop_iter,
+                $lookup,
+                $len,
+                $insert,
+                $delete,
+                $contains,
+                $k,
+                $v
+            );
         )*
     }
 }
 
 map_impl! {
-    alloc_intint, len_intint, lookup_intint, insert_intint, delete_intint, contains_intint, <Int, Int>;
-    alloc_intfloat, len_intfloat, lookup_intfloat, insert_intfloat, delete_intfloat, contains_intfloat, <Int, Float>;
-    alloc_intstr, len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str>;
-    alloc_strint, len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str, Int>;
-    alloc_strfloat, len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str, Float>;
-    alloc_strstr, len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str, Str>;
+    drop_iter_intint, iter_intint, alloc_intint, len_intint, lookup_intint, insert_intint, delete_intint, contains_intint, <Int, Int>;
+    drop_iter_intfloat, iter_intfloat, alloc_intfloat, len_intfloat, lookup_intfloat, insert_intfloat, delete_intfloat, contains_intfloat, <Int, Float>;
+    drop_iter_intstr, iter_intstr, alloc_intstr, len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str>;
+    drop_iter_strint, iter_strint, alloc_strint, len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str, Int>;
+    drop_iter_strfloat, iter_strfloat, alloc_strfloat, len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str, Float>;
+    drop_iter_strstr, iter_strstr, alloc_strstr, len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str, Str>;
 }
