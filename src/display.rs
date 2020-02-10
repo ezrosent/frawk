@@ -8,8 +8,8 @@ pub(crate) struct Wrap(pub Ident);
 
 impl Display for Wrap {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let Ident { low, sub, global } = self.0;
-        write!(f, "{}-{}%{}", low, sub, if global { "g" } else { "l" })
+        let Ident { low, sub, .. } = self.0;
+        write!(f, "{}-{}", low, sub)
     }
 }
 
@@ -39,6 +39,7 @@ impl<'a> Display for PrimStmt<'a> {
             AsgnVar(id, pe) => write!(f, "{} = {}", Wrap(*id), pe),
             SetBuiltin(v, pv) => write!(f, "{} = {}", v, pv),
             Return(v) => write!(f, "return {}", v),
+            IterDrop(v) => write!(f, "drop_iter {}", v),
         }
     }
 }

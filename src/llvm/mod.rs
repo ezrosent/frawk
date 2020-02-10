@@ -29,7 +29,7 @@ type FPred = llvm::LLVMRealPredicate;
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 struct Function {
-    // TODO remove from this struct
+    // TODO remove from this struct? It is present in FuncIno?
     val: LLVMValueRef,
     builder: LLVMBuilderRef,
     locals: HashMap<(NumTy, Ty), LLVMValueRef>,
@@ -119,7 +119,6 @@ pub(crate) struct Generator<'a, 'b> {
     ctx: LLVMContextRef,
     module: LLVMModuleRef,
     engine: LLVMExecutionEngineRef,
-    pass_manager: LLVMPassManagerRef,
     decls: Vec<FuncInfo>,
     funcs: Vec<Function>,
     type_map: TypeMap,
@@ -129,7 +128,6 @@ pub(crate) struct Generator<'a, 'b> {
 impl<'a, 'b> Drop for Generator<'a, 'b> {
     fn drop(&mut self) {
         unsafe {
-            LLVMDisposePassManager(self.pass_manager);
             LLVMDisposeModule(self.module);
         }
     }
@@ -176,15 +174,33 @@ unsafe fn alloc_local(
 }
 
 impl<'a, 'b> Generator<'a, 'b> {
-    pub unsafe fn pass_managers(
-        module: LLVMModuleRef,
-    ) -> (
-        /* function */ LLVMPassManagerRef,
-        /* module */ LLVMPassManagerRef,
-    ) {
-        // TODO: refer to optimize_mopdule in jit.rs in weld.
-        unimplemented!()
+    pub unsafe fn optimize(&mut self) {
+        // TODO: allow us to customize the opt level once we have more command-line flags, etc.
+        //
+        // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
+        use llvm::transforms::pass_manager_builder::*;
+        let mpm = LLVMCreatePassManager();
+        let fpm = LLVMCreateFunctionPassManagerForModule(self.module);
+
+        let builder = LLVMPassManagerBuilderCreate();
+        LLVMPassManagerBuilderSetOptLevel(builder, 3);
+        LLVMPassManagerBuilderSetSizeLevel(builder, 0);
+        LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 250);
+
+        LLVMPassManagerBuilderPopulateFunctionPassManager(builder, fpm);
+        LLVMPassManagerBuilderPopulateModulePassManager(builder, mpm);
+        LLVMPassManagerBuilderDispose(builder);
+
+        for f in self.decls.iter() {
+            LLVMRunFunctionPassManager(fpm, f.val);
+        }
+
+        LLVMFinalizeFunctionPassManager(fpm);
+        LLVMRunPassManager(mpm, self.module);
+        LLVMDisposePassManager(fpm);
+        LLVMDisposePassManager(mpm);
     }
+
     pub unsafe fn init(types: &'b mut Typer<'a>) -> Result<Generator<'a, 'b>> {
         if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
             return err!("failed to load in-process library");
@@ -206,24 +222,12 @@ impl<'a, 'b> Generator<'a, 'b> {
             return res;
         }
         let engine = maybe_engine.assume_init();
-        let pass_manager = LLVMCreateFunctionPassManagerForModule(module);
-        {
-            use llvm::transforms::scalar::*;
-            llvm::transforms::util::LLVMAddPromoteMemoryToRegisterPass(pass_manager);
-            LLVMAddConstantPropagationPass(pass_manager);
-            LLVMAddInstructionCombiningPass(pass_manager);
-            LLVMAddReassociatePass(pass_manager);
-            LLVMAddGVNPass(pass_manager);
-            LLVMAddCFGSimplificationPass(pass_manager);
-            LLVMInitializeFunctionPassManager(pass_manager);
-        }
         let nframes = types.frames.len();
         let mut res = Generator {
             types,
             ctx,
             module,
             engine,
-            pass_manager,
             decls: Vec::with_capacity(nframes),
             funcs: Vec::with_capacity(nframes),
             type_map: TypeMap::new(ctx),
@@ -297,6 +301,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             self.type_map.get_ty(ty)
         }
     }
+
     fn llvm_ptr_ty(&self, ty: Ty) -> LLVMTypeRef {
         self.type_map.get_ptr_ty(ty)
     }
@@ -398,8 +403,8 @@ impl<'a, 'b> Generator<'a, 'b> {
             c_str!(""),
         );
         LLVMBuildRetVoid(builder);
-        LLVMRunFunctionPassManager(self.pass_manager, decl);
         LLVMDisposeBuilder(builder);
+        self.optimize();
         Ok(())
     }
 
@@ -449,7 +454,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                         match hl {
                             Ret(_, _) => exits.push((i, j)),
                             Phi(_, _, _) => phis.push((i, j)),
-                            Call { .. } => {}
+                            DropIter(_, _) | Call { .. } => {}
                         }
                     }
                 }
@@ -521,7 +526,6 @@ impl<'a, 'b> Generator<'a, 'b> {
             blocks.clear();
         }
         LLVMBuildBr(entry_builder, bbs[0]);
-        LLVMRunFunctionPassManager(self.pass_manager, view.f.val);
         LLVMDisposeBuilder(entry_builder);
         Ok(())
     }
@@ -1331,6 +1335,7 @@ impl<'a> View<'a> {
             }
             // Returns are handled elsewhere
             Ret(_reg, _ty) => {}
+            DropIter(reg, ty) => unimplemented!(),
         };
         Ok(())
     }
