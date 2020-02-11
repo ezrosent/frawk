@@ -113,8 +113,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     use llvm::core::*;
     let usize_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint);
     let int_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Int>() * 8) as libc::c_uint);
-    let float_ty = LLVMDoubleType();
-    let void_ty = LLVMVoidType();
+    let float_ty = LLVMDoubleTypeInContext(ctx);
+    let void_ty = LLVMVoidTypeInContext(ctx);
     let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
     let rt_ty = LLVMPointerType(void_ty, 0);
     let str_ref_ty = LLVMPointerType(str_ty, 0);

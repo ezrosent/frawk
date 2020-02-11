@@ -182,7 +182,7 @@ unsafe fn alloc_local(
 }
 
 impl<'a, 'b> Generator<'a, 'b> {
-    pub unsafe fn optimize(&mut self) {
+    pub unsafe fn optimize(&mut self, main: LLVMValueRef) {
         // TODO: allow us to customize the opt level once we have more command-line flags, etc.
         //
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
@@ -202,6 +202,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         for f in self.decls.iter() {
             LLVMRunFunctionPassManager(fpm, f.val);
         }
+        LLVMRunFunctionPassManager(fpm, main);
 
         LLVMFinalizeFunctionPassManager(fpm);
         LLVMRunPassManager(mpm, self.module);
@@ -350,7 +351,10 @@ impl<'a, 'b> Generator<'a, 'b> {
             );
             let val = LLVMAddFunction(self.module, name.as_ptr(), ty);
             let builder = LLVMCreateBuilderInContext(self.ctx);
-            LLVMSetLinkage(val, llvm::LLVMLinkage::LLVMExternalLinkage);
+            // We make these private, as we generate a separate main that calls into them. This
+            // way, function bodies that get inlined into main do not have to show up in generated
+            // code.
+            LLVMSetLinkage(val, llvm::LLVMLinkage::LLVMLinkerPrivateLinkage);
             let id = self.funcs.len();
             self.decls.push(FuncInfo {
                 val,
@@ -375,7 +379,7 @@ impl<'a, 'b> Generator<'a, 'b> {
 
     unsafe fn gen_main(&mut self) -> Result<()> {
         let ty = LLVMFunctionType(
-            LLVMVoidType(),
+            LLVMVoidTypeInContext(self.ctx),
             &mut self.type_map.runtime_ty,
             1,
             /*IsVarArg=*/ 0,
@@ -413,8 +417,26 @@ impl<'a, 'b> Generator<'a, 'b> {
         );
         LLVMBuildRetVoid(builder);
         LLVMDisposeBuilder(builder);
-        self.optimize();
+        self.optimize(decl);
+        self.verify()?;
         Ok(())
+    }
+
+    unsafe fn verify(&self) -> Result<()> {
+        let mut error = ptr::null_mut();
+        let code = LLVMVerifyModule(
+            self.module,
+            LLVMVerifierFailureAction::LLVMReturnStatusAction,
+            &mut error,
+        );
+        let res = if code != 0 {
+            let err_str = CStr::from_ptr(error).to_string_lossy().into_owned();
+            err!("Module verification failed: {}", err_str)
+        } else {
+            Ok(())
+        };
+        LLVMDisposeMessage(error);
+        res
     }
 
     unsafe fn gen_function(&mut self, func_id: usize) -> Result<()> {
