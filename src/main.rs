@@ -66,8 +66,9 @@ BEGIN { for (i=0; i<10000000; i++) {SUMS[i "" (i-1)] = SUMS[i "" (i+2)] + 1; SUM
 
 fn main() {
     // TODO add a real main function
+    // XXX: we get a segfault for _PROGRAM_8 on mac.
     let prog = _PROGRAM_8;
-    if true {
+    if false {
         println!("{}", harness::bench_program(prog, "").unwrap());
     } else {
         // harness::dump_llvm(_PROGRAM_8).expect("error generating llvm:");
