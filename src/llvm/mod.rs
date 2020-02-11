@@ -1261,7 +1261,7 @@ impl<'a> View<'a> {
             StoreStrStr(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
             LoadVarStr(dst, var) => {
                 let v = self.var_val(var);
-                let res = self.call("load_var_str", &mut [v]);
+                let res = self.call("load_var_str", &mut [self.runtime_val(), v]);
                 let dreg = dst.reflect();
                 self.bind_val(dreg, res);
                 // The "load_var_" function refs the result for the common case that we are binding
@@ -1277,21 +1277,21 @@ impl<'a> View<'a> {
             StoreVarStr(var, src) => {
                 let v = self.var_val(var);
                 let sv = self.get_local(src.reflect())?;
-                self.call("store_var_str", &mut [v, sv]);
+                self.call("store_var_str", &mut [self.runtime_val(), v, sv]);
             }
             LoadVarInt(dst, var) => {
                 let v = self.var_val(var);
-                let res = self.call("load_var_int", &mut [v]);
+                let res = self.call("load_var_int", &mut [self.runtime_val(), v]);
                 self.bind_reg(dst, res);
             }
             StoreVarInt(var, src) => {
                 let v = self.var_val(var);
                 let sv = self.get_local(src.reflect())?;
-                self.call("store_var_int", &mut [v, sv]);
+                self.call("store_var_int", &mut [self.runtime_val(), v, sv]);
             }
             LoadVarIntMap(dst, var) => {
                 let v = self.var_val(var);
-                let res = self.call("load_var_intmap", &mut [v]);
+                let res = self.call("load_var_intmap", &mut [self.runtime_val(), v]);
                 // See the comment in the LoadVarStr case.
                 let dreg = dst.reflect();
                 self.bind_val(dreg, res);
@@ -1302,7 +1302,7 @@ impl<'a> View<'a> {
             StoreVarIntMap(var, src) => {
                 let v = self.var_val(var);
                 let sv = self.get_local(src.reflect())?;
-                self.call("store_var_intmap", &mut [v, sv]);
+                self.call("store_var_intmap", &mut [self.runtime_val(), v, sv]);
             }
             MovInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
