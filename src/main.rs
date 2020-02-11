@@ -53,24 +53,29 @@ END { for (i=0; i<100000000; i++) {SUM += i;}; print SUM }"#;
 const _PROGRAM_3: &'static str = r#"
 END { for (i=0; i<100000000; i++) {SUMS[i]++; SUM += i;}; print SUM }"#;
 const _PROGRAM_4: &'static str = r#"
-END { for (i=0; i<1000000; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
+BEGIN { for (i=0; i<10000000; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
 const _PROGRAM_5: &'static str = r#"
 END { for (i=0; i<100; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
 const _PROGRAM_6: &'static str = r#"
 END { for (i=0; i<100000; i++) {CD = CD i;}; print CD }"#;
 const _PROGRAM_7: &'static str = r#"
 END { m[0] = 1; m[1] = 2; for (i in m) { print i, m[i]; } }"#;
+// ???
+const _PROGRAM_8: &'static str = r#"
+BEGIN { for (i=0; i<10000000; i++) {SUMS[i "" (i-1)] = SUMS[i "" (i+2)] + 1; SUM += i;}; print SUM }"#;
 
 fn main() {
     // TODO add a real main function
-    if false {
-        println!("{}", harness::bench_program(_PROGRAM_6, "").unwrap());
+    let prog = _PROGRAM_8;
+    if true {
+        println!("{}", harness::bench_program(prog, "").unwrap());
+    } else {
+        // harness::dump_llvm(_PROGRAM_8).expect("error generating llvm:");
+        println!(
+            "output=[{}]",
+            harness::run_llvm(prog, "").expect("error generating llvm:")
+        );
     }
-    harness::dump_llvm(_PROGRAM_7).expect("error generating llvm:");
-    println!(
-        "output=[{}]",
-        harness::run_llvm(_PROGRAM_7, "").expect("error generating llvm:")
-    );
     // To debug bytecode, look at setting PRINT_DEBUG_INFO to true and using code.
     // let a = arena::Arena::default();
     // harness::run_program(
