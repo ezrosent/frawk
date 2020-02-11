@@ -33,6 +33,7 @@ struct Function {
     val: LLVMValueRef,
     builder: LLVMBuilderRef,
     locals: HashMap<(NumTy, Ty), LLVMValueRef>,
+    iters: HashMap<(NumTy, Ty), (/* ptr */ LLVMValueRef, /* len */ LLVMValueRef)>,
     skip_drop: HashSet<(NumTy, Ty)>,
     id: usize,
 }
@@ -352,6 +353,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             self.funcs.push(Function {
                 val,
                 builder,
+                iters: Default::default(),
                 locals: Default::default(),
                 skip_drop: Default::default(),
                 id,

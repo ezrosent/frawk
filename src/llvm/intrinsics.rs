@@ -235,11 +235,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 
 // TODO: Iterators
 // TODO: IO Errors.
-//  - we need to exit cleanly. Add a "checkIOerror" builtin to main? set a variable in the runtime
-//    and exit cleanly?
-//  - get this working along with iterators after everything else is working.
-//  - in gawk: redirecting to an output file that fails creates an error; but presumably we want to
-//    handle stdout being closed gracefully.
+// - better: just drop_in_place the runtime before exiting successfully.
 
 #[no_mangle]
 pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> Int {
