@@ -13,6 +13,7 @@ use hashbrown::HashMap;
 use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::mem;
+use std::slice;
 
 macro_rules! fail {
     ($($es:expr),+) => {{
@@ -176,9 +177,11 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         str_gte(str_ref_ty, str_ref_ty) -> int_ty;
         str_eq(str_ref_ty, str_ref_ty) -> int_ty;
 
+        drop_iter_int(iter_int_ty, usize_ty);
+        drop_iter_str(iter_int_ty, usize_ty);
+
         alloc_intint() -> usize_ty;
         iter_intint(usize_ty) -> iter_int_ty;
-        drop_iter_intint(iter_int_ty, usize_ty);
         len_intint(usize_ty) -> int_ty;
         lookup_intint(usize_ty, int_ty) -> int_ty;
         contains_intint(usize_ty, int_ty) -> int_ty;
@@ -187,7 +190,6 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 
         alloc_intfloat() -> usize_ty;
         iter_intfloat(usize_ty) -> iter_int_ty;
-        drop_iter_intfloat(iter_int_ty, usize_ty);
         len_intfloat(usize_ty) -> int_ty;
         lookup_intfloat(usize_ty, int_ty) -> float_ty;
         contains_intfloat(usize_ty, int_ty) -> int_ty;
@@ -196,7 +198,6 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 
         alloc_intstr() -> usize_ty;
         iter_intstr(usize_ty) -> iter_int_ty;
-        drop_iter_intstr(iter_int_ty, usize_ty);
         len_intstr(usize_ty) -> int_ty;
         lookup_intstr(usize_ty, int_ty) -> str_ty;
         contains_intstr(usize_ty, int_ty) -> int_ty;
@@ -205,7 +206,6 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 
         alloc_strint() -> usize_ty;
         iter_strint(usize_ty) -> iter_str_ty;
-        drop_iter_strint(iter_str_ty, usize_ty);
         len_strint(usize_ty) -> int_ty;
         lookup_strint(usize_ty, str_ref_ty) -> int_ty;
         contains_strint(usize_ty, str_ref_ty) -> int_ty;
@@ -214,7 +214,6 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 
         alloc_strfloat() -> usize_ty;
         iter_strfloat(usize_ty) -> iter_str_ty;
-        drop_iter_strfloat(iter_str_ty, usize_ty);
         len_strfloat(usize_ty) -> int_ty;
         lookup_strfloat(usize_ty, str_ref_ty) -> float_ty;
         contains_strfloat(usize_ty, str_ref_ty) -> int_ty;
@@ -223,7 +222,6 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 
         alloc_strstr() -> usize_ty;
         iter_strstr(usize_ty) -> iter_str_ty;
-        drop_iter_strstr(iter_str_ty, usize_ty);
         len_strstr(usize_ty) -> int_ty;
         lookup_strstr(usize_ty, str_ref_ty) -> str_ty;
         contains_strstr(usize_ty, str_ref_ty) -> int_ty;
@@ -687,9 +685,19 @@ macro_rules! convert_out {
         $e
     };
 }
+#[no_mangle]
+pub unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
+    mem::drop(Box::from_raw(slice::from_raw_parts_mut(iter, len)))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn drop_iter_str(iter: *mut u128, len: usize) {
+    let p = iter as *mut Str;
+    mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
+}
 
 macro_rules! map_impl_inner {
-    ($alloc:ident, $iter:ident, $drop_iter:ident, $lookup:ident, $len:ident,
+    ($alloc:ident, $iter:ident, $lookup:ident, $len:ident,
      $insert:ident, $delete:ident, $contains:ident, $k:tt, $v:tt) => {
         #[no_mangle]
         pub unsafe extern "C" fn $alloc() -> usize {
@@ -703,12 +711,6 @@ macro_rules! map_impl_inner {
             mem::forget(map);
             let b = iter.into_boxed_slice();
             Box::into_raw(b) as _
-        }
-        #[no_mangle]
-        pub unsafe extern "C" fn $drop_iter(iter: iter_ty!($k), len: usize) {
-            use std::slice;
-            let p = iter as *mut $k;
-            mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
         }
         #[no_mangle]
         pub unsafe extern "C" fn $len(map: usize) -> Int {
@@ -752,13 +754,12 @@ macro_rules! map_impl_inner {
 }
 
 macro_rules! map_impl {
-    ($($drop_iter:ident, $iter:ident, $alloc:ident, $len:ident, $lookup:ident,
+    ($($iter:ident, $alloc:ident, $len:ident, $lookup:ident,
        $insert:ident, $delete:ident, $contains:ident, < $k:tt, $v:tt >;)*) => {
         $(
             map_impl_inner!(
                 $alloc,
                 $iter,
-                $drop_iter,
                 $lookup,
                 $len,
                 $insert,
@@ -772,10 +773,10 @@ macro_rules! map_impl {
 }
 
 map_impl! {
-    drop_iter_intint, iter_intint, alloc_intint, len_intint, lookup_intint, insert_intint, delete_intint, contains_intint, <Int, Int>;
-    drop_iter_intfloat, iter_intfloat, alloc_intfloat, len_intfloat, lookup_intfloat, insert_intfloat, delete_intfloat, contains_intfloat, <Int, Float>;
-    drop_iter_intstr, iter_intstr, alloc_intstr, len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str>;
-    drop_iter_strint, iter_strint, alloc_strint, len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str, Int>;
-    drop_iter_strfloat, iter_strfloat, alloc_strfloat, len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str, Float>;
-    drop_iter_strstr, iter_strstr, alloc_strstr, len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str, Str>;
+    iter_intint, alloc_intint, len_intint, lookup_intint, insert_intint, delete_intint, contains_intint, <Int, Int>;
+     iter_intfloat, alloc_intfloat, len_intfloat, lookup_intfloat, insert_intfloat, delete_intfloat, contains_intfloat, <Int, Float>;
+    iter_intstr, alloc_intstr, len_intstr, lookup_intstr, insert_intstr, delete_intstr, contains_intstr, <Int, Str>;
+    iter_strint, alloc_strint, len_strint, lookup_strint, insert_strint, delete_strint, contains_strint, <Str, Int>;
+     iter_strfloat, alloc_strfloat, len_strfloat, lookup_strfloat, insert_strfloat, delete_strfloat, contains_strfloat, <Str, Float>;
+    iter_strstr, alloc_strstr, len_strstr, lookup_strstr, insert_strstr, delete_strstr, contains_strstr, <Str, Str>;
 }
