@@ -28,12 +28,19 @@ type FPred = llvm::LLVMRealPredicate;
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
+#[derive(Clone)]
+struct IterState {
+    iter_ptr: LLVMValueRef,  /* ptr to elt type */
+    cur_index: LLVMValueRef, /* ptr to integer */
+    len: LLVMValueRef,       /* integer */
+}
+
 struct Function {
     // TODO remove from this struct? It is present in FuncIno?
     val: LLVMValueRef,
     builder: LLVMBuilderRef,
     locals: HashMap<(NumTy, Ty), LLVMValueRef>,
-    iters: HashMap<(NumTy, Ty), (/* ptr */ LLVMValueRef, /* len */ LLVMValueRef)>,
+    iters: HashMap<(NumTy, Ty), IterState>,
     skip_drop: HashSet<(NumTy, Ty)>,
     id: usize,
 }
@@ -605,12 +612,88 @@ impl<'a> View<'a> {
         self.bind_val(r.reflect(), to);
     }
 
-    unsafe fn alloca_str(&mut self) -> LLVMValueRef {
-        let str_ty = self.tmap.get_ty(Ty::Str);
-        let res = LLVMBuildAlloca(self.entry_builder, str_ty, c_str!(""));
-        let v = LLVMConstInt(str_ty, 0, /*sign_extend=*/ 0);
+    unsafe fn alloca(&mut self, ty: Ty) -> LLVMValueRef {
+        let ty = self.tmap.get_ty(ty);
+        let res = LLVMBuildAlloca(self.entry_builder, ty, c_str!(""));
+        let v = LLVMConstInt(ty, 0, /*sign_extend=*/ 0);
         LLVMBuildStore(self.entry_builder, v, res);
         res
+    }
+
+    unsafe fn iter_begin(&mut self, dst: (NumTy, Ty), arr: (NumTy, Ty)) -> Result<()> {
+        use Ty::*;
+        let arrv = self.get_local(arr)?;
+        let (len_fn, begin_fn) = match arr.1 {
+            MapIntInt => ("len_intint", "iter_intint"),
+            MapIntStr => ("len_intstr", "iter_intstr"),
+            MapIntFloat => ("len_intfloat", "iter_intfloat"),
+            MapStrInt => ("len_strint", "iter_strint"),
+            MapStrStr => ("len_strstr", "iter_strstr"),
+            MapStrFloat => ("len_strfloat", "iter_strfloat"),
+            _ => return err!("iterating over non-map type: {:?}", arr.1),
+        };
+
+        let iter_ptr = self.call(begin_fn, &mut [arrv]);
+        let cur_index = self.alloca(Ty::Int);
+        let len = self.call(len_fn, &mut [arrv]);
+        let _old = self.f.iters.insert(
+            dst,
+            IterState {
+                iter_ptr,
+                cur_index,
+                len,
+            },
+        );
+        debug_assert!(_old.is_none());
+        Ok(())
+    }
+
+    fn get_iter(&self, iter: (NumTy, Ty)) -> Result<&IterState> {
+        if let Some(istate) = self.f.iters.get(&iter) {
+            Ok(istate)
+        } else {
+            err!("unbound iterator: {:?}", iter)
+        }
+    }
+
+    unsafe fn iter_hasnext(&mut self, iter: (NumTy, Ty), dst: (NumTy, Ty)) -> Result<()> {
+        let istate = self.get_iter(iter)?;
+        let cur = LLVMBuildLoad(self.f.builder, istate.cur_index, c_str!(""));
+        let len = istate.len;
+        let hasnext = self.cmp(Either::Left(Pred::LLVMIntULT), cur, len);
+        self.bind_val(dst, hasnext);
+        Ok(())
+    }
+
+    unsafe fn iter_getnext(&mut self, iter: (NumTy, Ty), dst: (NumTy, Ty)) -> Result<()> {
+        let (res, res_loc) = {
+            let istate = self.get_iter(iter)?;
+            let cur = LLVMBuildLoad(self.f.builder, istate.cur_index, c_str!(""));
+            let indices = &mut [cur];
+            let res_loc = LLVMBuildGEP(
+                self.f.builder,
+                istate.iter_ptr,
+                indices.as_mut_ptr(),
+                indices.len() as libc::c_uint,
+                c_str!(""),
+            );
+            let res = LLVMBuildLoad(self.f.builder, res_loc, c_str!(""));
+
+            let next_ix = LLVMBuildAdd(
+                self.f.builder,
+                cur,
+                LLVMConstInt(self.tmap.get_ty(Ty::Int), 1, /*sign_extend=*/ 1),
+                c_str!(""),
+            );
+            LLVMBuildStore(self.f.builder, next_ix, istate.cur_index);
+            (res, res_loc)
+        };
+        if let Ty::Str = dst.1 {
+            self.call("ref_str", &mut [res_loc]);
+        }
+        self.bind_val(dst, res);
+
+        Ok(())
     }
 
     // TODO move intrinsics and tmap into some kind of view datastructure; too much param passing.
@@ -661,7 +744,7 @@ impl<'a> View<'a> {
                 self.call("ref_map", &mut [to]);
             }
             Str => {
-                let loc = self.alloca_str();
+                let loc = self.alloca(Ty::Str);
                 self.call("drop_str", &mut [loc]);
                 LLVMBuildStore(self.f.builder, to, loc);
                 self.f.locals.insert(val, loc);
@@ -1235,16 +1318,16 @@ impl<'a> View<'a> {
             MovMapStrInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovMapStrFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovMapStrStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            IterBeginIntInt(dst, arr) => unimplemented!(),
-            IterBeginIntFloat(dst, arr) => unimplemented!(),
-            IterBeginIntStr(dst, arr) => unimplemented!(),
-            IterBeginStrInt(dst, arr) => unimplemented!(),
-            IterBeginStrFloat(dst, arr) => unimplemented!(),
-            IterBeginStrStr(dst, arr) => unimplemented!(),
-            IterHasNextInt(dst, iter) => unimplemented!(),
-            IterHasNextStr(dst, iter) => unimplemented!(),
-            IterGetNextInt(dst, iter) => unimplemented!(),
-            IterGetNextStr(dst, iter) => unimplemented!(),
+            IterBeginIntInt(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
+            IterBeginIntFloat(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
+            IterBeginIntStr(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
+            IterBeginStrInt(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
+            IterBeginStrFloat(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
+            IterBeginStrStr(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
+            IterHasNextInt(dst, iter) => self.iter_hasnext(iter.reflect(), dst.reflect())?,
+            IterHasNextStr(dst, iter) => self.iter_hasnext(iter.reflect(), dst.reflect())?,
+            IterGetNextInt(dst, iter) => self.iter_getnext(iter.reflect(), dst.reflect())?,
+            IterGetNextStr(dst, iter) => self.iter_getnext(iter.reflect(), dst.reflect())?,
 
             PushInt(_) | PushFloat(_) | PushStr(_) | PushIntInt(_) | PushIntFloat(_)
             | PushIntStr(_) | PushStrInt(_) | PushStrFloat(_) | PushStrStr(_) | PopInt(_)
@@ -1337,7 +1420,15 @@ impl<'a> View<'a> {
             }
             // Returns are handled elsewhere
             Ret(_reg, _ty) => {}
-            DropIter(reg, ty) => unimplemented!(),
+            DropIter(reg, ty) => {
+                let drop_fn = match ty {
+                    Ty::IterInt => "drop_iter_int",
+                    Ty::IterStr => "drop_iter_str",
+                    _ => return err!("can only drop iterators, got {:?}", ty),
+                };
+                let IterState { iter_ptr, len, .. } = self.get_iter((*reg, *ty))?.clone();
+                self.call(drop_fn, &mut [iter_ptr, len]);
+            }
         };
         Ok(())
     }
