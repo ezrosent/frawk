@@ -58,16 +58,18 @@ const _PROGRAM_5: &'static str = r#"
 END { for (i=0; i<100; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
 const _PROGRAM_6: &'static str = r#"
 END { for (i=0; i<100000; i++) {CD = CD i;}; print CD }"#;
+const _PROGRAM_7: &'static str = r#"
+END { m[0] = 1; m[1] = 2; for (i in m) { print i, m[i]; } }"#;
 
 fn main() {
     // TODO add a real main function
     if false {
         println!("{}", harness::bench_program(_PROGRAM_6, "").unwrap());
     }
-    harness::dump_llvm(_PROGRAM_2).expect("error generating llvm:");
+    harness::dump_llvm(_PROGRAM_7).expect("error generating llvm:");
     println!(
-        "output={}",
-        harness::run_llvm(_PROGRAM_2, "").expect("error generating llvm:")
+        "output=[{}]",
+        harness::run_llvm(_PROGRAM_7, "").expect("error generating llvm:")
     );
     // To debug bytecode, look at setting PRINT_DEBUG_INFO to true and using code.
     // let a = arena::Arena::default();
