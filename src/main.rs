@@ -60,9 +60,10 @@ const _PROGRAM_6: &'static str = r#"
 END { for (i=0; i<100000; i++) {CD = CD i;}; print CD }"#;
 const _PROGRAM_7: &'static str = r#"
 END { m[0] = 1; m[1] = 2; for (i in m) { print i, m[i]; } }"#;
-// ???
 const _PROGRAM_8: &'static str = r#"
 BEGIN { for (i=0; i<10000000; i++) {SUMS[i "" (i-1)] = SUMS[i "" (i+2)] + 1; SUM += i;}; print SUM }"#;
+const _PROGRAM_9: &'static str = r#"
+{ N = $1 + 0 } END { for (i=0; i<N; i++) {SUM += i;}; print SUM }"#;
 
 fn main() {
     // TODO add a real main function
@@ -71,10 +72,13 @@ fn main() {
     if false {
         println!("{}", harness::bench_program(prog, "").unwrap());
     } else {
-        // harness::dump_llvm(_PROGRAM_8).expect("error generating llvm:");
+        if let Err(e) = harness::dump_llvm(prog) {
+            println!("{}", e);
+            return;
+        }
         println!(
             "output=[{}]",
-            harness::run_llvm(prog, "").expect("error generating llvm:")
+            harness::run_llvm(prog, "100000000").expect("error generating llvm:")
         );
     }
     // To debug bytecode, look at setting PRINT_DEBUG_INFO to true and using code.
