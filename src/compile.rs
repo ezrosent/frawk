@@ -87,14 +87,13 @@ pub(crate) fn bytecode<'a>(
     Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
 }
 
-pub(crate) fn dump_llvm<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<()> {
+pub(crate) fn dump_llvm<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<String> {
     use crate::llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
         let mut gen = Generator::init(&mut typer)?;
-        gen.dump_module();
+        gen.dump_module()
     }
-    Ok(())
 }
 
 pub(crate) fn run_llvm<'a>(
@@ -603,8 +602,8 @@ impl<'a> Typer<'a> {
                 let (cur_globals, callee_globals) =
                     self.callgraph.index_twice_mut(frame_ix, callee);
                 let mut added = false;
-                for g in callee_globals.iter().cloned() {
-                    added = cur_globals.insert(g) || added;
+                for g in cur_globals.iter().cloned() {
+                    added = callee_globals.insert(g) || added;
                 }
                 if added {
                     wl.insert(callee.index());
@@ -612,9 +611,8 @@ impl<'a> Typer<'a> {
             }
         }
         for (i, set) in globals.iter_mut().enumerate() {
-            mem::swap(set, self.callgraph.node_weight_mut(NodeIx::new(i)).unwrap())
+            mem::swap(set, self.callgraph.node_weight_mut(NodeIx::new(i)).unwrap());
         }
-
         globals
     }
 }

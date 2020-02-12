@@ -5,7 +5,7 @@ use crate::{
     arena::Arena,
     ast,
     bytecode::Interp,
-    cfg::{self, Ident},
+    cfg,
     common::Result,
     compile, lexer, syntax,
     types::{self, get_types},
@@ -52,7 +52,7 @@ pub(crate) fn run_program<'a>(
     run_prog(a, stmt, stdin)
 }
 
-pub(crate) fn dump_llvm(prog: &str) -> Result<()> {
+pub(crate) fn dump_llvm(prog: &str) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
@@ -60,6 +60,9 @@ pub(crate) fn dump_llvm(prog: &str) -> Result<()> {
 }
 
 pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
+    if _PRINT_DEBUG_INFO {
+        eprintln!("llvm_module={}\n", dump_llvm(prog).unwrap());
+    }
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
@@ -216,28 +219,40 @@ mod tests {
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr,
          @types [ $($i:ident :: $ty:expr),* ]) => {
-            #[test]
-            fn $desc() {
-                let a = Arena::default();
-                let out = run_program(&a, $e, $inp);
-                match out {
-                    Ok((out, instrs, ts)) => {
-                        let expected = $out;
-                        assert_eq!(out, expected, "{}\nTypes:\n{:?}", instrs, ts);
-                        {
-                            #[allow(unused)]
-                            use crate::compile::Ty::*;
-                            $(
-                                assert_eq!(
-                                    ts.get(stringify!($i)).cloned(),
-                                    Some($ty),
-                                    "Expected identifier {} to have type {:?}. Types: {:?}\n{}\n",
-                                    stringify!($i), $ty, ts, instrs,
-                                );
-                            )*
+            mod $desc {
+                use super::*;
+                #[test]
+                fn bytecode() {
+                    let a = Arena::default();
+                    let out = run_program(&a, $e, $inp);
+                    match out {
+                        Ok((out, instrs, ts)) => {
+                            let expected = $out;
+                            assert_eq!(out, expected, "{}\nTypes:\n{:?}", instrs, ts);
+                            {
+                                #[allow(unused)]
+                                use crate::compile::Ty::*;
+                                $(
+                                    assert_eq!(
+                                      ts.get(stringify!($i)).cloned(),
+                                      Some($ty),
+                                      "Expected identifier {} to have type {:?}. Types: {:?}\n{}\n",
+                                      stringify!($i), $ty, ts, instrs,
+                                    );
+                                 )*
+                            }
                         }
+                        Err(e) => panic!("failed to run program: {}", e),
                     }
-                    Err(e) => panic!("failed to run program: {}", e),
+                }
+                #[test]
+                fn llvm() {
+                    match run_llvm($e, $inp) {
+                        Ok(out) => assert_eq!(
+                            out, $out,
+                            "llvm=\n{}", dump_llvm($e).expect("failed to dump llvm")),
+                        Err(e) => panic!("{}", e),
+                    }
                 }
             }
         };

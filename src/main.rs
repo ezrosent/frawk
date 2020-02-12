@@ -72,10 +72,10 @@ fn main() {
     if false {
         println!("{}", harness::bench_program(prog, "").unwrap());
     } else {
-        if let Err(e) = harness::dump_llvm(prog) {
-            println!("{}", e);
-            return;
-        }
+        match harness::dump_llvm(prog) {
+            Ok(m) => println!("{}", m),
+            Err(e) => println!("{}", e),
+        };
         println!(
             "output=[{}]",
             harness::run_llvm(prog, "100000000").expect("error generating llvm:")

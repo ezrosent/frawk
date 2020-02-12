@@ -250,12 +250,14 @@ impl<'a, 'b> Generator<'a, 'b> {
         Ok(res)
     }
 
-    pub unsafe fn dump_module(&mut self) {
+    pub unsafe fn dump_module(&mut self) -> Result<String> {
         if let Err(e) = self.gen_main() {
-            eprintln!("error generating main: {}", e);
-            return;
+            return err!("error generating main: {}", e);
         }
-        LLVMDumpModule(self.module);
+        let c_str = LLVMPrintModuleToString(self.module);
+        let res = CStr::from_ptr(c_str).to_string_lossy().into_owned();
+        libc::free(c_str as *mut _);
+        Ok(res)
     }
 
     pub unsafe fn run_main(
