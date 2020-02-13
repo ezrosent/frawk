@@ -953,7 +953,14 @@ impl<'a> View<'a> {
     ) -> Result<()> {
         if let Some((reg, t_bb)) = tcase {
             let val = self.get_local((reg, Ty::Int))?;
-            let val_bool = LLVMBuildTrunc(self.f.builder, val, self.tmap.bool_ty, c_str!(""));
+            let int_ty = self.tmap.get_ty(Ty::Int);
+            let val_bool = LLVMBuildICmp(
+                self.f.builder,
+                Pred::LLVMIntNE,
+                val,
+                LLVMConstInt(int_ty, 1, /*sign_extend=*/ 1),
+                c_str!(""),
+            );
             LLVMBuildCondBr(self.f.builder, val_bool, t_bb, fcase);
         } else {
             LLVMBuildBr(self.f.builder, fcase);
