@@ -421,7 +421,6 @@ pub unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> u128 {
     let s1 = &*(s1 as *mut Str);
     let s2 = &*(s2 as *mut Str);
     let res = Str::concat(s1.clone(), s2.clone());
-    mem::forget((s1, s2));
     mem::transmute::<Str, u128>(res)
 }
 
