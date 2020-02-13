@@ -1,14 +1,15 @@
-use super::llvm::{
-    self,
-    prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
-};
 use crate::builtins::Variable;
 use crate::common::Either;
 use crate::libc::c_void;
 use crate::runtime::{
     self, FileRead, FileWrite, Float, Int, IntMap, LazyVec, RegexCache, Str, StrMap, Variables,
 };
+
 use hashbrown::HashMap;
+use llvm_sys::{
+    self,
+    prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
+};
 
 use std::cell::RefCell;
 use std::convert::TryFrom;
@@ -94,7 +95,7 @@ impl IntrinsicMap {
     }
 
     pub(crate) unsafe fn get(&self, name: &'static str) -> LLVMValueRef {
-        use llvm::core::*;
+        use llvm_sys::core::*;
         let intr = &self.map[name];
         let mut val = intr.data.borrow_mut();
 
@@ -103,14 +104,14 @@ impl IntrinsicMap {
             Either::Right(v) => return *v,
         };
         let func = LLVMAddFunction(self.module, intr.name, ty);
-        LLVMSetLinkage(func, llvm::LLVMLinkage::LLVMExternalLinkage);
+        LLVMSetLinkage(func, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
         *val = Either::Right(func);
         func
     }
 }
 
 pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
-    use llvm::core::*;
+    use llvm_sys::core::*;
     let usize_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint);
     let int_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Int>() * 8) as libc::c_uint);
     let float_ty = LLVMDoubleTypeInContext(ctx);
@@ -178,7 +179,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         str_eq(str_ref_ty, str_ref_ty) -> int_ty;
 
         drop_iter_int(iter_int_ty, usize_ty);
-        drop_iter_str(iter_int_ty, usize_ty);
+        drop_iter_str(iter_str_ty, usize_ty);
 
         alloc_intint() -> usize_ty;
         iter_intint(usize_ty) -> iter_int_ty;

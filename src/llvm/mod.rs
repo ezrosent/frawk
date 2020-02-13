@@ -3,18 +3,18 @@ use crate::bytecode::{self, Accum};
 use crate::common::{Either, NodeIx, NumTy, Result};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
-use crate::llvm_sys as llvm;
 use crate::runtime;
-use llvm::{
+
+use crate::smallvec::{self, smallvec};
+use hashbrown::{HashMap, HashSet};
+use llvm_sys::{
     analysis::{LLVMVerifierFailureAction, LLVMVerifyModule},
     core::*,
     execution_engine::*,
     prelude::*,
     target::*,
 };
-
-use crate::smallvec::{self, smallvec};
-use hashbrown::{HashMap, HashSet};
+use petgraph::visit::Dfs;
 
 pub(crate) mod intrinsics;
 use intrinsics::IntrinsicMap;
@@ -23,8 +23,8 @@ use std::ffi::{CStr, CString};
 use std::mem::{self, MaybeUninit};
 use std::ptr;
 
-type Pred = llvm::LLVMIntPredicate;
-type FPred = llvm::LLVMRealPredicate;
+type Pred = llvm_sys::LLVMIntPredicate;
+type FPred = llvm_sys::LLVMRealPredicate;
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
@@ -187,7 +187,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         // TODO: allow us to customize the opt level once we have more command-line flags, etc.
         //
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
-        use llvm::transforms::pass_manager_builder::*;
+        use llvm_sys::transforms::pass_manager_builder::*;
         static OPT: bool = false;
         let mpm = LLVMCreatePassManager();
         let fpm = LLVMCreateFunctionPassManagerForModule(self.module);
@@ -215,7 +215,7 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     pub unsafe fn init(types: &'b mut Typer<'a>) -> Result<Generator<'a, 'b>> {
-        if llvm::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
+        if llvm_sys::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
             return err!("failed to load in-process library");
         }
         let ctx = LLVMContextCreate();
@@ -254,14 +254,17 @@ impl<'a, 'b> Generator<'a, 'b> {
         Ok(res)
     }
 
-    pub unsafe fn dump_module(&mut self) -> Result<String> {
-        if let Err(e) = self.gen_main() {
-            return err!("error generating main: {}", e);
-        }
+    unsafe fn dump_module_inner(&mut self) -> String {
         let c_str = LLVMPrintModuleToString(self.module);
         let res = CStr::from_ptr(c_str).to_string_lossy().into_owned();
         libc::free(c_str as *mut _);
-        Ok(res)
+        res
+    }
+
+    pub unsafe fn dump_module(&mut self) -> Result<String> {
+        self.gen_main()?;
+        self.verify()?;
+        Ok(self.dump_module_inner())
     }
 
     pub unsafe fn run_main(
@@ -271,6 +274,7 @@ impl<'a, 'b> Generator<'a, 'b> {
     ) -> Result<()> {
         let mut rt = intrinsics::Runtime::new(stdin, stdout);
         self.gen_main()?;
+        self.verify()?;
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
         let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
         main_fn((&mut rt) as *mut _ as *mut libc::c_void);
@@ -360,7 +364,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             // We make these private, as we generate a separate main that calls into them. This
             // way, function bodies that get inlined into main do not have to show up in generated
             // code.
-            LLVMSetLinkage(val, llvm::LLVMLinkage::LLVMLinkerPrivateLinkage);
+            LLVMSetLinkage(val, llvm_sys::LLVMLinkage::LLVMLinkerPrivateLinkage);
             let id = self.funcs.len();
             self.decls.push(FuncInfo {
                 val,
@@ -431,11 +435,10 @@ impl<'a, 'b> Generator<'a, 'b> {
         LLVMBuildRetVoid(builder);
         LLVMDisposeBuilder(builder);
         self.optimize(decl);
-        self.verify()?;
         Ok(())
     }
 
-    unsafe fn verify(&self) -> Result<()> {
+    unsafe fn verify(&mut self) -> Result<()> {
         let mut error = ptr::null_mut();
         let code = LLVMVerifyModule(
             self.module,
@@ -495,13 +498,23 @@ impl<'a, 'b> Generator<'a, 'b> {
             view.f.locals.insert(arg, argv);
             view.f.skip_drop.insert(arg);
         }
-        // TODO: is this traversal order okay?
-        for (i, bb) in frame.cfg.raw_nodes().iter().enumerate() {
+        // Why use DFS? The main issue we want to avoid is encountering registers that we haven't
+        // defined yet. There are two cases to consider:
+        // * Globals: these are all pre-declared, so if we encounter one we should be fine.
+        // * Locals: these are in SSA form, so "definition dominates use." In other words, any path
+        //   through the CFG will pass through a definition for a node beofer it is referenced.
+        let mut dfs_walker = Dfs::new(&frame.cfg, NodeIx::new(0));
+        while let Some(n) = dfs_walker.next(&frame.cfg) {
+            let i = n.index();
+            let bb = frame.cfg.node_weight(n).unwrap();
             LLVMPositionBuilderAtEnd(view.f.builder, bbs[i]);
-            for (j, inst) in bb.weight.iter().enumerate() {
+            // Generate instructions for this basic block.
+            for (j, inst) in bb.iter().enumerate() {
                 match inst {
                     Either::Left(ll) => view.gen_ll_inst(ll)?,
                     Either::Right(hl) => {
+                        // We record `ret` and `phi` for extra processing once the rest of the
+                        // instructions have been generated.
                         view.gen_hl_inst(hl)?;
                         match hl {
                             Ret(_, _) => exits.push((i, j)),
@@ -596,6 +609,7 @@ impl<'a> View<'a> {
                 // no point in loading the string directly. We manipulate them as pointers.
                 gv
             } else {
+                // XXX: do we need to ref maps here?
                 LLVMBuildLoad(self.f.builder, gv, c_str!(""))
             })
         } else {
@@ -748,7 +762,7 @@ impl<'a> View<'a> {
         #[cfg(debug_assertions)]
         {
             if let Ty::Str = val.1 {
-                use llvm::LLVMTypeKind::*;
+                use llvm_sys::LLVMTypeKind::*;
                 // make sure we are passing string values, not pointers here.
                 assert_eq!(LLVMGetTypeKind(LLVMTypeOf(to)), LLVMIntegerTypeKind);
             }
@@ -759,7 +773,7 @@ impl<'a> View<'a> {
         if let Some(ix) = self.decls[self.f.id].globals.get(&val) {
             // We're storing into a global variable. If it's a string or map, that means we have to
             // alter the reference counts appropriately.
-            //  - if Str, call drop, store.
+            //  - if Str, call drop, store, call ref.
             //  - if Map, load the value, drop it, ref `to` then store it
             //  - otherwise, just store it directly
             let param = LLVMGetParam(self.f.val, *ix as libc::c_uint);
@@ -774,6 +788,7 @@ impl<'a> View<'a> {
                 Str => {
                     self.call("drop_str", &mut [param]);
                     LLVMBuildStore(self.f.builder, new_global, param);
+                    self.call("ref_str", &mut [param]);
                 }
                 _ => {
                     LLVMBuildStore(self.f.builder, new_global, param);

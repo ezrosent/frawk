@@ -33,16 +33,18 @@ impl FakeStdout {
     }
 }
 
-const _PRINT_DEBUG_INFO: bool = false;
+const _PRINT_DEBUG_INFO: bool = true;
 
 type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
+#[allow(unused)]
 type ProgResult<'a> = Result<(
     String,                        /* output */
     String,                        /* debug info */
     HashMap<&'a str, compile::Ty>, /* type info */
 )>;
 
+#[allow(unused)]
 pub(crate) fn run_program<'a>(
     a: &'a Arena,
     prog: &str,
@@ -60,9 +62,6 @@ pub(crate) fn dump_llvm(prog: &str) -> Result<String> {
 }
 
 pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
-    if _PRINT_DEBUG_INFO {
-        eprintln!("llvm_module={}\n", dump_llvm(prog).unwrap());
-    }
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
