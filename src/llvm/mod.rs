@@ -42,6 +42,7 @@ struct Function {
     locals: HashMap<(NumTy, Ty), LLVMValueRef>,
     iters: HashMap<(NumTy, Ty), IterState>,
     skip_drop: HashSet<(NumTy, Ty)>,
+    args: SmallVec<(NumTy, Ty)>,
     id: usize,
 }
 
@@ -187,13 +188,16 @@ impl<'a, 'b> Generator<'a, 'b> {
         //
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
         use llvm::transforms::pass_manager_builder::*;
+        static OPT: bool = false;
         let mpm = LLVMCreatePassManager();
         let fpm = LLVMCreateFunctionPassManagerForModule(self.module);
 
         let builder = LLVMPassManagerBuilderCreate();
-        LLVMPassManagerBuilderSetOptLevel(builder, 3);
+        LLVMPassManagerBuilderSetOptLevel(builder, if OPT { 3 } else { 0 });
         LLVMPassManagerBuilderSetSizeLevel(builder, 0);
-        LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 250);
+        if OPT {
+            LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 250);
+        }
 
         LLVMPassManagerBuilderPopulateFunctionPassManager(builder, fpm);
         LLVMPassManagerBuilderPopulateModulePassManager(builder, mpm);
@@ -363,12 +367,19 @@ impl<'a, 'b> Generator<'a, 'b> {
                 globals,
                 num_args: arg_tys.len(),
             });
+            let args: SmallVec<_> = self.types.frames[i]
+                .arg_regs
+                .iter()
+                .cloned()
+                .zip(self.types.func_info[i].arg_tys.iter().cloned())
+                .collect();
             self.funcs.push(Function {
                 val,
                 builder,
                 iters: Default::default(),
                 locals: Default::default(),
                 skip_drop: Default::default(),
+                args,
                 id,
             });
             arg_tys.clear();
@@ -476,6 +487,14 @@ impl<'a, 'b> Generator<'a, 'b> {
             decls: &self.decls,
             entry_builder,
         };
+        // handle arguments
+        for (i, arg) in view.f.args.iter().cloned().enumerate() {
+            let argv = LLVMGetParam(view.f.val, i as libc::c_uint);
+            // We insert into `locals` directly because we know these aren't globals, and we want
+            // to avoid the extra ref/drop for string params.
+            view.f.locals.insert(arg, argv);
+            view.f.skip_drop.insert(arg);
+        }
         // TODO: is this traversal order okay?
         for (i, bb) in frame.cfg.raw_nodes().iter().enumerate() {
             LLVMPositionBuilderAtEnd(view.f.builder, bbs[i]);

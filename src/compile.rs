@@ -212,9 +212,9 @@ pub(crate) struct FuncInfo {
 pub(crate) struct Frame<'a> {
     src_function: NumTy,
     cur_ident: NumTy,
-    pub(crate) locals: HashMap<Ident, (u32, Ty)>,
-    arg_regs: SmallVec<NumTy>,
-    pub(crate) cfg: CFG<'a>,
+    pub locals: HashMap<Ident, (u32, Ty)>,
+    pub arg_regs: SmallVec<NumTy>,
+    pub cfg: CFG<'a>,
 }
 
 struct View<'a, 'b> {
