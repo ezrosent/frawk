@@ -54,6 +54,7 @@ pub(crate) fn run_program<'a>(
     run_prog(a, stmt, stdin)
 }
 
+#[allow(unused)]
 pub(crate) fn dump_llvm(prog: &str) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
@@ -61,6 +62,15 @@ pub(crate) fn dump_llvm(prog: &str) -> Result<String> {
     compile::dump_llvm(&mut ctx)
 }
 
+#[allow(unused)]
+pub(crate) fn compile_llvm(prog: &str) -> Result<()> {
+    let a = Arena::default();
+    let stmt = parse_program(prog, &a)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
+    compile::_compile_llvm(&mut ctx)
+}
+
+#[allow(unused)]
 pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
@@ -78,6 +88,7 @@ pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
     }
 }
 
+#[allow(unused)]
 pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
@@ -529,22 +540,40 @@ for (k in m) {
         ($desc:ident, $e:expr, @input $inp:expr) => {
             mod $desc {
                 use super::*;
-                #[bench]
-                fn end_to_end(b: &mut Bencher) {
-                    b.iter(|| {
-                        black_box(bench_program($e, $inp).unwrap());
-                    });
+                mod bytecode {
+                    use super::*;
+                    #[bench]
+                    fn end_to_end(b: &mut Bencher) {
+                        b.iter(|| {
+                            black_box(bench_program($e, $inp).unwrap());
+                        });
+                    }
+                    #[bench]
+                    fn program_only(b: &mut Bencher) {
+                        let a = Arena::default();
+                        let prog = parse_program($e, &a).unwrap();
+                        let (mut interp, stdout) = compile_program(&a, prog, $inp).unwrap();
+                        b.iter(|| {
+                            black_box(run_prog_nodebug(&mut interp, stdout.clone()).unwrap());
+                            interp.reset();
+                            stdout.clear();
+                        });
+                    }
                 }
-                #[bench]
-                fn program_only(b: &mut Bencher) {
-                    let a = Arena::default();
-                    let prog = parse_program($e, &a).unwrap();
-                    let (mut interp, stdout) = compile_program(&a, prog, $inp).unwrap();
-                    b.iter(|| {
-                        black_box(run_prog_nodebug(&mut interp, stdout.clone()).unwrap());
-                        interp.reset();
-                        stdout.clear();
-                    });
+                mod llvm {
+                    use super::*;
+                    #[bench]
+                    fn end_to_end(b: &mut Bencher) {
+                        b.iter(|| {
+                            black_box(run_llvm($e, $inp).unwrap());
+                        });
+                    }
+                    #[bench]
+                    fn compile_only(b: &mut Bencher) {
+                        b.iter(|| {
+                            black_box(compile_llvm($e).unwrap());
+                        });
+                    }
                 }
             }
         };

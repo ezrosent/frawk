@@ -36,7 +36,7 @@ struct IterState {
 }
 
 struct Function {
-    // TODO remove from this struct? It is present in FuncIno?
+    // NB this is always the same as the matching FuncInfo val; it's in here for convenience.
     val: LLVMValueRef,
     builder: LLVMBuilderRef,
     locals: HashMap<(NumTy, Ty), LLVMValueRef>,
@@ -187,7 +187,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         //
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
         use llvm_sys::transforms::pass_manager_builder::*;
-        static OPT: bool = false;
+        static OPT: bool = true;
         let mpm = LLVMCreatePassManager();
         let fpm = LLVMCreateFunctionPassManagerForModule(self.module);
 
@@ -266,6 +266,15 @@ impl<'a, 'b> Generator<'a, 'b> {
         Ok(self.dump_module_inner())
     }
 
+    // For benchmarking.
+    pub unsafe fn _compile_main(&mut self) -> Result<()> {
+        self.gen_main()?;
+        self.verify()?;
+        let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
+        ptr::read_volatile(&addr);
+        Ok(())
+    }
+
     pub unsafe fn run_main(
         &mut self,
         stdin: impl std::io::Read + 'static,
@@ -323,10 +332,6 @@ impl<'a, 'b> Generator<'a, 'b> {
     fn llvm_ptr_ty(&self, ty: Ty) -> LLVMTypeRef {
         self.type_map.get_ptr_ty(ty)
     }
-
-    // TODO control flow in gen_function. (maybe make it a helper?)
-    // TODO make "actual main" a wrapper function that takes the runtime, allocates the globals,
-    // and passes all of that to the inner "main" function.
 
     unsafe fn build_decls(&mut self) {
         let global_refs = self.types.get_global_refs();
@@ -752,7 +757,6 @@ impl<'a> View<'a> {
         Ok(())
     }
 
-    // TODO move intrinsics and tmap into some kind of view datastructure; too much param passing.
     unsafe fn bind_val(&mut self, val: (NumTy, Ty), to: LLVMValueRef) {
         // if val is global, then find the relevant parameter and store it directly.
         // if val is an existing local, fail

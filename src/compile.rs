@@ -96,6 +96,15 @@ pub(crate) fn dump_llvm<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Resul
     }
 }
 
+pub(crate) fn _compile_llvm<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<()> {
+    use crate::llvm::Generator;
+    let mut typer = Typer::init_from_ctx(ctx)?;
+    unsafe {
+        let mut gen = Generator::init(&mut typer)?;
+        gen._compile_main()
+    }
+}
+
 pub(crate) fn run_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     // default to std::io::stdin()
