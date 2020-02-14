@@ -958,7 +958,7 @@ impl<'a> View<'a> {
                 self.f.builder,
                 Pred::LLVMIntNE,
                 val,
-                LLVMConstInt(int_ty, 1, /*sign_extend=*/ 1),
+                LLVMConstInt(int_ty, 0, /*sign_extend=*/ 1),
                 c_str!(""),
             );
             LLVMBuildCondBr(self.f.builder, val_bool, t_bb, fcase);
