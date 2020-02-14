@@ -212,7 +212,6 @@ where
             local_globals: Default::default(),
             may_rename: Default::default(),
             max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations
-            tmp_fs: None,
         };
         let mut func_table: HashMap<Option<I>, NumTy> = Default::default();
         let mut funcs: Vec<Function<'a, I>> = Default::default();
@@ -332,11 +331,6 @@ struct GlobalContext<I> {
     // TODO: make may_rename per-function for local variables.
     may_rename: Vec<Ident>,
     max: NumTy,
-
-    // variable that holds the FS variable, if needed
-    // TODO add OFS, SUBSEP, etc. Revisit this as a technique (can it be generalized? How about any
-    // Key or value of a named variable. Implement this after we have more tests.)
-    tmp_fs: Option<Ident>,
 }
 
 impl<I> GlobalContext<I> {
@@ -411,16 +405,6 @@ where
         // 3. Rename variables
         self.rename(self.f.entry);
         Ok(())
-    }
-
-    fn field_sep(&mut self) -> Ident {
-        if let Some(id) = self.ctx.tmp_fs {
-            id
-        } else {
-            let n = self.fresh();
-            self.ctx.tmp_fs = Some(n);
-            n
-        }
     }
 
     // We want to make sure there is a single exit node. This method adds an unconditional branch
@@ -517,13 +501,6 @@ where
                     }
                 };
                 if vs.len() == 0 {
-                    // It's safe to leave these as globals, as we are writing them to $0, which is
-                    // always going to be a string. Similar logic applies to the temporaries
-                    // introduced below; they are all the result of Concat, which always returns a
-                    // string.
-                    //
-                    // TODO: this reasoning is based on the idea that  globals are "cheaper"; if
-                    // that changes, then we'll want to migrate these to `fresh_local`
                     let tmp = self.fresh_local();
                     self.add_stmt(
                         current_open,
@@ -550,7 +527,7 @@ where
 
                     // Assign the field separator to a local variable.
                     let fs = {
-                        let fs = self.field_sep();
+                        let fs = self.fresh_local();
                         self.add_stmt(
                             current_open,
                             PrimStmt::AsgnVar(
@@ -761,227 +738,218 @@ where
                 &Unop(ast::Unop::Not, &Unop(ast::Unop::Not, $e))
             };
         }
-        Ok((
-            current_open,
-            match expr {
-                ILit(n) => PrimExpr::Val(PrimVal::ILit(*n)),
-                FLit(n) => PrimExpr::Val(PrimVal::FLit(*n)),
-                PatLit(s) | StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
-                Unop(op, e) => {
-                    let (next, v) = self.convert_val(e, current_open)?;
-                    return Ok((
-                        next,
-                        PrimExpr::CallBuiltin(builtins::Function::Unop(*op), smallvec![v]),
-                    ));
+        let res_expr = match expr {
+            ILit(n) => PrimExpr::Val(PrimVal::ILit(*n)),
+            FLit(n) => PrimExpr::Val(PrimVal::FLit(*n)),
+            PatLit(s) | StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
+            Unop(op, e) => {
+                let (next, v) = self.convert_val(e, current_open)?;
+                return Ok((
+                    next,
+                    PrimExpr::CallBuiltin(builtins::Function::Unop(*op), smallvec![v]),
+                ));
+            }
+            Binop(op, e1, e2) => {
+                let (next, v1) = self.convert_val(e1, current_open)?;
+                let (next, v2) = self.convert_val(e2, next)?;
+                return Ok((
+                    next,
+                    PrimExpr::CallBuiltin(builtins::Function::Binop(*op), smallvec![v1, v2]),
+                ));
+            }
+            ITE(cond, tcase, fcase) => {
+                let res_id = self.fresh_local();
+                self.ctx.may_rename.push(res_id);
+                let (tstart, tend, te) = self.standalone_expr(tcase)?;
+                let (fstart, fend, fe) = self.standalone_expr(fcase)?;
+                self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te))?;
+                self.add_stmt(fend, PrimStmt::AsgnVar(res_id, fe))?;
+                let next =
+                    self.do_condition(cond, (tstart, tend), Some((fstart, fend)), current_open)?;
+                return Ok((next, PrimExpr::Val(PrimVal::Var(res_id))));
+            }
+            And(e1, e2) => {
+                return self.convert_expr(&ITE(e1, to_bool!(e2), &ILit(0)), current_open)
+            }
+            Or(e1, e2) => return self.convert_expr(&ITE(e1, &ILit(1), to_bool!(e2)), current_open),
+            Var(id) => {
+                if let Ok(bi) = builtins::Variable::try_from(id.clone()) {
+                    PrimExpr::LoadBuiltin(bi)
+                } else {
+                    let ident = self.get_identifier(id);
+                    PrimExpr::Val(PrimVal::Var(ident))
                 }
-                Binop(op, e1, e2) => {
-                    let (next, v1) = self.convert_val(e1, current_open)?;
-                    let (next, v2) = self.convert_val(e2, next)?;
-                    return Ok((
-                        next,
-                        PrimExpr::CallBuiltin(builtins::Function::Binop(*op), smallvec![v1, v2]),
-                    ));
-                }
-                ITE(cond, tcase, fcase) => {
-                    let res_id = self.fresh_local();
-                    self.ctx.may_rename.push(res_id);
-                    let (tstart, tend, te) = self.standalone_expr(tcase)?;
-                    let (fstart, fend, fe) = self.standalone_expr(fcase)?;
-                    self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te))?;
-                    self.add_stmt(fend, PrimStmt::AsgnVar(res_id, fe))?;
-                    let next = self.do_condition(
-                        cond,
-                        (tstart, tend),
-                        Some((fstart, fend)),
-                        current_open,
-                    )?;
-                    return Ok((next, PrimExpr::Val(PrimVal::Var(res_id))));
-                }
-                And(e1, e2) => {
-                    return self.convert_expr(&ITE(e1, to_bool!(e2), &ILit(0)), current_open)
-                }
-                Or(e1, e2) => {
-                    return self.convert_expr(&ITE(e1, &ILit(1), to_bool!(e2)), current_open)
-                }
-                Var(id) => {
-                    if let Ok(bi) = builtins::Variable::try_from(id.clone()) {
-                        PrimExpr::LoadBuiltin(bi)
-                    } else {
-                        let ident = self.get_identifier(id);
-                        PrimExpr::Val(PrimVal::Var(ident))
+            }
+            Index(arr, ix) => {
+                let (next, arr_v) = self.convert_val(arr, current_open)?;
+                let (next, ix_v) = self.convert_val(ix, next)?;
+                return Ok((next, PrimExpr::Index(arr_v, ix_v)));
+            }
+            Call(fname, args) => {
+                let bi = match fname {
+                    Either::Left(fname) => {
+                        if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
+                            Either::Right(bi)
+                        } else {
+                            Either::Left(fname.clone())
+                        }
                     }
+                    Either::Right(bi) => Either::Right(*bi),
+                };
+                let mut prim_args = SmallVec::with_capacity(args.len());
+                let mut open = current_open;
+                for a in args.iter() {
+                    let (next, v) = self.convert_val(a, open)?;
+                    open = next;
+                    prim_args.push(v);
                 }
-                Index(arr, ix) => {
-                    let (next, arr_v) = self.convert_val(arr, current_open)?;
-                    let (next, ix_v) = self.convert_val(ix, next)?;
-                    return Ok((next, PrimExpr::Index(arr_v, ix_v)));
-                }
-                Call(fname, args) => {
-                    let bi = match fname {
-                        Either::Left(fname) => {
-                            if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
-                                Either::Right(bi)
-                            } else {
-                                Either::Left(fname.clone())
+                match bi {
+                    Either::Left(fname) => {
+                        return if let Some(i) = self.func_table.get(&Some(fname.clone())) {
+                            Ok((open, PrimExpr::CallUDF(*i, prim_args)))
+                        } else {
+                            err!("Call to unknown function \"{}\"", fname)
+                        };
+                    }
+                    Either::Right(bi) => {
+                        if let builtins::Function::Split = bi {
+                            if prim_args.len() == 2 {
+                                let fs = self.fresh_local();
+                                self.add_stmt(
+                                    current_open,
+                                    PrimStmt::AsgnVar(
+                                        fs.clone(),
+                                        PrimExpr::LoadBuiltin(builtins::Variable::OFS),
+                                    ),
+                                )?;
+                                prim_args.push(PrimVal::Var(fs));
                             }
                         }
-                        Either::Right(bi) => Either::Right(*bi),
-                    };
-                    let mut prim_args = SmallVec::with_capacity(args.len());
-                    let mut open = current_open;
-                    for a in args.iter() {
-                        let (next, v) = self.convert_val(a, open)?;
-                        open = next;
-                        prim_args.push(v);
-                    }
-                    match bi {
-                        Either::Left(fname) => {
-                            return if let Some(i) = self.func_table.get(&Some(fname.clone())) {
-                                Ok((open, PrimExpr::CallUDF(*i, prim_args)))
-                            } else {
-                                err!("Call to unknown function \"{}\"", fname)
-                            };
-                        }
-                        Either::Right(bi) => {
-                            if let builtins::Function::Split = bi {
-                                if prim_args.len() == 2 {
-                                    let fs = self.field_sep();
-                                    self.add_stmt(
-                                        current_open,
-                                        PrimStmt::AsgnVar(
-                                            fs.clone(),
-                                            PrimExpr::LoadBuiltin(builtins::Variable::OFS),
-                                        ),
-                                    )?;
-                                    prim_args.push(PrimVal::Var(fs));
-                                }
-                            }
-                            return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
-                        }
+                        return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
                     }
                 }
-                Assign(Index(arr, ix), to) => {
-                    return self.do_assign_index(
-                        arr,
-                        ix,
-                        |slf, _, _, open| slf.convert_expr(to, open),
-                        current_open,
-                    )
-                }
+            }
+            Assign(Index(arr, ix), to) => {
+                return self.do_assign_index(
+                    arr,
+                    ix,
+                    |slf, _, _, open| slf.convert_expr(to, open),
+                    current_open,
+                )
+            }
 
-                AssignOp(Index(arr, ix), op, to) => {
-                    return self.do_assign_index(
-                        arr,
-                        ix,
-                        |slf, arr_v, ix_v, open| {
-                            let (next, to_v) = slf.convert_val(to, open)?;
-                            let arr_cell_v =
-                                slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), next)?;
-                            Ok((
-                                next,
-                                PrimExpr::CallBuiltin(
-                                    builtins::Function::Binop(*op),
-                                    smallvec![arr_cell_v, to_v],
-                                ),
-                            ))
-                        },
-                        current_open,
-                    )
-                }
-                Assign(x, to) => {
-                    let (next, to) = self.convert_expr(to, current_open)?;
-                    return self.do_assign(x, |_| to, next);
-                }
-                AssignOp(x, op, to) => {
-                    let (next, to_v) = self.convert_val(to, current_open)?;
-                    return self.do_assign(
-                        x,
-                        |v| {
+            AssignOp(Index(arr, ix), op, to) => {
+                return self.do_assign_index(
+                    arr,
+                    ix,
+                    |slf, arr_v, ix_v, open| {
+                        let (next, to_v) = slf.convert_val(to, open)?;
+                        let arr_cell_v = slf.to_val(PrimExpr::Index(arr_v, ix_v.clone()), next)?;
+                        Ok((
+                            next,
                             PrimExpr::CallBuiltin(
                                 builtins::Function::Binop(*op),
-                                smallvec![v.clone(), to_v],
-                            )
+                                smallvec![arr_cell_v, to_v],
+                            ),
+                        ))
+                    },
+                    current_open,
+                )
+            }
+            Assign(x, to) => {
+                let (next, to) = self.convert_expr(to, current_open)?;
+                return self.do_assign(x, |_| to, next);
+            }
+            AssignOp(x, op, to) => {
+                let (next, to_v) = self.convert_val(to, current_open)?;
+                return self.do_assign(
+                    x,
+                    |v| {
+                        PrimExpr::CallBuiltin(
+                            builtins::Function::Binop(*op),
+                            smallvec![v.clone(), to_v],
+                        )
+                    },
+                    next,
+                );
+            }
+            Inc { is_inc, is_post, x } => {
+                if !valid_lhs(x) {
+                    return err!("invalid operand for increment operation {:?}", x);
+                };
+                let (next, pre) = if *is_post {
+                    let (next, e) = self.convert_expr(x, current_open)?;
+                    let f = self.fresh_local();
+                    self.add_stmt(next, PrimStmt::AsgnVar(f, e))?;
+                    (next, Some(PrimExpr::Val(PrimVal::Var(f))))
+                } else {
+                    (current_open, None)
+                };
+                let (next, post) = self.convert_expr(
+                    &ast::Expr::AssignOp(
+                        x,
+                        if *is_inc {
+                            ast::Binop::Plus
+                        } else {
+                            ast::Binop::Minus
                         },
-                        next,
-                    );
-                }
-                Inc { is_inc, is_post, x } => {
-                    if !valid_lhs(x) {
-                        return err!("invalid operand for increment operation {:?}", x);
-                    };
-                    let (next, pre) = if *is_post {
-                        let (next, e) = self.convert_expr(x, current_open)?;
-                        let f = self.fresh_local();
-                        self.add_stmt(next, PrimStmt::AsgnVar(f, e))?;
-                        (next, Some(PrimExpr::Val(PrimVal::Var(f))))
-                    } else {
-                        (current_open, None)
-                    };
-                    let (next, post) = self.convert_expr(
-                        &ast::Expr::AssignOp(
-                            x,
-                            if *is_inc {
-                                ast::Binop::Plus
-                            } else {
-                                ast::Binop::Minus
+                        &ast::Expr::ILit(1),
+                    ),
+                    next,
+                )?;
+                return Ok((next, if *is_post { pre.unwrap() } else { post }));
+            }
+            Getline { from, into } => {
+                // Another use of non-structural recursion for desugaring. Here we desugar:
+                //   getline var < file
+                // to
+                //   var = nextline(file)
+                //   readerr(file)
+                // And we fill in various other pieces of sugar as well. Informally:
+                //  getline < file => getline $0 < file
+                //  getline var => getline var < stdin
+                //  getline => getline $0
+                use builtins::Function::{Nextline, NextlineStdin, ReadErr, ReadErrStdin};
+                match (from, into) {
+                    (from, None /* $0 */) => {
+                        return self.convert_expr(
+                            &ast::Expr::Getline {
+                                from: from.clone(),
+                                into: Some(&Unop(ast::Unop::Column, &ast::Expr::ILit(0))),
                             },
-                            &ast::Expr::ILit(1),
-                        ),
-                        next,
-                    )?;
-                    return Ok((next, if *is_post { pre.unwrap() } else { post }));
-                }
-                Getline { from, into } => {
-                    // Another use of non-structural recursion for desugaring. Here we desugar:
-                    //   getline var < file
-                    // to
-                    //   var = nextline(file)
-                    //   readerr(file)
-                    // And we fill in various other pieces of sugar as well. Informally:
-                    //  getline < file => getline $0 < file
-                    //  getline var => getline var < stdin
-                    //  getline => getline $0
-                    use builtins::Function::{Nextline, NextlineStdin, ReadErr, ReadErrStdin};
-                    match (from, into) {
-                        (from, None /* $0 */) => {
-                            return self.convert_expr(
-                                &ast::Expr::Getline {
-                                    from: from.clone(),
-                                    into: Some(&Unop(ast::Unop::Column, &ast::Expr::ILit(0))),
-                                },
-                                current_open,
-                            )
-                        }
-                        (Some(from), Some(into)) => {
-                            let (next, _) = self.convert_expr(
-                                &ast::Expr::Assign(
-                                    into,
-                                    &ast::Expr::Call(Either::Right(Nextline), vec![from]),
-                                ),
-                                current_open,
-                            )?;
-                            return self.convert_expr(
-                                &ast::Expr::Call(Either::Right(ReadErr), vec![from]),
-                                next,
-                            );
-                        }
-                        (None /*stdin*/, Some(into)) => {
-                            let (next, _) = self.convert_expr(
-                                &ast::Expr::Assign(
-                                    into,
-                                    &ast::Expr::Call(Either::Right(NextlineStdin), vec![]),
-                                ),
-                                current_open,
-                            )?;
-                            return self.convert_expr(
-                                &ast::Expr::Call(Either::Right(ReadErrStdin), vec![]),
-                                next,
-                            );
-                        }
-                    };
-                }
-            },
-        ))
+                            current_open,
+                        )
+                    }
+                    (Some(from), Some(into)) => {
+                        let (next, _) = self.convert_expr(
+                            &ast::Expr::Assign(
+                                into,
+                                &ast::Expr::Call(Either::Right(Nextline), vec![from]),
+                            ),
+                            current_open,
+                        )?;
+                        return self.convert_expr(
+                            &ast::Expr::Call(Either::Right(ReadErr), vec![from]),
+                            next,
+                        );
+                    }
+                    (None /*stdin*/, Some(into)) => {
+                        let (next, _) = self.convert_expr(
+                            &ast::Expr::Assign(
+                                into,
+                                &ast::Expr::Call(Either::Right(NextlineStdin), vec![]),
+                            ),
+                            current_open,
+                        )?;
+                        return self.convert_expr(
+                            &ast::Expr::Call(Either::Right(ReadErrStdin), vec![]),
+                            next,
+                        );
+                    }
+                };
+            }
+        };
+        Ok((current_open, res_expr))
     }
 
     fn guarded_else(&mut self, from: NodeIx, to: NodeIx) {
