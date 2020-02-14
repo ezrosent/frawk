@@ -301,14 +301,12 @@ print w,z;
         map_ops_simple,
         r#"BEGIN {
         for (i=0; i<10; ++i) m[i]=2*i;
-        for (i in m)
-            m[i]++
         for (i=0; i<10; ++i) {
             res = res OFS m[i]
         }
         print res
 }"#,
-        " 1 3 5 7 9 11 13 15 17 19\n"
+        " 0 2 4 6 8 10 12 14 16 18\n"
     );
 
     test_program!(
