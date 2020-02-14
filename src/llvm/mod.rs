@@ -187,7 +187,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         //
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
         use llvm_sys::transforms::pass_manager_builder::*;
-        static OPT: bool = true;
+        static OPT: bool = false;
         let mpm = LLVMCreatePassManager();
         let fpm = LLVMCreateFunctionPassManagerForModule(self.module);
 
@@ -283,6 +283,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         let mut rt = intrinsics::Runtime::new(stdin, stdout);
         self.gen_main()?;
         self.verify()?;
+        eprintln!("{}", self.dump_module_inner());
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
         let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
         main_fn((&mut rt) as *mut _ as *mut libc::c_void);
