@@ -92,7 +92,6 @@ struct TypeMap {
     table: [TypeRef; compile::NUM_TYPES],
     runtime_ty: LLVMTypeRef,
     var_ty: LLVMTypeRef,
-    bool_ty: LLVMTypeRef,
 }
 
 impl TypeMap {
@@ -102,7 +101,6 @@ impl TypeMap {
                 table: [TypeRef::null(); compile::NUM_TYPES],
                 runtime_ty: LLVMPointerType(LLVMVoidTypeInContext(ctx), 0),
                 var_ty: LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint),
-                bool_ty: LLVMIntTypeInContext(ctx, 1),
             }
         }
     }
@@ -132,6 +130,7 @@ pub(crate) struct Generator<'a, 'b> {
     funcs: Vec<Function>,
     type_map: TypeMap,
     intrinsics: IntrinsicMap,
+    //     literals: HashMap<&'a str, LLVMValueRef /* u128 */>,
 }
 
 impl<'a, 'b> Drop for Generator<'a, 'b> {
@@ -287,7 +286,6 @@ impl<'a, 'b> Generator<'a, 'b> {
             base: ty,
             ptr: LLVMPointerType(ty, 0),
         };
-        // TODO: make this a void* instead?
         let uintptr = LLVMIntTypeInContext(self.ctx, (size_of::<usize>() * 8) as libc::c_uint);
         self.type_map.init(
             Ty::Int,
@@ -308,7 +306,8 @@ impl<'a, 'b> Generator<'a, 'b> {
         self.type_map.init(Ty::MapStrInt, make(uintptr));
         self.type_map.init(Ty::MapStrFloat, make(uintptr));
         self.type_map.init(Ty::MapStrStr, make(uintptr));
-        // TODO: handle iterators.
+        // NB: iterators do not have types of their own, and we should never ask for their types.
+        // See the IterState type and its uses for more info.
         self.type_map.init(Ty::IterInt, TypeRef::null());
         self.type_map.init(Ty::IterStr, TypeRef::null());
     }
@@ -972,6 +971,12 @@ impl<'a> View<'a> {
         use crate::bytecode::Instr::*;
         match inst {
             StoreConstStr(sr, s) => {
+                // We don't know where we're storing this string literal. If it's in the middle of
+                // a loop, we could be calling drop on it repeatedly. If the string is boxed, that
+                // will lead to double-frees. In our current setup, these literals will all be
+                // either empty, or references to word-aligned arena-allocated strings, so that's
+                // actually fine.
+                assert!(s.drop_is_trivial());
                 let sc = s.clone().into_bits();
                 // There is no way to pass a 128-bit integer to LLVM directly. We have to convert
                 // it to a string first.

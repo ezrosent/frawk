@@ -178,6 +178,16 @@ impl<'a> From<String> for Str<'a> {
 pub struct Str<'a>(UnsafeCell<StrRep<'a>>);
 
 impl<'a> Str<'a> {
+    // We rely on string literals having trivial drops for LLVM codegen, as they may be dropped
+    // repeatedly.
+    pub fn drop_is_trivial(&self) -> bool {
+        let rep = unsafe { &mut *self.0.get() };
+        match rep.get_tag() {
+            EMPTY | LITERAL => true,
+            _ => false,
+        }
+    }
+
     // leaks `self` unless you transmute it back. This is used in LLVM codegen
     pub fn into_bits(self) -> u128 {
         unsafe { mem::transmute::<Str<'a>, u128>(self) }
