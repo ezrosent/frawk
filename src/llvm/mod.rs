@@ -507,7 +507,8 @@ impl<'a, 'b> Generator<'a, 'b> {
         // defined yet. There are two cases to consider:
         // * Globals: these are all pre-declared, so if we encounter one we should be fine.
         // * Locals: these are in SSA form, so "definition dominates use." In other words, any path
-        //   through the CFG will pass through a definition for a node beofer it is referenced.
+        //   through the CFG starting at the entry node will pass through a definition for a node
+        //   before it is referenced.
         let mut dfs_walker = Dfs::new(&frame.cfg, NodeIx::new(0));
         while let Some(n) = dfs_walker.next(&frame.cfg) {
             let i = n.index();
