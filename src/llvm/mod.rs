@@ -283,7 +283,6 @@ impl<'a, 'b> Generator<'a, 'b> {
         let mut rt = intrinsics::Runtime::new(stdin, stdout);
         self.gen_main()?;
         self.verify()?;
-        eprintln!("{}", self.dump_module_inner());
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
         let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
         main_fn((&mut rt) as *mut _ as *mut libc::c_void);
