@@ -6,6 +6,7 @@ use crate::runtime::{
 };
 
 use hashbrown::HashMap;
+use lazy_static::lazy_static;
 use llvm_sys::{
     self,
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
@@ -16,6 +17,25 @@ use std::convert::TryFrom;
 use std::mem;
 use std::slice;
 
+lazy_static! {
+    pub static ref _MUST_USE: usize = {
+        unsafe {
+            let allocs = &[
+                alloc_intstr() as usize,
+                alloc_intfloat() as usize,
+                alloc_intint() as usize,
+                alloc_strstr() as usize,
+                alloc_strfloat() as usize,
+                alloc_strint() as usize,
+            ];
+            let mut sum: usize = 0;
+            for a in allocs.iter().cloned() {
+                sum = sum.wrapping_add(a);
+            }
+            sum
+        }
+    };
+}
 macro_rules! fail {
     ($($es:expr),+) => {{
         #[cfg(test)]
@@ -112,12 +132,12 @@ impl IntrinsicMap {
 
 pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
     use llvm_sys::core::*;
-    let usize_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<usize>() * 8) as libc::c_uint);
     let int_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Int>() * 8) as libc::c_uint);
     let float_ty = LLVMDoubleTypeInContext(ctx);
     let void_ty = LLVMVoidTypeInContext(ctx);
     let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
     let rt_ty = LLVMPointerType(void_ty, 0);
+    let map_ty = rt_ty;
     let str_ref_ty = LLVMPointerType(str_ty, 0);
     let iter_int_ty = LLVMPointerType(int_ty, 0);
     let iter_str_ty = LLVMPointerType(str_ty, 0);
@@ -145,19 +165,19 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     register! {
         ref_str(str_ref_ty);
         drop_str(str_ref_ty);
-        ref_map(usize_ty);
-        drop_map(usize_ty);
+        ref_map(map_ty);
+        drop_map(map_ty);
         int_to_str(int_ty) -> str_ty;
         float_to_str(float_ty) -> str_ty;
         str_to_int(str_ref_ty) -> int_ty;
         str_to_float(str_ref_ty) -> float_ty;
-        str_len(str_ref_ty) -> usize_ty;
+        str_len(str_ref_ty) -> int_ty;
         concat(str_ref_ty, str_ref_ty) -> str_ty;
         match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         get_col(rt_ty, int_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
-        split_int(rt_ty, str_ref_ty, usize_ty, str_ref_ty) -> int_ty;
-        split_str(rt_ty, str_ref_ty, usize_ty, str_ref_ty) -> int_ty;
+        split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
+        split_str(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
         read_err(rt_ty, str_ref_ty) -> int_ty;
@@ -165,12 +185,12 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         next_line(rt_ty, str_ref_ty) -> str_ty;
         next_line_stdin(rt_ty) -> str_ty;
 
-        load_var_str(rt_ty, usize_ty) -> str_ty;
-        store_var_str(rt_ty, usize_ty, str_ref_ty);
-        load_var_int(rt_ty, usize_ty) -> int_ty;
-        store_var_int(rt_ty, usize_ty, int_ty);
-        load_var_intmap(rt_ty, usize_ty) -> usize_ty;
-        store_var_intmap(rt_ty, usize_ty, usize_ty);
+        load_var_str(rt_ty, int_ty) -> str_ty;
+        store_var_str(rt_ty, int_ty, str_ref_ty);
+        load_var_int(rt_ty, int_ty) -> int_ty;
+        store_var_int(rt_ty, int_ty, int_ty);
+        load_var_intmap(rt_ty, int_ty) -> map_ty;
+        store_var_intmap(rt_ty, int_ty, map_ty);
 
         str_lt(str_ref_ty, str_ref_ty) -> int_ty;
         str_gt(str_ref_ty, str_ref_ty) -> int_ty;
@@ -178,56 +198,56 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         str_gte(str_ref_ty, str_ref_ty) -> int_ty;
         str_eq(str_ref_ty, str_ref_ty) -> int_ty;
 
-        drop_iter_int(iter_int_ty, usize_ty);
-        drop_iter_str(iter_str_ty, usize_ty);
+        drop_iter_int(iter_int_ty, int_ty);
+        drop_iter_str(iter_str_ty, int_ty);
 
-        alloc_intint() -> usize_ty;
-        iter_intint(usize_ty) -> iter_int_ty;
-        len_intint(usize_ty) -> int_ty;
-        lookup_intint(usize_ty, int_ty) -> int_ty;
-        contains_intint(usize_ty, int_ty) -> int_ty;
-        insert_intint(usize_ty, int_ty, int_ty);
-        delete_intint(usize_ty, int_ty);
+        alloc_intint() -> map_ty;
+        iter_intint(map_ty) -> iter_int_ty;
+        len_intint(map_ty) -> int_ty;
+        lookup_intint(map_ty, int_ty) -> int_ty;
+        contains_intint(map_ty, int_ty) -> int_ty;
+        insert_intint(map_ty, int_ty, int_ty);
+        delete_intint(map_ty, int_ty);
 
-        alloc_intfloat() -> usize_ty;
-        iter_intfloat(usize_ty) -> iter_int_ty;
-        len_intfloat(usize_ty) -> int_ty;
-        lookup_intfloat(usize_ty, int_ty) -> float_ty;
-        contains_intfloat(usize_ty, int_ty) -> int_ty;
-        insert_intfloat(usize_ty, int_ty, float_ty);
-        delete_intfloat(usize_ty, int_ty);
+        alloc_intfloat() -> map_ty;
+        iter_intfloat(map_ty) -> iter_int_ty;
+        len_intfloat(map_ty) -> int_ty;
+        lookup_intfloat(map_ty, int_ty) -> float_ty;
+        contains_intfloat(map_ty, int_ty) -> int_ty;
+        insert_intfloat(map_ty, int_ty, float_ty);
+        delete_intfloat(map_ty, int_ty);
 
-        alloc_intstr() -> usize_ty;
-        iter_intstr(usize_ty) -> iter_int_ty;
-        len_intstr(usize_ty) -> int_ty;
-        lookup_intstr(usize_ty, int_ty) -> str_ty;
-        contains_intstr(usize_ty, int_ty) -> int_ty;
-        insert_intstr(usize_ty, int_ty, str_ref_ty);
-        delete_intstr(usize_ty, int_ty);
+        alloc_intstr() -> map_ty;
+        iter_intstr(map_ty) -> iter_int_ty;
+        len_intstr(map_ty) -> int_ty;
+        lookup_intstr(map_ty, int_ty) -> str_ty;
+        contains_intstr(map_ty, int_ty) -> int_ty;
+        insert_intstr(map_ty, int_ty, str_ref_ty);
+        delete_intstr(map_ty, int_ty);
 
-        alloc_strint() -> usize_ty;
-        iter_strint(usize_ty) -> iter_str_ty;
-        len_strint(usize_ty) -> int_ty;
-        lookup_strint(usize_ty, str_ref_ty) -> int_ty;
-        contains_strint(usize_ty, str_ref_ty) -> int_ty;
-        insert_strint(usize_ty, str_ref_ty, int_ty);
-        delete_strint(usize_ty, str_ref_ty);
+        alloc_strint() -> map_ty;
+        iter_strint(map_ty) -> iter_str_ty;
+        len_strint(map_ty) -> int_ty;
+        lookup_strint(map_ty, str_ref_ty) -> int_ty;
+        contains_strint(map_ty, str_ref_ty) -> int_ty;
+        insert_strint(map_ty, str_ref_ty, int_ty);
+        delete_strint(map_ty, str_ref_ty);
 
-        alloc_strfloat() -> usize_ty;
-        iter_strfloat(usize_ty) -> iter_str_ty;
-        len_strfloat(usize_ty) -> int_ty;
-        lookup_strfloat(usize_ty, str_ref_ty) -> float_ty;
-        contains_strfloat(usize_ty, str_ref_ty) -> int_ty;
-        insert_strfloat(usize_ty, str_ref_ty, float_ty);
-        delete_strfloat(usize_ty, str_ref_ty);
+        alloc_strfloat() -> map_ty;
+        iter_strfloat(map_ty) -> iter_str_ty;
+        len_strfloat(map_ty) -> int_ty;
+        lookup_strfloat(map_ty, str_ref_ty) -> float_ty;
+        contains_strfloat(map_ty, str_ref_ty) -> int_ty;
+        insert_strfloat(map_ty, str_ref_ty, float_ty);
+        delete_strfloat(map_ty, str_ref_ty);
 
-        alloc_strstr() -> usize_ty;
-        iter_strstr(usize_ty) -> iter_str_ty;
-        len_strstr(usize_ty) -> int_ty;
-        lookup_strstr(usize_ty, str_ref_ty) -> str_ty;
-        contains_strstr(usize_ty, str_ref_ty) -> int_ty;
-        insert_strstr(usize_ty, str_ref_ty, str_ref_ty);
-        delete_strstr(usize_ty, str_ref_ty);
+        alloc_strstr() -> map_ty;
+        iter_strstr(map_ty) -> iter_str_ty;
+        len_strstr(map_ty) -> int_ty;
+        lookup_strstr(map_ty, str_ref_ty) -> str_ty;
+        contains_strstr(map_ty, str_ref_ty) -> int_ty;
+        insert_strstr(map_ty, str_ref_ty, str_ref_ty);
+        delete_strstr(map_ty, str_ref_ty);
     };
     table
 }
@@ -313,11 +333,11 @@ pub unsafe extern "C" fn print(
 pub unsafe extern "C" fn split_str(
     runtime: *mut c_void,
     to_split: *mut c_void,
-    into_arr: usize,
+    into_arr: *mut c_void,
     pat: *mut c_void,
 ) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
-    let into_arr = mem::transmute::<usize, StrMap<Str>>(into_arr);
+    let into_arr = mem::transmute::<*mut c_void, StrMap<Str>>(into_arr);
     let to_split = &*(to_split as *mut Str);
     let pat = &*(pat as *mut Str);
     let old_len = into_arr.len();
@@ -336,11 +356,11 @@ pub unsafe extern "C" fn split_str(
 pub unsafe extern "C" fn split_int(
     runtime: *mut c_void,
     to_split: *mut c_void,
-    into_arr: usize,
+    into_arr: *mut c_void,
     pat: *mut c_void,
 ) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
-    let into_arr = mem::transmute::<usize, IntMap<Str>>(into_arr);
+    let into_arr = mem::transmute::<*mut c_void, IntMap<Str>>(into_arr);
     let to_split = &*(to_split as *mut Str);
     let pat = &*(pat as *mut Str);
     let old_len = into_arr.len();
@@ -449,22 +469,22 @@ pub unsafe extern "C" fn drop_str(s: *mut c_void) {
     std::ptr::drop_in_place(s as *mut Str);
 }
 
-unsafe fn ref_map_generic<K, V>(m: usize) {
-    mem::forget(mem::transmute::<&usize, &runtime::SharedMap<K, V>>(&m).clone())
+unsafe fn ref_map_generic<K, V>(m: *mut c_void) {
+    mem::forget(mem::transmute::<&*mut c_void, &runtime::SharedMap<K, V>>(&m).clone())
 }
 
-unsafe fn drop_map_generic<K, V>(m: usize) {
-    mem::drop(mem::transmute::<usize, runtime::SharedMap<K, V>>(m))
+unsafe fn drop_map_generic<K, V>(m: *mut c_void) {
+    mem::drop(mem::transmute::<*mut c_void, runtime::SharedMap<K, V>>(m))
 }
 
 // XXX: relying on this doing the same thing regardless of type. We probably want a custom Rc to
 // guarantee this.
 #[no_mangle]
-pub unsafe extern "C" fn ref_map(m: usize) {
+pub unsafe extern "C" fn ref_map(m: *mut c_void) {
     ref_map_generic::<Int, Int>(m)
 }
 #[no_mangle]
-pub unsafe extern "C" fn drop_map(m: usize) {
+pub unsafe extern "C" fn drop_map(m: *mut c_void) {
     drop_map_generic::<Int, Int>(m)
 }
 
@@ -574,7 +594,7 @@ pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> usize {
+pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let rt = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         use Variable::*;
@@ -582,18 +602,18 @@ pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> usize {
             ARGV => rt.vars.argv.clone(),
             OFS | ARGC | NF | NR | FS | RS | FILENAME => fail!("non intmap-var={:?}", var),
         };
-        mem::transmute::<IntMap<_>, usize>(res)
+        mem::transmute::<IntMap<_>, *mut c_void>(res)
     } else {
         fail!("invalid variable code={}", var)
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: usize) {
+pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_void) {
     let rt = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         use Variable::*;
-        let map = mem::transmute::<usize, IntMap<Str>>(map);
+        let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
         match var {
             ARGV => rt.vars.argv = map.clone(),
             OFS | ARGC | NF | NR | FS | RS | FILENAME => fail!("non intmap-var={:?}", var),
@@ -700,52 +720,52 @@ macro_rules! map_impl_inner {
     ($alloc:ident, $iter:ident, $lookup:ident, $len:ident,
      $insert:ident, $delete:ident, $contains:ident, $k:tt, $v:tt) => {
         #[no_mangle]
-        pub unsafe extern "C" fn $alloc() -> usize {
+        pub unsafe extern "C" fn $alloc() -> *mut c_void {
             let res: runtime::SharedMap<$k, $v> = Default::default();
-            mem::transmute::<runtime::SharedMap<$k, $v>, usize>(res)
+            mem::transmute::<runtime::SharedMap<$k, $v>, *mut c_void>(res)
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $iter(map: usize) -> iter_ty!($k) {
-            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+        pub unsafe extern "C" fn $iter(map: *mut c_void) -> iter_ty!($k) {
+            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
             let iter: Vec<_> = map.to_vec();
             mem::forget(map);
             let b = iter.into_boxed_slice();
             Box::into_raw(b) as _
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $len(map: usize) -> Int {
-            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+        pub unsafe extern "C" fn $len(map: *mut c_void) -> Int {
+            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
             let res = map.len();
             mem::forget(map);
             res as Int
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $lookup(map: usize, k: in_ty!($k)) -> out_ty!($v) {
-            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+        pub unsafe extern "C" fn $lookup(map: *mut c_void, k: in_ty!($k)) -> out_ty!($v) {
+            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
             let key = convert_in!($k, &k);
             let res = map.get(key).unwrap_or_else(Default::default);
             mem::forget(map);
             convert_out!($v, res)
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $contains(map: usize, k: in_ty!($k)) -> Int {
-            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+        pub unsafe extern "C" fn $contains(map: *mut c_void, k: in_ty!($k)) -> Int {
+            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
             let key = convert_in!($k, &k);
             let res = map.get(key).is_some() as Int;
             mem::forget(map);
             res
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $insert(map: usize, k: in_ty!($k), v: in_ty!($v)) {
-            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+        pub unsafe extern "C" fn $insert(map: *mut c_void, k: in_ty!($k), v: in_ty!($v)) {
+            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
             let key = convert_in!($k, &k);
             let val = convert_in!($v, &v);
             map.insert(key.clone(), val.clone());
             mem::forget(map);
         }
         #[no_mangle]
-        pub unsafe extern "C" fn $delete(map: usize, k: in_ty!($k)) {
-            let map = mem::transmute::<usize, runtime::SharedMap<$k, $v>>(map);
+        pub unsafe extern "C" fn $delete(map: *mut c_void, k: in_ty!($k)) {
+            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
             let key = convert_in!($k, &k);
             map.delete(key);
             mem::forget(map);
