@@ -283,6 +283,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         let mut rt = intrinsics::Runtime::new(stdin, stdout);
         self.gen_main()?;
         self.verify()?;
+        eprintln!("{}", self.dump_module_inner());
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
         let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
         main_fn((&mut rt) as *mut _ as *mut libc::c_void);
@@ -295,7 +296,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             base: ty,
             ptr: LLVMPointerType(ty, 0),
         };
-        let uintptr = LLVMIntTypeInContext(self.ctx, (size_of::<usize>() * 8) as libc::c_uint);
+        let voidptr = LLVMPointerType(LLVMVoidTypeInContext(self.ctx), 0);
         self.type_map.init(
             Ty::Int,
             make(LLVMIntTypeInContext(
@@ -309,12 +310,12 @@ impl<'a, 'b> Generator<'a, 'b> {
             Ty::Str,
             make(LLVMIntTypeInContext(self.ctx, 128 as libc::c_uint)),
         );
-        self.type_map.init(Ty::MapIntInt, make(uintptr));
-        self.type_map.init(Ty::MapIntFloat, make(uintptr));
-        self.type_map.init(Ty::MapIntStr, make(uintptr));
-        self.type_map.init(Ty::MapStrInt, make(uintptr));
-        self.type_map.init(Ty::MapStrFloat, make(uintptr));
-        self.type_map.init(Ty::MapStrStr, make(uintptr));
+        self.type_map.init(Ty::MapIntInt, make(voidptr));
+        self.type_map.init(Ty::MapIntFloat, make(voidptr));
+        self.type_map.init(Ty::MapIntStr, make(voidptr));
+        self.type_map.init(Ty::MapStrInt, make(voidptr));
+        self.type_map.init(Ty::MapStrFloat, make(voidptr));
+        self.type_map.init(Ty::MapStrStr, make(voidptr));
         // NB: iterators do not have types of their own, and we should never ask for their types.
         // See the IterState type and its uses for more info.
         self.type_map.init(Ty::IterInt, TypeRef::null());
