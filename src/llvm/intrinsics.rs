@@ -6,7 +6,6 @@ use crate::runtime::{
 };
 
 use hashbrown::HashMap;
-use lazy_static::lazy_static;
 use llvm_sys::{
     self,
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
@@ -17,25 +16,6 @@ use std::convert::TryFrom;
 use std::mem;
 use std::slice;
 
-lazy_static! {
-    pub static ref _MUST_USE: usize = {
-        unsafe {
-            let allocs = &[
-                alloc_intstr() as usize,
-                alloc_intfloat() as usize,
-                alloc_intint() as usize,
-                alloc_strstr() as usize,
-                alloc_strfloat() as usize,
-                alloc_strint() as usize,
-            ];
-            let mut sum: usize = 0;
-            for a in allocs.iter().cloned() {
-                sum = sum.wrapping_add(a);
-            }
-            sum
-        }
-    };
-}
 macro_rules! fail {
     ($($es:expr),+) => {{
         #[cfg(test)]
@@ -719,8 +699,19 @@ pub unsafe extern "C" fn drop_iter_str(iter: *mut u128, len: usize) {
 macro_rules! map_impl_inner {
     ($alloc:ident, $iter:ident, $lookup:ident, $len:ident,
      $insert:ident, $delete:ident, $contains:ident, $k:tt, $v:tt) => {
+        // XXX
+        // What's going on with the read_volatile(&false) stuff?
+        //
+        // Put simply, on MacOS the symbols for these functions are stripped out of the function
+        // without these lines.
+        //
+        // Linux seems much more fogiving in this regard. Without these, some tests will fail, only
+        // on MacOS, and only in a release build.
         #[no_mangle]
         pub unsafe extern "C" fn $alloc() -> *mut c_void {
+            if std::ptr::read_volatile(&false) {
+                eprintln!("allocating from {}", stringify!($alloc));
+            }
             let res: runtime::SharedMap<$k, $v> = Default::default();
             mem::transmute::<runtime::SharedMap<$k, $v>, *mut c_void>(res)
         }
@@ -734,6 +725,9 @@ macro_rules! map_impl_inner {
         }
         #[no_mangle]
         pub unsafe extern "C" fn $len(map: *mut c_void) -> Int {
+            if std::ptr::read_volatile(&false) {
+                eprintln!("allocating from {}", stringify!($alloc));
+            }
             let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
             let res = map.len();
             mem::forget(map);
