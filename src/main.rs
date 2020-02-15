@@ -12,6 +12,8 @@ pub mod dom;
 pub mod harness;
 pub mod lexer;
 pub mod llvm;
+#[allow(unused_parens)]
+pub mod parsing;
 pub mod runtime;
 #[cfg(test)]
 mod test_string_constants;
@@ -30,10 +32,6 @@ extern crate ryu;
 extern crate smallvec;
 extern crate stable_deref_trait;
 extern crate unicode_xid;
-
-use lalrpop_util::lalrpop_mod;
-
-lalrpop_mod!(syntax);
 
 // TODO: put jemalloc behind a feature flag
 // #[global_allocator]
