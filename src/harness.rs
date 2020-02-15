@@ -7,7 +7,8 @@ use crate::{
     bytecode::Interp,
     cfg,
     common::Result,
-    compile, lexer, syntax,
+    compile, lexer,
+    parsing::syntax,
     types::{self, get_types},
 };
 use hashbrown::HashMap;
