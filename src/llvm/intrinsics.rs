@@ -30,6 +30,14 @@ macro_rules! fail {
     }}
 }
 
+macro_rules! exit {
+    ($runtime:expr) => {{
+        let rt = $runtime as *mut Runtime;
+        std::ptr::drop_in_place(rt);
+        std::process::exit(0)
+    }};
+}
+
 pub(crate) struct Runtime<'a> {
     vars: Variables<'a>,
     line: Str<'a>,
@@ -232,10 +240,6 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     table
 }
 
-// TODO: Iterators
-// TODO: IO Errors.
-// - better: just drop_in_place the runtime before exiting successfully.
-
 #[no_mangle]
 pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
@@ -283,10 +287,10 @@ pub unsafe extern "C" fn print_stdout(runtime: *mut c_void, txt: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let txt = &*(txt as *mut Str);
     if runtime.write_files.write_str_stdout(txt).is_err() {
-        fail!("TODO: handle errors in file writing!")
+        exit!(runtime);
     }
     if runtime.write_files.write_str_stdout(&newline).is_err() {
-        fail!("TODO: handle errors in file writing!")
+        exit!(runtime);
     }
 }
 
@@ -305,7 +309,7 @@ pub unsafe extern "C" fn print(
         .write_line(out, txt, append != 0)
         .is_err()
     {
-        fail!("handle errors in file writing!")
+        exit!(runtime);
     }
 }
 
