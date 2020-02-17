@@ -429,7 +429,7 @@ impl<'a> Interp<'a> {
                         let mut buf = DynamicBuf::new(0);
                         fmt_str.with_str(|s| runtime::printf::printf(&mut buf, s, &scratch[..]))?;
                         scratch.clear();
-                        let res = unsafe { buf.into_buf().into_str() };
+                        let res = unsafe { buf.into_str() };
                         let dst = *dst;
                         *self.get_mut(dst) = res;
                     }

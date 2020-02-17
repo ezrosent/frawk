@@ -526,7 +526,7 @@ impl<'a> From<Int> for Str<'a> {
     fn from(i: Int) -> Str<'a> {
         let mut b = DynamicBuf::new(21);
         write!(&mut b, "{}", i).unwrap();
-        unsafe { b.into_buf().into_str() }
+        unsafe { b.into_str() }
     }
 }
 
@@ -543,7 +543,7 @@ impl<'a> From<Float> for Str<'a> {
         } else {
             write!(&mut b, "{}", f).unwrap();
         }
-        unsafe { b.into_buf().into_str() }
+        unsafe { b.into_str() }
     }
 }
 
@@ -580,10 +580,10 @@ impl DynamicBuf {
     fn size(&self) -> usize {
         unsafe { (*self.data.0).size }
     }
-    pub fn into_buf(mut self) -> Buf {
+    pub unsafe fn into_str<'a>(mut self) -> Str<'a> {
         // Shrink the buffer to fit.
-        unsafe { self.realloc(self.write_head) };
-        self.data.into_buf()
+        self.realloc(self.write_head);
+        self.data.into_buf().into_str()
     }
     unsafe fn realloc(&mut self, new_cap: usize) {
         let cap = self.size();
@@ -809,7 +809,7 @@ mod tests {
         )
         .unwrap();
         write!(&mut d, "And this is the second part").unwrap();
-        let s = unsafe { d.into_buf().into_str() };
+        let s = unsafe { d.into_str() };
         s.with_str(|s| {
             assert_eq!(
                 s,
