@@ -86,10 +86,10 @@ BaseStmt: &'a Stmt<'a,'a,&'a str> = {
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "print(" <pa:Args?> ")" <re:Redirect?> =>
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
-    "printf" <pa: PrintArgs?> <re:Redirect?> =>
-        arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
-    "printf(" <pa: Args?> ")" <re:Redirect?> =>
-        arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
+    "printf" <spec:PrecAdd> <pa: ("," <PrintArgs>)?> <re:Redirect?> =>
+        arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
+    "printf(" <spec:Expr> <pa: ("," <Args>)?> ")" <re:Redirect?> =>
+        arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
     "break" => arena.alloc_v(Stmt::Break),
     "continue" => arena.alloc_v(Stmt::Continue),
     "return" <Expr?> => arena.alloc_v(Stmt::Return(<>)),

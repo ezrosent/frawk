@@ -694,6 +694,12 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 let ret_ix = self.tc.funcs[&cur_func_key];
                 self.nw.add_dep(v_ix, ret_ix, Constraint::Flows(()));
             }
+            Printf(fmt, args, out) => {
+                // `fmt` must be a string
+                // `args` must all be scalars
+                // `out`, if there, should be a scalar
+                unimplemented!()
+            }
             // Builtins have fixed types; no constraint generation is necessary.
             // For IterDrop, we do not add extra constraints because IterBegin and IterNext will be
             // sufficient to determine the type of a given iterator.

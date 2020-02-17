@@ -98,20 +98,18 @@ pub enum Binop {
     EQ,
 }
 
-// Once we have done this, it's time to add a parser. That will let us clean out a lot of bugs and
-// get a more robust test suite as well.
-//
+// Features:
+// TODO printf
 // TODO add support for "next"; just continue to the toplevel loop -- annotate while loop?
 // TODO add "close", make cache for regexes LRU.
 // TODO trig functions, !=, any missing operators.
-// TODO printf
 // TODO CLI
 // TODO multiple files
-// TODO backend
 // TODO full /pat1/../pat2/ patterns
 //
-//
-// TVar is the variable?
+// Improvements:
+// * Remove `Vec`s in ASTs. This may be hard for lalrpop for now, but we should at least be able to
+//   move some of the Printf nodes onto an arena.
 
 static_map!(
     BINOPS<&'static str, Binop>,
@@ -161,14 +159,20 @@ pub enum Expr<'a, 'b, I> {
         into: Option<&'a Expr<'a, 'b, I>>,
         from: Option<&'a Expr<'a, 'b, I>>,
     },
+    // TODO sprintf
 }
 
 #[derive(Debug, Clone)]
 pub enum Stmt<'a, 'b, I> {
     Expr(&'a Expr<'a, 'b, I>),
     Block(Vec<&'a Stmt<'a, 'b, I>>),
-    // of course, Print can have 0 arguments. But let's handle that up the stack.
     Print(
+        Vec<&'a Expr<'a, 'b, I>>,
+        Option<(&'a Expr<'a, 'b, I>, bool /*append*/)>,
+    ),
+    // Unlike print, printf must have at least one argument.
+    Printf(
+        &'a Expr<'a, 'b, I>,
         Vec<&'a Expr<'a, 'b, I>>,
         Option<(&'a Expr<'a, 'b, I>, bool /*append*/)>,
     ),
