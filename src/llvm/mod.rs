@@ -1252,12 +1252,7 @@ impl<'a> View<'a> {
                 self.bind_reg(flds, resv);
             }
             Sprintf { dst, fmt, args } => unimplemented!(),
-            Printf {
-                output,
-                fmt,
-                args,
-                append,
-            } => unimplemented!(),
+            Printf { output, fmt, args } => unimplemented!(),
             PrintStdout(txt) => {
                 let txtv = self.get_local(txt.reflect())?;
                 self.call("print_stdout", &mut [self.runtime_val(), txtv]);
