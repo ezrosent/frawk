@@ -39,6 +39,21 @@ impl<'a> Display for PrimStmt<'a> {
             AsgnVar(id, pe) => write!(f, "{} = {}", Wrap(*id), pe),
             SetBuiltin(v, pv) => write!(f, "{} = {}", v, pv),
             Return(v) => write!(f, "return {}", v),
+            Printf(fmt, args, out) => {
+                write!(f, "printf({}", fmt)?;
+                for (i, a) in args.iter().enumerate() {
+                    if i == args.len() - 1 {
+                        write!(f, "{}", a)?;
+                    } else {
+                        write!(f, "{}, ", a)?;
+                    }
+                }
+                write!(f, ")")?;
+                if let Some((out, ap)) = out {
+                    write!(f, " {} {}", out, if *ap { ">>" } else { ">" })?;
+                }
+                Ok(())
+            }
             IterDrop(v) => write!(f, "drop_iter {}", v),
         }
     }

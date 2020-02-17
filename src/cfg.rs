@@ -107,6 +107,14 @@ pub(crate) enum PrimStmt<'a> {
     SetBuiltin(builtins::Variable, PrimExpr<'a>),
     Return(PrimVal<'a>),
     IterDrop(PrimVal<'a>),
+
+    // Printf is its own node because it is easier to handle varargs explicitly rather than to
+    // refactor the whole `builtins` module to support them.
+    Printf(
+        /*spec*/ PrimVal<'a>,
+        /* args */ SmallVec<PrimVal<'a>>,
+        /* output */ Option<(PrimVal<'a>, /* append */ bool)>,
+    ),
 }
 
 // only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
@@ -160,6 +168,15 @@ impl<'a> PrimStmt<'a> {
             // expressions, because assignments to m[k] are *uses* of m; it doesn't assign to it.
             AsgnVar(_, e) => e.replace(update),
             SetBuiltin(_, e) => e.replace(update),
+            Printf(fmt, specs, output) => {
+                fmt.replace(&mut update);
+                for s in specs.iter_mut() {
+                    s.replace(&mut update);
+                }
+                if let Some((out, _)) = output {
+                    out.replace(update);
+                }
+            }
             IterDrop(v) | Return(v) => v.replace(update),
         }
     }
@@ -471,6 +488,7 @@ where
                 }
                 current_open
             }
+            Printf(fmt, args, out) => unimplemented!(),
             Print(vs, out) => {
                 if vs.len() == 0 {
                     return self.convert_stmt(

@@ -1268,6 +1268,7 @@ impl<'a, 'b> View<'a, 'b> {
                     self.pushr(HighLevel::Ret(v_reg, v_ty));
                 }
             }
+            PrimStmt::Printf(fmt, args, out) => unimplemented!(),
             PrimStmt::IterDrop(v) => {
                 let (reg, ty) = self.get_reg(v)?;
                 self.pushr(HighLevel::DropIter(reg, ty))
