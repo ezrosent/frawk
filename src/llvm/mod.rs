@@ -1251,6 +1251,13 @@ impl<'a> View<'a> {
                 let resv = self.call("split_str", &mut [rt, tsv, arrv, patv]);
                 self.bind_reg(flds, resv);
             }
+            Sprintf { dst, fmt, args } => unimplemented!(),
+            Printf {
+                output,
+                fmt,
+                args,
+                append,
+            } => unimplemented!(),
             PrintStdout(txt) => {
                 let txtv = self.get_local(txt.reflect())?;
                 self.call("print_stdout", &mut [self.runtime_val(), txtv]);

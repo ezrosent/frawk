@@ -19,6 +19,10 @@ pub enum Tok<'a> {
     If,
     Else,
     Print,
+    Printf,
+    // Separate token for a "print(" and "printf(".
+    PrintLP,
+    PrintfLP,
     While,
     Do,
 
@@ -91,6 +95,9 @@ static_map!(
     ["if", Tok::If],
     ["else", Tok::Else],
     ["print", Tok::Print],
+    ["printf", Tok::Printf],
+    ["print(", Tok::PrintLP],
+    ["printf(", Tok::PrintfLP],
     ["while", Tok::While],
     ["do", Tok::Do],
     ["{", Tok::LBrace],
