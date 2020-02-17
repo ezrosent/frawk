@@ -1,3 +1,11 @@
+/// Custom string implemenation.
+///
+/// There is a lot of unsafe code here. Many of the features here can and were implementable in
+/// terms of safe code using enums, and various components of the standard library. We moved to
+/// this representation because it significanly improved some benchmarks in terms of time and
+/// space, and it also makes for more ergonomic interop with LLVM.
+///
+/// TODO explain more about what is going on here.
 use crate::runtime::{Float, Int};
 
 use regex::Regex;
