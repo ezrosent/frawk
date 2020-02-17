@@ -14,6 +14,7 @@ pub mod str_impl;
 pub mod strton;
 pub mod utf8;
 
+pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to

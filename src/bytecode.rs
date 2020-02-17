@@ -88,7 +88,7 @@ pub(crate) enum Instr<'a> {
     ModInt(Reg<Int>, Reg<Int>, Reg<Int>),
     Not(Reg<Int>, Reg<Int>),
     NotStr(Reg<Int>, Reg<Str<'a>>),
-    // TODO need NotStr
+    // TODO need NotStr?
     NegInt(Reg<Int>, Reg<Int>),
     NegFloat(Reg<Float>, Reg<Float>),
 
@@ -118,9 +118,7 @@ pub(crate) enum Instr<'a> {
     SetColumn(Reg<Int> /* dst column */, Reg<Str<'a>>),
     GetColumn(Reg<Str<'a>>, Reg<Int>),
 
-    // Lines
-    // perhaps we need
-    // Getline(Reg<Int> /* -1,0,1 */ , Reg<Str<'a>> /* output line */, Reg<Str<'a>> /* input file */)
+    // File reading.
     ReadErr(Reg<Int>, Reg<Str<'a>>),
     NextLine(Reg<Str<'a>>, Reg<Str<'a>>),
     ReadErrStdin(Reg<Int>),
@@ -145,13 +143,11 @@ pub(crate) enum Instr<'a> {
         args: Vec<(NumTy, Ty)>,
     },
     Printf {
-        output: Option<Reg<Str<'a>>>,
+        output: Option<(Reg<Str<'a>>, bool)>,
         fmt: Reg<Str<'a>>,
         args: Vec<(NumTy, Ty)>,
-        append: bool,
     },
     PrintStdout(Reg<Str<'a>> /*text*/),
-    // Print (TODO add more printing functions).
     Print(
         Reg<Str<'a>>, /*text*/
         Reg<Str<'a>>, /*output*/
@@ -314,6 +310,14 @@ impl<'a> Interp<'a> {
     pub(crate) fn instrs(&self) -> &Vec<Vec<Instr<'a>>> {
         &self.instrs
     }
+    fn format_arg(&self, (reg, ty): (NumTy, Ty)) -> Result<runtime::FormatArg<'a>> {
+        Ok(match ty {
+            Ty::Str => self.get(Reg::<Str<'a>>::from(reg)).clone().into(),
+            Ty::Int => self.get(Reg::<Int>::from(reg)).clone().into(),
+            Ty::Float => self.get(Reg::<Float>::from(reg)).clone().into(),
+            _ => return err!("non-scalar (s)printf argument type {:?}", ty),
+        })
+    }
     pub(crate) fn new(
         instrs: Vec<Vec<Instr<'a>>>,
         main_func: usize,
@@ -352,6 +356,7 @@ impl<'a> Interp<'a> {
     pub(crate) fn run(&mut self) -> Result<()> {
         use Instr::*;
         let newline: Str = "\n".into();
+        let mut scratch: Vec<runtime::FormatArg> = Vec::new();
         // We are only accessing one vector at a time here, but it's hard to convince the borrow
         // checker of this fact, so we access the vectors through raw pointers.
         let mut cur_fn = self.main_func;
@@ -669,13 +674,39 @@ impl<'a> Interp<'a> {
                         let out = index(&self.strs, out);
                         self.write_files.write_line(out, txt, *append)?;
                     }
-                    Sprintf { dst, fmt, args } => unimplemented!(),
-                    Printf {
-                        output,
-                        fmt,
-                        args,
-                        append,
-                    } => unimplemented!(),
+                    Sprintf { dst, fmt, args } => {
+                        debug_assert_eq!(scratch.len(), 0);
+                        for a in args.iter() {
+                            scratch.push(self.format_arg(*a)?);
+                        }
+                        use runtime::str_impl::DynamicBuf;
+                        let fmt_str = index(&self.strs, fmt);
+                        let mut buf = DynamicBuf::new(0);
+                        fmt_str.with_str(|s| runtime::printf::printf(&mut buf, s, &scratch[..]))?;
+                        scratch.clear();
+                        let res = unsafe { buf.into_buf().into_str() };
+                        let dst = *dst;
+                        *self.get_mut(dst) = res;
+                    }
+                    Printf { output, fmt, args } => {
+                        debug_assert_eq!(scratch.len(), 0);
+                        for a in args.iter() {
+                            scratch.push(self.format_arg(*a)?);
+                        }
+                        let fmt_str = index(&self.strs, fmt);
+                        if let Some((out_path_reg, append)) = output {
+                            let out_path = index(&self.strs, out_path_reg);
+                            self.write_files.printf(
+                                Some((out_path, *append)),
+                                fmt_str,
+                                &scratch[..],
+                            )
+                        } else {
+                            // print to stdout.
+                            self.write_files.printf(None, fmt_str, &scratch[..])
+                        }?;
+                        scratch.clear();
+                    }
                     LookupIntInt(res, arr, k) => {
                         let arr = index(&self.maps_int_int, arr);
                         let k = index(&self.ints, k);
@@ -1520,13 +1551,22 @@ impl<'a> Instr<'a> {
                 arr.accum(&mut f);
                 pat.accum(&mut f);
             }
-            Sprintf { dst, fmt, args } => unimplemented!(),
-            Printf {
-                output,
-                fmt,
-                args,
-                append,
-            } => unimplemented!(),
+            Sprintf { dst, fmt, args } => {
+                dst.accum(&mut f);
+                fmt.accum(&mut f);
+                for (reg, ty) in args.iter().cloned() {
+                    f(reg, ty);
+                }
+            }
+            Printf { output, fmt, args } => {
+                if let Some((path_reg, _)) = output {
+                    path_reg.accum(&mut f);
+                }
+                fmt.accum(&mut f);
+                for (reg, ty) in args.iter().cloned() {
+                    f(reg, ty);
+                }
+            }
             PrintStdout(txt) => txt.accum(&mut f),
             Print(txt, out, _append) => {
                 txt.accum(&mut f);
