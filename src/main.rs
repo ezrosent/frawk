@@ -10,6 +10,7 @@ pub mod compile;
 mod display;
 pub mod dom;
 pub mod harness;
+pub mod interp;
 pub mod lexer;
 pub mod llvm;
 #[allow(unused_parens)]
