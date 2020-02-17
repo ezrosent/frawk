@@ -4,13 +4,14 @@
 /// We currently lean on std::fmt to do the heavy lifting. Most of the code here just parses format
 /// strings.
 ///
-/// TODO: handle proper semantics for floats.
+/// TODO: handle proper semantics for floats. The main Ryu repo includes support for variable
+/// precision and scientific notation, we should read the paper and implement it using that.
 use crate::common::Result;
 use crate::runtime::{convert, strton::strtoi, Float, Int, Str};
 
 use std::convert::TryFrom;
 use std::fmt;
-use std::io::{self, Cursor, Write};
+use std::io::{self, Write};
 use std::iter::repeat;
 use std::str;
 
@@ -85,7 +86,7 @@ impl<'a> FormatArg<'a> {
     }
     fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
         use FormatArg::*;
-        let mut s: Str<'a> = match self {
+        let s: Str<'a> = match self {
             S(s) => s.clone(),
             F(f) => convert::<_, Str>(*f),
             I(i) => convert::<_, Str>(*i),
@@ -131,7 +132,12 @@ fn is_spec(c: char) -> bool {
 fn spec_base(mut w: impl io::Write, spec: u8, arg: &FormatArg) -> Result<()> {
     let mut buf = StackWriter::default();
     match spec as char {
-        'f' => wrap_result(write!(w, "{}", arg.to_float())),
+        'f' => {
+            // Ryu prints some things a bit differently than most awk implementations.
+            // `write!(w, "{}", arg.to_float())` is a bit closer.
+            let mut buf = ryu::Buffer::new();
+            wrap_result(write!(w, "{}", buf.format(arg.to_float())))
+        }
         'c' => {
             let res = match char::try_from(arg.to_int() as u32) {
                 Ok(ch) => ch,
@@ -362,7 +368,8 @@ pub(crate) fn printf(mut w: impl io::Write, spec: &str, mut args: &[FormatArg]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use FormatArg::*;
+
+    use std::io::Cursor;
 
     macro_rules! sprintf {
         ($fmt:expr $(, $e:expr)*) => {{
@@ -375,6 +382,7 @@ mod tests {
 
     #[test]
     fn basic_printf() {
+        use FormatArg::*;
         let mut v = Vec::<u8>::new();
         let w = Cursor::new(&mut v);
         // We don't use the macro here to test the truncation semantics here.
@@ -387,7 +395,7 @@ mod tests {
         let s = str::from_utf8(&v[..]).unwrap();
         assert_eq!(
             s,
-            "Hi there, to my 2 friends 1 percent of the time: 1.25369e23!"
+            "Hi there, to my 2 friends 1.0 percent of the time: 1.25369e23!"
         );
 
         let s2 = sprintf!("%e %d ~~ %s", 12535, 3, "hi");

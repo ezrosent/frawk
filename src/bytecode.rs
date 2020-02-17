@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::builtins::Variable;
 use crate::common::{NumTy, Result};
-use crate::compile;
+use crate::compile::{self, Ty};
 use crate::runtime::{self, Float, Int, LazyVec, Str};
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
@@ -139,6 +139,17 @@ pub(crate) enum Instr<'a> {
         Reg<runtime::StrMap<'a, Str<'a>>>,
         Reg<Str<'a>>,
     ),
+    Sprintf {
+        dst: Reg<Str<'a>>,
+        fmt: Reg<Str<'a>>,
+        args: Vec<(NumTy, Ty)>,
+    },
+    Printf {
+        output: Option<Reg<Str<'a>>>,
+        fmt: Reg<Str<'a>>,
+        args: Vec<(NumTy, Ty)>,
+        append: bool,
+    },
     PrintStdout(Reg<Str<'a>> /*text*/),
     // Print (TODO add more printing functions).
     Print(
@@ -658,6 +669,13 @@ impl<'a> Interp<'a> {
                         let out = index(&self.strs, out);
                         self.write_files.write_line(out, txt, *append)?;
                     }
+                    Sprintf { dst, fmt, args } => unimplemented!(),
+                    Printf {
+                        output,
+                        fmt,
+                        args,
+                        append,
+                    } => unimplemented!(),
                     LookupIntInt(res, arr, k) => {
                         let arr = index(&self.maps_int_int, arr);
                         let k = index(&self.ints, k);
@@ -1502,6 +1520,13 @@ impl<'a> Instr<'a> {
                 arr.accum(&mut f);
                 pat.accum(&mut f);
             }
+            Sprintf { dst, fmt, args } => unimplemented!(),
+            Printf {
+                output,
+                fmt,
+                args,
+                append,
+            } => unimplemented!(),
             PrintStdout(txt) => txt.accum(&mut f),
             Print(txt, out, _append) => {
                 txt.accum(&mut f);

@@ -1,9 +1,12 @@
-use crate::regex::Regex;
-use crate::smallvec::SmallVec;
+use crate::runtime::{Float, Int};
 
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use regex::Regex;
+use smallvec::SmallVec;
+
+use std::alloc::{alloc_zeroed, dealloc, realloc, Layout};
 use std::cell::{Cell, UnsafeCell};
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
@@ -16,6 +19,9 @@ use std::str;
 //  remaining 15 bytes. That's 5 bits to store the length, which is plenty.
 // TODO: add some macros to make "pattern matching" less error-prone (and to force errors if we add
 // new variants and forget a case?)
+//
+// TODO: explain what's going on here, and why we are using all thus Buf/UniqueBuf machinery
+// instead of just using Box<str> and Rc<str>.
 
 const EMPTY: usize = 0;
 const SHARED: usize = 1;
@@ -150,23 +156,6 @@ impl<'a> Drop for StrRep<'a> {
                 _ => {}
             }
         };
-    }
-}
-
-impl<'a> From<String> for Str<'a> {
-    fn from(s: String) -> Str<'a> {
-        if s.len() == 0 {
-            return Default::default();
-        }
-        // Strings are not guaranteed to be word aligned. Copy over strings that aren't. This
-        // is more important for tests; most of the places that literals can come from in an
-        // awk program will hand out aligned pointers.
-        let buf = Buf::read_from_str(s.as_str());
-        let boxed = Boxed {
-            len: s.len() as u64,
-            buf,
-        };
-        Str::from_rep(boxed.into())
     }
 }
 
@@ -508,6 +497,48 @@ impl<'a> From<&'a str> for Str<'a> {
     }
 }
 
+impl<'a> From<String> for Str<'a> {
+    fn from(s: String) -> Str<'a> {
+        if s.len() == 0 {
+            return Default::default();
+        }
+        // Strings are not guaranteed to be word aligned. Copy over strings that aren't. This
+        // is more important for tests; most of the places that literals can come from in an
+        // awk program will hand out aligned pointers.
+        let buf = Buf::read_from_str(s.as_str());
+        let boxed = Boxed {
+            len: s.len() as u64,
+            buf,
+        };
+        Str::from_rep(boxed.into())
+    }
+}
+
+impl<'a> From<Int> for Str<'a> {
+    fn from(i: Int) -> Str<'a> {
+        let mut b = DynamicBuf::new(21);
+        write!(&mut b, "{}", i).unwrap();
+        unsafe { b.into_buf().into_str() }
+    }
+}
+
+impl<'a> From<Float> for Str<'a> {
+    fn from(f: Float) -> Str<'a> {
+        // Per ryu's documentation, we will only ever use 24 bytes when printing an f64.
+        let mut b = DynamicBuf::new(24);
+        if f.is_finite() {
+            unsafe {
+                let len = ryu::raw::format64(f, b.data.as_mut_ptr());
+                debug_assert!(len < 24);
+                b.write_head = len;
+            };
+        } else {
+            write!(&mut b, "{}", f).unwrap();
+        }
+        unsafe { b.into_buf().into_str() }
+    }
+}
+
 impl Str<'static> {
     // Why have this? Parts of the runtime hold onto a Str<'static> to avoid adding a lifetime
     // parameter to the struct.
@@ -525,6 +556,71 @@ struct BufHeader {
 
 #[repr(transparent)]
 pub struct UniqueBuf(*mut BufHeader);
+
+pub struct DynamicBuf {
+    data: UniqueBuf,
+    write_head: usize,
+}
+
+impl DynamicBuf {
+    pub fn new(size: usize) -> DynamicBuf {
+        DynamicBuf {
+            data: UniqueBuf::new(size),
+            write_head: 0,
+        }
+    }
+    fn size(&self) -> usize {
+        unsafe { (*self.data.0).size }
+    }
+    pub fn into_buf(mut self) -> Buf {
+        // Shrink the buffer to fit.
+        unsafe { self.realloc(self.write_head) };
+        self.data.into_buf()
+    }
+    unsafe fn realloc(&mut self, new_cap: usize) {
+        let cap = self.size();
+        let new_buf = realloc(
+            self.data.0 as *mut u8,
+            UniqueBuf::layout(cap),
+            UniqueBuf::layout(new_cap).size(),
+        ) as *mut BufHeader;
+        (*new_buf).size = new_cap;
+        self.data.0 = new_buf;
+    }
+}
+
+impl Write for DynamicBuf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let cap = self.size();
+        let remaining = cap - self.write_head;
+        unsafe {
+            if remaining < buf.len() {
+                let new_cap = std::cmp::max(buf.len(), cap * 2);
+                self.realloc(new_cap);
+                ptr::copy(
+                    buf.as_ptr(),
+                    self.data.as_mut_ptr().offset(self.write_head as isize),
+                    buf.len(),
+                );
+            // NB: even after copying, there may be uninitialized memory at the tail of the
+            // buffer. We enforce that this memory is never read by doing a realloc(write_head)
+            // before moving this into a Buf. Before then, we don't read the underlying data at
+            // all.
+            } else {
+                ptr::copy(
+                    buf.as_ptr(),
+                    self.data.as_mut_ptr().offset(self.write_head as isize),
+                    buf.len(),
+                )
+            }
+        };
+        self.write_head += buf.len();
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 #[repr(transparent)]
 pub struct Buf(*const BufHeader);
@@ -693,6 +789,26 @@ mod tests {
     fn split_long_string() {
         let pat = Regex::new(r#"[ \t]"#).unwrap();
         test_str_split(&pat, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+    }
+
+    #[test]
+    fn dynamic_string() {
+        let mut d = DynamicBuf::new(0);
+        write!(
+            &mut d,
+            "This is the first part of the string {}\n",
+            "with formatting and everything!"
+        )
+        .unwrap();
+        write!(&mut d, "And this is the second part").unwrap();
+        let s = unsafe { d.into_buf().into_str() };
+        s.with_str(|s| {
+            assert_eq!(
+                s,
+                r#"This is the first part of the string with formatting and everything!
+And this is the second part"#
+            )
+        });
     }
 }
 

@@ -531,14 +531,6 @@ for (k in m) {
         @types [y :: Int]
     );
 
-    test_program!(
-        xyz,
-        r#"BEGIN { x = "hi"; x = 1; y = x; m[1]=2; }"#,
-        "",
-        @input "",
-        @types [y :: Int]
-    );
-
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,

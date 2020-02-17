@@ -242,6 +242,21 @@ impl FileWrite {
         )
     }
 
+    pub(crate) fn printf(
+        &mut self,
+        path: Option<(&Str, bool)>,
+        spec: &Str,
+        pa: &[printf::FormatArg],
+    ) -> Result<()> {
+        if let Some((out_file, append)) = path {
+            self.with_handle(append, out_file, |writer| {
+                spec.with_str(|spec| printf::printf(writer, spec, pa))
+            })
+        } else {
+            spec.with_str(|spec| printf::printf(&mut self.stdout, spec, pa))
+        }
+    }
+
     pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
         if let Err(e) = s.with_str(|s| self.stdout.write_all(s.as_bytes())) {
             err!("failed to write to stdout (stdout closed?): {}", e)
@@ -389,19 +404,15 @@ impl Convert<Int, Float> for _Carrier {
     }
 }
 
-// TODO(ezr): These two perform two heap allocations, we should make this faster if possible.
-
+// See str_impl.rs for how these first two are implemented.
 impl<'a> Convert<Int, Str<'a>> for _Carrier {
     fn convert(i: Int) -> Str<'a> {
-        format!("{}", i).into()
+        i.into()
     }
 }
 impl<'a> Convert<Float, Str<'a>> for _Carrier {
     fn convert(f: Float) -> Str<'a> {
-        let mut buffer = ryu::Buffer::new();
-        let printed = buffer.format(f);
-        let p_str: String = printed.into();
-        p_str.into()
+        f.into()
     }
 }
 impl<'a> Convert<Str<'a>, Float> for _Carrier {
@@ -433,6 +444,7 @@ where
 }
 
 // AWK arrays are inherently shared and mutable, so we have to do this, even if it is a code smell.
+// NB These are repr(transparent) because we pass them around as void* when compiling with LLVM.
 #[repr(transparent)]
 #[derive(Debug)]
 pub(crate) struct SharedMap<K, V>(Rc<RefCell<HashMap<K, V>>>);
