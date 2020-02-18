@@ -25,6 +25,27 @@ pub(crate) enum Ty {
     IterStr = 10,
 }
 
+impl std::convert::TryFrom<u32> for Ty {
+    type Error = ();
+    fn try_from(u: u32) -> std::result::Result<Ty, ()> {
+        use Ty::*;
+        Ok(match u {
+            0 => Int,
+            1 => Float,
+            2 => Str,
+            3 => MapIntInt,
+            4 => MapIntFloat,
+            5 => MapIntStr,
+            6 => MapStrInt,
+            7 => MapStrFloat,
+            8 => MapStrStr,
+            9 => IterInt,
+            10 => IterStr,
+            _ => return Err(()),
+        })
+    }
+}
+
 impl Default for Ty {
     fn default() -> Ty {
         Ty::Str
@@ -756,6 +777,15 @@ impl<'a, 'b> View<'a, 'b> {
         }
     }
 
+    fn ensure_ty(&mut self, reg: u32, from_ty: Ty, to_ty: Ty) -> Result<u32> {
+        if from_ty == to_ty {
+            return Ok(reg);
+        }
+        let new_reg = self.regs.stats.reg_of_ty(to_ty);
+        self.convert(new_reg, to_ty, reg, from_ty)?;
+        Ok(new_reg)
+    }
+
     // Move src into dst at type Ty.
     fn mov(&mut self, dst_reg: u32, src_reg: u32, ty: Ty) -> Result<()> {
         if let Some(inst) = mov(dst_reg, src_reg, ty)? {
@@ -1216,11 +1246,7 @@ impl<'a, 'b> View<'a, 'b> {
                 let (a_reg, a_ty) = self.reg_of_ident(arr);
                 let (mut k_reg, k_ty) = self.get_reg(pv)?;
                 let a_key_ty = a_ty.key()?;
-                if k_ty != a_key_ty {
-                    let conv_reg = self.regs.stats.reg_of_ty(a_key_ty);
-                    self.convert(conv_reg, a_key_ty, k_reg, k_ty)?;
-                    k_reg = conv_reg;
-                }
+                k_reg = self.ensure_ty(k_reg, k_ty, a_key_ty)?;
                 let v_ty = a_ty.val()?;
                 let v_reg = self.regs.stats.reg_of_ty(v_ty);
                 self.expr(v_reg, v_ty, pe)?;
@@ -1258,17 +1284,31 @@ impl<'a, 'b> View<'a, 'b> {
                 });
             }
             PrimStmt::Return(v) => {
-                let (v_reg, v_ty) = self.get_reg(v)?;
+                let (mut v_reg, v_ty) = self.get_reg(v)?;
                 let ret_ty = self.func_info[self.frame.cur_ident as usize].ret_ty;
-                if v_ty != ret_ty {
-                    let ret_reg = self.regs.stats.reg_of_ty(ret_ty);
-                    self.convert(ret_reg, ret_ty, v_reg, v_ty)?;
-                    self.pushr(HighLevel::Ret(ret_reg, ret_ty));
-                } else {
-                    self.pushr(HighLevel::Ret(v_reg, v_ty));
-                }
+                v_reg = self.ensure_ty(v_reg, v_ty, ret_ty)?;
+                self.pushr(HighLevel::Ret(v_reg, ret_ty));
             }
-            PrimStmt::Printf(fmt, args, out) => unimplemented!(),
+            PrimStmt::Printf(fmt, args, out) => {
+                let (mut fmt_reg, fmt_ty) = self.get_reg(fmt)?;
+                fmt_reg = self.ensure_ty(fmt_reg, fmt_ty, Ty::Str)?;
+                let mut arg_regs = Vec::with_capacity(args.len());
+                for a in args {
+                    arg_regs.push(self.get_reg(a)?);
+                }
+                let out_reg = if let Some((out, append)) = out {
+                    let (mut out_reg, out_ty) = self.get_reg(out)?;
+                    out_reg = self.ensure_ty(out_reg, out_ty, Ty::Str)?;
+                    Some((out_reg.into(), *append))
+                } else {
+                    None
+                };
+                self.pushl(LL::Printf {
+                    output: out_reg,
+                    fmt: fmt_reg.into(),
+                    args: arg_regs,
+                });
+            }
             PrimStmt::IterDrop(v) => {
                 let (reg, ty) = self.get_reg(v)?;
                 self.pushr(HighLevel::DropIter(reg, ty))

@@ -1,8 +1,10 @@
 use crate::builtins::Variable;
 use crate::common::Either;
+use crate::compile::Ty;
 use crate::libc::c_void;
 use crate::runtime::{
-    self, FileRead, FileWrite, Float, Int, IntMap, LazyVec, RegexCache, Str, StrMap, Variables,
+    self, printf::FormatArg, FileRead, FileWrite, Float, Int, IntMap, LazyVec, RegexCache, Str,
+    StrMap, Variables,
 };
 
 use hashbrown::HashMap;
@@ -125,6 +127,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     let void_ty = LLVMVoidTypeInContext(ctx);
     let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
     let rt_ty = LLVMPointerType(void_ty, 0);
+    let fmt_args_ty = LLVMPointerType(rt_ty, 0);
+    let fmt_tys_ty = LLVMPointerType(LLVMIntTypeInContext(ctx, 32), 0);
     let map_ty = rt_ty;
     let str_ref_ty = LLVMPointerType(str_ty, 0);
     let iter_int_ty = LLVMPointerType(int_ty, 0);
@@ -168,6 +172,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         split_str(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
+        printf_impl_file(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty, str_ref_ty, int_ty);
+        printf_impl_stdout(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty);
         read_err(rt_ty, str_ref_ty) -> int_ty;
         read_err_stdin(rt_ty) -> int_ty;
         next_line(rt_ty, str_ref_ty) -> str_ty;
@@ -689,6 +695,7 @@ macro_rules! convert_out {
         $e
     };
 }
+
 #[no_mangle]
 pub unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(iter, len)))
@@ -698,6 +705,76 @@ pub unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
 pub unsafe extern "C" fn drop_iter_str(iter: *mut u128, len: usize) {
     let p = iter as *mut Str;
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
+}
+
+type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
+
+unsafe fn wrap_args<'a>(
+    args: *mut *mut c_void,
+    tys: *mut u32,
+    num_args: Int,
+) -> SmallVec<FormatArg<'a>> {
+    let mut format_args = SmallVec::with_capacity(num_args as usize);
+    for i in 0..num_args {
+        let ty_code = *tys.offset(i as isize);
+        let arg = *(args.offset(i as isize));
+        let ty = if let Ok(ty) = Ty::try_from(ty_code) {
+            ty
+        } else {
+            fail!("invalid type code passed to printf_impl_file: {}", ty_code)
+        };
+        let typed_arg: FormatArg = match ty {
+            Ty::Int => mem::transmute::<*mut c_void, Int>(arg).into(),
+            Ty::Float => mem::transmute::<*mut c_void, Float>(arg).into(),
+            Ty::Str => mem::transmute::<*mut c_void, &Str>(arg).clone().into(),
+            _ => fail!(
+                "invalid format arg {:?} (this should have been caught earlier)",
+                ty
+            ),
+        };
+        format_args.push(typed_arg);
+    }
+    format_args
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn printf_impl_file(
+    rt: *mut c_void,
+    spec: *mut u128,
+    args: *mut *mut c_void,
+    tys: *mut u32,
+    num_args: Int,
+    output: *mut u128,
+    append: Int,
+) {
+    let output_wrapped = Some((&*(output as *mut Str), append != 0));
+    let format_args = wrap_args(args, tys, num_args);
+    let res = (*(rt as *mut Runtime)).write_files.printf(
+        output_wrapped,
+        &*(spec as *mut Str),
+        &format_args[..],
+    );
+    if res.is_err() {
+        exit!(rt);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn printf_impl_stdout(
+    rt: *mut c_void,
+    spec: *mut u128,
+    args: *mut *mut c_void,
+    tys: *mut u32,
+    num_args: Int,
+) {
+    let format_args = wrap_args(args, tys, num_args);
+    let res =
+        (*(rt as *mut Runtime))
+            .write_files
+            .printf(None, &*(spec as *mut Str), &format_args[..]);
+    if res.is_err() {
+        exit!(rt);
+    }
 }
 
 macro_rules! map_impl_inner {

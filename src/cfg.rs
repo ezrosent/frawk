@@ -488,8 +488,28 @@ where
                 }
                 current_open
             }
-            Printf(fmt, args, out) => unimplemented!(),
+            Printf(fmt, args, out) => {
+                let (mut current_open, fmt_v) = self.convert_val(fmt, current_open)?;
+                let mut arg_vs = SmallVec::with_capacity(args.len());
+                for a in args {
+                    let (next, arg_v) = self.convert_val(a, current_open)?;
+                    arg_vs.push(arg_v);
+                    current_open = next;
+                }
+                let out_v = if let Some((out, append)) = out {
+                    let (next, out_v) = self.convert_val(out, current_open)?;
+                    current_open = next;
+                    Some((out_v, *append))
+                } else {
+                    None
+                };
+                self.add_stmt(current_open, PrimStmt::Printf(fmt_v, arg_vs, out_v))?;
+                current_open
+            }
             Print(vs, out) => {
+                // TODO: why not just print a bunch of things in a row?
+                // Concatenation is cheap, but that might be cheaper! We would need to change the
+                // semantics of the underlying instruction to avoid a newline.
                 if vs.len() == 0 {
                     return self.convert_stmt(
                         &ast::Stmt::Print(
