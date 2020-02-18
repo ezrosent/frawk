@@ -1,18 +1,13 @@
-/// This module implements much of printf in AWK, except for some semantics around the rounding of
-/// floating point numbers (they are currently treated the same as integers are).
+/// This module implements much of printf in awk.
 ///
-/// We currently lean on std::fmt to do the heavy lifting. Most of the code here just parses format
-/// strings.
-///
-/// TODO: handle proper semantics for floats. The main Ryu repo includes support for variable
-/// precision and scientific notation, we should read the paper and implement it using that.
+/// We lean heavily on ryu and the std::fmt machinery; as such, most of the work is parsing
+/// awk-style format strings and translating them to individual calls to write!.
 use crate::common::Result;
 use crate::runtime::{convert, strton::strtoi, Float, Int, Str};
 
 use std::convert::TryFrom;
 use std::fmt;
-use std::io::{self, Write};
-use std::iter::repeat;
+use std::io::Write;
 use std::str;
 
 type SmallVec<T> = smallvec::SmallVec<[T; 32]>;
@@ -26,7 +21,7 @@ impl StackWriter {
     }
 }
 
-impl io::Write for StackWriter {
+impl Write for StackWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0.extend_from_slice(buf);
         Ok(buf.len())
@@ -95,16 +90,15 @@ impl<'a> FormatArg<'a> {
     }
 }
 
+#[derive(Copy, Clone)]
 struct FormatSpec {
     // leading '-' ? -- left justification.
     minus: bool,
     // number to the left of '.', if any
     leading_zeros: bool,
     // padding
-    // TODO: only zero-pad with a finite float
     lnum: usize,
-    // maximum string width
-    // TODO: implement rounding.
+    // maximum string width, or floating point precision.
     rnum: usize,
     // format specifier: e.g. c, d, s, x.
     spec: u8,
@@ -129,83 +123,98 @@ fn is_spec(c: char) -> bool {
     }
 }
 
-fn spec_base(mut w: impl io::Write, spec: u8, arg: &FormatArg) -> Result<()> {
-    let mut buf = StackWriter::default();
-    match spec as char {
+fn process_spec(mut w: impl Write, fspec: &mut FormatSpec, arg: &FormatArg) -> Result<()> {
+    macro_rules! match_for_spec {
+        ($s:expr, $arg:expr) => {
+            match (
+                fspec.minus,
+                fspec.leading_zeros,
+                fspec.lnum,
+                fspec.rnum == usize::max_value(),
+            ) {
+                (true, true, lnum, true) => write!(w, concat!("{:0<l$", $s, "}"), $arg, l = lnum),
+                (true, false, lnum, true) => write!(w, concat!("{:<l$", $s, "}"), $arg, l = lnum),
+                (true, true, lnum, false) => write!(
+                    w,
+                    concat!("{:0<l$.r$", $s, "}"),
+                    $arg,
+                    l = lnum,
+                    r = fspec.rnum
+                ),
+                (true, false, lnum, false) => write!(
+                    w,
+                    concat!("{:<l$.r$", $s, "}"),
+                    $arg,
+                    l = lnum,
+                    r = fspec.rnum
+                ),
+                (false, true, lnum, true) => write!(w, concat!("{:0>l$", $s, "}"), $arg, l = lnum),
+                (false, false, lnum, true) => write!(w, concat!("{:>l$", $s, "}"), $arg, l = lnum),
+                (false, true, lnum, false) => write!(
+                    w,
+                    concat!("{:0>l$.r$", $s, "}"),
+                    $arg,
+                    l = lnum,
+                    r = fspec.rnum
+                ),
+                (false, false, lnum, false) => write!(
+                    w,
+                    concat!("{:>l$.r$", $s, "}"),
+                    $arg,
+                    l = lnum,
+                    r = fspec.rnum
+                ),
+            }
+        };
+    }
+    let res = match fspec.spec as char {
         'f' => {
-            // Ryu prints some things a bit differently than most awk implementations.
-            // `write!(w, "{}", arg.to_float())` is a bit closer.
-            let mut buf = ryu::Buffer::new();
-            wrap_result(write!(w, "{}", buf.format(arg.to_float())))
-        }
-        'c' => {
-            let res = match char::try_from(arg.to_int() as u32) {
-                Ok(ch) => ch,
-                Err(e) => return err!("invalid character:  {}", e),
-            };
-            wrap_result(write!(w, "{}", res))
-        }
-        'd' => wrap_result(write!(w, "{}", arg.to_int())),
-        'e' => wrap_result(write!(w, "{:e}", arg.to_float())),
-        'g' => {
-            // %g means "pick the shorter of standard and scientific notation". We do the obvious
-            // thing of computing both and writing out the smaller one.
-            let f = arg.to_float();
-            wrap_result(write!(&mut buf, "{}", f))?;
-            let l1 = buf.len();
-            wrap_result(write!(&mut buf, "{:e}", f))?;
-            let l2 = buf.len() - l1;
-            if l1 < l2 {
-                wrap_result(write!(w, "{}", unsafe {
-                    str::from_utf8_unchecked(&buf.0[0..l1])
-                }))
+            if !fspec.leading_zeros && fspec.lnum == 0 && fspec.rnum == usize::max_value() {
+                // Fast path: use Ryu, which today is more efficient than the standard library.
+                // NB Ryu prints some things a bit differently than most awk implementations.
+                // `write!(w, "{}", arg.to_float())` is a bit closer.
+                let mut buf = ryu::Buffer::new();
+                write!(w, "{}", buf.format(arg.to_float()))
             } else {
-                wrap_result(write!(w, "{}", unsafe {
-                    str::from_utf8_unchecked(&buf.0[l1..(l1 + l2)])
-                }))
+                match_for_spec!("", arg.to_float())
             }
         }
-        'o' => wrap_result(write!(w, "{:o}", arg.to_int())),
-        's' => arg.with_str(|s| wrap_result(write!(w, "{}", s))),
-        'x' => wrap_result(write!(w, "{:x}", arg.to_int())),
-        _ => return err!("invalid format spec: {}", spec),
-    }
-}
-
-fn process_spec(
-    mut w: impl io::Write,
-    FormatSpec {
-        minus,
-        leading_zeros,
-        lnum,
-        rnum,
-        spec,
-    }: FormatSpec,
-    arg: &FormatArg,
-) -> Result<()> {
-    let mut padding = StackWriter::default();
-    let mut buf = StackWriter::default();
-    spec_base(&mut buf, spec, arg)?;
-    if rnum < buf.len() {
-        buf.0.truncate(rnum);
-    }
-    let padding_bytes = lnum.saturating_sub(buf.len());
-    if padding_bytes > 0 {
-        padding
-            .0
-            .extend(repeat(if leading_zeros { '0' } else { ' ' } as u8).take(padding_bytes));
-    }
-    let padding_str = unsafe { str::from_utf8_unchecked(&padding.0[..]) };
-    let buf_str = unsafe { str::from_utf8_unchecked(&buf.0[..]) };
-    if minus {
-        // minus => left justified. Padding comes second
-        wrap_result(write!(&mut w, "{}", buf_str))?;
-        wrap_result(write!(&mut w, "{}", padding_str))?;
-    } else {
-        wrap_result(write!(&mut w, "{}", padding_str))?;
-        wrap_result(write!(&mut w, "{}", buf_str))?;
-    }
-    Ok(())
+        'e' => match_for_spec!("e", arg.to_float()),
+        'g' => {
+            let mut buf = StackWriter::default();
+            // %g means "pick the shorter of standard and scientific notation". We do the obvious
+            // thing of computing both and writing out the smaller one.
+            fspec.spec = 'f' as u8;
+            process_spec(&mut buf, fspec, arg)?;
+            let l1 = buf.len();
+            fspec.spec = 'e' as u8;
+            process_spec(&mut buf, fspec, arg)?;
+            let l2 = buf.len() - l1;
+            if l1 < l2 {
+                write!(w, "{}", unsafe { str::from_utf8_unchecked(&buf.0[0..l1]) })
+            } else {
+                write!(w, "{}", unsafe {
+                    str::from_utf8_unchecked(&buf.0[l1..(l1 + l2)])
+                })
+            }
+        }
+        'd' => match_for_spec!("", arg.to_int()),
+        'o' => match_for_spec!("o", arg.to_int()),
+        'x' => match_for_spec!("x", arg.to_int()),
+        'c' => match char::try_from(arg.to_int() as u32) {
+            Ok(ch) if ch.is_ascii() => match_for_spec!("", ch),
+            _ => arg.with_str(|s| {
+                if let Some(ch) = s.chars().next() {
+                    match_for_spec!("", ch)
+                } else {
+                    Ok(())
+                }
+            }),
+        },
+        's' => arg.with_str(|s| match_for_spec!("", s)),
+        x => return err!("unsupported format specifier: {}", x),
+    };
+    wrap_result(res)
 }
 
 fn wrap_result(r: std::result::Result<(), impl fmt::Display>) -> Result<()> {
@@ -215,11 +224,11 @@ fn wrap_result(r: std::result::Result<(), impl fmt::Display>) -> Result<()> {
     }
 }
 
-fn write_str(mut w: impl io::Write, s: &str) -> Result<()> {
+fn write_str(mut w: impl Write, s: &str) -> Result<()> {
     wrap_result(write!(w, "{}", s))
 }
 
-pub(crate) fn printf(mut w: impl io::Write, spec: &str, mut args: &[FormatArg]) -> Result<()> {
+pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> Result<()> {
     #[derive(Copy, Clone)]
     enum State {
         // Byte index of start of string
@@ -287,13 +296,13 @@ pub(crate) fn printf(mut w: impl io::Write, spec: &str, mut args: &[FormatArg]) 
                     match (ch, stage) {
                         ('%', Begin) => {
                             fs.spec = '%' as u8;
-                            process_spec(&mut w, fs, next_arg())?;
+                            process_spec(&mut w, &mut fs, next_arg())?;
                             state = Raw(ix + 1);
                             continue 'outer;
                         }
                         (ch, _) if is_spec(ch) => {
                             fs.spec = ch as u8;
-                            process_spec(&mut w, fs, next_arg())?;
+                            process_spec(&mut w, &mut fs, next_arg())?;
                             state = Raw(ix + 1);
                             continue 'outer;
                         }
@@ -408,5 +417,11 @@ mod tests {
         assert_eq!(s1.as_str(), "000142 |Feb       |");
         let s2 = sprintf!("|%-10.");
         assert_eq!(s2.as_str(), "|%-10.");
+    }
+
+    #[test]
+    fn float_rounding() {
+        let s1 = sprintf!("%02.2f", 2.375);
+        assert_eq!(s1.as_str(), "2.38");
     }
 }
