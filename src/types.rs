@@ -695,10 +695,26 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 self.nw.add_dep(v_ix, ret_ix, Constraint::Flows(()));
             }
             Printf(fmt, args, out) => {
-                // `fmt` must be a string
-                // `args` must all be scalars
-                // `out`, if there, should be a scalar
-                unimplemented!()
+                // Printf's arguments can be any scalar.
+                //
+                // NB: This information isn't really needed for inference, but it means that we can
+                // avoid extra type-checking when lowering to typed bytecode. It's worth revisiting
+                // this form a performance standpoint.
+                let is_scalar: State = Some(TVar::Scalar(None));
+                let scalar_node = self.constant(is_scalar);
+                let fmt_node = self.val_node(fmt);
+                self.nw
+                    .add_dep(scalar_node, fmt_node, Constraint::Flows(()));
+                for a in args.iter() {
+                    let arg_node = self.val_node(a);
+                    self.nw
+                        .add_dep(scalar_node, arg_node, Constraint::Flows(()));
+                }
+                if let Some((out, _append)) = out {
+                    let out_node = self.val_node(out);
+                    self.nw
+                        .add_dep(scalar_node, out_node, Constraint::Flows(()));
+                }
             }
             // Builtins have fixed types; no constraint generation is necessary.
             // For IterDrop, we do not add extra constraints because IterBegin and IterNext will be

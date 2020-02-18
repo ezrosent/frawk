@@ -531,6 +531,20 @@ for (k in m) {
         @types [y :: Int]
     );
 
+    test_program!(
+        printf_1,
+        r#"BEGIN { x=1; y=2.5; z="hello";
+        printf "%d %10s %d\n\n", x, z, y;}"#,
+        "1      hello 2\n\n"
+    );
+
+    test_program!(
+        printf_2,
+        r#"BEGIN { x=1; y=2.5; z="hello";
+        printf("%02d %10s %02o\n\n", x+231, z, y<x);}"#,
+        "232      hello 00\n\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,
