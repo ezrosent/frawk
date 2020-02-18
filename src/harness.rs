@@ -548,8 +548,9 @@ for (k in m) {
     test_program!(
         printf_3,
         r#"BEGIN { x=1; y=2.5; z="hello";
+        printf("%02d %10s %02o\n\n", x+231, z, y<x);
         printf("%02d %10s %02o %s %d\n\n", x+231, z, y<x, 2.56, "320");}"#,
-        "232      hello 00 2.56 320\n\n"
+        "232      hello 00\n\n232      hello 00 2.56 320\n\n"
     );
 
     // TODO test more operators, consider more edge cases around functions
