@@ -190,7 +190,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         //
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
         use llvm_sys::transforms::pass_manager_builder::*;
-        static OPT: bool = false;
+        static OPT: bool = true;
         let mpm = LLVMCreatePassManager();
         let fpm = LLVMCreateFunctionPassManagerForModule(self.module);
 
@@ -290,7 +290,6 @@ impl<'a, 'b> Generator<'a, 'b> {
         let mut rt = intrinsics::Runtime::new(stdin, stdout);
         self.gen_main()?;
         self.verify()?;
-        eprintln!("{}", self.dump_module_inner());
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
         let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
         main_fn((&mut rt) as *mut _ as *mut libc::c_void);
@@ -1267,7 +1266,34 @@ impl<'a> View<'a> {
             // and call the function.
             //
             // Instead of an option, just pass a pointer and make it null if nothing is there.
-            Printf { output, fmt, args } => unimplemented!(),
+            Printf { output, fmt, args } => {
+                // First, extract the types and use that to get a handle on a wrapped printf
+                // function.
+                let arg_tys: SmallVec<_> = args.iter().map(|x| x.1).collect();
+                let printf_fn = self.wrapped_printf((arg_tys, output.is_some()));
+                let mut arg_vs = SmallVec::with_capacity(if output.is_some() {
+                    args.len() + 4
+                } else {
+                    args.len() + 2
+                });
+                arg_vs.push(self.runtime_val());
+                arg_vs.push(self.get_local(fmt.reflect())?);
+                for a in args.iter().cloned() {
+                    arg_vs.push(self.get_local(a)?);
+                }
+                if let Some((path, append)) = output {
+                    arg_vs.push(self.get_local(path.reflect())?);
+                    let int_ty = self.tmap.get_ty(Ty::Int);
+                    arg_vs.push(LLVMConstInt(int_ty, if *append { 1 } else { 0 }, 0));
+                }
+                LLVMBuildCall(
+                    self.f.builder,
+                    printf_fn,
+                    arg_vs.as_mut_ptr(),
+                    arg_vs.len() as libc::c_uint,
+                    c_str!(""),
+                );
+            }
             PrintStdout(txt) => {
                 let txtv = self.get_local(txt.reflect())?;
                 self.call("print_stdout", &mut [self.runtime_val(), txtv]);
@@ -1578,31 +1604,43 @@ impl<'a> View<'a> {
 
         // Allocate an array of u32s and an array of void*s to pass the arguments and their types.
         let u32_ty = LLVMIntTypeInContext(self.ctx, 32);
-        let voidp_ty = LLVMPointerType(ret, 0);
+        let usize_ty =
+            LLVMIntTypeInContext(self.ctx, mem::size_of::<*mut ()>() as libc::c_uint * 8);
         let len = args.len() as libc::c_uint;
         let types_ty = LLVMArrayType(u32_ty, len);
-        let args_ty = LLVMArrayType(voidp_ty, len);
+        let args_ty = LLVMArrayType(usize_ty, len);
         let types_array = LLVMBuildAlloca(builder, types_ty, c_str!(""));
         let args_array = LLVMBuildAlloca(builder, args_ty, c_str!(""));
+        let zero = LLVMConstInt(u32_ty, 0, /*sign_extend=*/ 0);
 
         for (i, t) in args.iter().cloned().enumerate() {
-            let mut index = LLVMConstInt(u32_ty, i as u64, /*sign_extend=*/ 0);
+            let mut index = [zero, LLVMConstInt(u32_ty, i as u64, /*sign_extend=*/ 0)];
 
             // Store a u32 code representing the type into the current index.
-            let ty_ptr = LLVMBuildGEP(builder, types_array, &mut index, 1, c_str!(""));
+            let ty_ptr = LLVMBuildGEP(builder, types_array, index.as_mut_ptr(), 2, c_str!(""));
             let tval = LLVMConstInt(u32_ty, t as u32 as u64, /*sign_extend=*/ 0);
             LLVMBuildStore(builder, tval, ty_ptr);
 
-            let arg_ptr = LLVMBuildGEP(builder, args_array, &mut index, 1, c_str!(""));
+            let arg_ptr = LLVMBuildGEP(builder, args_array, index.as_mut_ptr(), 2, c_str!(""));
             // The format spec is our first parameter, so increase the offset by one
-            let argval = LLVMGetParam(f, i as libc::c_uint + 1);
+            let argval = LLVMGetParam(f, i as libc::c_uint + 2);
             // Cast the value to void*, then store it into the array.
-            let cast_val = LLVMBuildBitCast(builder, argval, voidp_ty, c_str!(""));
+            let cast_val = if let Ty::Str = t {
+                LLVMBuildPtrToInt(builder, argval, usize_ty, c_str!(""))
+            } else {
+                LLVMBuildBitCast(builder, argval, usize_ty, c_str!(""))
+            };
             LLVMBuildStore(builder, cast_val, arg_ptr);
         }
-        let mut start_index = LLVMConstInt(u32_ty, 0, /*sign_extend=*/ 0);
-        let args_ptr = LLVMBuildGEP(builder, args_array, &mut start_index, 1, c_str!(""));
-        let tys_ptr = LLVMBuildGEP(builder, types_array, &mut start_index, 1, c_str!(""));
+        let mut start_index = [zero, zero];
+        let args_ptr = LLVMBuildGEP(builder, args_array, start_index.as_mut_ptr(), 2, c_str!(""));
+        let tys_ptr = LLVMBuildGEP(
+            builder,
+            types_array,
+            start_index.as_mut_ptr(),
+            2,
+            c_str!(""),
+        );
         let len_v = LLVMConstInt(
             self.tmap.get_ty(Ty::Int),
             len as u64,

@@ -127,7 +127,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     let void_ty = LLVMVoidTypeInContext(ctx);
     let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
     let rt_ty = LLVMPointerType(void_ty, 0);
-    let fmt_args_ty = LLVMPointerType(rt_ty, 0);
+    let fmt_args_ty = LLVMPointerType(int_ty, 0);
     let fmt_tys_ty = LLVMPointerType(LLVMIntTypeInContext(ctx, 32), 0);
     let map_ty = rt_ty;
     let str_ref_ty = LLVMPointerType(str_ty, 0);
@@ -709,11 +709,7 @@ pub unsafe extern "C" fn drop_iter_str(iter: *mut u128, len: usize) {
 
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
-unsafe fn wrap_args<'a>(
-    args: *mut *mut c_void,
-    tys: *mut u32,
-    num_args: Int,
-) -> SmallVec<FormatArg<'a>> {
+unsafe fn wrap_args<'a>(args: *mut usize, tys: *mut u32, num_args: Int) -> SmallVec<FormatArg<'a>> {
     let mut format_args = SmallVec::with_capacity(num_args as usize);
     for i in 0..num_args {
         let ty_code = *tys.offset(i as isize);
@@ -724,9 +720,9 @@ unsafe fn wrap_args<'a>(
             fail!("invalid type code passed to printf_impl_file: {}", ty_code)
         };
         let typed_arg: FormatArg = match ty {
-            Ty::Int => mem::transmute::<*mut c_void, Int>(arg).into(),
-            Ty::Float => mem::transmute::<*mut c_void, Float>(arg).into(),
-            Ty::Str => mem::transmute::<*mut c_void, &Str>(arg).clone().into(),
+            Ty::Int => mem::transmute::<usize, Int>(arg).into(),
+            Ty::Float => mem::transmute::<usize, Float>(arg).into(),
+            Ty::Str => mem::transmute::<usize, &Str>(arg).clone().into(),
             _ => fail!(
                 "invalid format arg {:?} (this should have been caught earlier)",
                 ty
@@ -741,7 +737,7 @@ unsafe fn wrap_args<'a>(
 pub unsafe extern "C" fn printf_impl_file(
     rt: *mut c_void,
     spec: *mut u128,
-    args: *mut *mut c_void,
+    args: *mut usize,
     tys: *mut u32,
     num_args: Int,
     output: *mut u128,
@@ -763,7 +759,7 @@ pub unsafe extern "C" fn printf_impl_file(
 pub unsafe extern "C" fn printf_impl_stdout(
     rt: *mut c_void,
     spec: *mut u128,
-    args: *mut *mut c_void,
+    args: *mut usize,
     tys: *mut u32,
     num_args: Int,
 ) {

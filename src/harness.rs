@@ -545,6 +545,13 @@ for (k in m) {
         "232      hello 00\n\n"
     );
 
+    test_program!(
+        printf_3,
+        r#"BEGIN { x=1; y=2.5; z="hello";
+        printf("%02d %10s %02o %s %d\n\n", x+231, z, y<x, 2.56, "320");}"#,
+        "232      hello 00 2.56 320\n\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,
