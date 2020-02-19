@@ -3,8 +3,9 @@ use crate::common::Either;
 use crate::compile::Ty;
 use crate::libc::c_void;
 use crate::runtime::{
-    self, printf::FormatArg, FileRead, FileWrite, Float, Int, IntMap, LazyVec, RegexCache, Str,
-    StrMap, Variables,
+    self,
+    printf::{printf, FormatArg},
+    FileRead, FileWrite, Float, Int, IntMap, LazyVec, RegexCache, Str, StrMap, Variables,
 };
 
 use hashbrown::HashMap;
@@ -172,6 +173,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         split_str(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
+        sprintf_impl(str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
         printf_impl_file(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty, str_ref_ty, int_ty);
         printf_impl_stdout(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty);
         read_err(rt_ty, str_ref_ty) -> int_ty;
@@ -753,6 +755,23 @@ pub unsafe extern "C" fn printf_impl_file(
     if res.is_err() {
         exit!(rt);
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sprintf_impl(
+    spec: *mut u128,
+    args: *mut usize,
+    tys: *mut u32,
+    num_args: Int,
+) -> u128 {
+    use runtime::str_impl::DynamicBuf;
+    let mut buf = DynamicBuf::new(0);
+    let format_args = wrap_args(args, tys, num_args);
+    let spec = &*(spec as *mut Str);
+    if let Err(e) = spec.with_str(|s| printf(&mut buf, s, &format_args[..])) {
+        fail!("unexpected failure during sprintf: {}", e);
+    }
+    mem::transmute::<Str, u128>(buf.into_str())
 }
 
 #[no_mangle]

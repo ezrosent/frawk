@@ -1119,6 +1119,34 @@ impl<'a, 'b> View<'a, 'b> {
                 self.pushr(HighLevel::Phi(dst_reg, dst_ty, pred_regs));
             }
             PrimExpr::CallBuiltin(bf, vs) => self.builtin(dst_reg, dst_ty, bf, vs)?,
+            PrimExpr::Sprintf(fmt, args) => {
+                // avoid spurious "variant never constructed" warning we get by using LL::Sprintf
+                use bytecode::Instr::Sprintf;
+                if dst_reg == UNUSED {
+                    return Ok(());
+                }
+                let (mut fmt_reg, fmt_ty) = self.get_reg(fmt)?;
+                fmt_reg = self.ensure_ty(fmt_reg, fmt_ty, Ty::Str)?;
+                let mut arg_regs = Vec::with_capacity(args.len());
+                for a in args {
+                    arg_regs.push(self.get_reg(a)?);
+                }
+                if let Ty::Str = dst_ty {
+                    self.pushl(Sprintf {
+                        dst: dst_reg.into(),
+                        fmt: fmt_reg.into(),
+                        args: arg_regs,
+                    });
+                } else {
+                    let reg = self.regs.stats.reg_of_ty(Ty::Str);
+                    self.pushl(Sprintf {
+                        dst: reg.into(),
+                        fmt: fmt_reg.into(),
+                        args: arg_regs,
+                    });
+                    self.convert(dst_reg, dst_ty, reg, Ty::Str)?;
+                }
+            }
             PrimExpr::CallUDF(func_id, vs) => {
                 let mut args = SmallVec::with_capacity(vs.len());
                 for v in vs.iter() {
@@ -1290,6 +1318,8 @@ impl<'a, 'b> View<'a, 'b> {
                 self.pushr(HighLevel::Ret(v_reg, ret_ty));
             }
             PrimStmt::Printf(fmt, args, out) => {
+                // avoid spurious "variant never constructed" warning we get by using LL::Printf
+                use bytecode::Instr::Printf;
                 let (mut fmt_reg, fmt_ty) = self.get_reg(fmt)?;
                 fmt_reg = self.ensure_ty(fmt_reg, fmt_ty, Ty::Str)?;
                 let mut arg_regs = Vec::with_capacity(args.len());
@@ -1303,7 +1333,7 @@ impl<'a, 'b> View<'a, 'b> {
                 } else {
                     None
                 };
-                self.pushl(LL::Printf {
+                self.pushl(Printf {
                     output: out_reg,
                     fmt: fmt_reg.into(),
                     args: arg_regs,

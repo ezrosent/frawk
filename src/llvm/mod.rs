@@ -59,7 +59,7 @@ struct View<'a> {
     intrinsics: &'a IntrinsicMap,
     ctx: LLVMContextRef,
     module: LLVMModuleRef,
-    printfs: &'a mut HashMap<(SmallVec<Ty>, bool), LLVMValueRef>,
+    printfs: &'a mut HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
     // We keep an extra builder always pointed at the start of the function. This is because
     // binding new string values requires an `alloca`; and we do not want to call `alloca` where a
     // string variable is referenced: for example, we do not want to call alloca in a loop.
@@ -124,6 +124,13 @@ impl TypeMap {
     }
 }
 
+#[derive(Copy, Clone, Hash, Eq, PartialEq)]
+enum PrintfKind {
+    Stdout,
+    File,
+    Sprintf,
+}
+
 pub(crate) struct Generator<'a, 'b> {
     types: &'b mut Typer<'a>,
     ctx: LLVMContextRef,
@@ -133,7 +140,7 @@ pub(crate) struct Generator<'a, 'b> {
     funcs: Vec<Function>,
     type_map: TypeMap,
     intrinsics: IntrinsicMap,
-    printfs: HashMap<(SmallVec<Ty>, bool), LLVMValueRef>,
+    printfs: HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
 }
 
 impl<'a, 'b> Drop for Generator<'a, 'b> {
@@ -1260,17 +1267,35 @@ impl<'a> View<'a> {
                 let resv = self.call("split_str", &mut [rt, tsv, arrv, patv]);
                 self.bind_reg(flds, resv);
             }
-            Sprintf { dst, fmt, args } => unimplemented!(),
-            // TODO: lazily declare new printfs with different call structures.  alloca the arg
-            // vector for (*mut c_void, Ty), then have an intrinsic do the conversion to FormatArg
-            // and call the function.
-            //
-            // Instead of an option, just pass a pointer and make it null if nothing is there.
+            Sprintf { dst, fmt, args } => {
+                let arg_tys: SmallVec<_> = args.iter().map(|x| x.1).collect();
+                let sprintf_fn = self.wrapped_printf((arg_tys, PrintfKind::Sprintf));
+                let mut arg_vs = SmallVec::with_capacity(args.len() + 1);
+                arg_vs.push(self.get_local(fmt.reflect())?);
+                for a in args.iter().cloned() {
+                    arg_vs.push(self.get_local(a)?);
+                }
+                let resv = LLVMBuildCall(
+                    self.f.builder,
+                    sprintf_fn,
+                    arg_vs.as_mut_ptr(),
+                    arg_vs.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                self.bind_reg(dst, resv);
+            }
             Printf { output, fmt, args } => {
                 // First, extract the types and use that to get a handle on a wrapped printf
                 // function.
                 let arg_tys: SmallVec<_> = args.iter().map(|x| x.1).collect();
-                let printf_fn = self.wrapped_printf((arg_tys, output.is_some()));
+                let printf_fn = self.wrapped_printf((
+                    arg_tys,
+                    if output.is_some() {
+                        PrintfKind::File
+                    } else {
+                        PrintfKind::Stdout
+                    },
+                ));
                 let mut arg_vs = SmallVec::with_capacity(if output.is_some() {
                     args.len() + 4
                 } else {
@@ -1559,16 +1584,17 @@ impl<'a> View<'a> {
     //
     // We could implement this all inline, but making it a separate function allows us to cache the
     // codegen across compatible invocations, and also makes the generated code a lot cleaner.
-    unsafe fn wrapped_printf(&mut self, key: (SmallVec<Ty>, bool)) -> LLVMValueRef {
+    unsafe fn wrapped_printf(&mut self, key: (SmallVec<Ty>, PrintfKind)) -> LLVMValueRef {
         use std::io::{Cursor, Write};
+        use PrintfKind::*;
+        let kind = key.1;
         if let Some(v) = self.printfs.get(&key) {
             return *v;
         }
         let args = &key.0[..];
-        let named_output = key.1;
 
         let ix = self.printfs.len();
-        let name = "_fpf";
+        let name = "_pf";
         // 64 bit integers should only ever need 20 digits or so.
         let mut name_c: smallvec::SmallVec<[u8; 32]> = smallvec![0; 32];
         for (i, b) in name.as_bytes().iter().enumerate() {
@@ -1581,7 +1607,12 @@ impl<'a> View<'a> {
         // The var-arg portion + runtime + format spec
         //  (+ output + append, if named_output)
         let mut arg_lltys = smallvec::SmallVec::<[_; 8]>::with_capacity(args.len() + 4);
-        arg_lltys.push(self.tmap.runtime_ty);
+        match kind {
+            File | Stdout => {
+                arg_lltys.push(self.tmap.runtime_ty);
+            }
+            Sprintf => {}
+        };
         arg_lltys.push(self.tmap.get_ptr_ty(Ty::Str)); // spec
         arg_lltys.extend(args.iter().cloned().map(|ty| {
             if ty == Ty::Str {
@@ -1590,12 +1621,15 @@ impl<'a> View<'a> {
                 self.tmap.get_ty(ty)
             }
         }));
-        if named_output {
+        if let File = kind {
             arg_lltys.push(self.tmap.get_ptr_ty(Ty::Str)); // output
             arg_lltys.push(self.tmap.get_ty(Ty::Int)); // append
         }
 
-        let ret = LLVMVoidTypeInContext(self.ctx);
+        let ret = match kind {
+            File | Stdout => LLVMVoidTypeInContext(self.ctx),
+            Sprintf => self.tmap.get_ty(Ty::Str),
+        };
         let func_ty = LLVMFunctionType(ret, arg_lltys.as_mut_ptr(), arg_lltys.len() as u32, 0);
         let builder = LLVMCreateBuilderInContext(self.ctx);
         let f = LLVMAddFunction(self.module, name_c.as_ptr() as *const libc::c_char, func_ty);
@@ -1622,8 +1656,14 @@ impl<'a> View<'a> {
             LLVMBuildStore(builder, tval, ty_ptr);
 
             let arg_ptr = LLVMBuildGEP(builder, args_array, index.as_mut_ptr(), 2, c_str!(""));
-            // The format spec is our first parameter, so increase the offset by one
-            let argval = LLVMGetParam(f, i as libc::c_uint + 2);
+            // Translate `i` to the param of the generated function.
+            let offset = match kind {
+                // Format spec, runtime
+                File | Stdout => 2,
+                // Just the format spec
+                Sprintf => 1,
+            };
+            let argval = LLVMGetParam(f, i as libc::c_uint + offset);
             // Cast the value to void*, then store it into the array.
             let cast_val = if let Ty::Str = t {
                 LLVMBuildPtrToInt(builder, argval, usize_ty, c_str!(""))
@@ -1646,44 +1686,60 @@ impl<'a> View<'a> {
             len as u64,
             /*sign_extend=*/ 0,
         );
-        if named_output {
-            let intrinsic = self.intrinsics.get("printf_impl_file");
-            // runtime, spec, args, tys, num_args, output, append
-            let mut args = [
-                LLVMGetParam(f, 0),
-                LLVMGetParam(f, 1),
-                args_ptr,
-                tys_ptr,
-                len_v,
-                LLVMGetParam(f, len - 2),
-                LLVMGetParam(f, len - 1),
-            ];
-            LLVMBuildCall(
-                builder,
-                intrinsic,
-                args.as_mut_ptr(),
-                args.len() as libc::c_uint,
-                c_str!(""),
-            );
-        } else {
-            let intrinsic = self.intrinsics.get("printf_impl_stdout");
-            // runtime, spec, args, tys, num_args
-            let mut args = [
-                LLVMGetParam(f, 0),
-                LLVMGetParam(f, 1),
-                args_ptr,
-                tys_ptr,
-                len_v,
-            ];
-            LLVMBuildCall(
-                builder,
-                intrinsic,
-                args.as_mut_ptr(),
-                args.len() as libc::c_uint,
-                c_str!(""),
-            );
+        match kind {
+            File => {
+                let intrinsic = self.intrinsics.get("printf_impl_file");
+                // runtime, spec, args, tys, num_args, output, append
+                let mut args = [
+                    LLVMGetParam(f, 0),
+                    LLVMGetParam(f, 1),
+                    args_ptr,
+                    tys_ptr,
+                    len_v,
+                    LLVMGetParam(f, len - 2),
+                    LLVMGetParam(f, len - 1),
+                ];
+                LLVMBuildCall(
+                    builder,
+                    intrinsic,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                LLVMBuildRetVoid(builder);
+            }
+            Stdout => {
+                let intrinsic = self.intrinsics.get("printf_impl_stdout");
+                // runtime, spec, args, tys, num_args
+                let mut args = [
+                    LLVMGetParam(f, 0),
+                    LLVMGetParam(f, 1),
+                    args_ptr,
+                    tys_ptr,
+                    len_v,
+                ];
+                LLVMBuildCall(
+                    builder,
+                    intrinsic,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                LLVMBuildRetVoid(builder);
+            }
+            Sprintf => {
+                let intrinsic = self.intrinsics.get("sprintf_impl");
+                let mut args = [LLVMGetParam(f, 0), args_ptr, tys_ptr, len_v];
+                let resv = LLVMBuildCall(
+                    builder,
+                    intrinsic,
+                    args.as_mut_ptr(),
+                    args.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                LLVMBuildRet(builder, resv);
+            }
         }
-        LLVMBuildRetVoid(builder);
         LLVMSetLinkage(f, llvm_sys::LLVMLinkage::LLVMLinkerPrivateLinkage);
         LLVMDisposeBuilder(builder);
         self.printfs.insert(key, f);
