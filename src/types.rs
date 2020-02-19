@@ -744,6 +744,19 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 let args: SmallVec<NodeIx> = args.iter().map(|arg| self.val_node(arg)).collect();
                 self.add_udf_call(*f, args, to);
             }
+            Sprintf(fmt, args) => {
+                let str_node = self.constant(TVar::Scalar(BaseTy::Str).abs());
+                let is_scalar: State = Some(TVar::Scalar(None));
+                let scalar_node = self.constant(is_scalar);
+                for a in args {
+                    let a_node = self.val_node(a);
+                    self.nw.add_dep(scalar_node, a_node, Constraint::Flows(()));
+                }
+                let fmt_node = self.val_node(fmt);
+                self.nw
+                    .add_dep(scalar_node, fmt_node, Constraint::Flows(()));
+                self.nw.add_dep(str_node, to, Constraint::Flows(()));
+            }
             Index(arr, ix) => {
                 let arr_ix = self.val_node(arr);
                 let ix_ix = self.val_node(ix);

@@ -94,6 +94,7 @@ impl<'a> Display for PrimExpr<'a> {
             }
             CallBuiltin(b, os) => write_func(f, b, &os[..]),
             CallUDF(func, os) => write_func(f, func, &os[..]),
+            Sprintf(fmt, os) => write_func(f, format!("sprintf[{}]", fmt), &os[..]),
             Index(m, v) => write!(f, "{}[{}]", m, v),
             IterBegin(m) => write!(f, "begin({})", m),
             HasNext(i) => write!(f, "hasnext({})", i),

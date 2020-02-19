@@ -1,6 +1,6 @@
 use crate::arena;
 use crate::ast::{self, Binop, Expr, Stmt, Unop};
-use crate::builtins;
+use crate::builtins::{self, IsSprintf};
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result};
 use crate::dom;
 
@@ -86,6 +86,7 @@ pub(crate) enum PrimExpr<'a> {
     Val(PrimVal<'a>),
     Phi(SmallVec<(NodeIx /* pred */, Ident)>),
     CallBuiltin(builtins::Function, SmallVec<PrimVal<'a>>),
+    Sprintf(PrimVal<'a>, SmallVec<PrimVal<'a>>),
     CallUDF(NumTy, SmallVec<PrimVal<'a>>),
     Index(PrimVal<'a>, PrimVal<'a>),
 
@@ -137,6 +138,12 @@ impl<'a> PrimExpr<'a> {
         match self {
             Val(v) => v.replace(update),
             Phi(_) => {}
+            Sprintf(fmt, args) => {
+                fmt.replace(&mut update);
+                for a in args.iter_mut() {
+                    a.replace(&mut update)
+                }
+            }
             CallBuiltin(_, args) | CallUDF(_, args) => {
                 for a in args.iter_mut() {
                     a.replace(&mut update)
@@ -203,6 +210,7 @@ impl<'a, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> P
 where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
+    I: IsSprintf,
 {
     pub(crate) fn local_globals(&mut self) -> HashSet<NumTy> {
         std::mem::replace(&mut self.shared.local_globals, Default::default())
@@ -403,6 +411,7 @@ impl<'a, 'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debu
 where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
+    I: IsSprintf,
 {
     fn fill<'c>(&mut self, stmt: &'c Stmt<'c, 'b, I>) -> Result<()> {
         // Add a CFG corresponding to `stmt`
@@ -825,6 +834,9 @@ where
             }
             Call(fname, args) => {
                 let bi = match fname {
+                    Either::Left(fname) if fname.is_sprintf() => {
+                        return self.do_sprintf(args, current_open);
+                    }
                     Either::Left(fname) => {
                         if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
                             Either::Right(bi)
@@ -995,6 +1007,26 @@ where
             return;
         }
         self.f.cfg.add_edge(from, to, Transition::null());
+    }
+
+    fn do_sprintf<'c>(
+        &mut self,
+        args: &Vec<&'c Expr<'c, 'b, I>>,
+        mut current_open: NodeIx,
+    ) -> Result<(NodeIx, PrimExpr<'b>)> {
+        if args.len() == 0 {
+            return err!("sprintf must have at least one argument");
+        }
+        let mut iter = args.iter();
+        let (next, fmt) = self.convert_val(iter.next().unwrap(), current_open)?;
+        current_open = next;
+        let mut res = SmallVec::with_capacity(args.len() - 1);
+        for a in iter {
+            let (next, v) = self.convert_val(a, current_open)?;
+            current_open = next;
+            res.push(v);
+        }
+        Ok((current_open, PrimExpr::Sprintf(fmt, res)))
     }
 
     fn do_assign<'c>(
