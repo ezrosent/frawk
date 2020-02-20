@@ -176,6 +176,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         sprintf_impl(str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
         printf_impl_file(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty, str_ref_ty, int_ty);
         printf_impl_stdout(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty);
+        close_file(rt_ty, str_ref_ty);
         read_err(rt_ty, str_ref_ty) -> int_ty;
         read_err_stdin(rt_ty) -> int_ty;
         next_line(rt_ty, str_ref_ty) -> str_ty;

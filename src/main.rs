@@ -63,13 +63,20 @@ const _PROGRAM_8: &'static str = r#"
 BEGIN { for (i=0; i<10000000; i++) {SUMS[i "" (i-1)] = SUMS[i "" (i+2)] + 1; SUM += i;}; print SUM }"#;
 const _PROGRAM_9: &'static str = r#"
 { N = $1 + 0 } END { for (i=0; i<N; i++) {SUM += i;}; print SUM }"#;
-const _PROGRAM_10: &'static str = r#"BEGIN { print "hello" >> "/tmp/hello"; }"#;
+const _PROGRAM_10: &'static str = r#"BEGIN {
+    print "hello" > "/tmp/hello2";
+    print "there" > "/tmp/hello2";
+    print "hello" > "/tmp/hello3";
+    x = close("/tmp/hello3");
+    print "there" > "/tmp/hello3";
+    printf "x=%s", x;
+}"#;
 
 fn main() {
     // TODO add a real main function
     // XXX: we get a segfault for _PROGRAM_8 on mac.
     let prog = _PROGRAM_10;
-    if true {
+    if false {
         println!("{}", harness::bench_program(prog, "").unwrap());
     } else {
         match harness::dump_llvm(prog) {
