@@ -27,7 +27,7 @@ pub enum Function {
 
 static_map!(
     FUNCTIONS<&'static str, Function>,
-    ["close", Function::Print],
+    ["close", Function::Close],
     ["print", Function::Print],
     ["split", Function::Split],
     ["length", Function::Length]
