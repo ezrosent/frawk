@@ -452,6 +452,11 @@ impl<'a> Interp<'a> {
                         }?;
                         scratch.clear();
                     }
+                    Close(file) => {
+                        let file = index(&self.strs, file);
+                        self.write_files.close(file);
+                        self.read_files.close(file);
+                    }
                     LookupIntInt(res, arr, k) => {
                         let arr = index(&self.maps_int_int, arr);
                         let k = index(&self.ints, k);

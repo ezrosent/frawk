@@ -133,6 +133,7 @@ impl Display for Function {
             Length => write!(f, "{}", "length"),
             Contains => write!(f, "{}", "contains"),
             Delete => write!(f, "{}", "delete"),
+            Close => write!(f, "{}", "close"),
         }
     }
 }

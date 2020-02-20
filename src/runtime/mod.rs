@@ -209,6 +209,9 @@ pub(crate) struct FileWrite {
 }
 
 impl FileWrite {
+    pub(crate) fn close(&mut self, path: &Str) {
+        self.files.remove(path);
+    }
     pub(crate) fn new(w: impl io::Write + 'static) -> FileWrite {
         let stdout: Box<dyn io::Write> = Box::new(w);
         FileWrite {
@@ -266,16 +269,6 @@ impl FileWrite {
         }
     }
 
-    pub(crate) fn write_str(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
-        self.with_handle(append, path, |writer| {
-            if let Err(e) = s.with_str(|s| writer.write_all(s.as_bytes())) {
-                err!("failed to write to file: {}", e)
-            } else {
-                Ok(())
-            }
-        })
-    }
-
     pub(crate) fn write_line(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
         self.with_handle(append, path, |writer| {
             s.with_str(|s| {
@@ -299,6 +292,9 @@ pub(crate) struct FileRead {
 }
 
 impl FileRead {
+    pub(crate) fn close(&mut self, path: &Str) {
+        self.files.remove(path);
+    }
     pub(crate) fn new(r: impl io::Read + 'static) -> FileRead {
         let d: Box<dyn io::Read> = Box::new(r);
         FileRead {
@@ -341,6 +337,7 @@ impl FileRead {
 }
 
 pub(crate) struct Registry<T> {
+    // TODO(ezr): use the raw bucket interface so we can avoid calls to `unmoor` here.
     // TODO(ezr): we could potentially increase speed here if we did pointer equality (and
     // length) for lookups.
     // We could be fine having duplicates for Regex. We could also also intern strings
@@ -357,6 +354,9 @@ impl<T> Default for Registry<T> {
 }
 
 impl<T> Registry<T> {
+    fn remove(&mut self, s: &Str) {
+        self.cached.remove(&s.clone().unmoor());
+    }
     fn get<R>(
         &mut self,
         s: &Str,

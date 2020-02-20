@@ -156,6 +156,7 @@ pub(crate) enum Instr<'a> {
         Reg<Str<'a>>, /*output*/
         bool,         /*append*/
     ),
+    Close(Reg<Str<'a>>),
 
     // Map operations
     LookupIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>, Reg<Int>),
@@ -588,6 +589,7 @@ impl<'a> Instr<'a> {
                 txt.accum(&mut f);
                 out.accum(&mut f)
             }
+            Close(file) => file.accum(&mut f),
             LookupIntInt(res, arr, k) => {
                 res.accum(&mut f);
                 arr.accum(&mut f);

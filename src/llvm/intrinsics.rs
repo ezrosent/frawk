@@ -792,6 +792,14 @@ pub unsafe extern "C" fn printf_impl_stdout(
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut u128) {
+    let rt = &mut *(rt as *mut Runtime);
+    let file = &*(file as *mut Str);
+    rt.read_files.close(file);
+    rt.write_files.close(file);
+}
+
 macro_rules! map_impl_inner {
     ($alloc:ident, $iter:ident, $lookup:ident, $len:ident,
      $insert:ident, $delete:ident, $contains:ident, $k:tt, $v:tt) => {

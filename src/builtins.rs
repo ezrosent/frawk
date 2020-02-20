@@ -13,6 +13,7 @@ pub enum Function {
     Binop(ast::Binop),
     Print,
     PrintStdout,
+    Close,
     ReadErr,
     Nextline,
     ReadErrStdin,
@@ -26,6 +27,7 @@ pub enum Function {
 
 static_map!(
     FUNCTIONS<&'static str, Function>,
+    ["close", Function::Print],
     ["print", Function::Print],
     ["split", Function::Split],
     ["length", Function::Length]
@@ -147,6 +149,7 @@ impl Function {
             // irrelevant return type
             Setcol => (smallvec![Int, Str], Int),
             Length => (smallvec![incoming[0]], Int),
+            Close => (smallvec![Str], Str),
             // Split's second input can be a map of either type
             Split => {
                 if let MapIntStr | MapStrStr = incoming[1] {
@@ -162,9 +165,8 @@ impl Function {
         use Function::*;
         Some(match self {
             ReadErrStdin | NextlineStdin => 0,
-            Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
+            Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Setcol | Binop(_) => 2,
-            // is this right?
             Delete | Contains => 2,
             Print | Split => 3,
         })
@@ -203,6 +205,7 @@ impl Function {
             Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())
             }
+            Close => Ok(None),
         }
     }
 }
