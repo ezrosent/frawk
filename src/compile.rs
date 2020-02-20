@@ -1083,6 +1083,7 @@ impl<'a, 'b> View<'a, 'b> {
                 }
                 _ => return err!("incorrect parameter types for Delete: {:?}", &conv_tys[..]),
             },
+            Close => self.pushl(LL::Close(conv_regs[0].into())),
         };
         self.convert(dst_reg, dst_ty, res_reg, res_ty)
     }

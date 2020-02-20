@@ -1323,6 +1323,10 @@ impl<'a> View<'a> {
                 let txtv = self.get_local(txt.reflect())?;
                 self.call("print_stdout", &mut [self.runtime_val(), txtv]);
             }
+            Close(file) => {
+                let filev = self.get_local(file.reflect())?;
+                self.call("close_file", &mut [self.runtime_val(), filev]);
+            }
             Print(txt, out, append) => {
                 let int_ty = self.tmap.get_ty(Ty::Int);
                 let appv = LLVMConstInt(int_ty, *append as u64, /*sign_extend=*/ 1);
