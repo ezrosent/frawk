@@ -34,7 +34,7 @@ impl FakeStdout {
     }
 }
 
-const _PRINT_DEBUG_INFO: bool = true;
+const _PRINT_DEBUG_INFO: bool = false;
 
 type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
@@ -559,6 +559,25 @@ for (k in m) {
         print sprintf("%02d %10s %02o\n\n", x+231, z, y<x);
         print sprintf("%02d %10s %02o %s %d\n\n", x+231, z, y<x, 2.56, "320");}"#,
         "232      hello 00\n\n\n232      hello 00 2.56 320\n\n\n"
+    );
+
+    test_program!(
+        comma_patterns,
+        r#"
+        /START/,/END/ { print; }
+        "#,
+        r#"START
+Hello there
+how are you
+END
+"#,
+        @input r#"This wont get printed
+START
+Hello there
+how are you
+END
+dont print this!
+Or this"#
     );
 
     // TODO test more operators, consider more edge cases around functions

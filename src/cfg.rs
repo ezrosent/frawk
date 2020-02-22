@@ -237,6 +237,7 @@ where
             local_globals: Default::default(),
             may_rename: Default::default(),
             max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations
+            conds: Default::default(),
         };
         let mut func_table: HashMap<Option<I>, NumTy> = Default::default();
         let mut funcs: Vec<Function<'a, I>> = Default::default();
@@ -356,6 +357,7 @@ struct GlobalContext<I> {
     // TODO: make may_rename per-function for local variables.
     may_rename: Vec<Ident>,
     max: NumTy,
+    conds: HashMap<usize, Ident>,
 }
 
 impl<I> GlobalContext<I> {
@@ -477,6 +479,16 @@ where
         Ok((start, end))
     }
 
+    fn get_cond(&mut self, cond: usize) -> Ident {
+        if let Some(i) = self.ctx.conds.get(&cond) {
+            return *i;
+        }
+        let i = self.fresh_local();
+        self.ctx.conds.insert(cond, i);
+        self.ctx.may_rename.push(i);
+        i
+    }
+
     fn convert_stmt<'c>(
         &mut self,
         stmt: &'c Stmt<'c, 'b, I>,
@@ -484,6 +496,22 @@ where
     ) -> Result<NodeIx> /*next open */ {
         use Stmt::*;
         Ok(match stmt {
+            StartCond(cond) => {
+                let cond_ident = self.get_cond(*cond);
+                self.add_stmt(
+                    current_open,
+                    PrimStmt::AsgnVar(cond_ident, PrimExpr::Val(PrimVal::ILit(1))),
+                )?;
+                current_open
+            }
+            EndCond(cond) => {
+                let cond_ident = self.get_cond(*cond);
+                self.add_stmt(
+                    current_open,
+                    PrimStmt::AsgnVar(cond_ident, PrimExpr::Val(PrimVal::ILit(0))),
+                )?;
+                current_open
+            }
             Expr(e) => {
                 // We need to assign to unused here, otherwise we could generate the expression but
                 // then drop it on the floor.
@@ -789,6 +817,10 @@ where
             ILit(n) => PrimExpr::Val(PrimVal::ILit(*n)),
             FLit(n) => PrimExpr::Val(PrimVal::FLit(*n)),
             PatLit(s) | StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
+            Cond(cond) => {
+                let id = self.get_cond(*cond);
+                PrimExpr::Val(PrimVal::Var(id))
+            }
             Unop(op, e) => {
                 let (next, v) = self.convert_val(e, current_open)?;
                 return Ok((
