@@ -24,16 +24,23 @@ pub struct FunDec<'a, 'b, I> {
     pub body: &'a Stmt<'a, 'b, I>,
 }
 
+pub enum Pattern<'a, 'b, I> {
+    Null,
+    Bool(&'a Expr<'a, 'b, I>),
+    Comma(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
+}
+
 pub struct Prog<'a, 'b, I> {
     pub decs: Vec<FunDec<'a, 'b, I>>,
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
     pub end: Option<&'a Stmt<'a, 'b, I>>,
-    pub pats: Vec<(Option<&'a Expr<'a, 'b, I>>, Option<&'a Stmt<'a, 'b, I>>)>,
+    pub pats: Vec<(Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
 }
 
 impl<'a, 'b, I> Prog<'a, 'b, I> {
     pub(crate) fn desugar<'outer>(&self, arena: &'a Arena<'outer>) -> Stmt<'a, 'b, I> {
         use {self::Binop::*, self::Expr::*, Stmt::*};
+        let mut conds = 0;
         let mut res = vec![];
 
         if let Some(begin) = self.begin {
@@ -48,10 +55,16 @@ impl<'a, 'b, I> Prog<'a, 'b, I> {
             } else {
                 arena.alloc(|| Print(vec![], None))
             };
-            if let Some(pat) = pat {
-                inner.push(arena.alloc(|| If(pat, body, None)));
-            } else {
-                inner.push(body);
+            match pat {
+                Pattern::Null => inner.push(body),
+                Pattern::Bool(pat) => inner.push(arena.alloc(|| If(pat, body, None))),
+                Pattern::Comma(l, r) => {
+                    // We desugar pat1,pat2
+                    inner.push(arena.alloc_v(If(l, arena.alloc_v(StartCond(conds)), None)));
+                    inner.push(arena.alloc_v(If(arena.alloc_v(Cond(conds)), body, None)));
+                    inner.push(arena.alloc_v(If(r, arena.alloc_v(EndCond(conds)), None)));
+                    conds += 1;
+                }
             }
         }
 
@@ -159,11 +172,14 @@ pub enum Expr<'a, 'b, I> {
         into: Option<&'a Expr<'a, 'b, I>>,
         from: Option<&'a Expr<'a, 'b, I>>,
     },
-    // TODO sprintf
+    // Used for comma patterns
+    Cond(usize),
 }
 
 #[derive(Debug, Clone)]
 pub enum Stmt<'a, 'b, I> {
+    StartCond(usize),
+    EndCond(usize),
     Expr(&'a Expr<'a, 'b, I>),
     Block(Vec<&'a Stmt<'a, 'b, I>>),
     Print(
