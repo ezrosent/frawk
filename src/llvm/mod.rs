@@ -1143,6 +1143,13 @@ impl<'a> View<'a> {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let rt = self.runtime_val();
+                let resv = self.call("match_pat_loc", &mut [rt, lv, rv]);
+                self.bind_reg(res, resv);
+            }
+            IsMatch(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let rt = self.runtime_val();
                 let resv = self.call("match_pat", &mut [rt, lv, rv]);
                 self.bind_reg(res, resv);
             }

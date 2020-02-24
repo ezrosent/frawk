@@ -240,6 +240,13 @@ impl<'a> Interp<'a> {
                         let res = *res;
                         let l = index(&self.strs, l);
                         let pat = index(&self.strs, r);
+                        *self.get_mut(res) =
+                            self.regexes.regex_match_loc(&mut self.vars, &pat, &l)? as Int;
+                    }
+                    IsMatch(res, l, r) => {
+                        let res = *res;
+                        let l = index(&self.strs, l);
+                        let pat = index(&self.strs, r);
                         *self.get_mut(res) = self.regexes.is_regex_match(&pat, &l)? as Int;
                     }
                     LenStr(res, s) => {

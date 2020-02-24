@@ -173,14 +173,18 @@ impl RegexCache {
     ) -> Result<Int> {
         use crate::builtins::Variable;
         // We use the awk semantics for `match`. If we match
-        let (start, end) = self.with_regex(pat, |re| {
+        let (start, len) = self.with_regex(pat, |re| {
             s.with_str(|s| match re.find(s) {
-                Some(m) => (m.start() as Int, m.end() as Int),
+                Some(m) => {
+                    let start = m.start() as Int;
+                    let end = m.end() as Int;
+                    (start + 1, end - start)
+                }
                 None => (0, -1),
             })
         })?;
         vars.store_int(Variable::RSTART, start)?;
-        vars.store_int(Variable::RLENGTH, end - start)?;
+        vars.store_int(Variable::RLENGTH, len)?;
         Ok(start)
     }
 

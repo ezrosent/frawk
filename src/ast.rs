@@ -103,7 +103,7 @@ pub enum Binop {
     Div,
     Mod,
     Concat,
-    Match,
+    IsMatch,
     LT,
     GT,
     LTE,
@@ -132,7 +132,7 @@ static_map!(
     ["/", Binop::Div],
     ["%", Binop::Mod],
     ["", Binop::Concat], // we may have to handle this one specially
-    ["~", Binop::Match],
+    ["~", Binop::IsMatch],
     ["<", Binop::LT],
     [">", Binop::GT],
     ["<=", Binop::LTE],
