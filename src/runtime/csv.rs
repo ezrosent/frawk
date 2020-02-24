@@ -1,3 +1,4 @@
+#[allow(unused)]
 /// A WIP port (with modifications) of geofflangdale/simdcsv.
 
 #[derive(Default)]
@@ -23,6 +24,7 @@ struct Offsets {
 //      return an error or just append the slash if we don't see it.
 
 #[cfg(target_arch = "x86_64")]
+#[allow(unused)]
 mod avx2 {
     use super::Offsets;
     // This is in a large part based on geofflangdale/simdcsv, which is an adaptation of some of
