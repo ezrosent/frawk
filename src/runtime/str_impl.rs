@@ -194,6 +194,7 @@ impl<'a> Str<'a> {
             // AWK stips empty leading fields.
             let mut leading_empty = true;
             // XXX hacks because we do not have match_indices right now...
+            // TODO: just use find_iter?
             let base = s.as_ptr() as usize;
             for sub in pat.split(s) {
                 if leading_empty && sub.len() == 0 {
@@ -205,6 +206,42 @@ impl<'a> Str<'a> {
                 push(self.slice(start, start + sub.len()))
             }
         });
+    }
+    pub fn subst_first(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, bool) {
+        self.with_str(|s| {
+            subst.with_str(|subst| {
+                if let Some(m) = pat.find(s) {
+                    let mut buf = DynamicBuf::new(s.len());
+                    buf.write(&s.as_bytes()[0..m.start()]).unwrap();
+                    buf.write(subst.as_bytes()).unwrap();
+                    buf.write(&s.as_bytes()[m.end()..s.len()]).unwrap();
+                    (unsafe { buf.into_str() }, true)
+                } else {
+                    (self.clone(), false)
+                }
+            })
+        })
+    }
+    pub fn subst_all(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, Int) {
+        self.with_str(|s| {
+            subst.with_str(|subst| {
+                let mut buf = DynamicBuf::new(0);
+                let mut prev = 0;
+                let mut count = 0;
+                for m in pat.find_iter(s) {
+                    buf.write(&s.as_bytes()[prev..m.start()]).unwrap();
+                    buf.write(subst.as_bytes()).unwrap();
+                    prev = m.end();
+                    count += 1;
+                }
+                if count == 0 {
+                    (self.clone(), count)
+                } else {
+                    buf.write(&s.as_bytes()[prev..s.len()]).unwrap();
+                    (unsafe { buf.into_str() }, count)
+                }
+            })
+        })
     }
     pub fn len(&self) -> usize {
         let rep = unsafe { &mut *self.0.get() };
@@ -817,6 +854,31 @@ mod tests {
 And this is the second part"#
             )
         });
+    }
+
+    #[test]
+    fn subst() {
+        let s1: Str = "String number one".into();
+        let s2: Str = "m".into();
+        let re1 = Regex::new("n").unwrap();
+        let (s3, n1) = s1.subst_all(&re1, &s2);
+        assert_eq!(n1, 3);
+        s3.with_str(|s| assert_eq!(s, "Strimg mumber ome"));
+
+        let re2 = Regex::new("xxyz").unwrap();
+        let (s4, n2) = s3.subst_all(&re2, &s2);
+        assert_eq!(n2, 0);
+        assert_eq!(s3, s4);
+
+        let empty = Str::default();
+        let (s5, n3) = empty.subst_all(&re1, &s2);
+        assert_eq!(n3, 0);
+        assert_eq!(empty, s5);
+
+        let s6: Str = "xxyz substituted into another xxyz".into();
+        let (s7, subbed) = s6.subst_first(&re2, &s1);
+        s7.with_str(|s| assert_eq!(s, "String number one substituted into another xxyz"));
+        assert!(subbed);
     }
 }
 
