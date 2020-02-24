@@ -240,7 +240,7 @@ impl<'a> Interp<'a> {
                         let res = *res;
                         let l = index(&self.strs, l);
                         let pat = index(&self.strs, r);
-                        *self.get_mut(res) = self.regexes.match_regex(&pat, &l)? as Int;
+                        *self.get_mut(res) = self.regexes.is_regex_match(&pat, &l)? as Int;
                     }
                     LenStr(res, s) => {
                         let res = *res;
@@ -644,72 +644,42 @@ impl<'a> Interp<'a> {
                         arr.insert(k, v);
                     }
                     LoadVarStr(dst, var) => {
-                        let s = match var {
-                            FS => self.vars.fs.clone(),
-                            OFS => self.vars.ofs.clone(),
-                            RS => self.vars.rs.clone(),
-                            FILENAME => self.vars.filename.clone(),
-                            ARGC | ARGV | NF | NR => unreachable!(),
-                        };
+                        let s = self.vars.load_str(*var)?;
                         let dst = *dst;
                         *self.get_mut(dst) = s;
                     }
                     StoreVarStr(var, src) => {
                         let src = *src;
                         let s = self.get(src).clone();
-                        match var {
-                            FS => self.vars.fs = s,
-                            OFS => self.vars.ofs = s,
-                            RS => self.vars.rs = s,
-                            FILENAME => self.vars.filename = s,
-                            ARGC | ARGV | NF | NR => unreachable!(),
-                        };
+                        self.vars.store_str(*var, s)?;
                     }
                     LoadVarInt(dst, var) => {
-                        let i = match var {
-                            ARGC => self.vars.argc,
-                            NF => {
-                                if self.split_line.len() == 0 {
-                                    self.regexes.split_regex(
-                                        &self.vars.fs,
-                                        &self.line,
-                                        &mut self.split_line,
-                                    )?;
-                                    self.vars.nf = self.split_line.len() as Int;
-                                }
-                                self.vars.nf
-                            }
-                            NR => self.vars.nr,
-                            OFS | FS | RS | FILENAME | ARGV => unreachable!(),
-                        };
+                        if *var == NF && self.split_line.len() == 0 {
+                            self.regexes.split_regex(
+                                &self.vars.fs,
+                                &self.line,
+                                &mut self.split_line,
+                            )?;
+                            self.vars.nf = self.split_line.len() as Int;
+                        }
+                        let i = self.vars.load_int(*var)?;
                         let dst = *dst;
                         *self.get_mut(dst) = i;
                     }
                     StoreVarInt(var, src) => {
                         let src = *src;
                         let s = *self.get(src);
-                        match var {
-                            ARGC => self.vars.argc = s,
-                            NF => self.vars.nf = s,
-                            NR => self.vars.nr = s,
-                            OFS | FS | RS | FILENAME | ARGV => unreachable!(),
-                        };
+                        self.vars.store_int(*var, s)?;
                     }
                     LoadVarIntMap(dst, var) => {
-                        let arr = match var {
-                            ARGV => self.vars.argv.clone(),
-                            OFS | ARGC | NF | NR | FS | RS | FILENAME => unreachable!(),
-                        };
+                        let arr = self.vars.load_intmap(*var)?;
                         let dst = *dst;
                         *self.get_mut(dst) = arr;
                     }
                     StoreVarIntMap(var, src) => {
                         let src = *src;
                         let s = self.get(src).clone();
-                        match var {
-                            ARGV => self.vars.argv = s,
-                            OFS | ARGC | NF | NR | FS | RS | FILENAME => unreachable!(),
-                        };
+                        self.vars.store_intmap(*var, s)?;
                     }
                     IterBeginIntInt(dst, arr) => {
                         let arr = *arr;

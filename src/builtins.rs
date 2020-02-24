@@ -2,6 +2,7 @@
 use crate::ast;
 use crate::common::{NodeIx, Result};
 use crate::compile;
+use crate::runtime::{Int, IntMap, Str};
 use crate::types::{self, SmallVec};
 use smallvec::smallvec;
 
@@ -220,13 +221,122 @@ pub(crate) enum Variable {
     NF = 5,
     NR = 6,
     FILENAME = 7,
+    RSTART = 8,
+    RLENGTH = 9,
 }
 
+impl From<Variable> for compile::Ty {
+    fn from(v: Variable) -> compile::Ty {
+        use Variable::*;
+        match v {
+            FS | OFS | RS | FILENAME => compile::Ty::Str,
+            ARGC | NF | NR | RSTART | RLENGTH => compile::Ty::Int,
+            ARGV => compile::Ty::MapIntStr,
+        }
+    }
+}
+
+pub(crate) struct Variables<'a> {
+    pub argc: Int,
+    pub argv: IntMap<Str<'a>>,
+    pub fs: Str<'a>,
+    pub ofs: Str<'a>,
+    pub rs: Str<'a>,
+    pub nf: Int,
+    pub nr: Int,
+    pub filename: Str<'a>,
+    pub rstart: Int,
+    pub rlength: Int,
+}
+
+impl<'a> Default for Variables<'a> {
+    fn default() -> Variables<'a> {
+        Variables {
+            argc: 0,
+            argv: Default::default(),
+            fs: "[ \t]+".into(),
+            ofs: " ".into(),
+            rs: "\n".into(),
+            nr: 0,
+            nf: 0,
+            filename: Default::default(),
+            rstart: 0,
+            rlength: -1,
+        }
+    }
+}
+impl<'a> Variables<'a> {
+    pub fn load_int(&self, var: Variable) -> Result<Int> {
+        use Variable::*;
+        Ok(match var {
+            ARGC => self.argc,
+            NF => self.nf,
+            NR => self.nr,
+            RSTART => self.rstart,
+            RLENGTH => self.rlength,
+            OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
+        })
+    }
+
+    pub fn store_int(&mut self, var: Variable, i: Int) -> Result<()> {
+        use Variable::*;
+        Ok(match var {
+            ARGC => self.argc = i,
+            NF => self.nf = i,
+            NR => self.nr = i,
+            RSTART => self.rstart = i,
+            RLENGTH => self.rlength = i,
+            OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
+        })
+    }
+
+    pub fn load_str(&self, var: Variable) -> Result<Str<'a>> {
+        use Variable::*;
+        Ok(match var {
+            FS => self.fs.clone(),
+            OFS => self.ofs.clone(),
+            RS => self.rs.clone(),
+            FILENAME => self.filename.clone(),
+            ARGC | ARGV | NF | NR | RSTART | RLENGTH => return err!("var {} not a string", var),
+        })
+    }
+
+    pub fn store_str(&mut self, var: Variable, s: Str<'a>) -> Result<()> {
+        use Variable::*;
+        Ok(match var {
+            FS => self.fs = s,
+            OFS => self.ofs = s,
+            RS => self.rs = s,
+            FILENAME => self.filename = s,
+            ARGC | ARGV | NF | NR | RSTART | RLENGTH => return err!("var {} not a string", var),
+        })
+    }
+
+    pub fn load_intmap(&self, var: Variable) -> Result<IntMap<Str<'a>>> {
+        use Variable::*;
+        match var {
+            ARGV => Ok(self.argv.clone()),
+            OFS | ARGC | NF | NR | FS | RS | FILENAME | RSTART | RLENGTH => {
+                err!("var {} is not a map", var)
+            }
+        }
+    }
+
+    pub fn store_intmap(&mut self, var: Variable, m: IntMap<Str<'a>>) -> Result<()> {
+        use Variable::*;
+        match var {
+            ARGV => Ok(self.argv = m),
+            OFS | ARGC | NF | NR | FS | RS | FILENAME | RSTART | RLENGTH => {
+                err!("var {} is not a map", var)
+            }
+        }
+    }
+}
 impl Variable {
     pub(crate) fn ty(&self) -> types::TVar<types::BaseTy> {
         use Variable::*;
         match self {
-            ARGC | NF | NR => types::TVar::Scalar(types::BaseTy::Int),
+            ARGC | NF | NR | RSTART | RLENGTH => types::TVar::Scalar(types::BaseTy::Int),
             // TODO(ezr): For full compliance, this may have to be Str -> Str
             //  If we had
             //  m["x"] = 1;
@@ -278,6 +388,8 @@ impl<'a> TryFrom<usize> for Variable {
             5 => Ok(NF),
             6 => Ok(NR),
             7 => Ok(FILENAME),
+            8 => Ok(RSTART),
+            9 => Ok(RLENGTH),
             _ => Err(()),
         }
     }
@@ -292,5 +404,7 @@ static_map!(
     ["RS", Variable::RS],
     ["NF", Variable::NF],
     ["NR", Variable::NR],
-    ["FILENAME", Variable::FILENAME]
+    ["FILENAME", Variable::FILENAME],
+    ["RSTART", Variable::RSTART],
+    ["RLENGTH", Variable::RLENGTH]
 );

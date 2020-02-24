@@ -15,6 +15,7 @@ pub mod str_impl;
 pub mod strton;
 pub mod utf8;
 
+pub(crate) use crate::builtins::Variables;
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
@@ -88,32 +89,6 @@ impl<T: Default> LazyVec<T> {
     }
 }
 
-pub(crate) struct Variables<'a> {
-    pub argc: Int,
-    pub argv: IntMap<Str<'a>>,
-    pub fs: Str<'a>,
-    pub ofs: Str<'a>,
-    pub rs: Str<'a>,
-    pub nf: Int,
-    pub nr: Int,
-    pub filename: Str<'a>,
-}
-
-impl<'a> Default for Variables<'a> {
-    fn default() -> Variables<'a> {
-        Variables {
-            argc: 0,
-            argv: Default::default(),
-            fs: "[ \t]+".into(),
-            ofs: " ".into(),
-            rs: "\n".into(),
-            nr: 0,
-            nf: 0,
-            filename: Default::default(),
-        }
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct RegexCache(Registry<Regex>);
 
@@ -148,14 +123,7 @@ impl RegexCache {
         pat: &Str<'a>,
         reg: &mut FileRead,
     ) -> Result<Str<'a>> {
-        self.0.get(
-            pat,
-            |s| match Regex::new(s) {
-                Ok(r) => Ok(r),
-                Err(e) => err!("{}", e),
-            },
-            |re| reg.get_line_stdin(re),
-        )
+        self.with_regex(pat, |re| reg.get_line_stdin(re))
     }
     pub(crate) fn split_regex<'a>(
         &mut self,
@@ -163,8 +131,7 @@ impl RegexCache {
         s: &Str<'a>,
         v: &mut LazyVec<Str<'a>>,
     ) -> Result<()> {
-        self.with_regex(pat, |re| s.split(re, |s| v.push(s)))?;
-        Ok(())
+        self.with_regex(pat, |re| s.split(re, |s| v.push(s)))
     }
 
     pub(crate) fn split_regex_intmap<'a>(
@@ -179,8 +146,7 @@ impl RegexCache {
                 i += 1;
                 m.insert(i, s);
             })
-        })?;
-        Ok(())
+        })
     }
 
     pub(crate) fn split_regex_strmap<'a>(
@@ -199,7 +165,26 @@ impl RegexCache {
         Ok(())
     }
 
-    pub(crate) fn match_regex(&mut self, pat: &Str, s: &Str) -> Result<bool> {
+    pub(crate) fn regex_match_loc(
+        &mut self,
+        vars: &mut Variables,
+        pat: &Str,
+        s: &Str,
+    ) -> Result<Int> {
+        use crate::builtins::Variable;
+        // We use the awk semantics for `match`. If we match
+        let (start, end) = self.with_regex(pat, |re| {
+            s.with_str(|s| match re.find(s) {
+                Some(m) => (m.start() as Int, m.end() as Int),
+                None => (0, -1),
+            })
+        })?;
+        vars.store_int(Variable::RSTART, start)?;
+        vars.store_int(Variable::RLENGTH, end - start)?;
+        Ok(start)
+    }
+
+    pub(crate) fn is_regex_match(&mut self, pat: &Str, s: &Str) -> Result<bool> {
         self.with_regex(pat, |re| s.with_str(|s| re.is_match(s)))
     }
 }

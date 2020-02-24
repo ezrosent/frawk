@@ -33,6 +33,18 @@ macro_rules! fail {
     }}
 }
 
+macro_rules! try_abort {
+    ($e:expr, $msg:expr) => {
+        match $e {
+            Ok(res) => res,
+            Err(e) => fail!(concat!($msg, " {}"), e),
+        }
+    };
+    ($e:expr) => {
+        try_abort!($e, "")
+    };
+}
+
 macro_rules! exit {
     ($runtime:expr) => {{
         let rt = $runtime as *mut Runtime;
@@ -252,10 +264,10 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 #[no_mangle]
 pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
-    let res = match runtime.read_files.read_err(&*(file as *mut Str)) {
-        Ok(res) => res,
-        Err(e) => fail!("unexpected error when reading error status of file: {}", e),
-    };
+    let res = try_abort!(
+        runtime.read_files.read_err(&*(file as *mut Str)),
+        "unexpected error when reading error status of file:"
+    );
     res
 }
 
@@ -268,13 +280,13 @@ pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
 #[no_mangle]
 pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
-    match runtime
-        .regexes
-        .get_line_stdin(&runtime.vars.rs, &mut runtime.read_files)
-    {
-        Ok(res) => mem::transmute::<Str, u128>(res),
-        Err(err) => fail!("unexpected error when reading line from stdin: {}", err),
-    }
+    let res = try_abort!(
+        runtime
+            .regexes
+            .get_line_stdin(&runtime.vars.rs, &mut runtime.read_files),
+        "unexpected error when reading line from stdin:"
+    );
+    mem::transmute::<Str, u128>(res)
 }
 
 #[no_mangle]
@@ -437,19 +449,14 @@ pub unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> u128 {
     mem::transmute::<Str, u128>(res)
 }
 
-// TODO: figure out error story.
-
 #[no_mangle]
 pub unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *mut c_void) -> Int {
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
-    let res = match (*runtime).regexes.match_regex(&pat, &s) {
-        Ok(res) => res as Int,
-        Err(e) => fail!("match_pat: {}", e),
-    };
+    let res = try_abort!((*runtime).regexes.is_regex_match(&pat, &s), "match_pat:");
     mem::forget((s, pat));
-    res
+    res as Int
 }
 
 #[no_mangle]
@@ -511,14 +518,7 @@ pub unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
 pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> u128 {
     let rt = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        use Variable::*;
-        let res = match var {
-            FS => rt.vars.fs.clone(),
-            OFS => rt.vars.ofs.clone(),
-            RS => rt.vars.rs.clone(),
-            FILENAME => rt.vars.filename.clone(),
-            ARGC | ARGV | NF | NR => fail!("non-string var={:?}", var),
-        };
+        let res = try_abort!(rt.vars.load_str(var));
         mem::transmute::<Str, u128>(res)
     } else {
         fail!("invalid variable code={}", var)
@@ -530,14 +530,7 @@ pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_vo
     let rt = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let s = (&*(s as *mut Str)).clone();
-        use Variable::*;
-        match var {
-            FS => rt.vars.fs = s,
-            OFS => rt.vars.ofs = s,
-            RS => rt.vars.rs = s,
-            FILENAME => rt.vars.filename = s,
-            ARGC | ARGV | NF | NR => fail!("non-string var={:?}", var),
-        };
+        try_abort!(rt.vars.store_str(var, s))
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -547,24 +540,15 @@ pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_vo
 pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     let rt = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        use Variable::*;
-        match var {
-            ARGC => rt.vars.argc,
-            NF => {
-                if rt.split_line.len() == 0 {
-                    if let Err(e) =
-                        rt.regexes
-                            .split_regex(&rt.vars.fs, &rt.line, &mut rt.split_line)
-                    {
-                        fail!("failed to split line: {}", e);
-                    }
-                    rt.vars.nf = rt.split_line.len() as Int;
-                }
-                rt.vars.nf
-            }
-            NR => rt.vars.nr,
-            OFS | FS | RS | FILENAME | ARGV => fail!("non-int variable {}", var),
+        if var == Variable::NF && rt.split_line.len() == 0 {
+            try_abort!(
+                rt.regexes
+                    .split_regex(&rt.vars.fs, &rt.line, &mut rt.split_line),
+                "failed to split line:"
+            );
+            rt.vars.nf = rt.split_line.len() as Int;
         }
+        try_abort!(rt.vars.load_int(var))
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -574,13 +558,7 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
 pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
     let rt = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        use Variable::*;
-        match var {
-            ARGC => rt.vars.argc = i,
-            NF => rt.vars.nf = i,
-            NR => rt.vars.nr = i,
-            OFS | FS | RS | FILENAME | ARGV => fail!("non-int variable {}", var),
-        };
+        try_abort!(rt.vars.store_int(var, i));
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -590,11 +568,7 @@ pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
 pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let rt = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        use Variable::*;
-        let res = match var {
-            ARGV => rt.vars.argv.clone(),
-            OFS | ARGC | NF | NR | FS | RS | FILENAME => fail!("non intmap-var={:?}", var),
-        };
+        let res = try_abort!(rt.vars.load_intmap(var));
         mem::transmute::<IntMap<_>, *mut c_void>(res)
     } else {
         fail!("invalid variable code={}", var)
@@ -605,12 +579,8 @@ pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_
 pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_void) {
     let rt = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        use Variable::*;
         let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
-        match var {
-            ARGV => rt.vars.argv = map.clone(),
-            OFS | ARGC | NF | NR | FS | RS | FILENAME => fail!("non intmap-var={:?}", var),
-        };
+        try_abort!(rt.vars.store_intmap(var, map.clone()));
         mem::forget(map);
     } else {
         fail!("invalid variable code={}", var)
