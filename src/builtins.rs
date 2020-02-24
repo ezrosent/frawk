@@ -24,6 +24,7 @@ pub enum Function {
     Length,
     Contains,
     Delete,
+    Match,
 }
 
 static_map!(
@@ -31,7 +32,8 @@ static_map!(
     ["close", Function::Close],
     ["print", Function::Print],
     ["split", Function::Split],
-    ["length", Function::Length]
+    ["length", Function::Length],
+    ["match", Function::Match]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -103,7 +105,7 @@ impl Function {
             },
             Unop(Column) => (smallvec![Int], Str),
             Binop(Concat) => (smallvec![Str; 2], Str),
-            Binop(Match) => (smallvec![Str; 2], Int),
+            Binop(IsMatch) => (smallvec![Str; 2], Int),
             // Not doesn't unconditionally convert to integers before negating it. Nonempty strings
             // are considered "truthy". Floating point numbers are converted beforehand:
             //    !5 == !1 == 0
@@ -151,6 +153,7 @@ impl Function {
             Setcol => (smallvec![Int, Str], Int),
             Length => (smallvec![incoming[0]], Int),
             Close => (smallvec![Str], Str),
+            Match => (smallvec![Str, Str], Int),
             // Split's second input can be a map of either type
             Split => {
                 if let MapIntStr | MapStrStr = incoming[1] {
@@ -167,7 +170,7 @@ impl Function {
         Some(match self {
             ReadErrStdin | NextlineStdin => 0,
             Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
-            Setcol | Binop(_) => 2,
+            Match | Setcol | Binop(_) => 2,
             Delete | Contains => 2,
             Print | Split => 3,
         })
@@ -199,8 +202,8 @@ impl Function {
             }
             Binop(Div) => Ok(Scalar(BaseTy::Float).abs()),
             Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
-            Unop(Not) | Binop(Match) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
-            | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete => {
+            Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
+            | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match => {
                 Ok(Scalar(BaseTy::Int).abs())
             }
             Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {

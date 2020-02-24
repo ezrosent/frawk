@@ -179,6 +179,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         str_len(str_ref_ty) -> int_ty;
         concat(str_ref_ty, str_ref_ty) -> str_ty;
         match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        match_pat_loc(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         get_col(rt_ty, int_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
@@ -455,6 +456,25 @@ pub unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *m
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
     let res = try_abort!((*runtime).regexes.is_regex_match(&pat, &s), "match_pat:");
+    mem::forget((s, pat));
+    res as Int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn match_pat_loc(
+    runtime: *mut c_void,
+    s: *mut c_void,
+    pat: *mut c_void,
+) -> Int {
+    let runtime = runtime as *mut Runtime;
+    let s = &*(s as *mut Str);
+    let pat = &*(pat as *mut Str);
+    let res = try_abort!(
+        (*runtime)
+            .regexes
+            .regex_match_loc(&mut (*runtime).vars, &pat, &s),
+        "match_pat_loc:"
+    );
     mem::forget((s, pat));
     res as Int
 }

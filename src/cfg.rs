@@ -1145,7 +1145,7 @@ where
         let (current_open, c_val) = if let ast::Expr::PatLit(_) = cond {
             // For conditionals, pattern literals become matches against $0.
             use ast::{Binop::*, Expr::*, Unop::*};
-            self.convert_val(&Binop(Match, &Unop(Column, &ILit(0)), cond), current_open)?
+            self.convert_val(&Binop(IsMatch, &Unop(Column, &ILit(0)), cond), current_open)?
         } else {
             self.convert_val(cond, current_open)?
         };

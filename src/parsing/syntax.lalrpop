@@ -224,10 +224,10 @@ PrecAndNoIn: &'a Expr<'a, 'a, &'a str> = {
 }
 
 PrecMatch: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecMatch> "~" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::Match, l, r)),
+    <l: PrecMatch> "~" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::IsMatch, l, r)),
     <l: PrecMatch> "!~" <r: PrecCmp> => arena.alloc_v(Expr::Unop(
             Unop::Not,
-            arena.alloc_v(Expr::Binop(Binop::Match, l, r)))),
+            arena.alloc_v(Expr::Binop(Binop::IsMatch, l, r)))),
     PrecCmp,
 }
 

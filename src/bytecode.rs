@@ -91,12 +91,12 @@ pub(crate) enum Instr<'a> {
     ModInt(Reg<Int>, Reg<Int>, Reg<Int>),
     Not(Reg<Int>, Reg<Int>),
     NotStr(Reg<Int>, Reg<Str<'a>>),
-    // TODO need NotStr?
     NegInt(Reg<Int>, Reg<Int>),
     NegFloat(Reg<Float>, Reg<Float>),
 
     // String processing
     Concat(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Str<'a>>),
+    IsMatch(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     Match(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     LenStr(Reg<Int>, Reg<Str<'a>>),
 
@@ -465,6 +465,11 @@ impl<'a> Instr<'a> {
                 r.accum(&mut f);
             }
             Match(res, l, r) => {
+                res.accum(&mut f);
+                l.accum(&mut f);
+                r.accum(&mut f);
+            }
+            IsMatch(res, l, r) => {
                 res.accum(&mut f);
                 l.accum(&mut f);
                 r.accum(&mut f);

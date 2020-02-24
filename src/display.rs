@@ -134,6 +134,7 @@ impl Display for Function {
             Contains => write!(f, "{}", "contains"),
             Delete => write!(f, "{}", "delete"),
             Close => write!(f, "{}", "close"),
+            Match => write!(f, "{}", "match"),
         }
     }
 }
@@ -189,7 +190,7 @@ impl Display for Binop {
                 Div => "/",
                 Mod => "%",
                 Concat => "<concat>",
-                Match => "~",
+                IsMatch => "~",
                 LT => "<",
                 GT => ">",
                 LTE => "<=",

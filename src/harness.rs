@@ -580,6 +580,17 @@ dont print this!
 Or this"#
     );
 
+    test_program!(
+        basic_match_loc,
+        r#"BEGIN {
+        x=match("something that should match", /t.?h/)
+        print x, RSTART, RLENGTH
+        y=match("something that will not match", /xxx/)
+        print y, RSTART, RLENGTH
+        }"#,
+        "5 5 2\n0 0 -1\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,
