@@ -7,6 +7,7 @@ use std::str;
 // These functions could also be used in a standalone library.
 
 #[cfg(test)]
+#[allow(unused)]
 fn parse_utf8(bs: &[u8]) -> Option<&str> {
     if is_utf8(bs) {
         Some(unsafe { str::from_utf8_unchecked(bs) })
@@ -371,8 +372,8 @@ mod x86 {
         // input lengths, except where the original lengths were zero. This verifies that no new
         // characters "started too early". We also want to check that there are no zeros, otherwise
         // there would have been too many continuation tokens. We can do this in 3 comparisons by
-        // checking testing that the carries only exceed the original lengths when the original
-        // lengths were 0. The code inverts this (because we are setting an error flag):
+        // checking that the carries only exceed the original lengths when the original lengths
+        // were 0. The code inverts this (because we are setting an error flag):
         //
         // has_error ||= carries > length == lengths > 0
         let overunder = _mm_cmpeq_epi8(

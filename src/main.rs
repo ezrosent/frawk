@@ -1,3 +1,4 @@
+#![feature(core_intrinsics)]
 #![feature(test)]
 #[macro_use]
 pub mod common;
