@@ -153,6 +153,8 @@ impl Display for Variable {
                 NF => "NF",
                 NR => "NR",
                 FILENAME => "FILENAME",
+                RSTART => "RSTART",
+                RLENGTH => "RLENGTH",
             }
         )
     }

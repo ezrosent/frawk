@@ -1,4 +1,4 @@
-use crate::builtins::{self, Variable};
+use crate::builtins;
 use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result, WorkList};
@@ -53,15 +53,6 @@ impl Default for Ty {
 }
 
 impl Ty {
-    fn of_var(v: Variable) -> Ty {
-        use Variable::*;
-        match v {
-            ARGC | FS | OFS | RS | FILENAME => Ty::Str,
-            NF | NR => Ty::Int,
-            ARGV => Ty::MapIntStr,
-        }
-    }
-
     fn iter(self) -> Result<Ty> {
         use Ty::*;
         match self {
@@ -1257,7 +1248,7 @@ impl<'a, 'b> View<'a, 'b> {
                 self.convert(dst_reg, dst_ty, target_reg, elt_ty)?
             }
             PrimExpr::LoadBuiltin(bv) => {
-                let target_ty = Ty::of_var(*bv);
+                let target_ty = Ty::from(*bv);
                 let target_reg = if target_ty == dst_ty {
                     dst_reg
                 } else {
@@ -1307,7 +1298,7 @@ impl<'a, 'b> View<'a, 'b> {
                 self.expr(dst_reg, dst_ty, pe)?;
             }
             PrimStmt::SetBuiltin(v, pe) => {
-                let ty = Ty::of_var(*v);
+                let ty = Ty::from(*v);
                 let reg = self.regs.stats.reg_of_ty(ty);
                 self.expr(reg, ty, pe)?;
                 use Ty::*;
