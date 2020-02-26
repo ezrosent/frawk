@@ -1008,6 +1008,18 @@ impl<'a, 'b> View<'a, 'b> {
             ReadErrStdin => self.pushl(LL::ReadErrStdin(res_reg.into())),
             NextlineStdin => self.pushl(LL::NextLineStdin(res_reg.into())),
             Setcol => self.pushl(LL::SetColumn(conv_regs[0].into(), conv_regs[1].into())),
+            Sub => self.pushl(LL::Sub(
+                res_reg.into(),
+                conv_regs[0].into(),
+                conv_regs[1].into(),
+                conv_regs[2].into(),
+            )),
+            GSub => self.pushl(LL::GSub(
+                res_reg.into(),
+                conv_regs[0].into(),
+                conv_regs[1].into(),
+                conv_regs[2].into(),
+            )),
             Split => {
                 if res_reg == UNUSED {
                     res_reg = self.regs.stats.reg_of_ty(res_ty);

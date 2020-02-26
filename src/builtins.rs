@@ -25,6 +25,8 @@ pub enum Function {
     Contains,
     Delete,
     Match,
+    Sub,
+    GSub,
 }
 
 static_map!(
@@ -33,7 +35,9 @@ static_map!(
     ["print", Function::Print],
     ["split", Function::Split],
     ["length", Function::Length],
-    ["match", Function::Match]
+    ["match", Function::Match],
+    ["sub", Function::Sub],
+    ["gsub", Function::GSub]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -74,6 +78,11 @@ impl Function {
                 let arr = args[0];
                 let query = args[1];
                 ctx.set_key(arr, query);
+            }
+            Function::Sub | Function::GSub => {
+                let out_str = args[2];
+                let str_const = ctx.constant(Scalar(BaseTy::Str).abs());
+                ctx.nw.add_dep(str_const, out_str, Constraint::Flows(()));
             }
             _ => {}
         };
@@ -153,6 +162,7 @@ impl Function {
             Setcol => (smallvec![Int, Str], Int),
             Length => (smallvec![incoming[0]], Int),
             Close => (smallvec![Str], Str),
+            Sub | GSub => (smallvec![Str, Str, Str], Int),
             Match => (smallvec![Str, Str], Int),
             // Split's second input can be a map of either type
             Split => {
@@ -172,7 +182,7 @@ impl Function {
             Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Match | Setcol | Binop(_) => 2,
             Delete | Contains => 2,
-            Print | Split => 3,
+            Sub | GSub | Print | Split => 3,
         })
     }
 
@@ -203,9 +213,8 @@ impl Function {
             Binop(Div) => Ok(Scalar(BaseTy::Float).abs()),
             Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
             Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
-            | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match => {
-                Ok(Scalar(BaseTy::Int).abs())
-            }
+            | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match
+            | Sub | GSub => Ok(Scalar(BaseTy::Int).abs()),
             Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())
             }

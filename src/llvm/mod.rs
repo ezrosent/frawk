@@ -1158,6 +1158,22 @@ impl<'a> View<'a> {
                 let lenv = self.call("str_len", &mut [sv]);
                 self.bind_reg(res, lenv);
             }
+            Sub(res, pat, s, in_s) => {
+                let patv = self.get_local(pat.reflect())?;
+                let sv = self.get_local(s.reflect())?;
+                let in_sv = self.get_local(in_s.reflect())?;
+                let rt = self.runtime_val();
+                let resv = self.call("subst_first", &mut [rt, patv, sv, in_sv]);
+                self.bind_reg(res, resv);
+            }
+            GSub(res, pat, s, in_s) => {
+                let patv = self.get_local(pat.reflect())?;
+                let sv = self.get_local(s.reflect())?;
+                let in_sv = self.get_local(in_s.reflect())?;
+                let rt = self.runtime_val();
+                let resv = self.call("subst_all", &mut [rt, patv, sv, in_sv]);
+                self.bind_reg(res, resv);
+            }
             LTFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;

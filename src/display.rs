@@ -135,6 +135,8 @@ impl Display for Function {
             Delete => write!(f, "{}", "delete"),
             Close => write!(f, "{}", "close"),
             Match => write!(f, "{}", "match"),
+            Sub => write!(f, "{}", "sub"),
+            GSub => write!(f, "{}", "gsub"),
         }
     }
 }
