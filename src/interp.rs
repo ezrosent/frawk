@@ -257,6 +257,26 @@ impl<'a> Interp<'a> {
                         let len = self.get(s).len();
                         *self.get_mut(res) = len as Int;
                     }
+                    Sub(res, pat, s, in_s) => {
+                        let (subbed, new) = {
+                            let pat = index(&self.strs, pat);
+                            let s = index(&self.strs, s);
+                            let in_s = index(&self.strs, in_s);
+                            self.regexes.with_regex(pat, |re| in_s.subst_first(re, s))?
+                        };
+                        *index_mut(&mut self.strs, in_s) = subbed;
+                        *index_mut(&mut self.ints, res) = new as Int;
+                    }
+                    GSub(res, pat, s, in_s) => {
+                        let (subbed, subs_made) = {
+                            let pat = index(&self.strs, pat);
+                            let s = index(&self.strs, s);
+                            let in_s = index(&self.strs, in_s);
+                            self.regexes.with_regex(pat, |re| in_s.subst_all(re, s))?
+                        };
+                        *index_mut(&mut self.strs, in_s) = subbed;
+                        *index_mut(&mut self.ints, res) = subs_made;
+                    }
                     LTFloat(res, l, r) => {
                         let res = *res;
                         let l = *self.get(*l);

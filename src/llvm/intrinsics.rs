@@ -180,6 +180,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         concat(str_ref_ty, str_ref_ty) -> str_ty;
         match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         match_pat_loc(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        subst_first(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        subst_all(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         get_col(rt_ty, int_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
@@ -477,6 +479,40 @@ pub unsafe extern "C" fn match_pat_loc(
     );
     mem::forget((s, pat));
     res as Int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn subst_first(
+    runtime: *mut c_void,
+    pat: *mut u128,
+    s: *mut u128,
+    in_s: *mut u128,
+) -> Int {
+    let runtime = &mut *(runtime as *mut Runtime);
+    let s = &*(s as *mut Str);
+    let pat = &*(pat as *mut Str);
+    let in_s = &mut *(in_s as *mut Str);
+    let (subbed, new) = try_abort!(runtime
+        .regexes
+        .with_regex(pat, |re| in_s.subst_first(re, s)));
+    *in_s = subbed;
+    new as Int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn subst_all(
+    runtime: *mut c_void,
+    pat: *mut u128,
+    s: *mut u128,
+    in_s: *mut u128,
+) -> Int {
+    let runtime = &mut *(runtime as *mut Runtime);
+    let s = &mut *(s as *mut Str);
+    let pat = &*(pat as *mut Str);
+    let in_s = &mut *(in_s as *mut Str);
+    let (subbed, nsubs) = try_abort!(runtime.regexes.with_regex(pat, |re| in_s.subst_all(re, s)));
+    *in_s = subbed;
+    nsubs
 }
 
 #[no_mangle]

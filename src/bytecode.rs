@@ -99,6 +99,18 @@ pub(crate) enum Instr<'a> {
     IsMatch(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     Match(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     LenStr(Reg<Int>, Reg<Str<'a>>),
+    Sub(
+        Reg<Int>,
+        /*pat*/ Reg<Str<'a>>,
+        /*for*/ Reg<Str<'a>>,
+        /*in*/ Reg<Str<'a>>,
+    ),
+    GSub(
+        Reg<Int>,
+        /*pat*/ Reg<Str<'a>>,
+        /*for*/ Reg<Str<'a>>,
+        /*in*/ Reg<Str<'a>>,
+    ),
 
     // Comparison
     LTFloat(Reg<Int>, Reg<Float>, Reg<Float>),
@@ -477,6 +489,12 @@ impl<'a> Instr<'a> {
             LenStr(res, s) => {
                 res.accum(&mut f);
                 s.accum(&mut f)
+            }
+            GSub(res, pat, s, in_s) | Sub(res, pat, s, in_s) => {
+                res.accum(&mut f);
+                pat.accum(&mut f);
+                s.accum(&mut f);
+                in_s.accum(&mut f);
             }
             LTFloat(res, l, r) => {
                 res.accum(&mut f);
