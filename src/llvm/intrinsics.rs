@@ -182,6 +182,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         match_pat_loc(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_first(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_all(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        substr(str_ref_ty, int_ty, int_ty) -> str_ty;
         get_col(rt_ty, int_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
@@ -514,6 +515,16 @@ pub unsafe extern "C" fn subst_all(
     let (subbed, nsubs) = try_abort!(runtime.regexes.with_regex(pat, |re| in_s.subst_all(re, s)));
     *in_s = subbed;
     nsubs
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn substr(base: *mut u128, l: Int, r: Int) -> u128 {
+    use std::cmp::{max, min};
+    let base = &*(base as *mut Str);
+    let len = base.len();
+    let l = max(0, l - 1) as usize;
+    let r = min(len as Int, r) as usize;
+    mem::transmute::<Str, u128>(base.slice(l, r))
 }
 
 #[no_mangle]

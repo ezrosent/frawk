@@ -5,6 +5,8 @@ use crate::common::{NumTy, Result};
 use crate::compile::{self, Ty};
 use crate::runtime::{self, Float, Int, LazyVec, Str};
 
+use std::cmp;
+
 #[derive(Default)]
 pub(crate) struct Storage<T> {
     pub(crate) regs: Vec<T>,
@@ -277,6 +279,13 @@ impl<'a> Interp<'a> {
                         };
                         *index_mut(&mut self.strs, in_s) = subbed;
                         *index_mut(&mut self.ints, res) = subs_made;
+                    }
+                    Substr(res, base, l, r) => {
+                        let base = index(&self.strs, base);
+                        let len = base.len();
+                        let l = cmp::max(0, -1 + *index(&self.ints, l)) as usize;
+                        let r = cmp::min(len as Int, *index(&self.ints, r)) as usize;
+                        *index_mut(&mut self.strs, res) = base.slice(l, r);
                     }
                     LTFloat(res, l, r) => {
                         let res = *res;
@@ -957,6 +966,9 @@ impl<'a> Interp<'a> {
 
 // TODO: Add a pass that does checking of indexes once.
 // That could justify no checking during interpretation.
+#[cfg(debug_assertions)]
+const CHECKED: bool = true;
+#[cfg(not(debug_assertions))]
 const CHECKED: bool = false;
 
 #[inline(always)]

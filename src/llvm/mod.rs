@@ -1174,6 +1174,13 @@ impl<'a> View<'a> {
                 let resv = self.call("subst_all", &mut [rt, patv, sv, in_sv]);
                 self.bind_reg(res, resv);
             }
+            Substr(res, base, l, r) => {
+                let basev = self.get_local(base.reflect())?;
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let resv = self.call("substr", &mut [basev, lv, rv]);
+                self.bind_reg(res, resv);
+            }
             LTFloat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;

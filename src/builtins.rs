@@ -27,6 +27,7 @@ pub enum Function {
     Match,
     Sub,
     GSub,
+    Substr,
 }
 
 static_map!(
@@ -37,7 +38,8 @@ static_map!(
     ["length", Function::Length],
     ["match", Function::Match],
     ["sub", Function::Sub],
-    ["gsub", Function::GSub]
+    ["gsub", Function::GSub],
+    ["substr", Function::Substr]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -163,6 +165,7 @@ impl Function {
             Length => (smallvec![incoming[0]], Int),
             Close => (smallvec![Str], Str),
             Sub | GSub => (smallvec![Str, Str, Str], Int),
+            Substr => (smallvec![Str, Int, Int], Str),
             Match => (smallvec![Str, Str], Int),
             // Split's second input can be a map of either type
             Split => {
@@ -182,7 +185,7 @@ impl Function {
             Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Match | Setcol | Binop(_) => 2,
             Delete | Contains => 2,
-            Sub | GSub | Print | Split => 3,
+            Substr | Sub | GSub | Print | Split => 3,
         })
     }
 
@@ -215,7 +218,7 @@ impl Function {
             Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
             | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match
             | Sub | GSub => Ok(Scalar(BaseTy::Int).abs()),
-            Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {
+            Substr | Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())
             }
             Close => Ok(None),

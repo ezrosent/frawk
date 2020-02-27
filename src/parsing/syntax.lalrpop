@@ -88,7 +88,7 @@ BaseStmt: &'a Stmt<'a,'a,&'a str> = {
         arena.alloc_v(Stmt::Expr(arena.alloc_v(Expr::Call(Either::Right(Function::Delete), vec![i.0, i.1])))),
     "print" <pa:PrintArgs?> <re:Redirect?> =>
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
-    "print(" <pa:Args?> ")" <re:Redirect?> =>
+    "print(" <pa:(<Args?>)> ")" <re:Redirect?> =>
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "printf" <spec:PrecAdd> <pa: ("," <PrintArgs>)?> <re:Redirect?> =>
         arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
@@ -134,8 +134,8 @@ PrintArgs: Vec<&'a Expr<'a,'a,&'a str>> = {
 Args: Vec<&'a Expr<'a,'a,&'a str>> = {
     // To avoid ambiguities with expressions including ">" we jump down the precedence hierarchy
     // past the comparison operators.
-    <Expr> => vec![<>],
-    <v:(<Expr> ",")+> <e:Expr?> => match e {
+    NL <Expr> => vec![<>],
+    <v:(NL <Expr> ",")+> <e:(NL <Expr?>)> => match e {
         None => v,
         Some(e) => {
             let mut v = v;

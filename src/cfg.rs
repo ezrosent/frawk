@@ -896,7 +896,7 @@ where
                         };
                     }
                     Either::Right(bi) => {
-                        if let builtins::Function::Split = bi {
+                        if bi == builtins::Function::Split && args.len() == 2 {
                             if prim_args.len() == 2 {
                                 let fs = self.fresh_local();
                                 self.add_stmt(
@@ -909,7 +909,13 @@ where
                                 prim_args.push(PrimVal::Var(fs));
                             }
                         }
+                        if bi == builtins::Function::Substr && args.len() == 2 {
+                            // We clamp indexes anyways, we'll just put a big number in as the
+                            // rightmost index.
+                            prim_args.push(PrimVal::ILit(i64::max_value()));
+                        }
                         if let builtins::Function::Sub | builtins::Function::GSub = bi {
+                            // TODO: this should get broken out into its own function
                             let assignee = match args.len() {
                                 3 => &args[2],
                                 2 => {
@@ -1418,8 +1424,6 @@ where
     }
 
     fn rename(&mut self, cur: NodeIx) {
-        // TODO mark elements of renamestack as ones that do not progress, thereby changing the
-        // behavior or get_next and latest
         #[derive(Clone)]
         struct RenameStack {
             // global variables do not get renamed and have no phi functions.
