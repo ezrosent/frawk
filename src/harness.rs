@@ -626,6 +626,23 @@ Or this"#
         "snow banana 2\nsnow globe\n",
         @input "snow ball"
     );
+
+    test_program!(
+        substrings,
+        r#"BEGIN {
+        s="this is a string";
+        print(
+            sprintf("[%s]",
+            substr(s, 1, 1)),
+            substr(s, 6, 9),
+            substr(s, -20, 4),
+            substr(s, 11, 100),
+            substr(s, 11),
+        );
+    }"#,
+        "[t] is a this string string\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,

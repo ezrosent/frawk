@@ -1020,6 +1020,12 @@ impl<'a, 'b> View<'a, 'b> {
                 conv_regs[1].into(),
                 conv_regs[2].into(),
             )),
+            Substr => self.pushl(LL::Substr(
+                res_reg.into(),
+                conv_regs[0].into(),
+                conv_regs[1].into(),
+                conv_regs[2].into(),
+            )),
             Split => {
                 if res_reg == UNUSED {
                     res_reg = self.regs.stats.reg_of_ty(res_ty);

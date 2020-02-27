@@ -137,6 +137,7 @@ impl Display for Function {
             Match => write!(f, "{}", "match"),
             Sub => write!(f, "{}", "sub"),
             GSub => write!(f, "{}", "gsub"),
+            Substr => write!(f, "{}", "substr"),
         }
     }
 }

@@ -111,6 +111,7 @@ pub(crate) enum Instr<'a> {
         /*for*/ Reg<Str<'a>>,
         /*in*/ Reg<Str<'a>>,
     ),
+    Substr(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Int>, Reg<Int>),
 
     // Comparison
     LTFloat(Reg<Int>, Reg<Float>, Reg<Float>),
@@ -495,6 +496,12 @@ impl<'a> Instr<'a> {
                 pat.accum(&mut f);
                 s.accum(&mut f);
                 in_s.accum(&mut f);
+            }
+            Substr(res, base, l, r) => {
+                res.accum(&mut f);
+                base.accum(&mut f);
+                l.accum(&mut f);
+                r.accum(&mut f);
             }
             LTFloat(res, l, r) => {
                 res.accum(&mut f);
