@@ -207,6 +207,20 @@ impl<'a> Str<'a> {
             }
         });
     }
+    pub fn join<'b>(&self, mut ss: impl Iterator<Item = &'b Str<'a>>) -> Str<'a>
+    where
+        'a: 'b,
+    {
+        let mut res = if let Some(s) = ss.next() {
+            s.clone()
+        } else {
+            return Default::default();
+        };
+        for s in ss {
+            res = Str::concat(res.clone(), Str::concat(self.clone(), s.clone()));
+        }
+        res
+    }
     pub fn subst_first(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, bool) {
         self.with_str(|s| {
             subst.with_str(|subst| {

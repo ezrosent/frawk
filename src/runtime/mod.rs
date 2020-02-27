@@ -38,6 +38,15 @@ impl<T> LazyVec<T> {
     }
 }
 
+impl<'a> LazyVec<Str<'a>> {
+    pub(crate) fn join(&self, sep: &Str<'a>) -> Str<'a> {
+        match self {
+            Either::Left(v) => sep.join(v.iter()),
+            Either::Right(m) => sep.join(m.0.borrow().values()),
+        }
+    }
+}
+
 impl<T: Clone> LazyVec<T> {
     pub(crate) fn get(&self, ix: usize) -> Option<T> {
         match self {

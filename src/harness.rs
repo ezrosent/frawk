@@ -591,6 +591,8 @@ Or this"#
         "5 5 2\n0 0 -1\n"
     );
 
+    test_program!(degenerate_map, r#"BEGIN { print m[1]; }"#, "\n");
+
     test_program!(
         substitutions,
         r#"BEGIN {
@@ -603,6 +605,27 @@ Or this"#
         "b there 1 snow banana 2\n"
     );
 
+    test_program!(
+        map_substitutions,
+        r#"BEGIN {
+        m[1] = "snow ball";
+        yr=gsub(/l/,"na",m[1])
+        print m[1], yr;
+        }"#,
+        "snow banana 2\n"
+    );
+
+    test_program!(
+        column_substitutions,
+        r#"{
+        yr=gsub(/l/,"na")
+        print $0, yr
+        sub(/banana/, "globe", $2);
+        print;
+        }"#,
+        "snow banana 2\nsnow globe\n",
+        @input "snow ball"
+    );
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,
