@@ -21,6 +21,7 @@ pub(crate) struct Interp<'a> {
 
     line: Str<'a>,
     split_line: LazyVec<Str<'a>>,
+
     regexes: runtime::RegexCache,
     write_files: runtime::FileWrite,
     read_files: runtime::FileRead,
@@ -388,6 +389,7 @@ impl<'a> Interp<'a> {
                         }
                         self.split_line
                             .insert(col as usize - 1, self.get(*src).clone());
+                        self.line = self.split_line.join(&self.vars.ofs);
                     }
                     GetColumn(dst, src) => {
                         let col = *self.get(*src);

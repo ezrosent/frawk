@@ -11,6 +11,7 @@ use smallvec::smallvec; // macro
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
+use std::mem;
 
 #[derive(Debug, Default)]
 pub(crate) struct BasicBlock<'a> {
@@ -865,6 +866,7 @@ where
                 return Ok((next, PrimExpr::Index(arr_v, ix_v)));
             }
             Call(fname, args) => {
+                // TODO: desugaring for 2-arg sub/gsub
                 let bi = match fname {
                     Either::Left(fname) if fname.is_sprintf() => {
                         return self.do_sprintf(args, current_open);
@@ -906,6 +908,67 @@ where
                                 )?;
                                 prim_args.push(PrimVal::Var(fs));
                             }
+                        }
+                        if let builtins::Function::Sub | builtins::Function::GSub = bi {
+                            let assignee = match args.len() {
+                                3 => &args[2],
+                                2 => {
+                                    // If a third argument isn't provided, we assume you mean $0.
+                                    let e = &Expr::Unop(ast::Unop::Column, &Expr::ILit(0));
+                                    let (next, v) = self.convert_val(e, open)?;
+                                    open = next;
+                                    prim_args.push(v);
+                                    e
+                                }
+                                n => {
+                                    return err!(
+                                        "{} takes either 2 or 3 arguments, we got {}",
+                                        bi,
+                                        n
+                                    );
+                                }
+                            };
+                            // Easy case! How delighful
+                            if let Expr::Var(_) = assignee {
+                                return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
+                            }
+                            // We got something like sub(x, y, m[z]);
+                            // We allocate fresh variables for the initial value of the assignee
+                            // and the result of the call to (g)sub.
+                            //
+                            // We do the computation, then we assign the substituted string to the
+                            // asignee expression, yielding the saved result.
+                            let to_set = self.fresh_local();
+                            let res = self.fresh_local();
+                            let last_arg =
+                                mem::replace(&mut prim_args[2], PrimVal::Var(to_set.clone()));
+                            self.add_stmt(
+                                open,
+                                PrimStmt::AsgnVar(to_set.clone(), PrimExpr::Val(last_arg)),
+                            )?;
+                            prim_args[2] = PrimVal::Var(to_set.clone());
+                            self.add_stmt(
+                                open,
+                                PrimStmt::AsgnVar(
+                                    res.clone(),
+                                    PrimExpr::CallBuiltin(bi, prim_args),
+                                ),
+                            )?;
+                            let to_set_var = PrimExpr::Val(PrimVal::Var(to_set.clone()));
+                            let (next, _) = match assignee {
+                                Expr::Unop(_, _) => self.do_assign(assignee, |_| to_set_var, open),
+                                Expr::Index(arr, ix) => self.do_assign_index(
+                                    arr,
+                                    ix,
+                                    |_, _, _, open| Ok((open, to_set_var.clone())),
+                                    open,
+                                ),
+                                _ => err!(
+                                    "invalid operand for substitution {:?} (must be assignable)",
+                                    assignee
+                                ),
+                            }?;
+                            return Ok((next, PrimExpr::Val(PrimVal::Var(res))));
                         }
                         return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
                     }

@@ -37,6 +37,16 @@ pub(crate) enum BaseTy {
     Str,
 }
 
+impl BaseTy {
+    fn lift_null(self) -> BaseTy {
+        if let BaseTy::Null = self {
+            BaseTy::Str
+        } else {
+            self
+        }
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum TVar<T> {
     Iter(T),
@@ -292,10 +302,9 @@ fn concrete(state: State) -> TVar<BaseTy> {
 fn flatten(tv: TVar<BaseTy>) -> Result<compile::Ty> {
     use compile::Ty;
     use {BaseTy::*, TVar::*};
-    match tv {
+    match tv.map(|b| b.lift_null()) {
         Scalar(Int) => Ok(Ty::Int),
         Scalar(Float) => Ok(Ty::Float),
-        // TODO(ezr): add Null to compile::Ty?
         Scalar(Null) | Scalar(Str) => Ok(Ty::Str),
         Iter(Int) => Ok(Ty::IterInt),
         Iter(Null) | Iter(Str) => Ok(Ty::IterStr),

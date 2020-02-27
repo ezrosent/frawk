@@ -434,6 +434,7 @@ pub unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void)
     }
     let s = &*(s as *mut Str);
     runtime.split_line.insert(col as usize - 1, s.clone());
+    runtime.line = runtime.split_line.join(&runtime.vars.ofs);
 }
 
 #[no_mangle]
