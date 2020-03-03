@@ -42,6 +42,8 @@ use arena::Arena;
 use std::fs::File;
 use std::io::{self, BufReader, Write};
 
+// TODO: fix bug with comparing numbers and strings incorrectly.
+
 // TODO: put jemalloc behind a feature flag
 // #[global_allocator]
 // static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
