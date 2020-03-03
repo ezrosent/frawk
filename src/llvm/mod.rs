@@ -108,17 +108,14 @@ impl TypeMap {
         }
     }
 
-    #[inline(always)]
     fn init(&mut self, ty: Ty, r: TypeRef) {
         self.table[ty as usize] = r;
     }
 
-    #[inline(always)]
     fn get_ty(&self, ty: Ty) -> LLVMTypeRef {
         self.table[ty as usize].base
     }
 
-    #[inline(always)]
     fn get_ptr_ty(&self, ty: Ty) -> LLVMTypeRef {
         self.table[ty as usize].ptr
     }
@@ -131,6 +128,11 @@ enum PrintfKind {
     Sprintf,
 }
 
+#[derive(Copy, Clone)]
+pub(crate) struct Config {
+    pub opt_level: usize,
+}
+
 pub(crate) struct Generator<'a, 'b> {
     types: &'b mut Typer<'a>,
     ctx: LLVMContextRef,
@@ -141,6 +143,7 @@ pub(crate) struct Generator<'a, 'b> {
     type_map: TypeMap,
     intrinsics: IntrinsicMap,
     printfs: HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
+    cfg: Config,
 }
 
 impl<'a, 'b> Drop for Generator<'a, 'b> {
@@ -192,21 +195,22 @@ unsafe fn alloc_local(
 }
 
 impl<'a, 'b> Generator<'a, 'b> {
-    pub unsafe fn optimize(&mut self, main: LLVMValueRef) {
-        // TODO: allow us to customize the opt level once we have more command-line flags, etc.
-        //
+    pub unsafe fn optimize(&mut self, main: LLVMValueRef) -> Result<()> {
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
         use llvm_sys::transforms::pass_manager_builder::*;
-        static OPT: bool = true;
         let mpm = LLVMCreatePassManager();
         let fpm = LLVMCreateFunctionPassManagerForModule(self.module);
 
         let builder = LLVMPassManagerBuilderCreate();
-        LLVMPassManagerBuilderSetOptLevel(builder, if OPT { 3 } else { 0 });
+        LLVMPassManagerBuilderSetOptLevel(builder, self.cfg.opt_level as u32);
         LLVMPassManagerBuilderSetSizeLevel(builder, 0);
-        if OPT {
-            LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 250);
-        }
+        match self.cfg.opt_level {
+            0 => {}
+            1 => LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 50),
+            2 => LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 100),
+            3 => LLVMPassManagerBuilderUseInlinerWithThreshold(builder, 250),
+            _ => return err!("unrecognized opt level"),
+        };
 
         LLVMPassManagerBuilderPopulateFunctionPassManager(builder, fpm);
         LLVMPassManagerBuilderPopulateModulePassManager(builder, mpm);
@@ -224,9 +228,10 @@ impl<'a, 'b> Generator<'a, 'b> {
         LLVMRunPassManager(mpm, self.module);
         LLVMDisposePassManager(fpm);
         LLVMDisposePassManager(mpm);
+        Ok(())
     }
 
-    pub unsafe fn init(types: &'b mut Typer<'a>) -> Result<Generator<'a, 'b>> {
+    pub unsafe fn init(types: &'b mut Typer<'a>, cfg: Config) -> Result<Generator<'a, 'b>> {
         if llvm_sys::support::LLVMLoadLibraryPermanently(ptr::null()) != 0 {
             return err!("failed to load in-process library");
         }
@@ -258,6 +263,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             type_map: TypeMap::new(ctx),
             intrinsics: intrinsics::register(module, ctx),
             printfs: Default::default(),
+            cfg,
         };
         res.build_map();
         res.build_decls();
@@ -452,7 +458,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         );
         LLVMBuildRetVoid(builder);
         LLVMDisposeBuilder(builder);
-        self.optimize(decl);
+        self.optimize(decl)?;
         Ok(())
     }
 
