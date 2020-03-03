@@ -37,43 +37,14 @@ extern crate stable_deref_trait;
 extern crate unicode_xid;
 
 use clap::Clap;
+
+use arena::Arena;
+use std::fs::File;
+use std::io::{self, BufReader, Write};
+
 // TODO: put jemalloc behind a feature flag
 // #[global_allocator]
 // static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
-const _PROGRAM: &'static str = r#"
-function fib(n) {
-if (n == 0 || n == 1) {
-return n;
-}
-return fib(n-1) + fib(n-2);
-}
-END { print fib(35); }"#;
-
-const _PROGRAM_2: &'static str = r#"
-END { for (i=0; i<100000000; i++) {SUM += i;}; print SUM }"#;
-const _PROGRAM_3: &'static str = r#"
-END { for (i=0; i<100000000; i++) {SUMS[i]++; SUM += i;}; print SUM }"#;
-const _PROGRAM_4: &'static str = r#"
-BEGIN { for (i=0; i<10000000; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
-const _PROGRAM_5: &'static str = r#"
-END { for (i=0; i<100; i++) {SUMS[i ""]++; SUM += i;}; print SUM }"#;
-const _PROGRAM_6: &'static str = r#"
-END { for (i=0; i<100000; i++) {CD = CD i;}; print CD }"#;
-const _PROGRAM_7: &'static str = r#"
-END { m[0] = 1; m[1] = 2; for (i in m) { print i, m[i]; } }"#;
-const _PROGRAM_8: &'static str = r#"
-BEGIN { for (i=0; i<10000000; i++) {SUMS[i "" (i-1)] = SUMS[i "" (i+2)] + 1; SUM += i;}; print SUM }"#;
-const _PROGRAM_9: &'static str = r#"
-{ N = $1 + 0 } END { for (i=0; i<N; i++) {SUM += i;}; print SUM }"#;
-const _PROGRAM_10: &'static str = r#"BEGIN {
-    print "hello" > "/tmp/hello2";
-    print "there" > "/tmp/hello2";
-    print "hello" > "/tmp/hello3";
-    x = close("/tmp/hello3");
-    print "there" > "/tmp/hello3";
-    printf "x=%s", x;
-}"#;
 
 #[derive(Clap, Debug)]
 struct Opts {
@@ -86,11 +57,6 @@ struct Opts {
     #[clap(short = "o", long = "out-file")]
     out_file: Option<String>,
 }
-
-use arena::Arena;
-use std::fs::File;
-use std::io::{self, BufReader, Write};
-
 macro_rules! fail {
     ($($t:tt)*) => {{
         eprintln!($($t)*);
