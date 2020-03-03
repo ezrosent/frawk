@@ -2,6 +2,7 @@ use crate::builtins;
 use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result, WorkList};
+use crate::llvm;
 use crate::smallvec::{self, smallvec};
 use crate::types;
 
@@ -99,20 +100,26 @@ pub(crate) fn bytecode<'a>(
     Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
 }
 
-pub(crate) fn dump_llvm<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<String> {
-    use crate::llvm::Generator;
+pub(crate) fn dump_llvm<'a>(
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
+    cfg: llvm::Config,
+) -> Result<String> {
+    use llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
-        let mut gen = Generator::init(&mut typer)?;
+        let mut gen = Generator::init(&mut typer, cfg)?;
         gen.dump_module()
     }
 }
 
-pub(crate) fn _compile_llvm<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<()> {
-    use crate::llvm::Generator;
+pub(crate) fn _compile_llvm<'a>(
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
+    cfg: llvm::Config,
+) -> Result<()> {
+    use llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
-        let mut gen = Generator::init(&mut typer)?;
+        let mut gen = Generator::init(&mut typer, cfg)?;
         gen._compile_main()
     }
 }
@@ -123,11 +130,12 @@ pub(crate) fn run_llvm<'a>(
     reader: impl std::io::Read + 'static,
     // default to std::io::BufWriter::new(std::io::stdout())
     writer: impl std::io::Write + 'static,
+    cfg: llvm::Config,
 ) -> Result<()> {
     use crate::llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
-        let mut gen = Generator::init(&mut typer)?;
+        let mut gen = Generator::init(&mut typer, cfg)?;
         gen.run_main(reader, writer)
     }
 }

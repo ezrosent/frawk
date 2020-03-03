@@ -20,6 +20,7 @@ rand = "0.7.2"
 lalrpop-util = "0.17.2"
 unicode-xid = "0.2.0"
 llvm-sys = "90.0.0"
+clap = { git = "https://github.com/clap-rs/clap/" }
 
 [build-dependencies]
 lalrpop = "0.17.2"

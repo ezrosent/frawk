@@ -7,7 +7,7 @@ use crate::{
     bytecode::Interp,
     cfg,
     common::Result,
-    compile, lexer,
+    compile, lexer, llvm,
     parsing::syntax,
     types::{self, get_types},
 };
@@ -45,6 +45,8 @@ type ProgResult<'a> = Result<(
     HashMap<&'a str, compile::Ty>, /* type info */
 )>;
 
+const LLVM_CONFIG: llvm::Config = llvm::Config { opt_level: 3 };
+
 #[allow(unused)]
 pub(crate) fn run_program<'a>(
     a: &'a Arena,
@@ -60,7 +62,7 @@ pub(crate) fn dump_llvm(prog: &str) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
-    compile::dump_llvm(&mut ctx)
+    compile::dump_llvm(&mut ctx, LLVM_CONFIG)
 }
 
 #[allow(unused)]
@@ -68,7 +70,7 @@ pub(crate) fn compile_llvm(prog: &str) -> Result<()> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
-    compile::_compile_llvm(&mut ctx)
+    compile::_compile_llvm(&mut ctx, LLVM_CONFIG)
 }
 
 #[allow(unused)]
@@ -78,7 +80,12 @@ pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
-    compile::run_llvm(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?;
+    compile::run_llvm(
+        &mut ctx,
+        std::io::Cursor::new(stdin),
+        stdout.clone(),
+        LLVM_CONFIG,
+    )?;
     let v = match Rc::try_unwrap(stdout.0) {
         Ok(v) => v.into_inner(),
         Err(rc) => rc.borrow().clone(),
