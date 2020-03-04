@@ -130,9 +130,9 @@ impl Function {
             },
             Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE) | Binop(EQ) => (
                 match (incoming[0], incoming[1]) {
-                    (Str, _) | (_, Str) => smallvec![Str; 2],
-                    (Float, _) | (_, Float) => smallvec![Float; 2],
-                    (Int, _) | (_, Int) => smallvec![Int; 2],
+                    (Str, Str) => smallvec![Str; 2],
+                    (Int, Int) => smallvec![Int; 2],
+                    (_, Str) | (Str, _) | (Float, _) | (_, Float) => smallvec![Float; 2],
                     _ => return err!("invalid input spec for comparison op: {:?}", &incoming[..]),
                 },
                 Int,
