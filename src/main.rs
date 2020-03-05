@@ -45,8 +45,8 @@ use std::io::{self, BufReader, Write};
 // TODO: fix bug with comparing numbers and strings incorrectly.
 
 // TODO: put jemalloc behind a feature flag
-// #[global_allocator]
-// static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[derive(Clap, Debug)]
 struct Opts {
@@ -58,6 +58,10 @@ struct Opts {
     opt_level: i32,
     #[clap(short = "o", long = "out-file")]
     out_file: Option<String>,
+    #[clap(short = "dL", long = "dump-llvm")]
+    dump_llvm: bool,
+    #[clap(short = "dB", long = "dump-bytecode")]
+    dump_bytecode: bool,
 }
 macro_rules! fail {
     ($($t:tt)*) => {{
@@ -121,6 +125,35 @@ fn run_llvm(
     }
 }
 
+fn dump_llvm(prog: &str, cfg: llvm::Config) -> String {
+    let a = Arena::default();
+    let mut ctx = get_context(prog, &a);
+    match compile::dump_llvm(&mut ctx, cfg) {
+        Ok(s) => s,
+        Err(e) => fail!("error compiling llvm: {}", e),
+    }
+}
+
+fn dump_bytecode(prog: &str) -> String {
+    use std::io::Cursor;
+    let a = Arena::default();
+    let mut ctx = get_context(prog, &a);
+    let fake_io = Cursor::new(vec![]);
+    let interp = match compile::bytecode(&mut ctx, fake_io.clone(), fake_io) {
+        Ok(ctx) => ctx,
+        Err(e) => fail!("bytecode compilation failure: {}", e),
+    };
+    let mut v = Vec::<u8>::new();
+    for (i, func) in interp.instrs().iter().enumerate() {
+        write!(&mut v, "function {} {{\n", i).unwrap();
+        for (j, inst) in func.iter().enumerate() {
+            write!(&mut v, "\t[{:2}] {:?}\n", j, inst).unwrap();
+        }
+        write!(&mut v, "}}\n").unwrap();
+    }
+    String::from_utf8(v).unwrap()
+}
+
 fn main() {
     let opts: Opts = Opts::parse();
     let program_string = {
@@ -139,6 +172,34 @@ fn main() {
             std::process::exit(1)
         }
     };
+    if opts.opt_level > 3 {
+        fail!("opt levels can only be negative, or in the range [0, 3]");
+    }
+    let skip_output = opts.dump_llvm || opts.dump_bytecode;
+    if opts.dump_llvm {
+        let config = llvm::Config {
+            opt_level: if opts.opt_level < 0 {
+                3
+            } else {
+                opts.opt_level as usize
+            },
+        };
+        let _ = write!(
+            std::io::stdout(),
+            "{}",
+            dump_llvm(program_string.as_str(), config)
+        );
+    }
+    if opts.dump_bytecode {
+        let _ = write!(
+            std::io::stdout(),
+            "{}",
+            dump_bytecode(program_string.as_str()),
+        );
+    }
+    if skip_output {
+        return;
+    }
     macro_rules! with_inp {
         ($inp:ident, $body:expr) => {
             match opts.input_files.len() {
@@ -177,8 +238,6 @@ fn main() {
 
     if opts.opt_level < 0 {
         with_io!(|inp, oup| run_interp(program_string.as_str(), inp, oup));
-    } else if opts.opt_level > 3 {
-        fail!("opt levels can only be negative, or in the range [0, 3]");
     } else {
         with_io!(|inp, oup| run_llvm(
             program_string.as_str(),

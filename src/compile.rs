@@ -242,7 +242,6 @@ pub(crate) struct Frame<'a> {
     src_function: NumTy,
     cur_ident: NumTy,
     pub locals: HashMap<Ident, (u32, Ty)>,
-    pub local_regs: HashSet<(u32, Ty)>,
     pub arg_regs: SmallVec<NumTy>,
     pub cfg: CFG<'a>,
 }
@@ -557,7 +556,6 @@ impl<'a> Typer<'a> {
         gen.main_offset = main_offset as usize;
         gen.local_globals = local_globals;
         for frame in gen.frames.iter_mut() {
-            frame.local_regs = frame.locals.values().cloned().collect();
             let src_func = frame.src_function as usize;
             let mut stream = Vec::new();
             View {
@@ -795,11 +793,6 @@ impl<'a, 'b> View<'a, 'b> {
         Ok(())
     }
 
-    // TODO do basic code motion here:
-    //  1. only do this if it's a local variable:
-    //  2. basic block has extra field: a map from offset to vector of instructions. When
-    //     generating intructions, you take "detours" along that path. It should be pretty easy to
-    //     implement this way, and it avoids wrapping everything in a new HL variant.
     fn convert(&mut self, dst_reg: u32, dst_ty: Ty, src_reg: u32, src_ty: Ty) -> Result<()> {
         use Ty::*;
         if dst_reg == UNUSED || src_reg == UNUSED {
