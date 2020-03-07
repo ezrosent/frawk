@@ -43,24 +43,24 @@ const NUM_VARIANTS: usize = 5;
 #[derive(Clone)]
 #[repr(C)]
 struct Literal<'a> {
-    len: u64,
     ptr: *const u8,
+    len: u64,
     _marker: PhantomData<&'a ()>,
 }
 
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Boxed {
-    len: u64,
     buf: Buf,
+    len: u64,
 }
 
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Shared {
+    buf: Buf,
     start: u32,
     end: u32,
-    buf: Buf,
 }
 
 #[derive(Clone, Debug)]
@@ -71,15 +71,15 @@ struct ConcatInner<'a> {
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Concat<'a> {
-    len: u64,
     inner: Rc<ConcatInner<'a>>,
+    len: u64,
 }
 
 #[derive(Default, PartialEq, Eq)]
 #[repr(C)]
 struct StrRep<'a> {
-    low: u64,
     hi: usize,
+    low: u64,
     _marker: PhantomData<&'a ()>,
 }
 
