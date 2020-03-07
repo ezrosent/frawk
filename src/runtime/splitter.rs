@@ -57,7 +57,7 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
 
 impl<R: Read> Reader<R> {
     pub(crate) fn new(r: R, chunk_size: usize) -> Result<Self> {
-        let mut res = Reader {
+        let res = Reader {
             inner: r,
             prefix: Default::default(),
             cur: Default::default(),
@@ -65,7 +65,6 @@ impl<R: Read> Reader<R> {
             state: ReaderState::OK,
             last_len: 0,
         };
-        res.advance(0)?;
         Ok(res)
     }
     pub(crate) fn read_state(&self) -> i64 {

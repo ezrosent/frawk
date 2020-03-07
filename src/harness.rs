@@ -650,6 +650,21 @@ Or this"#
         "[t] is a this string string\n"
     );
 
+    test_program!(
+        iter_across_functions,
+        r#"
+        function update(h, k, v) {
+            h[k] += v*v+v;
+        }
+        BEGIN {FS=",";}
+        { 
+            update(h,$3,$5) }
+        END {for (k in h) { print k, h[k]; }}
+        "#,
+        "3 62.0\n4 30.0\n",
+        @input ",,3,,4\n,,3,,6\n,,4,,5\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,

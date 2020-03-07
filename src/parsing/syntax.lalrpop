@@ -43,7 +43,7 @@ FormalParams: Vec<&'a str> = {
 }
 
 Begin: &'a Stmt<'a,'a,&'a str> = {
-    "BEGIN" NL <Block> => <>
+    "BEGIN" NL <Block> NL => <>
 }
 
 End: &'a Stmt<'a,'a,&'a str> = {

@@ -1,3 +1,4 @@
+use super::attr::{self, FunctionAttr};
 use crate::builtins::Variable;
 use crate::common::Either;
 use crate::compile::Ty;
@@ -13,6 +14,8 @@ use llvm_sys::{
     self,
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
 };
+use smallvec;
+type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
 use std::cell::RefCell;
 use std::convert::TryFrom;
@@ -81,18 +84,21 @@ impl<'a> Runtime<'a> {
 struct Intrinsic {
     name: *const libc::c_char,
     data: RefCell<Either<LLVMTypeRef, LLVMValueRef>>,
+    attrs: smallvec::SmallVec<[FunctionAttr; 1]>,
     _func: *mut c_void,
 }
 
 // A map of intrinsics that lazily declares them when they are used in codegen.
 pub(crate) struct IntrinsicMap {
     module: LLVMModuleRef,
+    ctx: LLVMContextRef,
     map: HashMap<&'static str, Intrinsic>,
 }
 
 impl IntrinsicMap {
-    fn new(module: LLVMModuleRef) -> IntrinsicMap {
+    fn new(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
         IntrinsicMap {
+            ctx,
             module,
             map: Default::default(),
         }
@@ -102,6 +108,7 @@ impl IntrinsicMap {
         name: &'static str,
         cname: *const libc::c_char,
         ty: LLVMTypeRef,
+        attrs: &[FunctionAttr],
         _func: *mut c_void,
     ) {
         assert!(self
@@ -111,6 +118,7 @@ impl IntrinsicMap {
                 Intrinsic {
                     name: cname,
                     data: RefCell::new(Either::Left(ty)),
+                    attrs: attrs.iter().cloned().collect(),
                     _func,
                 }
             )
@@ -128,6 +136,9 @@ impl IntrinsicMap {
         };
         let func = LLVMAddFunction(self.module, intr.name, ty);
         LLVMSetLinkage(func, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
+        if intr.attrs.len() > 0 {
+            attr::add_function_attrs(self.ctx, func, &intr.attrs[..]);
+        }
         *val = Either::Right(func);
         func
     }
@@ -146,24 +157,33 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     let str_ref_ty = LLVMPointerType(str_ty, 0);
     let iter_int_ty = LLVMPointerType(int_ty, 0);
     let iter_str_ty = LLVMPointerType(str_ty, 0);
-    let mut table = IntrinsicMap::new(module);
+    let mut table = IntrinsicMap::new(module, ctx);
     macro_rules! register_inner {
-        ($name:ident, [ $($param:expr),* ], $ret:expr) => { {
+        ($name:ident, [ $($param:expr),* ], [$($attr:tt),*], $ret:expr) => { {
             // Try and make sure the linker doesn't strip the function out.
             let mut params = [$($param),*];
             let ty = LLVMFunctionType($ret, params.as_mut_ptr(), params.len() as u32, 0);
-            table.register(stringify!($name), c_str!(stringify!($name)), ty, $name as *mut c_void);
+            table.register(
+                stringify!($name),
+                c_str!(stringify!($name)),
+                ty,
+                &[$(FunctionAttr::$attr),*],
+                $name as *mut c_void,
+            );
         }};
     }
     macro_rules! register {
         ($name:ident ($($param:expr),*); $($rest:tt)*) => {
-            register_inner!($name, [ $($param),* ], void_ty);
-            register!($($rest)*);
+            register!($name($($param),*) -> void_ty; $($rest)*);
         };
         ($name:ident ($($param:expr),*) -> $ret:expr; $($rest:tt)*) => {
-            register_inner!($name, [ $($param),* ], $ret);
+            register!([] $name($($param),*) -> $ret; $($rest)*);
+        };
+        ([$($attr:tt),*] $name:ident ($($param:expr),*) -> $ret:expr; $($rest:tt)*) => {
+            register_inner!($name, [ $($param),* ], [$($attr),*], $ret);
             register!($($rest)*);
         };
+
         () => {};
     }
 
@@ -172,18 +192,18 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         drop_str(str_ref_ty);
         ref_map(map_ty);
         drop_map(map_ty);
-        int_to_str(int_ty) -> str_ty;
-        float_to_str(float_ty) -> str_ty;
-        str_to_int(str_ref_ty) -> int_ty;
-        str_to_float(str_ref_ty) -> float_ty;
-        str_len(str_ref_ty) -> int_ty;
+        [ReadOnly] int_to_str(int_ty) -> str_ty;
+        [ReadOnly] float_to_str(float_ty) -> str_ty;
+        [ReadOnly] str_to_int(str_ref_ty) -> int_ty;
+        [ReadOnly] str_to_float(str_ref_ty) -> float_ty;
+        [ReadOnly] str_len(str_ref_ty) -> int_ty;
         concat(str_ref_ty, str_ref_ty) -> str_ty;
-        match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
-        match_pat_loc(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] match_pat_loc(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_first(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_all(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
-        substr(str_ref_ty, int_ty, int_ty) -> str_ty;
-        get_col(rt_ty, int_ty) -> str_ty;
+        [ReadOnly] substr(str_ref_ty, int_ty, int_ty) -> str_ty;
+        [ReadOnly] get_col(rt_ty, int_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
         split_str(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
@@ -198,67 +218,67 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         next_line(rt_ty, str_ref_ty) -> str_ty;
         next_line_stdin(rt_ty) -> str_ty;
 
-        load_var_str(rt_ty, int_ty) -> str_ty;
+        [ReadOnly] load_var_str(rt_ty, int_ty) -> str_ty;
         store_var_str(rt_ty, int_ty, str_ref_ty);
-        load_var_int(rt_ty, int_ty) -> int_ty;
+        [ReadOnly] load_var_int(rt_ty, int_ty) -> int_ty;
         store_var_int(rt_ty, int_ty, int_ty);
-        load_var_intmap(rt_ty, int_ty) -> map_ty;
+        [ReadOnly] load_var_intmap(rt_ty, int_ty) -> map_ty;
         store_var_intmap(rt_ty, int_ty, map_ty);
 
-        str_lt(str_ref_ty, str_ref_ty) -> int_ty;
-        str_gt(str_ref_ty, str_ref_ty) -> int_ty;
-        str_lte(str_ref_ty, str_ref_ty) -> int_ty;
-        str_gte(str_ref_ty, str_ref_ty) -> int_ty;
-        str_eq(str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] str_lt(str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] str_gt(str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] str_lte(str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] str_gte(str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] str_eq(str_ref_ty, str_ref_ty) -> int_ty;
 
         drop_iter_int(iter_int_ty, int_ty);
         drop_iter_str(iter_str_ty, int_ty);
 
         alloc_intint() -> map_ty;
         iter_intint(map_ty) -> iter_int_ty;
-        len_intint(map_ty) -> int_ty;
-        lookup_intint(map_ty, int_ty) -> int_ty;
-        contains_intint(map_ty, int_ty) -> int_ty;
+        [ReadOnly] len_intint(map_ty) -> int_ty;
+        [ReadOnly] lookup_intint(map_ty, int_ty) -> int_ty;
+        [ReadOnly] contains_intint(map_ty, int_ty) -> int_ty;
         insert_intint(map_ty, int_ty, int_ty);
         delete_intint(map_ty, int_ty);
 
         alloc_intfloat() -> map_ty;
         iter_intfloat(map_ty) -> iter_int_ty;
-        len_intfloat(map_ty) -> int_ty;
-        lookup_intfloat(map_ty, int_ty) -> float_ty;
-        contains_intfloat(map_ty, int_ty) -> int_ty;
+        [ReadOnly] len_intfloat(map_ty) -> int_ty;
+        [ReadOnly] lookup_intfloat(map_ty, int_ty) -> float_ty;
+        [ReadOnly] contains_intfloat(map_ty, int_ty) -> int_ty;
         insert_intfloat(map_ty, int_ty, float_ty);
         delete_intfloat(map_ty, int_ty);
 
         alloc_intstr() -> map_ty;
         iter_intstr(map_ty) -> iter_int_ty;
-        len_intstr(map_ty) -> int_ty;
-        lookup_intstr(map_ty, int_ty) -> str_ty;
-        contains_intstr(map_ty, int_ty) -> int_ty;
+        [ReadOnly] len_intstr(map_ty) -> int_ty;
+        [ReadOnly] lookup_intstr(map_ty, int_ty) -> str_ty;
+        [ReadOnly] contains_intstr(map_ty, int_ty) -> int_ty;
         insert_intstr(map_ty, int_ty, str_ref_ty);
         delete_intstr(map_ty, int_ty);
 
         alloc_strint() -> map_ty;
         iter_strint(map_ty) -> iter_str_ty;
-        len_strint(map_ty) -> int_ty;
-        lookup_strint(map_ty, str_ref_ty) -> int_ty;
-        contains_strint(map_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] len_strint(map_ty) -> int_ty;
+        [ReadOnly] lookup_strint(map_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] contains_strint(map_ty, str_ref_ty) -> int_ty;
         insert_strint(map_ty, str_ref_ty, int_ty);
         delete_strint(map_ty, str_ref_ty);
 
         alloc_strfloat() -> map_ty;
         iter_strfloat(map_ty) -> iter_str_ty;
-        len_strfloat(map_ty) -> int_ty;
-        lookup_strfloat(map_ty, str_ref_ty) -> float_ty;
-        contains_strfloat(map_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] len_strfloat(map_ty) -> int_ty;
+        [ReadOnly] lookup_strfloat(map_ty, str_ref_ty) -> float_ty;
+        [ReadOnly] contains_strfloat(map_ty, str_ref_ty) -> int_ty;
         insert_strfloat(map_ty, str_ref_ty, float_ty);
         delete_strfloat(map_ty, str_ref_ty);
 
         alloc_strstr() -> map_ty;
         iter_strstr(map_ty) -> iter_str_ty;
-        len_strstr(map_ty) -> int_ty;
-        lookup_strstr(map_ty, str_ref_ty) -> str_ty;
-        contains_strstr(map_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] len_strstr(map_ty) -> int_ty;
+        [ReadOnly] lookup_strstr(map_ty, str_ref_ty) -> str_ty;
+        [ReadOnly] contains_strstr(map_ty, str_ref_ty) -> int_ty;
         insert_strstr(map_ty, str_ref_ty, str_ref_ty);
         delete_strstr(map_ty, str_ref_ty);
     };
@@ -747,8 +767,6 @@ pub unsafe extern "C" fn drop_iter_str(iter: *mut u128, len: usize) {
     let p = iter as *mut Str;
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
 }
-
-type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
 unsafe fn wrap_args<'a>(args: *mut usize, tys: *mut u32, num_args: Int) -> SmallVec<FormatArg<'a>> {
     let mut format_args = SmallVec::with_capacity(num_args as usize);

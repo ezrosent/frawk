@@ -54,6 +54,14 @@ impl Default for Ty {
 }
 
 impl Ty {
+    fn is_iter(self) -> bool {
+        if let Ty::IterInt | Ty::IterStr = self {
+            true
+        } else {
+            false
+        }
+    }
+
     fn iter(self) -> Result<Ty> {
         use Ty::*;
         match self {
@@ -412,9 +420,12 @@ impl<'a> Typer<'a> {
                             locals.clear();
                             locals.extend(frame.locals.values().cloned());
                             for (reg, ty) in locals.iter().cloned() {
-                                push_var(instrs, reg, ty)?;
+                                if !ty.is_iter() {
+                                    push_var(instrs, reg, ty)?;
+                                }
                             }
                             for (reg, ty) in args.iter().cloned() {
+                                assert!(!ty.is_iter());
                                 push_var(instrs, reg, ty)?;
                             }
                             let callee = *func_id as usize;
@@ -423,7 +434,9 @@ impl<'a> Typer<'a> {
                             // Restore local variables
                             locals.reverse();
                             for (reg, ty) in locals.iter().cloned() {
-                                pop_var(instrs, reg, ty)?;
+                                if !ty.is_iter() {
+                                    pop_var(instrs, reg, ty)?;
+                                }
                             }
                             let ret_reg = ret_regs[callee];
                             debug_assert_eq!(self.func_info[callee].ret_ty, *dst_ty);

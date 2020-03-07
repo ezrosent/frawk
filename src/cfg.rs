@@ -11,6 +11,7 @@ use smallvec::smallvec; // macro
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::hash::Hash;
+use std::io;
 use std::mem;
 
 #[derive(Debug, Default)]
@@ -33,6 +34,32 @@ impl<'a> Transition<'a> {
 }
 
 pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
+
+fn dbg_print(cfg: &CFG, w: &mut impl io::Write) -> io::Result<()> {
+    for (i, n) in cfg.raw_nodes().iter().enumerate() {
+        writeln!(w, "{}:", i)?;
+        for s in n.weight.q.iter() {
+            writeln!(w, "\t{}", s)?;
+        }
+        let mut walker = cfg.neighbors(NodeIx::new(i)).detach();
+        let mut sv = SmallVec::new();
+        while let Some((t_ix, n_ix)) = walker.next(&cfg) {
+            sv.push((t_ix, n_ix));
+        }
+        sv.reverse();
+        for (t_ix, n_ix) in sv.into_iter() {
+            let trans = cfg.edge_weight(t_ix).unwrap();
+            match trans {
+                Transition(Some(t)) => {
+                    writeln!(w, "\tbrif {} :{}", t, n_ix.index())?;
+                }
+                Transition(None) => writeln!(w, "\tbr :{}", n_ix.index())?,
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
 pub(crate) struct Ident {
     pub(crate) low: NumTy,
@@ -101,7 +128,7 @@ pub(crate) enum PrimExpr<'a> {
 #[derive(Debug)]
 pub(crate) enum PrimStmt<'a> {
     AsgnIndex(
-        Ident,        /*map*/
+        Ident,        /* map */
         PrimVal<'a>,  /* index */
         PrimExpr<'a>, /* assign to */
     ),
@@ -205,6 +232,25 @@ pub(crate) struct ProgramContext<'a, I> {
     // table at construction time (in the func_table passed to View).
     pub funcs: Vec<Function<'a, I>>,
     pub main_offset: usize,
+}
+
+impl<'a> ProgramContext<'a, &'a str> {
+    pub(crate) fn dbg_print(&self, w: &mut impl io::Write) -> io::Result<()> {
+        for f in self.funcs.iter() {
+            write!(w, "function {}={}(", f.name.unwrap_or("<main>"), f.ident)?;
+            for (i, a) in f.args.iter().enumerate() {
+                use crate::display::Wrap;
+                write!(w, "{}={}", a.name, Wrap(a.id))?;
+                if i != f.args.len() - 1 {
+                    write!(w, ", ")?;
+                }
+            }
+            writeln!(w, ") {{")?;
+            dbg_print(&f.cfg, w)?;
+            writeln!(w, "\n}}")?;
+        }
+        Ok(())
+    }
 }
 
 impl<'a, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> ProgramContext<'a, I>
