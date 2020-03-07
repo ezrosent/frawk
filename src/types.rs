@@ -122,7 +122,10 @@ impl<T> Constraint<T> {
 impl Constraint<State> {
     fn eval<'a, 'b>(&self, tc: &mut TypeContext<'a, 'b>) -> Result<State> {
         match self {
-            Constraint::KeyIn(None) => Ok(None),
+            Constraint::KeyIn(None) => Ok(Some(TVar::Map {
+                key: None,
+                val: None,
+            })),
             Constraint::KeyIn(Some(TVar::Scalar(k))) => Ok(Some(TVar::Map {
                 key: k.clone(),
                 val: None,
@@ -135,7 +138,10 @@ impl Constraint<State> {
                 err!("invalid operand for Key constraint: {:?} (must be map)", op)
             }
 
-            Constraint::ValIn(None) => Ok(None),
+            Constraint::ValIn(None) => Ok(Some(TVar::Map {
+                key: None,
+                val: None,
+            })),
             Constraint::ValIn(Some(TVar::Scalar(v))) => Ok(Some(TVar::Map {
                 key: None,
                 val: v.clone(),
@@ -148,7 +154,7 @@ impl Constraint<State> {
                 err!("invalid operand for Val constraint: {:?} (must be map)", op)
             }
 
-            Constraint::IterValIn(None) => Ok(None),
+            Constraint::IterValIn(None) => Ok(Some(TVar::Iter(None))),
             Constraint::IterValIn(Some(TVar::Scalar(v))) => Ok(Some(TVar::Iter(v.clone()))),
             Constraint::IterValIn(op) => err!("Non-scalar IterValIn constraint: {:?}", op),
 
@@ -558,6 +564,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         }
         Ok(())
     }
+
     pub(crate) fn set_key(&mut self, arr: NodeIx, key: NodeIx) {
         self.nw.add_dep(key, arr, Constraint::KeyIn(()));
         self.nw.add_dep(arr, key, Constraint::Key(()));
@@ -572,6 +579,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         self.nw.add_dep(val, iter, Constraint::IterValIn(()));
         self.nw.add_dep(iter, val, Constraint::IterVal(()));
     }
+
     pub(crate) fn constant(&mut self, tv: State) -> NodeIx {
         use hashbrown::hash_map::Entry::*;
         match self.base.entry(tv) {

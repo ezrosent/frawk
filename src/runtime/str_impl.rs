@@ -191,20 +191,22 @@ impl<'a> Str<'a> {
     }
     pub fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>)) {
         self.with_str(|s| {
-            // AWK stips empty leading fields.
-            let mut leading_empty = true;
-            // XXX hacks because we do not have match_indices right now...
-            // TODO: just use find_iter?
-            let base = s.as_ptr() as usize;
-            for sub in pat.split(s) {
-                if leading_empty && sub.len() == 0 {
+            if s.len() == 0 {
+                return;
+            }
+            let mut prev = 0;
+            for m in pat.find_iter(s) {
+                // Awk will trim whitespace off the beginning of a line and not create an empty
+                // field in $1, but this doesn't happen for other patterns: leading ',' when FS=,
+                // do create empty fields, for example.
+                if m.start() == 0 && s.chars().next().unwrap().is_whitespace() {
+                    prev = m.end();
                     continue;
                 }
-                leading_empty = false;
-                let sub_base = sub.as_ptr() as usize;
-                let start = sub_base - base;
-                push(self.slice(start, start + sub.len()))
+                push(self.slice(prev, m.start()));
+                prev = m.end();
             }
+            push(self.slice(prev, s.len()));
         });
     }
     pub fn join<'b>(&self, mut ss: impl Iterator<Item = &'b Str<'a>>) -> Str<'a>

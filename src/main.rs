@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![feature(core_intrinsics)]
 #![feature(test)]
 #[macro_use]
@@ -42,8 +43,6 @@ use arena::Arena;
 use std::fs::File;
 use std::io::{self, BufReader, Write};
 
-// TODO: fix bug with comparing numbers and strings incorrectly.
-
 // TODO: put jemalloc behind a feature flag
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -58,10 +57,12 @@ struct Opts {
     opt_level: i32,
     #[clap(short = "o", long = "out-file")]
     out_file: Option<String>,
-    #[clap(short = "dL", long = "dump-llvm")]
+    #[clap(long = "dump-llvm")]
     dump_llvm: bool,
-    #[clap(short = "dB", long = "dump-bytecode")]
+    #[clap(long = "dump-bytecode")]
     dump_bytecode: bool,
+    #[clap(long = "dump-cfg")]
+    dump_cfg: bool,
 }
 macro_rules! fail {
     ($($t:tt)*) => {{
@@ -175,7 +176,7 @@ fn main() {
     if opts.opt_level > 3 {
         fail!("opt levels can only be negative, or in the range [0, 3]");
     }
-    let skip_output = opts.dump_llvm || opts.dump_bytecode;
+    let skip_output = opts.dump_llvm || opts.dump_bytecode || opts.dump_cfg;
     if opts.dump_llvm {
         let config = llvm::Config {
             opt_level: if opts.opt_level < 0 {
@@ -196,6 +197,12 @@ fn main() {
             "{}",
             dump_bytecode(program_string.as_str()),
         );
+    }
+    if opts.dump_cfg {
+        let a = Arena::default();
+        let ctx = get_context(program_string.as_str(), &a);
+        let mut stdout = std::io::stdout();
+        let _ = ctx.dbg_print(&mut stdout);
     }
     if skip_output {
         return;

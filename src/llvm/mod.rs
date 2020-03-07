@@ -1,3 +1,6 @@
+mod attr;
+mod intrinsics;
+
 use crate::builtins::Variable;
 use crate::bytecode::{self, Accum};
 use crate::common::{Either, NodeIx, NumTy, Result};
@@ -16,7 +19,6 @@ use llvm_sys::{
 };
 use petgraph::visit::Dfs;
 
-pub(crate) mod intrinsics;
 use intrinsics::IntrinsicMap;
 
 use std::ffi::{CStr, CString};
