@@ -45,7 +45,7 @@ type ProgResult<'a> = Result<(
     HashMap<&'a str, compile::Ty>, /* type info */
 )>;
 
-const LLVM_CONFIG: llvm::Config = llvm::Config { opt_level: 3 };
+const LLVM_CONFIG: llvm::Config = llvm::Config { opt_level: 0 };
 
 #[allow(unused)]
 pub(crate) fn run_program<'a>(
@@ -657,7 +657,7 @@ Or this"#
             h[k] += v*v+v;
         }
         BEGIN {FS=",";}
-        { 
+        {
             update(h,$3,$5) }
         END {for (k in h) { print k, h[k]; }}
         "#,
@@ -698,6 +698,12 @@ Or this"#
                 }
                 mod llvm {
                     use super::*;
+                    #[test]
+                    fn run_multiple() {
+                        for _ in 0..50 {
+                            black_box(run_llvm($e, $inp).unwrap());
+                        }
+                    }
                     #[bench]
                     fn end_to_end(b: &mut Bencher) {
                         b.iter(|| {
@@ -715,6 +721,7 @@ Or this"#
         };
     }
 
+    // Looks to be memory corruption somewhere in this benchmark. Inspect the llvm output
     bench_program!(
         str_movs_split,
         r#"END {

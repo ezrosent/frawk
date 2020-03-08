@@ -662,23 +662,24 @@ impl<'a> View<'a> {
 
     unsafe fn drop_reg(&mut self, reg: (NumTy, Ty)) -> Result<()> {
         let val = self.get_local(reg)?;
-        self.drop_val(val, reg.1)
+        self.drop_val(val, reg.1);
+        Ok(())
     }
 
-    unsafe fn drop_val(&mut self, mut val: LLVMValueRef, ty: Ty) -> Result<()> {
+    unsafe fn drop_val(&mut self, mut val: LLVMValueRef, ty: Ty) {
         use Ty::*;
-        match ty {
-            MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
-                let func = self.intrinsics.get("drop_map");
-                LLVMBuildCall(self.f.builder, func, &mut val, 1, c_str!(""));
-            }
-            Str => {
-                let func = self.intrinsics.get("drop_str");
-                LLVMBuildCall(self.f.builder, func, &mut val, 1, c_str!(""));
-            }
-            _ => {}
+        let fname = match ty {
+            MapIntInt => "drop_intint",
+            MapIntFloat => "drop_intfloat",
+            MapIntStr => "drop_intstr",
+            MapStrInt => "drop_strint",
+            MapStrFloat => "drop_strfloat",
+            MapStrStr => "drop_strstr",
+            Str => "drop_str",
+            _ => return,
         };
-        Ok(())
+        let func = self.intrinsics.get(fname);
+        LLVMBuildCall(self.f.builder, func, &mut val, 1, c_str!(""));
     }
 
     unsafe fn call(&mut self, func: &'static str, args: &mut [LLVMValueRef]) -> LLVMValueRef {
@@ -810,7 +811,7 @@ impl<'a> View<'a> {
             match val.1 {
                 MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
                     let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
-                    self.call("drop_map", &mut [prev_global]);
+                    self.drop_val(prev_global, val.1);
                     self.call("ref_map", &mut [new_global]);
                     LLVMBuildStore(self.f.builder, new_global, param);
                 }
@@ -1539,7 +1540,7 @@ impl<'a> View<'a> {
             if self.f.skip_drop.contains(&(reg, ty)) || llval == &to_return {
                 continue;
             }
-            self.drop_val(*llval, ty)?;
+            self.drop_val(*llval, ty);
         }
         if let Ty::Str = ty {
             let loaded = LLVMBuildLoad(self.f.builder, to_return, c_str!(""));
