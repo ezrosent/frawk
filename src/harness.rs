@@ -45,7 +45,7 @@ type ProgResult<'a> = Result<(
     HashMap<&'a str, compile::Ty>, /* type info */
 )>;
 
-const LLVM_CONFIG: llvm::Config = llvm::Config { opt_level: 0 };
+const LLVM_CONFIG: llvm::Config = llvm::Config { opt_level: 3 };
 
 #[allow(unused)]
 pub(crate) fn run_program<'a>(
@@ -698,12 +698,6 @@ Or this"#
                 }
                 mod llvm {
                     use super::*;
-                    #[test]
-                    fn run_multiple() {
-                        for _ in 0..50 {
-                            black_box(run_llvm($e, $inp).unwrap());
-                        }
-                    }
                     #[bench]
                     fn end_to_end(b: &mut Bencher) {
                         b.iter(|| {
