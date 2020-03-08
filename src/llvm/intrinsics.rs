@@ -929,6 +929,9 @@ macro_rules! map_impl_inner {
         }
         #[no_mangle]
         pub unsafe extern "C" fn $drop(map: *mut c_void) {
+            if std::ptr::read_volatile(&false) {
+                eprintln!("dropping from {}", stringify!($drop));
+            }
             drop_map_generic::<$k, $v>(map)
         }
     };
