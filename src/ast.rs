@@ -60,6 +60,11 @@ impl<'a, 'b, I> Prog<'a, 'b, I> {
                 Pattern::Bool(pat) => inner.push(arena.alloc(|| If(pat, body, None))),
                 Pattern::Comma(l, r) => {
                     // We desugar pat1,pat2
+                    // TODO: This doesn't totally work as a desugaring,
+                    // If we had
+                    //   /\/*/,/*\// { comment++; next; }
+                    // we would never finish the comment because `next` would bail out before
+                    // EndCond. Something to consider once we add `next` support.
                     inner.push(arena.alloc_v(If(l, arena.alloc_v(StartCond(conds)), None)));
                     inner.push(arena.alloc_v(If(arena.alloc_v(Cond(conds)), body, None)));
                     inner.push(arena.alloc_v(If(r, arena.alloc_v(EndCond(conds)), None)));
