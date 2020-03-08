@@ -8,8 +8,9 @@ use llvm_sys::prelude::*;
 pub enum FunctionAttr {
     // There is more where that came from; we will add them as needed.
     ReadOnly,
+    // Keeping this here as an example if we ever want to add more attributes.
+    #[allow(unused)]
     ArgmemOnly,
-    // ReadNone, "readnone"
 }
 
 impl FunctionAttr {

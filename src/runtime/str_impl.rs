@@ -43,24 +43,24 @@ const NUM_VARIANTS: usize = 5;
 #[derive(Clone)]
 #[repr(C)]
 struct Literal<'a> {
-    ptr: *const u8,
     len: u64,
+    ptr: *const u8,
     _marker: PhantomData<&'a ()>,
 }
 
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Boxed {
-    buf: Buf,
     len: u64,
+    buf: Buf,
 }
 
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Shared {
-    buf: Buf,
     start: u32,
     end: u32,
+    buf: Buf,
 }
 
 #[derive(Clone, Debug)]
@@ -71,15 +71,15 @@ struct ConcatInner<'a> {
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Concat<'a> {
-    inner: Rc<ConcatInner<'a>>,
     len: u64,
+    inner: Rc<ConcatInner<'a>>,
 }
 
 #[derive(Default, PartialEq, Eq)]
 #[repr(C)]
 struct StrRep<'a> {
-    hi: usize,
     low: u64,
+    hi: usize,
     _marker: PhantomData<&'a ()>,
 }
 
@@ -189,6 +189,7 @@ impl<'a> Str<'a> {
     pub fn into_bits(self) -> u128 {
         unsafe { mem::transmute::<Str<'a>, u128>(self) }
     }
+
     pub fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>)) {
         self.with_str(|s| {
             if s.len() == 0 {
@@ -197,7 +198,7 @@ impl<'a> Str<'a> {
             let mut prev = 0;
             for m in pat.find_iter(s) {
                 // Awk will trim whitespace off the beginning of a line and not create an empty
-                // field in $1, but this doesn't happen for other patterns: leading ',' when FS=,
+                // field in $1, but this doesn't happen for other patterns: leading ','s when FS=,
                 // do create empty fields, for example.
                 if m.start() == 0 && s.chars().next().unwrap().is_whitespace() {
                     prev = m.end();
@@ -209,6 +210,7 @@ impl<'a> Str<'a> {
             push(self.slice(prev, s.len()));
         });
     }
+
     pub fn join<'b>(&self, mut ss: impl Iterator<Item = &'b Str<'a>>) -> Str<'a>
     where
         'a: 'b,
@@ -223,6 +225,7 @@ impl<'a> Str<'a> {
         }
         res
     }
+
     pub fn subst_first(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, bool) {
         self.with_str(|s| {
             subst.with_str(|subst| {
@@ -238,6 +241,7 @@ impl<'a> Str<'a> {
             })
         })
     }
+
     pub fn subst_all(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, Int) {
         self.with_str(|s| {
             subst.with_str(|subst| {
@@ -259,6 +263,7 @@ impl<'a> Str<'a> {
             })
         })
     }
+
     pub fn len(&self) -> usize {
         let rep = unsafe { &mut *self.0.get() };
         rep.len()
