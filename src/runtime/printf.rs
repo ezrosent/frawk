@@ -16,7 +16,7 @@ type SmallVec<T> = smallvec::SmallVec<[T; 32]>;
 struct StackWriter(pub SmallVec<u8>);
 
 impl StackWriter {
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
 }
@@ -30,7 +30,6 @@ impl Write for StackWriter {
         Ok(())
     }
 }
-
 #[derive(Clone)]
 pub(crate) enum FormatArg<'a> {
     S(Str<'a>),
