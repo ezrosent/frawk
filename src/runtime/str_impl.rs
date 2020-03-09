@@ -322,7 +322,7 @@ impl<'a> Str<'a> {
         Str::from_rep(new_rep)
     }
 
-    pub fn slice(&self, from: usize, to: usize) -> Str<'a> {
+    unsafe fn slice_internal(&self, from: usize, to: usize) -> Str<'a> {
         assert!(from <= to);
         if from == to {
             return Default::default();
@@ -336,17 +336,15 @@ impl<'a> Str<'a> {
             len
         );
         let new_len = to - from;
-        let tag = unsafe { &mut *self.0.get() }.get_tag();
+        let tag = (&mut *self.0.get()).get_tag();
         let u32_max = u32::max_value() as usize;
         let mut may_overflow = to > u32_max || from > u32_max;
         if !may_overflow && tag == SHARED {
             // If we are taking a slice of an existing slice, then we can overflow by adding the
             // starts and ends together.
-            may_overflow = unsafe {
-                (*self.0.get()).view_as(|s: &Shared| {
-                    (s.start as usize + from) > u32_max || (s.start as usize + to) > u32_max
-                })
-            };
+            may_overflow = (*self.0.get()).view_as(|s: &Shared| {
+                (s.start as usize + from) > u32_max || (s.start as usize + to) > u32_max
+            });
         }
         // Slices of literals are addressed with 64 bits.
         may_overflow = may_overflow && tag != LITERAL;
@@ -356,29 +354,49 @@ impl<'a> Str<'a> {
             // TODO: We can optimize cases when we are getting suffixes of Literal values
             // by creating new ones with offset pointers. This doesn't seem worth optimizing right
             // now, but we may want to in the future.
-            unsafe { self.force() };
-            let rep = unsafe { &mut *self.0.get() };
+            self.force();
+            let rep = &mut *self.0.get();
             let tag = rep.get_tag();
-            unsafe {
-                // All other variants ruled out by how large `self` is and the fact that we
-                // just called `force`
-                debug_assert_eq!(tag, BOXED);
-                return Str::from_rep(rep.view_as(|b: &Boxed| {
-                    let buf = Buf::read_from_raw(b.buf.as_ptr().offset(from as isize), new_len);
-                    Boxed {
-                        len: new_len as u64,
-                        buf,
-                    }
-                    .into()
-                }));
-            }
+            // All other variants ruled out by how large `self` is and the fact that we
+            // just called `force`
+            debug_assert_eq!(tag, BOXED);
+            return Str::from_rep(rep.view_as(|b: &Boxed| {
+                let buf = Buf::read_from_raw(b.buf.as_ptr().offset(from as isize), new_len);
+                Boxed {
+                    len: new_len as u64,
+                    buf,
+                }
+                .into()
+            }));
         }
 
         // Force concat up here so we don't have to worry about aliasing `rep` in slice_nooverflow.
         if let CONCAT = tag {
-            unsafe { self.force() };
+            self.force()
         }
-        unsafe { self.slice_nooverflow(from, to) }
+        self.slice_nooverflow(from, to)
+    }
+
+    pub fn slice(&self, from: usize, to: usize) -> Str<'a> {
+        // TODO: consider returning a result here so we can error out in a more graceful way.
+        {
+            use super::utf8::is_char_boundary;
+            let bs = unsafe { &*self.get_bytes() };
+            assert!(
+                (from == to && to == bs.len()) || from < bs.len(),
+                "internal error: invalid index"
+            );
+            assert!(to <= bs.len(), "internal error: invalid index");
+            assert!(
+                (from == to) || is_char_boundary(bs[from]),
+                "must take substring at char boundary"
+            );
+            assert!(
+                to == bs.len() || is_char_boundary(bs[to]),
+                "must take substring at char boundary"
+            );
+        }
+        unsafe { self.slice_internal(from, to) }
     }
 
     // Why is [with_str] safe and [force] unsafe? Let's go case-by-case for the state of `self`
@@ -458,29 +476,29 @@ impl<'a> Str<'a> {
     }
 
     // Avoid using this function; subsequent immutable calls to &self can invalidate the pointer.
-    pub fn get_raw_str(&self) -> *const str {
+    fn get_bytes(&self) -> *const [u8] {
         let rep = unsafe { &mut *self.0.get() };
         let tag = rep.get_tag();
         unsafe {
             match tag {
-                EMPTY => "",
+                EMPTY => &[],
                 LITERAL => rep.view_as(|lit: &Literal| {
-                    str::from_utf8_unchecked(slice::from_raw_parts(lit.ptr, lit.len as usize))
+                    slice::from_raw_parts(lit.ptr, lit.len as usize) as *const _
                 }),
                 SHARED => rep.view_as(|s: &Shared| {
-                    str::from_utf8_unchecked(&s.buf.as_bytes()[s.start as usize..s.end as usize])
-                        as *const _
+                    &s.buf.as_bytes()[s.start as usize..s.end as usize] as *const _
                 }),
-                BOXED => {
-                    rep.view_as(|b: &Boxed| str::from_utf8_unchecked(b.buf.as_bytes()) as *const _)
-                }
+                BOXED => rep.view_as(|b: &Boxed| b.buf.as_bytes() as *const _),
                 CONCAT => {
                     self.force();
-                    self.get_raw_str()
+                    self.get_bytes()
                 }
                 _ => unreachable!(),
             }
         }
+    }
+    pub fn get_raw_str(&self) -> *const str {
+        unsafe { str::from_utf8_unchecked(&*self.get_bytes()) }
     }
 
     pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
@@ -839,14 +857,23 @@ mod tests {
         s.split(&pat, |sub| got.push(sub));
         let total_got = got.len();
         let total = want.len();
-        for (g, w) in got.into_iter().zip(want.into_iter()) {
+        for (g, w) in got.iter().cloned().zip(want.iter().cloned()) {
             assert_eq!(g, Str::from(w));
         }
-        assert_eq!(total_got, total);
+        if total_got > total {
+            // We want there to be trailing empty fields in this case.
+            for s in &got[total..] {
+                assert_eq!(s.len(), 0);
+            }
+        } else {
+            assert_eq!(total_got, total, "got={:?} vs want={:?}", got, want);
+        }
     }
 
     #[test]
     fn basic_splitting() {
+        let pat0 = Regex::new(",").unwrap();
+        test_str_split(&pat0, "what,is,,,up,");
         let pat = Regex::new(r#"[ \t]"#).unwrap();
         test_str_split(&pat, "what is \t up ");
     }

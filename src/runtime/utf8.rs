@@ -16,6 +16,14 @@ fn parse_utf8(bs: &[u8]) -> Option<&str> {
     }
 }
 
+#[inline(always)]
+pub fn is_char_boundary(b: u8) -> bool {
+    // Test if `b` is a character boundary, taken from the
+    // str::is_char_boundary implementation in the standard
+    // library.
+    (b as i8) >= -0x40
+}
+
 #[cfg(test)]
 fn parse_utf8_clipped(bs: &[u8]) -> Option<&str> {
     validate_utf8_clipped(bs).map(|off| unsafe { str::from_utf8_unchecked(&bs[..off]) })
@@ -24,13 +32,6 @@ fn parse_utf8_clipped(bs: &[u8]) -> Option<&str> {
 pub(crate) fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        #[inline]
-        fn is_char_boundary(b: u8) -> bool {
-            // Test if `b` is a character boundary, taken from the
-            // str::is_char_boundary implementation in the standard
-            // library.
-            (b as i8) >= -0x40
-        }
         if is_x86_feature_detected!("sse2") {
             // The SIMD implementation does not keep track of when a
             // string becomes invalid. That's important here because
