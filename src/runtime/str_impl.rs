@@ -31,36 +31,83 @@ use std::str;
 // TODO: explain what's going on here, and why we are using all thus Buf/UniqueBuf machinery
 // instead of just using Box<str> and Rc<str>.
 
-const EMPTY: usize = 0;
-const SHARED: usize = 1;
-const LITERAL: usize = 2;
-const CONCAT: usize = 3;
-const BOXED: usize = 4;
-const NUM_VARIANTS: usize = 5;
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[repr(usize)]
+enum StrTag {
+    Empty = 0,
+    Literal = 1,
+    Shared = 2,
+    Concat = 3,
+    Boxed = 4,
+    Inline = 5,
+}
+const NUM_VARIANTS: usize = 6;
+
+impl StrTag {
+    fn forced(self) -> bool {
+        use StrTag::*;
+        match self {
+            Empty | Literal | Boxed | Inline => true,
+            Concat | Shared => false,
+        }
+    }
+}
 
 // Why the repr(C)? We may rely on the lengths coming first.
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+struct Inline(u128);
+const MAX_INLINE_SIZE: usize = 15;
+
+impl Inline {
+    unsafe fn from_raw(ptr: *const u8, len: usize) -> Inline {
+        debug_assert!(len <= MAX_INLINE_SIZE);
+        let mut res = ((len << 3) | StrTag::Inline as usize) as u128;
+        ptr::copy_nonoverlapping(
+            ptr,
+            mem::transmute::<&mut u128, *mut u8>(&mut res).offset(1),
+            len,
+        );
+        Inline(res)
+    }
+    unsafe fn from_unchecked(bs: &[u8]) -> Inline {
+        Self::from_raw(bs.as_ptr(), bs.len())
+    }
+    fn len(&self) -> usize {
+        (self.0 as usize & 0xFF) >> 3
+    }
+    fn bytes(&self) -> &[u8] {
+        unsafe {
+            slice::from_raw_parts(
+                mem::transmute::<&Inline, *const u8>(self).offset(1),
+                self.len(),
+            )
+        }
+    }
+}
 
 #[derive(Clone)]
 #[repr(C)]
 struct Literal<'a> {
-    len: u64,
     ptr: *const u8,
+    len: u64,
     _marker: PhantomData<&'a ()>,
 }
 
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Boxed {
-    len: u64,
     buf: Buf,
+    len: u64,
 }
 
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Shared {
+    buf: Buf,
     start: u32,
     end: u32,
-    buf: Buf,
 }
 
 #[derive(Clone, Debug)]
@@ -71,23 +118,32 @@ struct ConcatInner<'a> {
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct Concat<'a> {
-    len: u64,
     inner: Rc<ConcatInner<'a>>,
+    len: u64,
 }
 
 #[derive(Default, PartialEq, Eq)]
 #[repr(C)]
 struct StrRep<'a> {
-    low: u64,
     hi: usize,
+    low: u64,
     _marker: PhantomData<&'a ()>,
 }
 
 impl<'a> StrRep<'a> {
-    fn get_tag(&self) -> usize {
+    fn get_tag(&self) -> StrTag {
+        use StrTag::*;
         let tag = self.hi & 0x7;
-        debug_assert!(tag < NUM_VARIANTS);
-        tag
+        assert!(tag < NUM_VARIANTS);
+        match tag {
+            0 => Empty,
+            1 => Literal,
+            2 => Shared,
+            3 => Concat,
+            4 => Boxed,
+            5 => Inline,
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -96,22 +152,25 @@ macro_rules! impl_tagged_from {
         impl<'a> From<$from> for StrRep<'a> {
             fn from(s: $from) -> StrRep<'a> {
                 let mut rep = unsafe { mem::transmute::<$from, StrRep>(s) };
-                rep.hi |= $tag;
+                rep.hi |= ($tag as usize);
                 rep
             }
         }
     };
 }
 
-impl_tagged_from!(Shared, SHARED);
-impl_tagged_from!(Concat<'a>, CONCAT);
-impl_tagged_from!(Boxed, BOXED);
+impl_tagged_from!(Shared, StrTag::Shared);
+impl_tagged_from!(Concat<'a>, StrTag::Concat);
+impl_tagged_from!(Boxed, StrTag::Boxed);
+impl_tagged_from!(Inline, StrTag::Inline);
 
 impl<'a> From<Literal<'a>> for StrRep<'a> {
     fn from(s: Literal<'a>) -> StrRep<'a> {
-        if s.ptr as usize & 0x7 == 0 {
+        if s.len <= MAX_INLINE_SIZE as u64 {
+            unsafe { Inline::from_raw(s.ptr, s.len as usize).into() }
+        } else if s.ptr as usize & 0x7 == 0 {
             let mut rep = unsafe { mem::transmute::<Literal<'a>, StrRep>(s) };
-            rep.hi |= LITERAL;
+            rep.hi |= StrTag::Literal as usize;
             rep
         } else {
             let buf = unsafe { Buf::read_from_raw(s.ptr, s.len as usize) };
@@ -123,10 +182,12 @@ impl<'a> From<Literal<'a>> for StrRep<'a> {
 impl<'a> StrRep<'a> {
     fn len(&mut self) -> usize {
         match self.get_tag() {
-            EMPTY => 0,
-            BOXED | LITERAL | CONCAT => self.low as usize,
-            SHARED => unsafe { self.view_as(|s: &Shared| s.end as usize - s.start as usize) },
-            _ => unreachable!(),
+            StrTag::Empty => 0,
+            StrTag::Boxed | StrTag::Literal | StrTag::Concat => self.low as usize,
+            StrTag::Shared => unsafe {
+                self.view_as(|s: &Shared| s.end as usize - s.start as usize)
+            },
+            StrTag::Inline => unsafe { self.view_as(|i: &Inline| i.len()) },
         }
     }
     unsafe fn view_as<T, R>(&mut self, f: impl FnOnce(&T) -> R) -> R {
@@ -158,10 +219,10 @@ impl<'a> Drop for StrRep<'a> {
         let tag = self.get_tag();
         unsafe {
             match tag {
-                SHARED => self.view_as_mut(|s: &mut Shared| ptr::drop_in_place(s)),
-                BOXED => self.view_as_mut(|b: &mut Boxed| ptr::drop_in_place(b)),
-                CONCAT => self.view_as_mut(|c: &mut Concat<'a>| ptr::drop_in_place(c)),
-                _ => {}
+                StrTag::Shared => self.view_as_mut(|s: &mut Shared| ptr::drop_in_place(s)),
+                StrTag::Boxed => self.view_as_mut(|b: &mut Boxed| ptr::drop_in_place(b)),
+                StrTag::Concat => self.view_as_mut(|c: &mut Concat<'a>| ptr::drop_in_place(c)),
+                StrTag::Inline | StrTag::Literal | StrTag::Empty => {}
             }
         };
     }
@@ -175,13 +236,18 @@ impl<'a> Drop for StrRep<'a> {
 pub struct Str<'a>(UnsafeCell<StrRep<'a>>);
 
 impl<'a> Str<'a> {
+    unsafe fn rep(&self) -> &StrRep<'a> {
+        &*self.0.get()
+    }
+    unsafe fn rep_mut(&self) -> &mut StrRep<'a> {
+        &mut *self.0.get()
+    }
     // We rely on string literals having trivial drops for LLVM codegen, as they may be dropped
     // repeatedly.
     pub fn drop_is_trivial(&self) -> bool {
-        let rep = unsafe { &mut *self.0.get() };
-        match rep.get_tag() {
-            EMPTY | LITERAL => true,
-            _ => false,
+        match unsafe { self.rep() }.get_tag() {
+            StrTag::Empty | StrTag::Literal | StrTag::Inline => true,
+            StrTag::Shared | StrTag::Concat | StrTag::Boxed => false,
         }
     }
 
@@ -265,16 +331,33 @@ impl<'a> Str<'a> {
     }
 
     pub fn len(&self) -> usize {
-        let rep = unsafe { &mut *self.0.get() };
-        rep.len()
+        unsafe { self.rep_mut() }.len()
     }
 
     pub fn concat(left: Str<'a>, right: Str<'a>) -> Str<'a> {
-        let concat = Concat {
-            len: (left.len() + right.len()) as u64,
-            inner: Rc::new(ConcatInner { left, right }),
-        };
-        Str::from_rep(concat.into())
+        let llen = left.len();
+        if llen == 0 {
+            return right;
+        }
+        let rlen = right.len();
+        if rlen == 0 {
+            return left;
+        }
+        let new_len = llen + rlen;
+        if new_len <= MAX_INLINE_SIZE {
+            let mut b = DynamicBuf::new(0);
+            unsafe {
+                b.write(&*left.get_bytes()).unwrap();
+                b.write(&*right.get_bytes()).unwrap();
+                b.into_str()
+            }
+        } else {
+            let concat = Concat {
+                len: new_len as u64,
+                inner: Rc::new(ConcatInner { left, right }),
+            };
+            Str::from_rep(concat.into())
+        }
     }
 
     fn from_rep(rep: StrRep<'a>) -> Str<'a> {
@@ -284,12 +367,12 @@ impl<'a> Str<'a> {
     // This helper method assumes:
     // * that from and to cannot overflow when moved to u32s/shared/etc.
     // * that any CONCATs have been forced away.
+    // * to - from > MAX_INLINE_SIZE
     unsafe fn slice_nooverflow(&self, from: usize, to: usize) -> Str<'a> {
-        let rep = &mut *self.0.get();
+        let rep = self.rep_mut();
         let tag = rep.get_tag();
         let new_rep = match tag {
-            EMPTY => return Default::default(),
-            SHARED => rep.view_as(|s: &Shared| {
+            StrTag::Shared => rep.view_as(|s: &Shared| {
                 let start = s.start + from as u32;
                 let end = s.start + to as u32;
                 Shared {
@@ -299,7 +382,7 @@ impl<'a> Str<'a> {
                 }
                 .into()
             }),
-            BOXED => rep.view_as(|b: &Boxed| {
+            StrTag::Boxed => rep.view_as(|b: &Boxed| {
                 Shared {
                     start: from as u32,
                     end: to as u32,
@@ -307,7 +390,7 @@ impl<'a> Str<'a> {
                 }
                 .into()
             }),
-            LITERAL => rep.view_as(|l: &Literal| {
+            StrTag::Literal => rep.view_as(|l: &Literal| {
                 let new_ptr = l.ptr.offset(from as isize);
                 let new_len = (to - from) as u64;
                 Literal {
@@ -317,7 +400,7 @@ impl<'a> Str<'a> {
                 }
                 .into()
             }),
-            _ => unreachable!(),
+            StrTag::Empty | StrTag::Inline | StrTag::Concat => unreachable!(),
         };
         Str::from_rep(new_rep)
     }
@@ -336,18 +419,21 @@ impl<'a> Str<'a> {
             len
         );
         let new_len = to - from;
-        let tag = (&mut *self.0.get()).get_tag();
+        if new_len <= MAX_INLINE_SIZE {
+            return Str::from_rep(Inline::from_unchecked(&(*self.get_bytes())[from..to]).into());
+        }
+        let tag = self.rep().get_tag();
         let u32_max = u32::max_value() as usize;
         let mut may_overflow = to > u32_max || from > u32_max;
-        if !may_overflow && tag == SHARED {
+        if !may_overflow && tag == StrTag::Shared {
             // If we are taking a slice of an existing slice, then we can overflow by adding the
             // starts and ends together.
-            may_overflow = (*self.0.get()).view_as(|s: &Shared| {
+            may_overflow = self.rep_mut().view_as(|s: &Shared| {
                 (s.start as usize + from) > u32_max || (s.start as usize + to) > u32_max
             });
         }
         // Slices of literals are addressed with 64 bits.
-        may_overflow = may_overflow && tag != LITERAL;
+        may_overflow = may_overflow && tag != StrTag::Literal;
         if may_overflow {
             // uncommon case: we cannot represent a Shared value. We need to copy and box the value
             // instead.
@@ -355,11 +441,11 @@ impl<'a> Str<'a> {
             // by creating new ones with offset pointers. This doesn't seem worth optimizing right
             // now, but we may want to in the future.
             self.force();
-            let rep = &mut *self.0.get();
+            let rep = self.rep_mut();
             let tag = rep.get_tag();
             // All other variants ruled out by how large `self` is and the fact that we
             // just called `force`
-            debug_assert_eq!(tag, BOXED);
+            debug_assert_eq!(tag, StrTag::Boxed);
             return Str::from_rep(rep.view_as(|b: &Boxed| {
                 let buf = Buf::read_from_raw(b.buf.as_ptr().offset(from as isize), new_len);
                 Boxed {
@@ -371,7 +457,7 @@ impl<'a> Str<'a> {
         }
 
         // Force concat up here so we don't have to worry about aliasing `rep` in slice_nooverflow.
-        if let CONCAT = tag {
+        if let StrTag::Concat = tag {
             self.force()
         }
         self.slice_nooverflow(from, to)
@@ -415,10 +501,10 @@ impl<'a> Str<'a> {
 
     unsafe fn force(&self) {
         let (tag, len) = {
-            let rep = &mut *self.0.get();
+            let rep = self.rep_mut();
             (rep.get_tag(), rep.len())
         };
-        if let LITERAL | BOXED | EMPTY = tag {
+        if tag.forced() {
             return;
         }
         let mut whead = 0;
@@ -440,27 +526,29 @@ impl<'a> Str<'a> {
         let mut todos = SmallVec::<[Str<'a>; 16]>::new();
         let mut cur: Str<'a> = self.clone();
         let new_rep: StrRep<'a> = 'outer: loop {
-            let rep = &mut (*cur.0.get());
+            let rep = cur.rep_mut();
             let tag = rep.get_tag();
             cur = loop {
                 match tag {
-                    EMPTY => {}
-                    LITERAL => rep.view_as(|l: &Literal| {
+                    StrTag::Empty => {}
+                    StrTag::Inline => rep.view_as(|i: &Inline| {
+                        push_bytes!(i.bytes(), [0, i.len()]);
+                    }),
+                    StrTag::Literal => rep.view_as(|l: &Literal| {
                         push_bytes!(l.ptr, l.len as usize);
                     }),
-                    BOXED => rep.view_as(|b: &Boxed| {
+                    StrTag::Boxed => rep.view_as(|b: &Boxed| {
                         push_bytes!(b.buf.as_bytes(), [0, b.len as usize]);
                     }),
-                    SHARED => rep.view_as(|s: &Shared| {
+                    StrTag::Shared => rep.view_as(|s: &Shared| {
                         push_bytes!(s.buf.as_bytes(), [s.start as usize, s.end as usize]);
                     }),
-                    CONCAT => {
+                    StrTag::Concat => {
                         break rep.view_as(|c: &Concat| {
                             todos.push(c.inner.right.clone());
                             c.inner.left.clone()
                         })
                     }
-                    _ => unreachable!(),
                 }
                 if let Some(c) = todos.pop() {
                     break c;
@@ -472,28 +560,28 @@ impl<'a> Str<'a> {
                 .into();
             };
         };
-        *self.0.get() = new_rep;
+        *self.rep_mut() = new_rep;
     }
 
     // Avoid using this function; subsequent immutable calls to &self can invalidate the pointer.
     fn get_bytes(&self) -> *const [u8] {
-        let rep = unsafe { &mut *self.0.get() };
+        let rep = unsafe { self.rep_mut() };
         let tag = rep.get_tag();
         unsafe {
             match tag {
-                EMPTY => &[],
-                LITERAL => rep.view_as(|lit: &Literal| {
+                StrTag::Empty => &[],
+                StrTag::Inline => rep.view_as(|i: &Inline| i.bytes() as *const _),
+                StrTag::Literal => rep.view_as(|lit: &Literal| {
                     slice::from_raw_parts(lit.ptr, lit.len as usize) as *const _
                 }),
-                SHARED => rep.view_as(|s: &Shared| {
+                StrTag::Shared => rep.view_as(|s: &Shared| {
                     &s.buf.as_bytes()[s.start as usize..s.end as usize] as *const _
                 }),
-                BOXED => rep.view_as(|b: &Boxed| b.buf.as_bytes() as *const _),
-                CONCAT => {
+                StrTag::Boxed => rep.view_as(|b: &Boxed| b.buf.as_bytes() as *const _),
+                StrTag::Concat => {
                     self.force();
                     self.get_bytes()
                 }
-                _ => unreachable!(),
             }
         }
     }
@@ -506,9 +594,9 @@ impl<'a> Str<'a> {
         unsafe { f(&*raw) }
     }
     pub fn unmoor(self) -> Str<'static> {
-        let rep = unsafe { &mut *self.0.get() };
+        let rep = unsafe { self.rep_mut() };
         let tag = rep.get_tag();
-        if let LITERAL = tag {
+        if let StrTag::Literal = tag {
             let new_rep = unsafe {
                 rep.view_as(|lit: &Literal| {
                     let buf = Buf::read_from_raw(lit.ptr, lit.len as usize);
@@ -523,15 +611,14 @@ impl<'a> Str<'a> {
 
 impl<'a> Clone for Str<'a> {
     fn clone(&self) -> Str<'a> {
-        let rep = unsafe { &mut *self.0.get() };
+        let rep = unsafe { self.rep_mut() };
         let tag = rep.get_tag();
         let cloned_rep: StrRep<'a> = unsafe {
             match tag {
-                EMPTY | LITERAL => rep.copy(),
-                SHARED => rep.view_as(|s: &Shared| s.clone()).into(),
-                BOXED => rep.view_as(|b: &Boxed| b.clone()).into(),
-                CONCAT => rep.view_as(|c: &Concat<'a>| c.clone()).into(),
-                _ => unreachable!(),
+                StrTag::Empty | StrTag::Literal | StrTag::Inline => rep.copy(),
+                StrTag::Shared => rep.view_as(|s: &Shared| s.clone()).into(),
+                StrTag::Boxed => rep.view_as(|b: &Boxed| b.clone()).into(),
+                StrTag::Concat => rep.view_as(|c: &Concat<'a>| c.clone()).into(),
             }
         };
         Str(UnsafeCell::new(cloned_rep))
@@ -540,9 +627,11 @@ impl<'a> Clone for Str<'a> {
 
 impl<'a> PartialEq for Str<'a> {
     fn eq(&self, other: &Str<'a>) -> bool {
-        if unsafe { &*self.0.get() == &*other.0.get() } {
+        // If the bits are the same, then the strings are equal.
+        if unsafe { self.rep() == other.rep() } {
             return true;
         }
+        // TODO: we could intern these strings if they wind up equal.
         self.with_str(|s1| other.with_str(|s2| s1 == s2))
     }
 }
@@ -558,9 +647,10 @@ impl<'a> Hash for Str<'a> {
 impl<'a> From<&'a str> for Str<'a> {
     fn from(s: &'a str) -> Str<'a> {
         if s.len() == 0 {
-            return Default::default();
-        }
-        if s.as_ptr() as usize & 0x7 != 0 {
+            Default::default()
+        } else if s.len() <= MAX_INLINE_SIZE {
+            Str::from_rep(unsafe { Inline::from_raw(s.as_ptr(), s.len()).into() })
+        } else if s.as_ptr() as usize & 0x7 != 0 {
             // Strings are not guaranteed to be word aligned. Copy over strings that aren't. This
             // is more important for tests; most of the places that literals can come from in an
             // awk program will hand out aligned pointers.
@@ -586,9 +676,6 @@ impl<'a> From<String> for Str<'a> {
         if s.len() == 0 {
             return Default::default();
         }
-        // Strings are not guaranteed to be word aligned. Copy over strings that aren't. This
-        // is more important for tests; most of the places that literals can come from in an
-        // awk program will hand out aligned pointers.
         let buf = Buf::read_from_str(s.as_str());
         let boxed = Boxed {
             len: s.len() as u64,
@@ -598,9 +685,20 @@ impl<'a> From<String> for Str<'a> {
     }
 }
 
+// For numbers, we are careful to check if a number only requires 15 digits or fewer to be
+// represented. This allows us to trigger the "Inline" variant and avoid a heap allocation,
+// sometimes at the expenseof a small copy.
+
 impl<'a> From<Int> for Str<'a> {
     fn from(i: Int) -> Str<'a> {
-        let mut b = DynamicBuf::new(21);
+        let digit_guess = if i >= 1000000000000000 || i <= -100000000000000 {
+            // Allocate on the heap; this is the maximum length we expect to see.
+            21
+        } else {
+            // We'll allocate this inline.
+            0
+        };
+        let mut b = DynamicBuf::new(digit_guess);
         write!(&mut b, "{}", i).unwrap();
         unsafe { b.into_str() }
     }
@@ -609,17 +707,18 @@ impl<'a> From<Int> for Str<'a> {
 impl<'a> From<Float> for Str<'a> {
     fn from(f: Float) -> Str<'a> {
         // Per ryu's documentation, we will only ever use 24 bytes when printing an f64.
-        let mut b = DynamicBuf::new(24);
         if f.is_finite() {
-            unsafe {
-                let len = ryu::raw::format64(f, b.data.as_mut_ptr());
-                debug_assert!(len < 24);
-                b.write_head = len;
-            };
+            // TODO: fix this. Read it into a stack buffer, then write it in.
+            let mut ryubuf = ryu::Buffer::new();
+            let s = ryubuf.format(f);
+            let mut b = DynamicBuf::new(s.len());
+            b.write(s.as_bytes()).unwrap();
+            unsafe { b.into_str() }
         } else {
+            let mut b = DynamicBuf::new(0);
             write!(&mut b, "{}", f).unwrap();
+            unsafe { b.into_str() }
         }
-        unsafe { b.into_str() }
     }
 }
 
@@ -641,14 +740,14 @@ struct BufHeader {
 #[repr(transparent)]
 pub struct UniqueBuf(*mut BufHeader);
 
-pub struct DynamicBuf {
+pub struct DynamicBufHeap {
     data: UniqueBuf,
     write_head: usize,
 }
 
-impl DynamicBuf {
-    pub fn new(size: usize) -> DynamicBuf {
-        DynamicBuf {
+impl DynamicBufHeap {
+    pub fn new(size: usize) -> DynamicBufHeap {
+        DynamicBufHeap {
             data: UniqueBuf::new(size),
             write_head: 0,
         }
@@ -673,7 +772,7 @@ impl DynamicBuf {
     }
 }
 
-impl Write for DynamicBuf {
+impl Write for DynamicBufHeap {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let cap = self.size();
         let remaining = cap - self.write_head;
@@ -700,6 +799,50 @@ impl Write for DynamicBuf {
         };
         self.write_head += buf.len();
         Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub enum DynamicBuf {
+    Inline(smallvec::SmallVec<[u8; MAX_INLINE_SIZE]>),
+    Heap(DynamicBufHeap),
+}
+
+impl DynamicBuf {
+    pub fn new(size: usize) -> DynamicBuf {
+        if size <= MAX_INLINE_SIZE {
+            DynamicBuf::Inline(Default::default())
+        } else {
+            DynamicBuf::Heap(DynamicBufHeap::new(size))
+        }
+    }
+    pub unsafe fn into_str<'a>(self) -> Str<'a> {
+        match self {
+            DynamicBuf::Inline(sv) => Str::from_rep(Inline::from_unchecked(&sv[..]).into()),
+            DynamicBuf::Heap(dbuf) => dbuf.into_str(),
+        }
+    }
+}
+
+impl Write for DynamicBuf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            DynamicBuf::Inline(sv) => {
+                let new_len = sv.len() + buf.len();
+                if sv.len() + buf.len() > MAX_INLINE_SIZE {
+                    let mut heap = DynamicBufHeap::new(new_len);
+                    heap.write(&sv[..]).unwrap();
+                    heap.write(buf).unwrap();
+                    *self = DynamicBuf::Heap(heap);
+                } else {
+                    sv.extend(buf.iter().cloned());
+                }
+                Ok(buf.len())
+            }
+            DynamicBuf::Heap(dbuf) => dbuf.write(buf),
+        }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
@@ -819,6 +962,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inline_basics() {
+        let test_str = "hello there";
+        unsafe {
+            let i = Inline::from_unchecked(test_str.as_bytes());
+            assert_eq!(test_str, str::from_utf8(i.bytes()).unwrap());
+        }
+
+        let s: Str = "hi there".into();
+        assert_eq!(unsafe { s.rep().get_tag() }, StrTag::Inline);
+        let s1 = s.slice(0, 1);
+        assert_eq!(unsafe { s1.rep().get_tag() }, StrTag::Inline);
+        s1.with_str(|s1| assert_eq!(s1, "h"));
+    }
+
+    #[test]
     fn basic_behavior() {
         let base_1 = "hi there fellow";
         let base_2 = "how are you?";
@@ -827,7 +985,7 @@ mod tests {
         let s2 = Str::from(base_2);
         let s3 = Str::from(base_3);
         s1.with_str(|s| assert_eq!(s, base_1));
-        s2.with_str(|s| assert_eq!(s, base_2));
+        s2.with_str(|s| assert_eq!(s, base_2, "{:?}", s2));
         s3.with_str(|s| assert_eq!(s, base_3));
 
         let s4 = Str::concat(s1, s2.clone());
@@ -943,14 +1101,16 @@ mod formatting {
     impl<'a> Debug for Str<'a> {
         fn fmt(&self, f: &mut Formatter) -> fmt::Result {
             unsafe {
-                let rep = &mut *self.0.get();
+                let rep = self.rep_mut();
                 match rep.get_tag() {
-                    EMPTY => write!(f, "Str(EMPTY)"),
-                    LITERAL => rep.view_as(|l: &Literal| write!(f, "Str({:?})", l)),
-                    SHARED => rep.view_as(|s: &Shared| write!(f, "Str({:?})", s)),
-                    CONCAT => rep.view_as(|c: &Concat| write!(f, "Str({:?})", c)),
-                    BOXED => rep.view_as(|b: &Boxed| write!(f, "Str({:?})", b)),
-                    _ => unreachable!(),
+                    StrTag::Empty => write!(f, "Str(EMPTY)"),
+                    StrTag::Inline => {
+                        rep.view_as(|i: &Inline| write!(f, "Str(Inline({:?}))", i.bytes()))
+                    }
+                    StrTag::Literal => rep.view_as(|l: &Literal| write!(f, "Str({:?})", l)),
+                    StrTag::Shared => rep.view_as(|s: &Shared| write!(f, "Str({:?})", s)),
+                    StrTag::Concat => rep.view_as(|c: &Concat| write!(f, "Str({:?})", c)),
+                    StrTag::Boxed => rep.view_as(|b: &Boxed| write!(f, "Str({:?})", b)),
                 }?
             }
             write!(f, "/[disp=<{}>]", self)
