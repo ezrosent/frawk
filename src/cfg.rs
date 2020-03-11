@@ -306,6 +306,8 @@ where
             let ret = shared.fresh_local();
             shared.may_rename.push(ret);
             let exit = cfg.add_node(Default::default());
+            let mut defsites: HashMap<Ident, HashSet<NodeIx>> = Default::default();
+            let mut orig: HashMap<NodeIx, HashSet<Ident>> = Default::default();
 
             let f = Function {
                 name: Some(fundec.name.clone()),
@@ -317,6 +319,10 @@ where
                         let name = i.clone();
                         let id = shared.fresh_local();
                         args_map.insert(i.clone(), ix);
+                        // Args are just like standard local variables --- in fact it's a major
+                        // use-case for arguments in AWK.
+                        shared.may_rename.push(id);
+                        record_ident(&mut defsites, &mut orig, id, entry);
                         ix += 1;
                         Arg { name, id }
                     })
@@ -324,8 +330,8 @@ where
                 args_map,
                 ret,
                 cfg,
-                defsites: Default::default(),
-                orig: Default::default(),
+                defsites,
+                orig,
                 entry,
                 exit,
                 loop_ctx: Default::default(),
@@ -454,6 +460,17 @@ pub(crate) struct Function<'a, I> {
 
 pub(crate) fn is_unused(i: Ident) -> bool {
     i.low == 0
+}
+
+fn record_ident(
+    defsites: &mut HashMap<Ident, HashSet<NodeIx>>,
+    orig: &mut HashMap<NodeIx, HashSet<Ident>>,
+    id: Ident,
+    blk: NodeIx,
+) {
+    defsites.entry(id).or_insert(HashSet::default()).insert(blk);
+
+    orig.entry(blk).or_insert(HashSet::default()).insert(id);
 }
 
 impl<'a, 'b, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> View<'a, 'b, I>
@@ -1361,18 +1378,7 @@ where
     }
 
     fn record_ident(&mut self, id: Ident, blk: NodeIx) {
-        // TODO: add a new set to the global context indicating which functions write to `id`, if
-        // it is a global. That will then be used to rewrite it as a local.
-        self.f
-            .defsites
-            .entry(id)
-            .or_insert(HashSet::default())
-            .insert(blk);
-        self.f
-            .orig
-            .entry(blk)
-            .or_insert(HashSet::default())
-            .insert(id);
+        record_ident(&mut self.f.defsites, &mut self.f.orig, id, blk);
     }
 
     fn get_identifier(&mut self, i: &I) -> Ident {

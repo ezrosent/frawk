@@ -283,7 +283,7 @@ impl FileWrite {
     }
 }
 
-const CHUNK_SIZE: usize = 2 << 10;
+const CHUNK_SIZE: usize = 16 << 10;
 
 pub(crate) struct FileRead {
     files: Registry<splitter::Reader<File>>,
