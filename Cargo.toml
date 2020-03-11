@@ -22,5 +22,9 @@ unicode-xid = "0.2.0"
 llvm-sys = "90.0.0"
 clap = { git = "https://github.com/clap-rs/clap/" }
 
+[profile.release]
+lto = "fat"
+# codegen-units=1
+
 [build-dependencies]
 lalrpop = "0.17.2"
