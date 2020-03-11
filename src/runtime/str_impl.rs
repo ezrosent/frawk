@@ -22,18 +22,12 @@ use std::rc::Rc;
 use std::slice;
 use std::str;
 
-// TODO: Inline strings:
-//  * If tag matches, then last byte shifted by 3 contains length of string, using up to the
-//  remaining 15 bytes. That's 5 bits to store the length, which is plenty.
-// TODO: add some macros to make "pattern matching" less error-prone (and to force errors if we add
-// new variants and forget a case?)
-//
-// TODO: explain what's going on here, and why we are using all thus Buf/UniqueBuf machinery
-// instead of just using Box<str> and Rc<str>.
+// TODO look into a design based on unions
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(usize)]
 enum StrTag {
+    // TODO we probably do not need Empty, now that we have Inline
     Empty = 0,
     Literal = 1,
     Shared = 2,
@@ -197,12 +191,11 @@ impl<'a> StrRep<'a> {
         self.hi = old;
         res
     }
-    unsafe fn view_as_mut<T, R>(&mut self, f: impl FnOnce(&mut T) -> R) -> R {
+    unsafe fn drop_as<T>(&mut self) {
         let old = self.hi;
         self.hi = old & !0x7;
-        let res = f(mem::transmute::<&mut StrRep<'a>, &mut T>(self));
+        ptr::drop_in_place(mem::transmute::<&mut StrRep<'a>, *mut T>(self));
         self.hi = old;
-        res
     }
 
     unsafe fn copy(&self) -> StrRep<'a> {
@@ -219,9 +212,9 @@ impl<'a> Drop for StrRep<'a> {
         let tag = self.get_tag();
         unsafe {
             match tag {
-                StrTag::Shared => self.view_as_mut(|s: &mut Shared| ptr::drop_in_place(s)),
-                StrTag::Boxed => self.view_as_mut(|b: &mut Boxed| ptr::drop_in_place(b)),
-                StrTag::Concat => self.view_as_mut(|c: &mut Concat<'a>| ptr::drop_in_place(c)),
+                StrTag::Shared => self.drop_as::<Shared>(),
+                StrTag::Boxed => self.drop_as::<Boxed>(),
+                StrTag::Concat => self.drop_as::<Concat>(),
                 StrTag::Inline | StrTag::Literal | StrTag::Empty => {}
             }
         };

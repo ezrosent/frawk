@@ -630,12 +630,13 @@ impl<'a> View<'a> {
     unsafe fn has_var(&self, var: (NumTy, Ty)) -> bool {
         self.f.locals.get(&var).is_some() || self.decls[self.f.id].globals.get(&var).is_some()
     }
-    unsafe fn get_local(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
+    // TODO: rename this; it gets globals too :)
+    unsafe fn get_local_inner(&self, local: (NumTy, Ty)) -> Option<LLVMValueRef> {
         if let Some(v) = self.f.locals.get(&local) {
-            Ok(*v)
+            Some(*v)
         } else if let Some(ix) = self.decls[self.f.id].globals.get(&local) {
             let gv = LLVMGetParam(self.f.val, *ix as libc::c_uint);
-            Ok(if let Ty::Str = local.1 {
+            Some(if let Ty::Str = local.1 {
                 // no point in loading the string directly. We manipulate them as pointers.
                 gv
             } else {
@@ -643,12 +644,34 @@ impl<'a> View<'a> {
                 LLVMBuildLoad(self.f.builder, gv, c_str!(""))
             })
         } else {
-            // We'll see if we need to be careful about iteration order here. We may want to do a
-            // DFS starting at entry.
-            err!(
+            None
+        }
+    }
+    unsafe fn get_param(&mut self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
+        if let Some(v) = self.get_local_inner(local) {
+            Ok(v)
+        } else {
+            // Some parameters are never mentioned in the source program, but are just added in as
+            // placeholders by the `compile` module. In that case, we'll have an initialized value
+            // that is never mentioned elsewhere. We still need to drop it, but we do not need to
+            // perform any extra dropping.
+            let v = if let Ty::Int | Ty::Str = local.1 {
+                let str_ty = self.tmap.get_ty(local.1);
+                LLVMConstInt(str_ty, 0, /*sign_extend=*/ 0)
+            } else {
+                alloc_local(self.f.builder, local.1, self.tmap, self.intrinsics)?
+            };
+            self.bind_val(local, v);
+            Ok(v)
+        }
+    }
+    unsafe fn get_local(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
+        match self.get_local_inner(local) {
+            Some(v) => Ok(v),
+            None => err!(
                 "unbound variable {:?} (must call bind_val on it before)",
                 local
-            )
+            ),
         }
     }
 
@@ -1567,7 +1590,7 @@ impl<'a> View<'a> {
                 let mut argvs: SmallVec<LLVMValueRef> =
                     smallvec![ptr::null_mut(); args.len() + target.globals.len() + 1];
                 for (i, arg) in args.iter().cloned().enumerate() {
-                    argvs[i] = self.get_local(arg)?;
+                    argvs[i] = self.get_param(arg)?;
                 }
                 for (global, ix) in target.globals.iter() {
                     let cur_ix = source

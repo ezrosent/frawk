@@ -665,6 +665,18 @@ Or this"#
         @input ",,3,,4\n,,3,,6\n,,4,,5\n"
     );
 
+    test_program!(
+        function_locals,
+        r#"function p(n,  i,res) {
+            for (i=0;i<n;i++) res+=i;
+            return res;
+        }
+        { SUM += p($1+0); }
+        END { print SUM; }"#,
+        "6\n",
+        @input "4"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,
