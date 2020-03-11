@@ -63,6 +63,12 @@ struct Opts {
     dump_bytecode: bool,
     #[clap(long = "dump-cfg")]
     dump_cfg: bool,
+    #[clap(
+        default_value = "32768",
+        long = "out-buffer-size",
+        help = "output to --out-file is buffered; this flag determines buffer size"
+    )]
+    out_file_bufsize: usize,
 }
 macro_rules! fail {
     ($($t:tt)*) => {{
@@ -229,8 +235,9 @@ fn main() {
         (|$inp:ident, $out:ident| $body:expr) => {
             match opts.out_file {
                 Some(oup) => {
-                    let $out = io::BufWriter::new(
-                        File::open(oup.as_str())
+                    let $out = io::BufWriter::with_capacity(
+                        opts.out_file_bufsize,
+                        File::create(oup.as_str())
                             .unwrap_or_else(|e| fail!("failed to open {}: {}", oup.as_str(), e)),
                     );
                     with_inp!($inp, $body);

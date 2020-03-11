@@ -12,6 +12,8 @@ struct Offsets {
 // TODO: store what character we have in the high bits? or maybe just use prefetching to read the
 //       proper locations.
 // TODO: materialize
+// TODO: consider the model we want: we may want to compute `Offsets` in a big batch, but do this
+// work on a line-by-line basis.
 //  iterate over fields:
 //    Keep track of previous location, initialize at 0. Iterate over `fields` and case-analyze the
 //    pointed-to character. A few of these will rely on having 0s padding the end.
@@ -21,7 +23,12 @@ struct Offsets {
 //    if we have a quote, check ahead one and if it's a quote append the quote, otherwise do
 //      nothing.
 //    if we have a backslash, check ahead and escape appropriately, consider about whether to
-//      return an error or just append the slash if we don't see it.
+//      return an error or just append the slash if we don't see it. (maybe this can be a table
+//      lookup)
+// TODO: API,
+//  We could add new instruction (get_line_csv)..
+//  Seems like it would be better to stub this out with its own API. We could make it a template
+//  parameter to the runtime, have "split" and "getline" methods.
 
 #[cfg(target_arch = "x86_64")]
 #[allow(unused)]
