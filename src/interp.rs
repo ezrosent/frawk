@@ -3,9 +3,11 @@ use crate::bytecode::{Get, Instr, Label, Pop, Reg};
 use crate::builtins::Variable;
 use crate::common::{NumTy, Result};
 use crate::compile::{self, Ty};
-use crate::runtime::{self, Float, Int, LazyVec, Str};
+use crate::runtime::{self, Float, Int, LazyVec, Line, LineReader, Str};
 
 use std::cmp;
+
+type ClassicReader = runtime::splitter::Reader<Box<dyn std::io::Read>>;
 
 #[derive(Default)]
 pub(crate) struct Storage<T> {
@@ -13,7 +15,7 @@ pub(crate) struct Storage<T> {
     pub(crate) stack: Vec<T>,
 }
 
-pub(crate) struct Interp<'a> {
+pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     // index of `instrs` that contains "main"
     main_func: usize,
     instrs: Vec<Vec<Instr<'a>>>,
@@ -21,12 +23,12 @@ pub(crate) struct Interp<'a> {
 
     vars: runtime::Variables<'a>,
 
-    line: Str<'a>,
+    line: LR::Line,
     split_line: LazyVec<Str<'a>>,
 
     regexes: runtime::RegexCache,
     write_files: runtime::FileWrite,
-    read_files: runtime::FileRead,
+    read_files: runtime::FileRead<LR>,
 
     // TODO: should these be smallvec<[T; 32]>? We never add registers, so could we allocate one
     // contiguous region ahead of time?
@@ -55,17 +57,6 @@ fn default_of<T: Default>(n: usize) -> Storage<T> {
 }
 
 impl<'a> Interp<'a> {
-    pub(crate) fn instrs(&self) -> &Vec<Vec<Instr<'a>>> {
-        &self.instrs
-    }
-    fn format_arg(&self, (reg, ty): (NumTy, Ty)) -> Result<runtime::FormatArg<'a>> {
-        Ok(match ty {
-            Ty::Str => self.get(Reg::<Str<'a>>::from(reg)).clone().into(),
-            Ty::Int => self.get(Reg::<Int>::from(reg)).clone().into(),
-            Ty::Float => self.get(Reg::<Float>::from(reg)).clone().into(),
-            _ => return err!("non-scalar (s)printf argument type {:?}", ty),
-        })
-    }
     pub(crate) fn new(
         instrs: Vec<Vec<Instr<'a>>>,
         main_func: usize,
@@ -87,7 +78,7 @@ impl<'a> Interp<'a> {
             split_line: LazyVec::new(),
             regexes: Default::default(),
             write_files: runtime::FileWrite::new(stdout),
-            read_files: runtime::FileRead::new(stdin),
+            read_files: runtime::FileRead::new_transitional(stdin),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -101,6 +92,21 @@ impl<'a> Interp<'a> {
             iters_str: default_of(regs(IterStr)),
         }
     }
+}
+
+impl<'a, LR: LineReader> Interp<'a, LR> {
+    pub(crate) fn instrs(&self) -> &Vec<Vec<Instr<'a>>> {
+        &self.instrs
+    }
+    fn format_arg(&self, (reg, ty): (NumTy, Ty)) -> Result<runtime::FormatArg<'a>> {
+        Ok(match ty {
+            Ty::Str => self.get(Reg::<Str<'a>>::from(reg)).clone().into(),
+            Ty::Int => self.get(Reg::<Int>::from(reg)).clone().into(),
+            Ty::Float => self.get(Reg::<Float>::from(reg)).clone().into(),
+            _ => return err!("non-scalar (s)printf argument type {:?}", ty),
+        })
+    }
+
     pub(crate) fn run(&mut self) -> Result<()> {
         use Instr::*;
         let newline: Str = "\n".into();
@@ -384,21 +390,22 @@ impl<'a> Interp<'a> {
                         }
                         if col == 0 {
                             self.split_line.clear();
-                            self.line = self.get(*src).clone();
+                            self.line.assign_from_str(index(&self.strs, src));
                             self.vars.nf = -1;
                             break cur + 1;
                         }
                         if self.split_line.len() == 0 {
                             self.regexes.split_regex(
                                 &self.vars.fs,
-                                &self.line,
+                                self.line.as_str(),
                                 &mut self.split_line,
                             )?;
                             self.vars.nf = self.split_line.len() as Int;
                         }
                         self.split_line
                             .insert(col as usize - 1, self.get(*src).clone());
-                        self.line = self.split_line.join(&self.vars.ofs);
+                        self.line
+                            .assign_from_str(&self.split_line.join(&self.vars.ofs));
                     }
                     GetColumn(dst, src) => {
                         let col = *self.get(*src);
@@ -407,14 +414,14 @@ impl<'a> Interp<'a> {
                             return err!("attempt to access field {}", col);
                         }
                         if col == 0 {
-                            let line = self.line.clone();
+                            let line = self.line.as_str().clone();
                             *self.get_mut(dst) = line;
                             break cur + 1;
                         }
                         if self.split_line.len() == 0 {
                             self.regexes.split_regex(
                                 &self.vars.fs,
-                                &self.line,
+                                self.line.as_str(),
                                 &mut self.split_line,
                             )?;
                             self.vars.nf = self.split_line.len() as Int;
@@ -695,7 +702,7 @@ impl<'a> Interp<'a> {
                         if *var == NF && self.split_line.len() == 0 {
                             self.regexes.split_regex(
                                 &self.vars.fs,
-                                &self.line,
+                                self.line.as_str(),
                                 &mut self.split_line,
                             )?;
                             self.vars.nf = self.split_line.len() as Int;
@@ -1018,11 +1025,11 @@ impl<T: Default> Storage<T> {
 }
 
 #[cfg(test)]
-impl<'a> Interp<'a> {
+impl<'a, LR: LineReader> Interp<'a, LR> {
     pub(crate) fn reset(&mut self) {
         self.stack = Default::default();
         self.vars = Default::default();
-        self.line = "".into();
+        self.line.assign_from_str(&Default::default());
         self.split_line = LazyVec::new();
         self.regexes = Default::default();
         self.floats.reset();

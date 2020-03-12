@@ -62,6 +62,9 @@ pub(crate) struct Runtime<'a> {
     split_line: LazyVec<Str<'a>>,
     regexes: RegexCache,
     write_files: FileWrite,
+    // TODO: get Interp working, then make this an enum (along with line)
+    // We could monomorphize everything here, but keeping it to a predictable branch seems pretty
+    // reasonable as a first pass.
     read_files: FileRead,
 }
 
@@ -76,7 +79,7 @@ impl<'a> Runtime<'a> {
             split_line: LazyVec::new(),
             regexes: Default::default(),
             write_files: FileWrite::new(stdout),
-            read_files: FileRead::new(stdin),
+            read_files: FileRead::new_transitional(stdin),
         }
     }
 }

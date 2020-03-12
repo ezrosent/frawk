@@ -721,6 +721,9 @@ impl Str<'static> {
     pub fn upcast<'a>(self) -> Str<'a> {
         unsafe { mem::transmute::<Str<'static>, Str<'a>>(self) }
     }
+    pub fn upcast_ref<'a>(&self) -> &Str<'a> {
+        unsafe { mem::transmute::<&Str<'static>, &Str<'a>>(self) }
+    }
 }
 
 #[repr(C)]

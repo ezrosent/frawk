@@ -301,7 +301,7 @@ fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) 
 
 macro_rules! impl_pop {
     ($t:ty, $fld:ident) => {
-        impl<'a> Pop<$t> for Interp<'a> {
+        impl<'a, LR: runtime::LineReader> Pop<$t> for Interp<'a, LR> {
             #[inline(always)]
             fn push(&mut self, r: Reg<$t>) {
                 push(&mut self.$fld, &r)
@@ -335,7 +335,7 @@ macro_rules! impl_accum  {
 macro_rules! impl_get {
     ($t:ty, $fld:ident, $ty:tt $(,$lt:tt)*) => {
         impl_accum!($t, $ty, $($lt),*);
-        impl<'a> Get<$t> for Interp<'a> {
+        impl<'a, LR: runtime::LineReader> Get<$t> for Interp<'a, LR> {
             #[inline(always)]
             fn get(&self, r: Reg<$t>) -> &$t {
                 #[cfg(debug_assertions)]

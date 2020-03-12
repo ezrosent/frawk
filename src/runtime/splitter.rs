@@ -5,6 +5,7 @@
 //! characters that cross chunk boundaries, or multi-chunk "lines".
 use super::str_impl::{Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
+use super::LineReader;
 use crate::common::Result;
 
 use regex::Regex;
@@ -18,6 +19,25 @@ pub(crate) enum ReaderState {
     ERROR = -1,
     EOF = 0,
     OK = 1,
+}
+
+impl<R: Read> LineReader for Reader<R> {
+    type Line = Str<'static>;
+    fn read_line(&mut self, pat: &Str, rc: &mut super::RegexCache) -> Result<Self::Line> {
+        rc.with_regex(pat, |re| self.read_line_regex(re))
+    }
+    fn read_state(&self) -> i64 {
+        match self.state {
+            ReaderState::OK => self.state as i64,
+            ReaderState::ERROR | ReaderState::EOF => {
+                if self.last_len == 0 {
+                    self.state as i64
+                } else {
+                    ReaderState::OK as i64
+                }
+            }
+        }
+    }
 }
 
 pub(crate) struct Reader<R> {
@@ -56,7 +76,7 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
 }
 
 impl<R: Read> Reader<R> {
-    pub(crate) fn new(r: R, chunk_size: usize) -> Result<Self> {
+    pub(crate) fn new(r: R, chunk_size: usize) -> Self {
         let res = Reader {
             inner: r,
             prefix: Default::default(),
@@ -65,28 +85,20 @@ impl<R: Read> Reader<R> {
             state: ReaderState::OK,
             last_len: 0,
         };
-        Ok(res)
+        res
     }
-    pub(crate) fn read_state(&self) -> i64 {
-        match self.state {
-            ReaderState::OK => self.state as i64,
-            ReaderState::ERROR | ReaderState::EOF => {
-                if self.last_len == 0 {
-                    self.state as i64
-                } else {
-                    ReaderState::OK as i64
-                }
-            }
-        }
-    }
+
     pub(crate) fn is_eof(&self) -> bool {
         self.cur.len() == 0 && self.state == ReaderState::EOF
     }
-    pub(crate) fn read_line(&mut self, pat: &Regex) -> Str<'static> {
+
+    fn read_line_regex(&mut self, pat: &Regex) -> Str<'static> {
+        // We keep this as a separate method because it helps in writing tests.
         let res = self.read_line_inner(pat);
         self.last_len = res.len();
         res
     }
+
     fn read_line_inner(&mut self, pat: &Regex) -> Str<'static> {
         macro_rules! handle_err {
             ($e:expr) => {
@@ -197,6 +209,7 @@ impl<R: Read> Reader<R> {
 mod test {
     // need to benchmark batched splitting vs. regular splitting to get a feel for things.
     extern crate test;
+    use super::LineReader;
     use super::Str;
     use lazy_static::lazy_static;
     use regex::Regex;
@@ -218,10 +231,10 @@ mod test {
         let chunk_size = 1 << 9;
         let bs: String = crate::test_string_constants::PRIDE_PREJUDICE_CH2.into();
         let c = Cursor::new(bs.clone());
-        let mut rdr = super::Reader::new(c, chunk_size).unwrap();
+        let mut rdr = super::Reader::new(c, chunk_size);
         let mut lines = Vec::new();
         while !rdr.is_eof() {
-            let line = rdr.read_line(&*LINE).upcast();
+            let line = rdr.read_line_regex(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
@@ -247,10 +260,10 @@ mod test {
 
         let s = String::from_utf8(bs).unwrap();
         let c = Cursor::new(s.clone());
-        let mut rdr = super::Reader::new(c, chunk_size).unwrap();
+        let mut rdr = super::Reader::new(c, chunk_size);
         let mut lines = Vec::new();
         while !rdr.is_eof() {
-            let line = rdr.read_line(&*LINE).upcast();
+            let line = rdr.read_line_regex(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
