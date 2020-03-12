@@ -19,6 +19,30 @@ pub(crate) use crate::builtins::Variables;
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
+pub(crate) trait Line<'a> {
+    fn as_str(&self) -> &Str<'a>;
+    fn split(&self, pat: &Str, rc: &mut RegexCache, push: impl FnMut(Str<'a>)) -> Result<()>;
+    fn assign_from_str(&mut self, s: &Str<'a>);
+}
+
+pub(crate) trait LineReader {
+    type Line: for<'a> Line<'a>;
+    fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<Self::Line>;
+    fn read_state(&self) -> i64;
+}
+
+impl<'a> Line<'a> for Str<'static> {
+    fn as_str(&self) -> &Str<'a> {
+        self.upcast_ref()
+    }
+    fn split(&self, pat: &Str, rc: &mut RegexCache, mut push: impl FnMut(Str<'a>)) -> Result<()> {
+        rc.with_regex(pat, |re| self.split(re, |s| push(s.upcast())))
+    }
+    fn assign_from_str(&mut self, s: &Str<'a>) {
+        *self = s.clone().unmoor();
+    }
+}
+
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.
 pub(crate) type LazyVec<T> = Either<Vec<T>, IntMap<T>>;
@@ -99,7 +123,7 @@ impl<T: Default> LazyVec<T> {
 }
 
 #[derive(Default)]
-pub(crate) struct RegexCache(Registry<Regex>);
+pub struct RegexCache(Registry<Regex>);
 
 impl RegexCache {
     pub(crate) fn with_regex<T>(&mut self, pat: &Str, mut f: impl FnMut(&Regex) -> T) -> Result<T> {
@@ -112,27 +136,23 @@ impl RegexCache {
             |x| f(x),
         )
     }
-    pub(crate) fn get_line<'a>(
+    pub(crate) fn get_line<'a, LR: LineReader>(
         &mut self,
         file: &Str<'a>,
         pat: &Str<'a>,
-        reg: &mut FileRead,
+        reg: &mut FileRead<LR>,
     ) -> Result<Str<'a>> {
-        self.0.get_fallible(
-            pat,
-            |s| match Regex::new(s) {
-                Ok(r) => Ok(r),
-                Err(e) => err!("{}", e),
-            },
-            |re| reg.get_line(file, re),
-        )
+        Ok(reg
+            .with_file(file, |reader| reader.read_line(pat, self))?
+            .as_str()
+            .clone())
     }
-    pub(crate) fn get_line_stdin<'a>(
+    pub(crate) fn get_line_stdin<'a, LR: LineReader>(
         &mut self,
         pat: &Str<'a>,
-        reg: &mut FileRead,
+        reg: &mut FileRead<LR>,
     ) -> Result<Str<'a>> {
-        self.with_regex(pat, |re| reg.get_line_stdin(re))
+        Ok(reg.stdin.read_line(pat, self)?.as_str().clone())
     }
     pub(crate) fn split_regex<'a>(
         &mut self,
@@ -285,36 +305,33 @@ impl FileWrite {
 
 const CHUNK_SIZE: usize = 16 << 10;
 
-pub(crate) struct FileRead {
+pub(crate) struct FileRead<LR = splitter::Reader<Box<dyn io::Read>>> {
     files: Registry<splitter::Reader<File>>,
-    stdin: Option<splitter::Reader<Box<dyn io::Read>>>,
+    stdin: LR,
 }
 
 impl FileRead {
-    pub(crate) fn close(&mut self, path: &Str) {
-        self.files.remove(path);
-    }
-    pub(crate) fn new(r: impl io::Read + 'static) -> FileRead {
+    pub(crate) fn new_transitional(r: impl io::Read + 'static) -> FileRead {
         let d: Box<dyn io::Read> = Box::new(r);
         FileRead {
             files: Default::default(),
-            stdin: splitter::Reader::new(d, CHUNK_SIZE).ok(),
+            stdin: splitter::Reader::new(d, CHUNK_SIZE),
         }
     }
-    pub(crate) fn get_line_stdin<'a>(&mut self, pat: &Regex) -> Str<'a> {
-        match &mut self.stdin {
-            Some(s) => s.read_line(pat).upcast(),
-            None => "".into(),
+}
+
+impl<LR: LineReader> FileRead<LR> {
+    pub(crate) fn close(&mut self, path: &Str) {
+        self.files.remove(path);
+    }
+    pub(crate) fn new(stdin: LR) -> FileRead<LR> {
+        FileRead {
+            files: Default::default(),
+            stdin,
         }
     }
     pub(crate) fn read_err_stdin<'a>(&mut self) -> Int {
-        self.stdin
-            .as_ref()
-            .map(|s| s.read_state())
-            .unwrap_or(splitter::ReaderState::EOF as Int)
-    }
-    pub(crate) fn get_line<'a>(&mut self, path: &Str<'a>, pat: &Regex) -> Result<Str<'a>> {
-        self.with_file(path, |reader| Ok(reader.read_line(pat).upcast()))
+        self.stdin.read_state()
     }
     pub(crate) fn read_err<'a>(&mut self, path: &Str<'a>) -> Result<Int> {
         self.with_file(path, |reader| Ok(reader.read_state()))
@@ -327,7 +344,7 @@ impl FileRead {
         self.files.get_fallible(
             path,
             |s| match File::open(s) {
-                Ok(f) => Ok(splitter::Reader::new(f, CHUNK_SIZE)?),
+                Ok(f) => Ok(splitter::Reader::new(f, CHUNK_SIZE)),
                 Err(e) => err!("failed to open file '{}': {}", s, e),
             },
             f,
