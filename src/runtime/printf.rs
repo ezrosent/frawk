@@ -3,7 +3,7 @@
 /// We lean heavily on ryu and the std::fmt machinery; as such, most of the work is parsing
 /// awk-style format strings and translating them to individual calls to write!.
 use crate::common::Result;
-use crate::runtime::{convert, strton::strtoi, Float, Int, Str};
+use crate::runtime::{convert, strtoi, Float, Int, Str};
 
 use std::convert::TryFrom;
 use std::fmt;

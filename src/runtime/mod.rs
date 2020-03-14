@@ -9,13 +9,14 @@ use std::iter::FromIterator;
 use std::rc::Rc;
 
 pub mod csv;
+pub mod float_parse;
 pub mod printf;
 pub mod splitter;
 pub mod str_impl;
-pub mod strton;
 pub mod utf8;
 
 pub(crate) use crate::builtins::Variables;
+pub(crate) use float_parse::slow_path::{strtod, strtoi};
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
@@ -434,22 +435,22 @@ impl<'a> Convert<Float, Str<'a>> for _Carrier {
 }
 impl<'a> Convert<Str<'a>, Float> for _Carrier {
     fn convert(s: Str<'a>) -> Float {
-        s.with_str(strton::strtod)
+        s.with_str(strtod)
     }
 }
 impl<'a> Convert<Str<'a>, Int> for _Carrier {
     fn convert(s: Str<'a>) -> Int {
-        s.with_str(strton::strtoi)
+        s.with_str(strtoi)
     }
 }
 impl<'b, 'a> Convert<&'b Str<'a>, Float> for _Carrier {
     fn convert(s: &'b Str<'a>) -> Float {
-        s.with_str(strton::strtod)
+        s.with_str(strtod)
     }
 }
 impl<'b, 'a> Convert<&'b Str<'a>, Int> for _Carrier {
     fn convert(s: &'b Str<'a>) -> Int {
-        s.with_str(strton::strtoi)
+        s.with_str(strtoi)
     }
 }
 
