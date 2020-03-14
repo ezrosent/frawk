@@ -133,7 +133,7 @@ fn compute_float_64(power: i64, mut i: u64, negative: bool) -> Option<f64> {
 }
 
 #[allow(unreachable_code)]
-fn parse_number(s: &str) -> f64 {
+pub fn strtod(s: &str) -> f64 {
     if s.len() == 0 {
         return 0.0;
     }
@@ -279,11 +279,11 @@ mod tests {
     use super::*;
     #[test]
     fn basic_behavior() {
-        assert_eq!(parse_number("1.234"), 1.234);
-        assert_eq!(parse_number("1.234hello"), 1.234);
-        assert_eq!(parse_number("1.234E70hello"), 1.234E70);
-        assert_eq!(parse_number("752834029324532"), 752834029324532.0);
-        assert_eq!(parse_number(""), 0.0);
+        assert_eq!(strtod("1.234"), 1.234);
+        assert_eq!(strtod("1.234hello"), 1.234);
+        assert_eq!(strtod("1.234E70hello"), 1.234E70);
+        assert_eq!(strtod("752834029324532"), 752834029324532.0);
+        assert_eq!(strtod(""), 0.0);
     }
 }
 
@@ -1115,5 +1115,3 @@ const MANTISSA_128: &[u64] = &[
     0x1858ccfce06cac74, 0xf37801e0c43ebc8, 0xd30560258f54e6ba, 0x47c6b82ef32a2069,
     0x4cdc331d57fa5441, 0xe0133fe4adf8e952, 0x58180fddd97723a6, 0x570f09eaa7ea7648,
 ];
-
-pub fn _test() {}

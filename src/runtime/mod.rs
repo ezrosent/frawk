@@ -16,7 +16,7 @@ pub mod str_impl;
 pub mod utf8;
 
 pub(crate) use crate::builtins::Variables;
-pub(crate) use float_parse::slow_path::{strtod, strtoi};
+pub(crate) use float_parse::{slow_path::strtoi, strtod};
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
