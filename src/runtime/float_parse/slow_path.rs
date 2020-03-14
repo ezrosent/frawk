@@ -76,7 +76,6 @@ impl SmallCString {
 
 #[cfg(test)]
 mod tests {
-    use super::super::parse_number;
     use super::*;
     extern crate test;
     use test::{black_box, Bencher};
@@ -238,14 +237,14 @@ mod tests {
 
     #[bench]
     fn bench_strtod_long_fast(b: &mut Bencher) {
-        bench_strtod_long(b, parse_number)
+        bench_strtod_long(b, super::super::strtod)
     }
     #[bench]
     fn bench_strtod_medium_fast(b: &mut Bencher) {
-        bench_strtod_medium(b, parse_number)
+        bench_strtod_medium(b, super::super::strtod)
     }
     #[bench]
     fn bench_strtod_short_fast(b: &mut Bencher) {
-        bench_strtod_short(b, parse_number)
+        bench_strtod_short(b, super::super::strtod)
     }
 }
