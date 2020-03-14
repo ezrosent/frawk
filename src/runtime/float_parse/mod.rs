@@ -2,10 +2,11 @@
 /// semantics (no failures, just 0s and stopping early).
 use std::intrinsics::unlikely;
 use std::mem;
-pub(crate) mod slow_path;
+mod slow_path;
 
 // The simdjson repo has more optimizations to add for int parsing, but this is a big win over libc
-// for the time being.
+// for the time being, if only because we do not have to copy `s` into a NUL-terminated
+// representation.
 pub fn strtoi(s: &str) -> i64 {
     let bs = s.as_bytes();
     if bs.len() == 0 {
@@ -14,10 +15,7 @@ pub fn strtoi(s: &str) -> i64 {
     let neg = bs[0] == '-' as u8;
     let off = if neg || bs[0] == '+' as u8 { 1 } else { 0 };
     let mut i = 0i64;
-    for b in bs[off..].iter().cloned() {
-        if !is_integer(b) {
-            break;
-        }
+    for b in bs[off..].iter().cloned().take_while(|b| is_integer(*b)) {
         let digit = (b - '0' as u8) as i64;
         i = if let Some(i) = i.checked_mul(10).and_then(|i| i.checked_add(digit)) {
             i
@@ -208,11 +206,22 @@ pub fn strtod(s: &str) -> f64 {
         }
     }
 
-    fn return_int_handle_overflow(u: u64, digits: usize, orig: &str, start_digits: &[u8]) -> f64 {
+    fn return_int_handle_overflow(
+        u: u64,
+        neg: bool,
+        digits: usize,
+        orig: &str,
+        start_digits: &[u8],
+    ) -> f64 {
         if may_overflow(start_digits, digits) {
             slow_path::strtod(orig)
         } else {
-            u as f64
+            let res = u as f64;
+            if neg {
+                -res
+            } else {
+                res
+            }
         }
     }
     unsafe {
@@ -237,6 +246,7 @@ pub fn strtod(s: &str) -> f64 {
             i = i.wrapping_mul(10).wrapping_add(digit as u64);
             advance_or!(return_int_handle_overflow(
                 i,
+                negative,
                 start_digits.len() - cur.len(),
                 s,
                 start_digits
@@ -246,6 +256,7 @@ pub fn strtod(s: &str) -> f64 {
         if cur!() == '.' as u8 {
             advance_or!(return_int_handle_overflow(
                 i,
+                negative,
                 start_digits.len() - cur.len() - 1,
                 s,
                 start_digits
@@ -260,7 +271,6 @@ pub fn strtod(s: &str) -> f64 {
                 advance_or!(break);
             }
         }
-        // TODO: check this math re: 1
         let digit_count = start_digits.len() - cur.len() - 1;
         let mut exp_number = 0i64;
 
@@ -282,7 +292,7 @@ pub fn strtod(s: &str) -> f64 {
                     let digit = cur!() - '0' as u8;
                     exp_number = exp_number.wrapping_mul(10).wrapping_add(digit as i64);
                     if exp_number > 0x100000000 {
-                        // The exponent is overflowing? Let's just defer to the slow path.
+                        // Yikes! That's a big exponent. Let's just defer to the slow path.
                         return slow_path::strtod(s);
                     }
                     advance_or!(break);
@@ -304,6 +314,10 @@ pub fn strtod(s: &str) -> f64 {
     }
 }
 
+fn is_integer(c: u8) -> bool {
+    (c >= '0' as u8) && (c <= '9' as u8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,12 +328,15 @@ mod tests {
         assert_eq!(strtod("1.234E70hello"), 1.234E70);
         assert_eq!(strtod("752834029324532"), 752834029324532.0);
         assert_eq!(strtod(""), 0.0);
+        let imax = format!("{}", i64::max_value());
+        let imin = format!("{}", i64::min_value());
+        assert_eq!(strtod(imax.as_str()), i64::max_value() as f64);
+        assert_eq!(strtod(imin.as_str()), i64::min_value() as f64);
     }
 }
 
-fn is_integer(c: u8) -> bool {
-    (c >= '0' as u8) && (c <= '9' as u8)
-}
+// What follows is a bunch of precomputed values for powers of 10; it's unlikely to be very
+// interesting.
 
 // Precomputed explicit representations for the powers of 10 going from 10^FASTFLOAT_SMALLEST_POWER
 // to 10^FASTFLOAT_LARGEST_POWER. These basically correspond to subnormal values, which we do not

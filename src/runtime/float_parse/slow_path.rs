@@ -253,4 +253,16 @@ mod tests {
     fn bench_strtod_short_fast(b: &mut Bencher) {
         bench_strtod_short(b, super::super::strtod)
     }
+    #[bench]
+    fn bench_strtoi_long_fast(b: &mut Bencher) {
+        bench_strtoi_long(b, super::super::strtoi)
+    }
+    #[bench]
+    fn bench_strtoi_medium_fast(b: &mut Bencher) {
+        bench_strtoi_medium(b, super::super::strtoi)
+    }
+    #[bench]
+    fn bench_strtoi_short_fast(b: &mut Bencher) {
+        bench_strtoi_short(b, super::super::strtoi)
+    }
 }
