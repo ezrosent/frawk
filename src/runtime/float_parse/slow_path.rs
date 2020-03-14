@@ -76,6 +76,7 @@ impl SmallCString {
 
 #[cfg(test)]
 mod tests {
+    use super::super::parse_number;
     use super::*;
     extern crate test;
     use test::{black_box, Bencher};
@@ -167,7 +168,7 @@ mod tests {
         })
     }
     fn bench_strtod_medium(b: &mut Bencher, mut f: impl FnMut(&str) -> f64) {
-        const INPUT: &str = "9514590.99863318361683342512E22";
+        const INPUT: &str = "9514005346590.99863E10";
         b.iter(|| {
             black_box(f(INPUT));
         })
@@ -233,5 +234,18 @@ mod tests {
     #[bench]
     fn bench_strtod_short_libc(b: &mut Bencher) {
         bench_strtod_short(b, strtod_libc)
+    }
+
+    #[bench]
+    fn bench_strtod_long_fast(b: &mut Bencher) {
+        bench_strtod_long(b, parse_number)
+    }
+    #[bench]
+    fn bench_strtod_medium_fast(b: &mut Bencher) {
+        bench_strtod_medium(b, parse_number)
+    }
+    #[bench]
+    fn bench_strtod_short_fast(b: &mut Bencher) {
+        bench_strtod_short(b, parse_number)
     }
 }

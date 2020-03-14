@@ -3,7 +3,7 @@ use crate::{
   ast::{Pattern, Expr, Stmt, Binop, Unop, Prog, FunDec},
   builtins::Function,
   common::Either,
-  runtime::strton::{strtoi,strtod},
+  runtime::{strtoi,strtod},
   lexer::{self, Tok},
 };
 
