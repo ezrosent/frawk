@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use smallvec::SmallVec;
 
+#[allow(unused)]
 pub(crate) fn strtoi(s: &str) -> i64 {
     strtoi_libc(s)
 }
@@ -22,6 +23,7 @@ fn strtoi_libc(s: &str) -> i64 {
     unsafe { libc::strtol(cstr.as_ptr(), std::ptr::null_mut(), 10) as i64 }
 }
 
+#[allow(unused)]
 fn strtod_libc(s: &str) -> f64 {
     let cstr = SmallCString::from_str(s);
     unsafe { libc::strtod(cstr.as_ptr(), std::ptr::null_mut()) as f64 }
@@ -131,6 +133,10 @@ mod tests {
     #[test]
     fn test_strtoi_libc() {
         test_strtoi(strtoi_libc);
+    }
+    #[test]
+    fn test_strtoi_fast() {
+        test_strtoi(super::super::strtoi);
     }
 
     #[test]

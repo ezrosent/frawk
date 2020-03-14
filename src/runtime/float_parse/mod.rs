@@ -4,6 +4,37 @@ use std::intrinsics::unlikely;
 use std::mem;
 pub(crate) mod slow_path;
 
+// The simdjson repo has more optimizations to add for int parsing, but this is a big win over libc
+// for the time being.
+pub fn strtoi(s: &str) -> i64 {
+    let bs = s.as_bytes();
+    if bs.len() == 0 {
+        return 0;
+    }
+    let neg = bs[0] == '-' as u8;
+    let off = if neg || bs[0] == '+' as u8 { 1 } else { 0 };
+    let mut i = 0i64;
+    for b in bs[off..].iter().cloned() {
+        if !is_integer(b) {
+            break;
+        }
+        let digit = (b - '0' as u8) as i64;
+        i = if let Some(i) = i.checked_mul(10).and_then(|i| i.checked_add(digit)) {
+            i
+        } else {
+            // overflow
+            return 0;
+        }
+    }
+    if neg {
+        -i
+    } else {
+        i
+    }
+}
+
+// And now, for floats
+
 #[derive(Copy, Clone)]
 struct Explicit {
     mantissa: u64,
@@ -28,7 +59,6 @@ fn compute_float_64(power: i64, mut i: u64, negative: bool) -> Option<f64> {
     debug_assert!(power <= FASTFLOAT_LARGEST_POWER);
     debug_assert_ne!(i, 0);
     // Very fast path: we can fit in 53 bits. We can just dump i in an f64 and multiply.
-    const MANTISSA_BITS: u64 = 53;
     const MAX_MANTISSA: u64 = (1 << 53) - 1;
     if -22 <= power && power <= 22 && i <= MAX_MANTISSA {
         let mut d = i as f64;
@@ -289,31 +319,6 @@ mod tests {
 
 fn is_integer(c: u8) -> bool {
     (c >= '0' as u8) && (c <= '9' as u8)
-}
-
-#[inline(always)]
-fn is_not_structural_or_whitespace_or_exponent_or_decimal(c: u8) -> bool {
-    const TABLE: [bool; 256] = [
-        true, true, true, true, true, true, true, true, true, false, false, true, true, false,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, false, true, true, true, true, true, true, true, true, true, true, true,
-        false, true, false, true, true, true, true, true, true, true, true, true, true, true,
-        false, true, true, true, true, true, true, true, true, true, true, false, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, false, true, false, true, true, true, true, true, true, true, false,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, false, true, false, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        true, true, true, true,
-    ];
-    TABLE[c as usize]
 }
 
 // Precomputed explicit representations for the powers of 10 going from 10^FASTFLOAT_SMALLEST_POWER
