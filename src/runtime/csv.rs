@@ -1,12 +1,128 @@
-#[allow(unused)]
 /// A WIP port (with modifications) of geofflangdale/simdcsv.
+use std::str;
+
+use super::Str;
 
 #[derive(Default)]
-struct Offsets {
+pub struct Offsets {
+    start: usize,
     // NB We're using u64s to potentially handle huge input streams.
     // An alternative option would be to save lines and fields in separate vectors, but this is
     // more efficient for iteration
     fields: Vec<u64>,
+}
+
+#[derive(Default)]
+pub struct Line {
+    raw: Str<'static>,
+    fields: Vec<Str<'static>>,
+}
+
+#[derive(Clone)]
+enum CSVState {
+    Complete(usize /*consumed*/),
+    Partial(
+        bool,         /*split escape*/
+        usize,        /* line_start */
+        Str<'static>, /*partial record */
+    ),
+}
+
+impl Offsets {
+    unsafe fn read_line(&mut self, buf: &Str<'static>) -> (Line, CSVState) {
+        let bs = &*buf.get_bytes();
+        let mut line = Line::default();
+        let line_start = self.start;
+        let mut prev_ix = self.start;
+        const COMMA: u8 = ',' as u8;
+        const QUOTE: u8 = '"' as u8;
+        const NL: u8 = '\n' as u8;
+        const BS: u8 = '\\' as u8;
+        if self.start == self.fields.len() {
+            return (line, CSVState::Complete(self.start));
+        }
+        let mut iter = self.fields[self.start..].iter().map(|x| *x as usize);
+        while let Some(ix) = iter.next() {
+            match *bs.get_unchecked(ix) {
+                COMMA => {
+                    let rec = buf.slice(prev_ix, ix);
+                    line.fields.push(rec);
+                    prev_ix = ix + 1;
+                }
+                NL => {
+                    let rec = buf.slice(prev_ix, ix);
+                    line.fields.push(rec);
+                    line.raw = buf.slice(line_start, ix);
+                    return (line, CSVState::Complete(ix + 1));
+                }
+                QUOTE => {
+                    // For now, we treat fields like
+                    //  ,Unquoted text"quoted ""text\n""",
+                    // As though the unquoted and quoted portions are concatenated, with escaping
+                    // only performed inside quotes.
+                    let mut rec = buf.slice(prev_ix, ix);
+                    let mut last_quote = ix;
+                    let mut in_quote = true;
+                    while let Some(inner_ix) = iter.next() {
+                        // This can happen when we look ahead one character and consumer it, e.g.
+                        // with escaped backslashes.
+                        if inner_ix < prev_ix {
+                            continue;
+                        }
+                        rec = Str::concat(rec, buf.slice(prev_ix, inner_ix));
+                        match *bs.get_unchecked(ix) {
+                            COMMA => {
+                                line.fields.push(rec);
+                                prev_ix = inner_ix + 1;
+                                break;
+                            }
+                            QUOTE => {
+                                if in_quote && inner_ix == last_quote + 1 {
+                                    rec = Str::concat(rec, "\"".into());
+                                    in_quote = true;
+                                } else if in_quote {
+                                    in_quote = false;
+                                } else {
+                                    last_quote = ix;
+                                    in_quote = true;
+                                }
+                                prev_ix = inner_ix + 1;
+                            }
+                            BS => {
+                                // NB Using that padding we require.
+                                let mut not_escaped = ['\\' as u8, 0];
+                                if ix == bs.len() {
+                                    return (line, CSVState::Partial(true, line_start, rec));
+                                }
+                                let res = match *bs.get_unchecked(ix + 1) as char {
+                                    'n' => "\n",
+                                    't' => "\t",
+                                    '\\' => "\\",
+                                    c => {
+                                        not_escaped[1] = c as u8;
+                                        str::from_utf8_unchecked(&not_escaped[..])
+                                    }
+                                };
+                                rec = Str::concat(rec, Str::from(res).unmoor());
+                                prev_ix = inner_ix + 2;
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+
+                _x => {
+                    // We should only hit a backslash while we are handling a quote.
+                    debug_assert_ne!(_x, BS);
+                    unreachable!()
+                }
+            }
+        }
+        (
+            line,
+            CSVState::Partial(false, line_start, buf.slice(prev_ix, bs.len())),
+        )
+    }
 }
 
 // TODO: store what character we have in the high bits? or maybe just use prefetching to read the

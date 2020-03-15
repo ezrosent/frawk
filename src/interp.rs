@@ -7,7 +7,7 @@ use crate::runtime::{self, Float, Int, LazyVec, Line, LineReader, Str};
 
 use std::cmp;
 
-type ClassicReader = runtime::splitter::Reader<Box<dyn std::io::Read>>;
+type ClassicReader = runtime::splitter::RegexSplitter<Box<dyn std::io::Read>>;
 
 #[derive(Default)]
 pub(crate) struct Storage<T> {

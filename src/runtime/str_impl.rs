@@ -557,7 +557,7 @@ impl<'a> Str<'a> {
     }
 
     // Avoid using this function; subsequent immutable calls to &self can invalidate the pointer.
-    fn get_bytes(&self) -> *const [u8] {
+    pub fn get_bytes(&self) -> *const [u8] {
         let rep = unsafe { self.rep_mut() };
         let tag = rep.get_tag();
         unsafe {
