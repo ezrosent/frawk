@@ -15,6 +15,8 @@ pub mod splitter;
 pub mod str_impl;
 pub mod utf8;
 
+use splitter::RegexSplitter;
+
 pub(crate) use crate::builtins::Variables;
 pub(crate) use float_parse::{strtod, strtoi};
 pub(crate) use printf::FormatArg;
@@ -306,8 +308,8 @@ impl FileWrite {
 
 const CHUNK_SIZE: usize = 16 << 10;
 
-pub(crate) struct FileRead<LR = splitter::Reader<Box<dyn io::Read>>> {
-    files: Registry<splitter::Reader<File>>,
+pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read>>> {
+    files: Registry<RegexSplitter<File>>,
     stdin: LR,
 }
 
@@ -316,7 +318,7 @@ impl FileRead {
         let d: Box<dyn io::Read> = Box::new(r);
         FileRead {
             files: Default::default(),
-            stdin: splitter::Reader::new(d, CHUNK_SIZE),
+            stdin: RegexSplitter::new(d, CHUNK_SIZE),
         }
     }
 }
@@ -340,12 +342,12 @@ impl<LR: LineReader> FileRead<LR> {
     fn with_file<'a, R>(
         &mut self,
         path: &Str<'a>,
-        f: impl FnMut(&mut splitter::Reader<File>) -> Result<R>,
+        f: impl FnMut(&mut RegexSplitter<File>) -> Result<R>,
     ) -> Result<R> {
         self.files.get_fallible(
             path,
             |s| match File::open(s) {
-                Ok(f) => Ok(splitter::Reader::new(f, CHUNK_SIZE)),
+                Ok(f) => Ok(RegexSplitter::new(f, CHUNK_SIZE)),
                 Err(e) => err!("failed to open file '{}': {}", s, e),
             },
             f,

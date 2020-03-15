@@ -3,6 +3,7 @@
 //!
 //! In addition to this API, it also handles reading in chunks, with appropriate handling of UTF8
 //! characters that cross chunk boundaries, or multi-chunk "lines".
+use super::csv;
 use super::str_impl::{Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
 use super::LineReader;
@@ -21,17 +22,17 @@ pub(crate) enum ReaderState {
     OK = 1,
 }
 
-impl<R: Read> LineReader for Reader<R> {
+impl<R: Read> LineReader for RegexSplitter<R> {
     type Line = Str<'static>;
     fn read_line(&mut self, pat: &Str, rc: &mut super::RegexCache) -> Result<Self::Line> {
         rc.with_regex(pat, |re| self.read_line_regex(re))
     }
     fn read_state(&self) -> i64 {
-        match self.state {
-            ReaderState::OK => self.state as i64,
+        match self.0.state {
+            ReaderState::OK => self.0.state as i64,
             ReaderState::ERROR | ReaderState::EOF => {
-                if self.last_len == 0 {
-                    self.state as i64
+                if self.0.last_len == 0 {
+                    self.0.state as i64
                 } else {
                     ReaderState::OK as i64
                 }
@@ -40,7 +41,72 @@ impl<R: Read> LineReader for Reader<R> {
     }
 }
 
-pub(crate) struct Reader<R> {
+pub struct RegexSplitter<R>(Reader<R>);
+
+impl<R: Read> RegexSplitter<R> {
+    pub fn new(r: R, chunk_size: usize) -> Self {
+        RegexSplitter(Reader::new(r, chunk_size))
+    }
+
+    fn read_line_regex(&mut self, pat: &Regex) -> Str<'static> {
+        // We keep this as a separate method because it helps in writing tests.
+        let res = self.read_line_inner(pat);
+        self.0.last_len = res.len();
+        res
+    }
+
+    fn read_line_inner(&mut self, pat: &Regex) -> Str<'static> {
+        macro_rules! handle_err {
+            ($e:expr) => {
+                if let Ok(e) = $e {
+                    e
+                } else {
+                    self.0.state = ReaderState::ERROR;
+                    return Str::default();
+                }
+            };
+        }
+        let mut prefix: Str<'static> = Default::default();
+        if self.0.is_eof() {
+            return prefix;
+        }
+        self.0.state = ReaderState::OK;
+        loop {
+            // Why this map invocation? Match objects hold a reference to the substring, which
+            // makes it harder for us to call mutable methods like advance in the body, so just get
+            // the start and end pointers.
+            match self
+                .0
+                .cur
+                .with_str(|s| pat.find(s).map(|m| (m.start(), m.end())))
+            {
+                Some((start, end)) => {
+                    let res = self.0.cur.slice(0, start);
+                    // NOTE if we get a read error here, then we will stop one line early.
+                    // That seems okay, but we could find out that it actually isn't, in which case
+                    // we would want some more complicated error handling here.
+                    handle_err!(self.0.advance(end));
+                    return if prefix.with_str(|s| s.len() > 0) {
+                        Str::concat(prefix, res.into())
+                    } else {
+                        res.into()
+                    };
+                }
+                None => {
+                    let cur: Str = self.0.cur.clone();
+                    handle_err!(self.0.advance(self.0.cur.len()));
+                    prefix = Str::concat(prefix, cur);
+                    if self.0.is_eof() {
+                        // All done! Just return the rest of the buffer.
+                        return prefix;
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct Reader<R> {
     inner: R,
     // The "stray bytes" that will be prepended to the next buffer.
     prefix: SmallVec<[u8; 8]>,
@@ -75,6 +141,39 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
     Ok(read)
 }
 
+struct CSVReader<R> {
+    inner: Reader<R>,
+    cur_offsets: csv::Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+}
+
+impl<R: Read> CSVReader<R> {
+    pub fn new(r: R, chunk_size: usize) -> Self {
+        CSVReader {
+            inner: Reader::new(r, chunk_size),
+            cur_offsets: Default::default(),
+            prev_iter_inside_quote: 0,
+            prev_iter_cr_end: 0,
+        }
+    }
+    pub fn read_line(&mut self) -> csv::Line {
+        // TODO we need to propagate "in quote"-ness from the offset calculation, as well as store
+        // the loop variables from the offset computation in this struct to we can pass them on.
+        // 1. if cur_offsets is exhausted, assert that cur is empty and then fetch a new buffer,
+        //    compute its offsets in one batch.
+        //
+        // 2. with offsets left, get a line based on self.inner.cur. Note: do not advance until the
+        //    buffer is exhausted! If the line is complete, return it.
+        // 3. If the line is partial, then get the next buffer and if it's a "split escape" handle
+        //    the escaping based on the first character (appending it to the line and last record).
+        //
+        //    Then, compute the next line from the new buffer and merge it with the last one.
+        //    Iterate this operation until we get a complete line, then return it.
+        unimplemented!()
+    }
+}
+
 impl<R: Read> Reader<R> {
     pub(crate) fn new(r: R, chunk_size: usize) -> Self {
         let res = Reader {
@@ -92,59 +191,6 @@ impl<R: Read> Reader<R> {
         self.cur.len() == 0 && self.state == ReaderState::EOF
     }
 
-    fn read_line_regex(&mut self, pat: &Regex) -> Str<'static> {
-        // We keep this as a separate method because it helps in writing tests.
-        let res = self.read_line_inner(pat);
-        self.last_len = res.len();
-        res
-    }
-
-    fn read_line_inner(&mut self, pat: &Regex) -> Str<'static> {
-        macro_rules! handle_err {
-            ($e:expr) => {
-                if let Ok(e) = $e {
-                    e
-                } else {
-                    self.state = ReaderState::ERROR;
-                    return "".into();
-                }
-            };
-        }
-        self.state = ReaderState::OK;
-        let mut prefix: Str<'static> = Default::default();
-        loop {
-            // Why this map invocation? Match objects hold a reference to the substring, which
-            // makes it harder for us to call mutable methods like advance in the body, so just get
-            // the start and end pointers.
-            match self
-                .cur
-                .with_str(|s| pat.find(s).map(|m| (m.start(), m.end())))
-            {
-                Some((start, end)) => {
-                    let res = self.cur.slice(0, start);
-                    // NOTE if we get a read error here, then we will stop one line early.
-                    // That seems okay, but we could find out that it actually isn't, in which case
-                    // we would want some more complicated error handling here.
-                    handle_err!(self.advance(end));
-                    return if prefix.with_str(|s| s.len() > 0) {
-                        Str::concat(prefix, res.into())
-                    } else {
-                        res.into()
-                    };
-                }
-                None => {
-                    let cur: Str = self.cur.clone();
-                    handle_err!(self.advance(self.cur.len()));
-                    prefix = Str::concat(prefix, cur);
-                    if self.is_eof() {
-                        // All done! Just return the rest of the buffer.
-                        return prefix;
-                    }
-                }
-            }
-        }
-    }
-
     fn advance(&mut self, n: usize) -> Result<()> {
         let len = self.cur.len();
         if len > n {
@@ -160,11 +206,15 @@ impl<R: Read> Reader<R> {
         self.cur = self.get_next_buf()?;
         self.advance(residue)
     }
+
     fn get_next_buf(&mut self) -> Result<Str<'static>> {
+        // For CSV
+        // TODO disable for regex-based splitting.
+        const PADDING: usize = 32;
         let mut done = false;
         // NB: UniqueBuf fills the allocation with zeros.
-        let mut data = UniqueBuf::new(self.chunk_size);
-        let mut bytes = data.as_mut_bytes();
+        let mut data = UniqueBuf::new(self.chunk_size + PADDING);
+        let mut bytes = &mut data.as_mut_bytes()[..self.chunk_size];
         for (i, b) in self.prefix.iter().cloned().enumerate() {
             bytes[i] = b;
         }
@@ -231,9 +281,9 @@ mod test {
         let chunk_size = 1 << 9;
         let bs: String = crate::test_string_constants::PRIDE_PREJUDICE_CH2.into();
         let c = Cursor::new(bs.clone());
-        let mut rdr = super::Reader::new(c, chunk_size);
+        let mut rdr = super::RegexSplitter::new(c, chunk_size);
         let mut lines = Vec::new();
-        while !rdr.is_eof() {
+        while !rdr.0.is_eof() {
             let line = rdr.read_line_regex(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
@@ -260,9 +310,9 @@ mod test {
 
         let s = String::from_utf8(bs).unwrap();
         let c = Cursor::new(s.clone());
-        let mut rdr = super::Reader::new(c, chunk_size);
+        let mut rdr = super::RegexSplitter::new(c, chunk_size);
         let mut lines = Vec::new();
-        while !rdr.is_eof() {
+        while !rdr.0.is_eof() {
             let line = rdr.read_line_regex(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
