@@ -144,6 +144,7 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
 struct CSVReader<R> {
     inner: Reader<R>,
     cur_offsets: csv::Offsets,
+    prev_ix: usize,
     prev_iter_inside_quote: u64,
     prev_iter_cr_end: u64,
 }
@@ -153,24 +154,58 @@ impl<R: Read> CSVReader<R> {
         CSVReader {
             inner: Reader::new(r, chunk_size),
             cur_offsets: Default::default(),
+            prev_ix: 0,
             prev_iter_inside_quote: 0,
             prev_iter_cr_end: 0,
         }
     }
-    pub fn read_line(&mut self) -> csv::Line {
-        // TODO we need to propagate "in quote"-ness from the offset calculation, as well as store
-        // the loop variables from the offset computation in this struct to we can pass them on.
-        // 1. if cur_offsets is exhausted, assert that cur is empty and then fetch a new buffer,
-        //    compute its offsets in one batch.
-        //
-        // 2. with offsets left, get a line based on self.inner.cur. Note: do not advance until the
-        //    buffer is exhausted! If the line is complete, return it.
-        // 3. If the line is partial, then get the next buffer and if it's a "split escape" handle
-        //    the escaping based on the first character (appending it to the line and last record).
-        //
-        //    Then, compute the next line from the new buffer and merge it with the last one.
-        //    Iterate this operation until we get a complete line, then return it.
-        unimplemented!()
+    fn refresh_buf(&mut self) -> Result<bool> {
+        // exhausted. Fetch a new `cur`.
+        self.inner.advance(self.inner.cur.len())?;
+        if self.inner.is_eof() {
+            return Ok(true);
+        }
+        let (next_iq, next_cre) = unsafe {
+            csv::find_indexes(
+                &*self.inner.cur.get_bytes(),
+                &mut self.cur_offsets,
+                self.prev_iter_inside_quote,
+                self.prev_iter_cr_end,
+            )
+        };
+        self.prev_iter_inside_quote = next_iq;
+        self.prev_iter_cr_end = next_cre;
+        Ok(false)
+    }
+    fn stepper(&mut self, st: csv::State, line: csv::Line) -> csv::Stepper {
+        csv::Stepper {
+            buf: &self.inner.cur,
+            off: &mut self.cur_offsets,
+            prev_ix: self.prev_ix,
+            line,
+            st,
+        }
+    }
+    pub fn read_line(&mut self) -> Result<csv::Line> {
+        if self.prev_ix == self.inner.cur.len() {
+            if self.refresh_buf()? {
+                return Ok(csv::Line::default());
+            }
+        }
+        let mut st = csv::State::Init;
+        let mut line = csv::Line::default();
+        loop {
+            let mut stepper = self.stepper(st, line);
+            line = unsafe { stepper.step() };
+            if let csv::State::Done = stepper.st {
+                return Ok(line);
+            }
+            st = stepper.st;
+            if self.refresh_buf()? {
+                line.promote();
+                return Ok(line);
+            }
+        }
     }
 }
 

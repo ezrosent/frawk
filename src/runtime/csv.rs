@@ -1,11 +1,13 @@
 /// A WIP port (with modifications) of geofflangdale/simdcsv.
+use std::mem;
 use std::str;
 
 use super::Str;
+use crate::common::Result;
 
 #[derive(Default)]
 pub struct Offsets {
-    start: usize,
+    pub start: usize,
     // NB We're using u64s to potentially handle huge input streams.
     // An alternative option would be to save lines and fields in separate vectors, but this is
     // more efficient for iteration
@@ -16,135 +18,189 @@ pub struct Offsets {
 pub struct Line {
     raw: Str<'static>,
     fields: Vec<Str<'static>>,
+    partial: Str<'static>,
 }
 
-#[derive(Clone)]
-enum CSVState {
-    Complete(usize /*consumed*/),
-    Partial(
-        bool,         /*split escape*/
-        usize,        /* line_start */
-        Str<'static>, /*partial record */
-    ),
+impl<'a> super::Line<'a> for Line {
+    fn as_str(&self) -> &Str<'a> {
+        &self.raw.upcast_ref()
+    }
+    fn split(
+        &self,
+        _pat: &Str,
+        _rc: &mut super::RegexCache,
+        mut push: impl FnMut(Str<'a>),
+    ) -> Result<()> {
+        for f in self.fields.iter().cloned() {
+            push(f.upcast())
+        }
+        Ok(())
+    }
+
+    fn assign_from_str(&mut self, _s: &Str<'a>) {}
 }
 
-impl Offsets {
-    unsafe fn read_line(&mut self, buf: &Str<'static>) -> (Line, CSVState) {
-        let bs = &*buf.get_bytes();
-        let mut line = Line::default();
-        let line_start = self.start;
-        let mut prev_ix = self.start;
+impl Line {
+    pub fn promote(&mut self) {
+        let partial = mem::replace(&mut self.partial, Str::default());
+        self.fields.push(partial);
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum State {
+    Init,
+    BS,
+    Quote,
+    QuoteInQuote,
+    Done,
+}
+
+pub struct Stepper<'a> {
+    pub buf: &'a Str<'static>,
+    pub off: &'a mut Offsets,
+    pub prev_ix: usize,
+    pub st: State,
+    pub line: Line,
+}
+
+impl<'a> Stepper<'a> {
+    fn append(&mut self, s: Str<'static>) {
+        let partial = mem::replace(&mut self.line.raw, Str::default());
+        self.line.partial = Str::concat(partial, s);
+    }
+    fn append_slice(&mut self, i: usize, j: usize) {
+        self.append(self.buf.slice(i, j));
+    }
+    fn push_past(&mut self, i: usize) {
+        self.append_slice(self.prev_ix, i);
+        self.prev_ix = i + 1;
+    }
+    pub fn promote(&mut self) {
+        self.line.promote();
+    }
+
+    fn get(&mut self, line_start: usize, j: usize, cur: usize) -> Line {
+        self.off.start = cur;
+        let line = mem::replace(&mut self.line.raw, Str::default());
+        self.line.raw = Str::concat(line, self.buf.slice(line_start, j));
+        mem::replace(&mut self.line, Line::default())
+    }
+    pub unsafe fn step(&mut self) -> Line {
         const COMMA: u8 = ',' as u8;
         const QUOTE: u8 = '"' as u8;
         const NL: u8 = '\n' as u8;
         const BS: u8 = '\\' as u8;
-        if self.start == self.fields.len() {
-            return (line, CSVState::Complete(self.start));
+        let line_start = self.prev_ix;
+        let bs = &*self.buf.get_bytes();
+        let mut cur = self.off.start;
+        macro_rules! get_next {
+            () => {
+                if cur == self.off.fields.len() {
+                    self.push_past(bs.len());
+                    return self.get(line_start, bs.len(), cur);
+                } else {
+                    let res = *self.off.fields.get_unchecked(cur) as usize;
+                    cur += 1;
+                    res
+                }
+            };
         }
-        let mut iter = self.fields[self.start..].iter().map(|x| *x as usize);
-        while let Some(ix) = iter.next() {
-            match *bs.get_unchecked(ix) {
-                COMMA => {
-                    let rec = buf.slice(prev_ix, ix);
-                    line.fields.push(rec);
-                    prev_ix = ix + 1;
-                }
-                NL => {
-                    let rec = buf.slice(prev_ix, ix);
-                    line.fields.push(rec);
-                    line.raw = buf.slice(line_start, ix);
-                    return (line, CSVState::Complete(ix + 1));
-                }
-                QUOTE => {
-                    // For now, we treat fields like
-                    //  ,Unquoted text"quoted ""text\n""",
-                    // As though the unquoted and quoted portions are concatenated, with escaping
-                    // only performed inside quotes.
-                    let mut rec = buf.slice(prev_ix, ix);
-                    let mut last_quote = ix;
-                    let mut in_quote = true;
-                    while let Some(inner_ix) = iter.next() {
-                        // This can happen when we look ahead one character and consumer it, e.g.
-                        // with escaped backslashes.
-                        if inner_ix < prev_ix {
+        'outer: loop {
+            match self.st {
+                State::Init => loop {
+                    let ix = get_next!();
+                    match *bs.get_unchecked(ix) {
+                        COMMA => {
+                            self.push_past(ix);
+                            self.promote();
                             continue;
                         }
-                        rec = Str::concat(rec, buf.slice(prev_ix, inner_ix));
-                        match *bs.get_unchecked(ix) {
-                            COMMA => {
-                                line.fields.push(rec);
-                                prev_ix = inner_ix + 1;
-                                break;
-                            }
-                            QUOTE => {
-                                if in_quote && inner_ix == last_quote + 1 {
-                                    rec = Str::concat(rec, "\"".into());
-                                    in_quote = true;
-                                } else if in_quote {
-                                    in_quote = false;
-                                } else {
-                                    last_quote = ix;
-                                    in_quote = true;
-                                }
-                                prev_ix = inner_ix + 1;
-                            }
-                            BS => {
-                                // NB Using that padding we require.
-                                let mut not_escaped = ['\\' as u8, 0];
-                                if ix == bs.len() {
-                                    return (line, CSVState::Partial(true, line_start, rec));
-                                }
-                                let res = match *bs.get_unchecked(ix + 1) as char {
-                                    'n' => "\n",
-                                    't' => "\t",
-                                    '\\' => "\\",
-                                    c => {
-                                        not_escaped[1] = c as u8;
-                                        str::from_utf8_unchecked(&not_escaped[..])
-                                    }
-                                };
-                                rec = Str::concat(rec, Str::from(res).unmoor());
-                                prev_ix = inner_ix + 2;
-                            }
-                            _ => unreachable!(),
+                        NL => {
+                            self.push_past(ix);
+                            self.promote();
+                            self.st = State::Done;
+                            return self.get(line_start, ix, cur);
                         }
+                        QUOTE => {
+                            self.push_past(ix);
+                            self.st = State::Quote;
+                            continue 'outer;
+                        }
+                        _ => unreachable!(),
+                    }
+                },
+                State::Quote => {
+                    let ix = get_next!();
+                    match *bs.get_unchecked(ix) {
+                        QUOTE => {
+                            self.push_past(ix);
+                            self.st = State::QuoteInQuote;
+                            continue;
+                        }
+                        BS => {
+                            self.push_past(ix);
+                            self.st = State::BS;
+                            continue;
+                        }
+                        _ => unreachable!(),
                     }
                 }
-
-                _x => {
-                    // We should only hit a backslash while we are handling a quote.
-                    debug_assert_ne!(_x, BS);
-                    unreachable!()
+                State::QuoteInQuote => {
+                    // We've just seen a " inside a ", it could be the end of the quote, or it
+                    // could be an escaped quote. We peek ahead one character and check.
+                    if bs.len() == self.prev_ix {
+                        // We are past the end! Let's pick this up later.
+                        // We had better not have any more offsets in the stream!
+                        debug_assert_eq!(self.off.fields.len(), cur);
+                        return self.get(line_start, bs.len(), cur);
+                    }
+                    if *bs.get_unchecked(self.prev_ix) == QUOTE {
+                        self.append("\"".into());
+                        self.st = State::Quote;
+                    } else {
+                        self.st = State::Init;
+                    }
                 }
+                // TODO: CR/LF
+                State::BS => {
+                    if bs.len() == self.prev_ix {
+                        debug_assert_eq!(self.off.fields.len(), cur);
+                        return self.get(line_start, bs.len(), cur);
+                    }
+                    const N: u8 = 'n' as u8;
+                    const T: u8 = 't' as u8;
+                    match *bs.get_unchecked(self.prev_ix) {
+                        N => self.append("\n".into()),
+                        T => self.append("\t".into()),
+                        BS => self.append("\\".into()),
+                        x => {
+                            let buf = &[x];
+                            let s: Str<'static> = Str::concat(
+                                "\\".into(),
+                                Str::from(str::from_utf8_unchecked(buf)).unmoor(),
+                            );
+                            self.append(s);
+                        }
+                    }
+                    self.st = State::Quote;
+                }
+                State::Done => panic!("cannot start in Done state"),
             }
         }
-        (
-            line,
-            CSVState::Partial(false, line_start, buf.slice(prev_ix, bs.len())),
-        )
     }
 }
 
-// TODO: store what character we have in the high bits? or maybe just use prefetching to read the
-//       proper locations.
-// TODO: materialize
-// TODO: consider the model we want: we may want to compute `Offsets` in a big batch, but do this
-// work on a line-by-line basis.
-//  iterate over fields:
-//    Keep track of previous location, initialize at 0. Iterate over `fields` and case-analyze the
-//    pointed-to character. A few of these will rely on having 0s padding the end.
-//    if we have a comma, append slice of [prev, loc of comma) to current record.
-//    if we have a newline, append slice of [prev, loc of comma) to current record and append
-//      record to output.
-//    if we have a quote, check ahead one and if it's a quote append the quote, otherwise do
-//      nothing.
-//    if we have a backslash, check ahead and escape appropriately, consider about whether to
-//      return an error or just append the slash if we don't see it. (maybe this can be a table
-//      lookup)
-// TODO: API,
-//  We could add new instruction (get_line_csv)..
-//  Seems like it would be better to stub this out with its own API. We could make it a template
-//  parameter to the runtime, have "split" and "getline" methods.
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn find_indexes(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    // TODO: cross-platform, sse2 version
+    avx2::find_indexes(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
 
 #[cfg(target_arch = "x86_64")]
 #[allow(unused)]
@@ -267,7 +323,7 @@ mod avx2 {
 
     // unsafe because `buf` must have padding 32 bytes past the end, and has to have its length be
     // a multiple of 64.
-    unsafe fn find_indexes(
+    pub unsafe fn find_indexes(
         buf: &[u8],
         offsets: &mut Offsets,
         mut prev_iter_inside_quote: u64, /*start at 0*/
@@ -275,6 +331,7 @@ mod avx2 {
     ) -> (u64, u64) {
         // debug_assert_eq!(buf.len() % INPUT_SIZE, 0);
         offsets.fields.clear();
+        offsets.start = 0;
         // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
         // reuse this across different chunks.
         offsets.fields.reserve(buf.len());
