@@ -345,6 +345,11 @@ impl<'a> Str<'a> {
                 b.into_str()
             }
         } else {
+            // TODO: we can add another case here. If `left` is boxed and has a refcount of 1, we
+            // can move it into a dynamicbuf and push `right` onto it, avoiding the heap
+            // allocation. We _only_ want to do this if we reevaluate the `realloc` that DynamicBuf
+            // does when you convert it back into a string, though. We would have to keep a
+            // capacity around as well as a length.
             let concat = Concat {
                 len: new_len as u64,
                 inner: Rc::new(ConcatInner { left, right }),

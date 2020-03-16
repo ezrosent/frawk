@@ -31,6 +31,16 @@ pub(crate) trait Line<'a> {
 pub(crate) trait LineReader {
     type Line: for<'a> Line<'a>;
     fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<Self::Line>;
+    fn read_line_reuse(
+        &mut self,
+        pat: &Str,
+        rc: &mut RegexCache,
+        old: &mut Self::Line,
+    ) -> Result<()> {
+        let mut new = self.read_line(pat, rc)?;
+        std::mem::swap(old, &mut new);
+        Ok(())
+    }
     fn read_state(&self) -> i64;
 }
 
@@ -139,6 +149,12 @@ impl RegexCache {
             |x| f(x),
         )
     }
+    // TODO: refactor get_line to consume a &mut LR::Line (do that for both interp and llvm)
+    // TODO: implement LineReader for CSVReader
+    // TODO: build constructor, CLI options for the interp path, see that it works.
+    // TODO: build the same path and implement handling for LLVM (no polymorphism, just do an
+    // Either<> of either the CSV or legacy paths).
+    // TODO: add tests for the CSV path (including plumbing in harness to get all of that working).
     pub(crate) fn get_line<'a, LR: LineReader>(
         &mut self,
         file: &Str<'a>,
