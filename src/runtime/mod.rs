@@ -31,11 +31,11 @@ pub(crate) trait Line<'a> {
 pub(crate) trait LineReader {
     type Line: for<'a> Line<'a>;
     fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<Self::Line>;
-    fn read_line_reuse(
-        &mut self,
+    fn read_line_reuse<'a, 'b: 'a>(
+        &'b mut self,
         pat: &Str,
         rc: &mut RegexCache,
-        old: &mut Self::Line,
+        old: &'a mut Self::Line,
     ) -> Result<()> {
         let mut new = self.read_line(pat, rc)?;
         std::mem::swap(old, &mut new);
@@ -149,8 +149,8 @@ impl RegexCache {
             |x| f(x),
         )
     }
-    // TODO: refactor get_line to consume a &mut LR::Line (do that for both interp and llvm)
-    // TODO: implement LineReader for CSVReader
+    // TODO: refactor LR, etc. so it also includes split_line? That way we wont even have to copy
+    // to get things into the existing splitting infrastructure. It also hides LazyVec.
     // TODO: build constructor, CLI options for the interp path, see that it works.
     // TODO: build the same path and implement handling for LLVM (no polymorphism, just do an
     // Either<> of either the CSV or legacy paths).
@@ -172,6 +172,14 @@ impl RegexCache {
         reg: &mut FileRead<LR>,
     ) -> Result<Str<'a>> {
         Ok(reg.stdin.read_line(pat, self)?.as_str().clone())
+    }
+    pub(crate) fn get_line_stdin_reuse<'a, LR: LineReader>(
+        &mut self,
+        pat: &Str<'a>,
+        reg: &mut FileRead<LR>,
+        old_line: &mut LR::Line,
+    ) -> Result<()> {
+        reg.stdin.read_line_reuse(pat, self, old_line)
     }
     pub(crate) fn split_regex<'a>(
         &mut self,
