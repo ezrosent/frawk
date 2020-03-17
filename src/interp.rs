@@ -866,6 +866,16 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             .get_line_stdin(&self.vars.rs, &mut self.read_files)?;
                         *self.get_mut(dst) = res;
                     }
+                    NextLineStdinFused() => {
+                        self.regexes.get_line_stdin_reuse(
+                            &self.vars.rs,
+                            &mut self.read_files,
+                            &mut self.line,
+                        )?;
+                        // TODO: figure out nf?
+                        self.split_line.clear();
+                        self.vars.nf = -1;
+                    }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;
                         if *self.get(cond) != 0 {

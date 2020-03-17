@@ -139,6 +139,8 @@ pub(crate) enum Instr<'a> {
     NextLine(Reg<Str<'a>>, Reg<Str<'a>>),
     ReadErrStdin(Reg<Int>),
     NextLineStdin(Reg<Str<'a>>),
+    // Fetches line directly into $0.
+    NextLineStdinFused(),
 
     // Split
     SplitInt(
@@ -869,7 +871,7 @@ impl<'a> Instr<'a> {
             PopStrInt(reg) => reg.accum(&mut f),
             PopStrFloat(reg) => reg.accum(&mut f),
             PopStrStr(reg) => reg.accum(&mut f),
-            Call(_) | Jmp(_) | Ret | Halt => {}
+            NextLineStdinFused() | Call(_) | Jmp(_) | Ret | Halt => {}
         }
     }
 }

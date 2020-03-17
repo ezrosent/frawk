@@ -1415,6 +1415,11 @@ impl<'a> View<'a> {
                 let resv = self.call("next_line_stdin", &mut [self.runtime_val()]);
                 self.bind_reg(dst, resv);
             }
+            NextLineStdinFused() => {
+                let resv = self.call("next_line_stdin", &mut [self.runtime_val()]);
+                let zero = LLVMConstInt(self.tmap.get_ty(Ty::Int), 0, /*sign_extend=*/ 0);
+                self.call("set_col", &mut [self.runtime_val(), zero, resv]);
+            }
             LookupIntInt(res, arr, k) => {
                 self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
             }

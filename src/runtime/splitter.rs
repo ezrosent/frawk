@@ -28,16 +28,7 @@ impl<R: Read> LineReader for RegexSplitter<R> {
         rc.with_regex(pat, |re| self.read_line_regex(re))
     }
     fn read_state(&self) -> i64 {
-        match self.0.state {
-            ReaderState::OK => self.0.state as i64,
-            ReaderState::ERROR | ReaderState::EOF => {
-                if self.0.last_len == 0 {
-                    self.0.state as i64
-                } else {
-                    ReaderState::OK as i64
-                }
-            }
-        }
+        self.0.read_state()
     }
 }
 
@@ -106,39 +97,24 @@ impl<R: Read> RegexSplitter<R> {
     }
 }
 
-struct Reader<R> {
-    inner: R,
-    // The "stray bytes" that will be prepended to the next buffer.
-    prefix: SmallVec<[u8; 8]>,
-    // TODO we probably want this to be a Buf, not a Str, but Buf's API gives out bytes not
-    // strings.
-    cur: Str<'static>,
-    chunk_size: usize,
-    state: ReaderState,
-    last_len: usize,
-}
-
-fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
-    let mut read = 0;
-    while buf.len() > 0 {
-        match r.read(buf) {
-            Ok(n) => {
-                if n == 0 {
-                    break;
-                }
-                buf = &mut buf[n..];
-                read += n;
-            }
-            Err(e) => match e.kind() {
-                ErrorKind::Interrupted => continue,
-                ErrorKind::UnexpectedEof => {
-                    break;
-                }
-                _ => return err!("read error {}", e),
-            },
-        }
+impl<R: Read> LineReader for CSVReader<R> {
+    type Line = csv::Line;
+    fn read_line(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<csv::Line> {
+        let mut line = csv::Line::default();
+        self.read_line_inner(&mut line)?;
+        Ok(line)
     }
-    Ok(read)
+    fn read_line_reuse<'a, 'b: 'a>(
+        &'b mut self,
+        _pat: &Str,
+        _rc: &mut super::RegexCache,
+        old: &'a mut csv::Line,
+    ) -> Result<()> {
+        self.read_line_inner(old)
+    }
+    fn read_state(&self) -> i64 {
+        self.inner.read_state()
+    }
 }
 
 struct CSVReader<R> {
@@ -177,7 +153,11 @@ impl<R: Read> CSVReader<R> {
         self.prev_iter_cr_end = next_cre;
         Ok(false)
     }
-    fn stepper(&mut self, st: csv::State, line: csv::Line) -> csv::Stepper {
+    fn stepper<'a, 'b: 'a>(
+        &'b mut self,
+        st: csv::State,
+        line: &'a mut csv::Line,
+    ) -> csv::Stepper<'a> {
         csv::Stepper {
             buf: &self.inner.cur,
             off: &mut self.cur_offsets,
@@ -186,29 +166,63 @@ impl<R: Read> CSVReader<R> {
             st,
         }
     }
-    pub fn read_line(&mut self) -> Result<csv::Line> {
+    pub fn read_line_inner<'a, 'b: 'a>(&'b mut self, mut line: &'a mut csv::Line) -> Result<()> {
+        line.clear();
         if self.prev_ix == self.inner.cur.len() {
             if self.refresh_buf()? {
-                return Ok(csv::Line::default());
+                return Ok(());
             }
         }
         let mut st = csv::State::Init;
-        let mut line = csv::Line::default();
         loop {
-            let mut stepper = self.stepper(st, line);
-            line = unsafe { stepper.step() };
+            let mut stepper = self.stepper(st, &mut line);
+            unsafe { stepper.step() };
             if let csv::State::Done = stepper.st {
-                return Ok(line);
+                return Ok(());
             }
             st = stepper.st;
             if self.refresh_buf()? {
                 line.promote();
-                return Ok(line);
+                return Ok(());
             }
         }
     }
 }
 
+struct Reader<R> {
+    inner: R,
+    // The "stray bytes" that will be prepended to the next buffer.
+    prefix: SmallVec<[u8; 8]>,
+    // TODO we probably want this to be a Buf, not a Str, but Buf's API gives out bytes not
+    // strings.
+    cur: Str<'static>,
+    chunk_size: usize,
+    state: ReaderState,
+    last_len: usize,
+}
+
+fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
+    let mut read = 0;
+    while buf.len() > 0 {
+        match r.read(buf) {
+            Ok(n) => {
+                if n == 0 {
+                    break;
+                }
+                buf = &mut buf[n..];
+                read += n;
+            }
+            Err(e) => match e.kind() {
+                ErrorKind::Interrupted => continue,
+                ErrorKind::UnexpectedEof => {
+                    break;
+                }
+                _ => return err!("read error {}", e),
+            },
+        }
+    }
+    Ok(read)
+}
 impl<R: Read> Reader<R> {
     pub(crate) fn new(r: R, chunk_size: usize) -> Self {
         let res = Reader {
@@ -224,6 +238,19 @@ impl<R: Read> Reader<R> {
 
     pub(crate) fn is_eof(&self) -> bool {
         self.cur.len() == 0 && self.state == ReaderState::EOF
+    }
+
+    fn read_state(&self) -> i64 {
+        match self.state {
+            ReaderState::OK => self.state as i64,
+            ReaderState::ERROR | ReaderState::EOF => {
+                if self.last_len == 0 {
+                    self.state as i64
+                } else {
+                    ReaderState::OK as i64
+                }
+            }
+        }
     }
 
     fn advance(&mut self, n: usize) -> Result<()> {

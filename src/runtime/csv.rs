@@ -14,7 +14,7 @@ pub struct Offsets {
     fields: Vec<u64>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Line {
     raw: Str<'static>,
     fields: Vec<Str<'static>>,
@@ -45,6 +45,11 @@ impl Line {
         let partial = mem::replace(&mut self.partial, Str::default());
         self.fields.push(partial);
     }
+    pub fn clear(&mut self) {
+        self.fields.clear();
+        self.partial = Str::default();
+        self.raw = Str::default();
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -61,7 +66,7 @@ pub struct Stepper<'a> {
     pub off: &'a mut Offsets,
     pub prev_ix: usize,
     pub st: State,
-    pub line: Line,
+    pub line: &'a mut Line,
 }
 
 impl<'a> Stepper<'a> {
@@ -80,13 +85,12 @@ impl<'a> Stepper<'a> {
         self.line.promote();
     }
 
-    fn get(&mut self, line_start: usize, j: usize, cur: usize) -> Line {
+    fn get(&mut self, line_start: usize, j: usize, cur: usize) {
         self.off.start = cur;
         let line = mem::replace(&mut self.line.raw, Str::default());
         self.line.raw = Str::concat(line, self.buf.slice(line_start, j));
-        mem::replace(&mut self.line, Line::default())
     }
-    pub unsafe fn step(&mut self) -> Line {
+    pub unsafe fn step(&mut self) {
         const COMMA: u8 = ',' as u8;
         const QUOTE: u8 = '"' as u8;
         const NL: u8 = '\n' as u8;
