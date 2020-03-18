@@ -6,7 +6,7 @@
 use super::csv;
 use super::str_impl::{Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
-use super::LineReader;
+use super::{Int, LazyVec, Line0, LineReader, RegexCache};
 use crate::common::Result;
 
 use regex::Regex;
@@ -20,6 +20,54 @@ pub(crate) enum ReaderState {
     ERROR = -1,
     EOF = 0,
     OK = 1,
+}
+
+struct RegexLine {
+    line: Str<'static>,
+    fields: LazyVec<Str<'static>>,
+}
+
+impl RegexLine {
+    fn split_if_needed(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<()> {
+        if self.fields.len() == 0 {
+            rc.split_regex(pat, &self.line, &mut self.fields)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Line0<'a> for RegexLine {
+    fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize> {
+        self.split_if_needed(pat, rc)?;
+        Ok(self.fields.len())
+    }
+    fn get_col(&mut self, col: Int, pat: &Str, rc: &mut RegexCache) -> Result<Str<'a>> {
+        if col < 0 {
+            return err!("attempt to access field {}; field must be nonnegative", col);
+        }
+        let res = if col == 0 {
+            self.line.clone()
+        } else {
+            self.split_if_needed(pat, rc)?;
+            self.fields
+                .get((col - 1) as usize)
+                .unwrap_or_else(Str::default)
+        };
+        Ok(res.upcast())
+    }
+    fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()> {
+        if col == 0 {
+            self.line = s.clone().unmoor();
+            self.fields.clear();
+            return Ok(());
+        }
+        if col < 0 {
+            return err!("attempt to access field {}; field must be nonnegative", col);
+        }
+        self.split_if_needed(pat, rc)?;
+        self.fields.insert(col as usize, s.clone().unmoor());
+        Ok(())
+    }
 }
 
 impl<R: Read> LineReader for RegexSplitter<R> {

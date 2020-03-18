@@ -27,6 +27,11 @@ pub(crate) trait Line<'a> {
     fn split(&self, pat: &Str, rc: &mut RegexCache, push: impl FnMut(Str<'a>)) -> Result<()>;
     fn assign_from_str(&mut self, s: &Str<'a>);
 }
+pub(crate) trait Line0<'a> {
+    fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
+    fn get_col(&mut self, col: Int, pat: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
+    fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()>;
+}
 
 pub(crate) trait LineReader {
     type Line: for<'a> Line<'a>;
@@ -183,7 +188,7 @@ impl RegexCache {
     }
     pub(crate) fn split_regex<'a>(
         &mut self,
-        pat: &Str<'a>,
+        pat: &Str,
         s: &Str<'a>,
         v: &mut LazyVec<Str<'a>>,
     ) -> Result<()> {
