@@ -40,6 +40,37 @@ impl<'a> super::Line<'a> for Line {
     fn assign_from_str(&mut self, _s: &Str<'a>) {}
 }
 
+impl<'a> super::Line0<'a> for Line {
+    fn nf(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<usize> {
+        Ok(self.fields.len())
+    }
+
+    fn get_col(
+        &mut self,
+        col: super::Int,
+        _pat: &Str,
+        _rc: &mut super::RegexCache,
+    ) -> Result<Str<'a>> {
+        Ok(self
+            .fields
+            .get(col as usize)
+            .cloned()
+            .unwrap_or_else(Str::default)
+            .upcast())
+    }
+
+    // Setting columns for CSV doesn't work. We refuse it outright.
+    fn set_col(
+        &mut self,
+        _col: super::Int,
+        _s: &Str<'a>,
+        _pat: &Str,
+        _rc: &mut super::RegexCache,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
 impl Line {
     pub fn promote(&mut self) {
         let partial = mem::replace(&mut self.partial, Str::default());
