@@ -6,7 +6,7 @@
 use super::csv;
 use super::str_impl::{Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
-use super::{Int, LazyVec, Line0, LineReader, RegexCache};
+use super::{Int, LazyVec, Line, LineReader, RegexCache};
 use crate::common::Result;
 
 use regex::Regex;
@@ -22,9 +22,20 @@ pub(crate) enum ReaderState {
     OK = 1,
 }
 
-struct RegexLine {
+pub struct RegexLine {
     line: Str<'static>,
     fields: LazyVec<Str<'static>>,
+    diverged: bool,
+}
+
+impl Default for RegexLine {
+    fn default() -> RegexLine {
+        RegexLine {
+            line: Str::default(),
+            fields: LazyVec::new(),
+            diverged: false,
+        }
+    }
 }
 
 impl RegexLine {
@@ -36,17 +47,22 @@ impl RegexLine {
     }
 }
 
-impl<'a> Line0<'a> for RegexLine {
+impl<'a> Line<'a> for RegexLine {
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize> {
         self.split_if_needed(pat, rc)?;
         Ok(self.fields.len())
     }
-    fn get_col(&mut self, col: Int, pat: &Str, rc: &mut RegexCache) -> Result<Str<'a>> {
+    fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>> {
         if col < 0 {
             return err!("attempt to access field {}; field must be nonnegative", col);
         }
-        let res = if col == 0 {
+        let res = if col == 0 && !self.diverged {
             self.line.clone()
+        } else if col == 0 && self.diverged {
+            let res = self.fields.join(&ofs.clone().unmoor());
+            self.line = res.clone();
+            self.diverged = false;
+            res
         } else {
             self.split_if_needed(pat, rc)?;
             self.fields
@@ -65,15 +81,20 @@ impl<'a> Line0<'a> for RegexLine {
             return err!("attempt to access field {}; field must be nonnegative", col);
         }
         self.split_if_needed(pat, rc)?;
-        self.fields.insert(col as usize, s.clone().unmoor());
+        self.fields.insert(col as usize - 1, s.clone().unmoor());
+        self.diverged = true;
         Ok(())
     }
 }
 
 impl<R: Read> LineReader for RegexSplitter<R> {
-    type Line = Str<'static>;
+    type Line = RegexLine;
     fn read_line(&mut self, pat: &Str, rc: &mut super::RegexCache) -> Result<Self::Line> {
-        rc.with_regex(pat, |re| self.read_line_regex(re))
+        rc.with_regex(pat, |re| RegexLine {
+            line: self.read_line_regex(re),
+            fields: LazyVec::new(),
+            diverged: false,
+        })
     }
     fn read_state(&self) -> i64 {
         self.0.read_state()
@@ -87,7 +108,7 @@ impl<R: Read> RegexSplitter<R> {
         RegexSplitter(Reader::new(r, chunk_size))
     }
 
-    fn read_line_regex(&mut self, pat: &Regex) -> Str<'static> {
+    pub fn read_line_regex(&mut self, pat: &Regex) -> Str<'static> {
         // We keep this as a separate method because it helps in writing tests.
         let res = self.read_line_inner(pat);
         self.0.last_len = res.len();

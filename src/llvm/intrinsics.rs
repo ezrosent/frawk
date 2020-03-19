@@ -6,7 +6,8 @@ use crate::libc::c_void;
 use crate::runtime::{
     self,
     printf::{printf, FormatArg},
-    FileRead, FileWrite, Float, Int, IntMap, LazyVec, RegexCache, Str, StrMap, Variables,
+    splitter::RegexLine,
+    FileRead, FileWrite, Float, Int, IntMap, Line, RegexCache, Str, StrMap, Variables,
 };
 
 use hashbrown::HashMap;
@@ -58,8 +59,7 @@ macro_rules! exit {
 
 pub(crate) struct Runtime<'a> {
     vars: Variables<'a>,
-    line: Str<'a>,
-    split_line: LazyVec<Str<'a>>,
+    line: RegexLine,
     regexes: RegexCache,
     write_files: FileWrite,
     // TODO: get Interp working, then make this an enum (along with line)
@@ -75,8 +75,7 @@ impl<'a> Runtime<'a> {
     ) -> Runtime<'a> {
         Runtime {
             vars: Default::default(),
-            line: "".into(),
-            split_line: LazyVec::new(),
+            line: Default::default(),
             regexes: Default::default(),
             write_files: FileWrite::new(stdout),
             read_files: FileRead::new_transitional(stdin),
@@ -414,56 +413,29 @@ pub unsafe extern "C" fn split_int(
 
 #[no_mangle]
 pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> u128 {
-    if col < 0 {
-        fail!("attempt to access negative column: {}", col);
-    }
     let runtime = &mut *(runtime as *mut Runtime);
-    if col == 0 {
-        return mem::transmute::<Str, u128>(runtime.line.clone());
-    }
-    if runtime.split_line.len() == 0 {
-        if let Err(e) =
-            runtime
-                .regexes
-                .split_regex(&runtime.vars.fs, &runtime.line, &mut runtime.split_line)
-        {
-            fail!("failed to split line: {}", e);
-        }
-        runtime.vars.nf = runtime.split_line.len() as Int;
-    }
-    let res = runtime
-        .split_line
-        .get(col as usize - 1)
-        .unwrap_or_else(Str::default);
+    let res = match runtime.line.get_col(
+        col,
+        &runtime.vars.fs,
+        &runtime.vars.ofs,
+        &mut runtime.regexes,
+    ) {
+        Ok(s) => s,
+        Err(e) => fail!("get_col: {}", e),
+    };
     mem::transmute::<Str, u128>(res)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
-    if col < 0 {
-        fail!("attempt to set negative column: {}", col);
-    }
     let runtime = &mut *(runtime as *mut Runtime);
-    if col == 0 {
-        runtime.split_line.clear();
-        ref_str(s);
-        runtime.line = (*(s as *mut Str)).clone();
-        runtime.vars.nf = -1;
-        return;
-    }
-    if runtime.split_line.len() == 0 {
-        if let Err(e) =
-            runtime
-                .regexes
-                .split_regex(&runtime.vars.fs, &runtime.line, &mut runtime.split_line)
-        {
-            fail!("failed to split line: {}", e);
-        }
-        runtime.vars.nf = runtime.split_line.len() as Int;
-    }
     let s = &*(s as *mut Str);
-    runtime.split_line.insert(col as usize - 1, s.clone());
-    runtime.line = runtime.split_line.join(&runtime.vars.ofs);
+    if let Err(e) = runtime
+        .line
+        .set_col(col, s, &runtime.vars.ofs, &mut runtime.regexes)
+    {
+        fail!("set_col: {}", e);
+    }
 }
 
 #[no_mangle]
@@ -634,13 +606,11 @@ pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_vo
 pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     let rt = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        if var == Variable::NF && rt.split_line.len() == 0 {
-            try_abort!(
-                rt.regexes
-                    .split_regex(&rt.vars.fs, &rt.line, &mut rt.split_line),
-                "failed to split line:"
-            );
-            rt.vars.nf = rt.split_line.len() as Int;
+        if let Variable::NF = var {
+            rt.vars.nf = match rt.line.nf(&rt.vars.fs, &mut rt.regexes) {
+                Ok(nf) => nf as Int,
+                Err(e) => fail!("nf: {}", e),
+            };
         }
         try_abort!(rt.vars.load_int(var))
     } else {

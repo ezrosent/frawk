@@ -19,6 +19,7 @@ pub enum Function {
     Nextline,
     ReadErrStdin,
     NextlineStdin,
+    ReadLineStdinFused,
     Setcol,
     Split,
     Length,
@@ -158,6 +159,7 @@ impl Function {
             PrintStdout => (smallvec![Str], Int),
             Nextline => (smallvec![Str], Str),
             ReadErr => (smallvec![Str], Int),
+            ReadLineStdinFused => (smallvec![], Int),
             NextlineStdin => (smallvec![], Str),
             ReadErrStdin => (smallvec![], Int),
             // irrelevant return type
@@ -181,7 +183,7 @@ impl Function {
     pub(crate) fn arity(&self) -> Option<usize> {
         use Function::*;
         Some(match self {
-            ReadErrStdin | NextlineStdin => 0,
+            ReadErrStdin | NextlineStdin | ReadLineStdinFused => 0,
             Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Match | Setcol | Binop(_) => 2,
             Delete | Contains => 2,
@@ -221,7 +223,7 @@ impl Function {
             Substr | Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())
             }
-            Close => Ok(None),
+            ReadLineStdinFused | Close => Ok(None),
         }
     }
 }

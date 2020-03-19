@@ -21,7 +21,7 @@ pub struct Line {
     partial: Str<'static>,
 }
 
-impl<'a> super::Line<'a> for Line {
+impl<'a> super::Line1<'a> for Line {
     fn as_str(&self) -> &Str<'a> {
         &self.raw.upcast_ref()
     }
@@ -40,7 +40,7 @@ impl<'a> super::Line<'a> for Line {
     fn assign_from_str(&mut self, _s: &Str<'a>) {}
 }
 
-impl<'a> super::Line0<'a> for Line {
+impl<'a> super::Line<'a> for Line {
     fn nf(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<usize> {
         Ok(self.fields.len())
     }
@@ -49,6 +49,7 @@ impl<'a> super::Line0<'a> for Line {
         &mut self,
         col: super::Int,
         _pat: &Str,
+        _ofs: &Str,
         _rc: &mut super::RegexCache,
     ) -> Result<Str<'a>> {
         Ok(self

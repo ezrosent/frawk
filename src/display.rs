@@ -128,6 +128,7 @@ impl Display for Function {
             Nextline => write!(f, "{}", "nextline"),
             ReadErrStdin => write!(f, "{}", "hasline(stdin)"),
             NextlineStdin => write!(f, "{}", "nextline(stdin)"),
+            ReadLineStdinFused => write!(f, "{}", "stdin-fused"),
             Setcol => write!(f, "{}", "$="),
             Split => write!(f, "{}", "split"),
             Length => write!(f, "{}", "length"),

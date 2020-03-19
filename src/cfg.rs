@@ -1113,6 +1113,20 @@ where
                 )?;
                 return Ok((next, if *is_post { pre.unwrap() } else { post }));
             }
+            ReadStdin => {
+                use builtins::Function::{ReadErrStdin, ReadLineStdinFused};
+                self.add_stmt(
+                    current_open,
+                    PrimStmt::AsgnVar(
+                        Self::unused(),
+                        PrimExpr::CallBuiltin(ReadLineStdinFused, smallvec![]),
+                    ),
+                )?;
+                return self.convert_expr(
+                    &ast::Expr::Call(Either::Right(ReadErrStdin), vec![]),
+                    current_open,
+                );
+            }
             Getline { from, into } => {
                 // Another use of non-structural recursion for desugaring. Here we desugar:
                 //   getline var < file
