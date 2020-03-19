@@ -22,14 +22,15 @@ pub(crate) use float_parse::{strtod, strtoi};
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
-pub(crate) trait Line<'a> {
+// TODO: remove
+pub(crate) trait Line1<'a> {
     fn as_str(&self) -> &Str<'a>;
     fn split(&self, pat: &Str, rc: &mut RegexCache, push: impl FnMut(Str<'a>)) -> Result<()>;
     fn assign_from_str(&mut self, s: &Str<'a>);
 }
-pub(crate) trait Line0<'a> {
+pub(crate) trait Line<'a>: Default {
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
-    fn get_col(&mut self, col: Int, pat: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
+    fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
     fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()>;
 }
 
@@ -49,7 +50,7 @@ pub(crate) trait LineReader {
     fn read_state(&self) -> i64;
 }
 
-impl<'a> Line<'a> for Str<'static> {
+impl<'a> Line1<'a> for Str<'static> {
     fn as_str(&self) -> &Str<'a> {
         self.upcast_ref()
     }
@@ -117,6 +118,10 @@ impl<T: Default> LazyVec<T> {
                         v.push(t);
                     // XXX: this is a heuristic to keep a dense representation, perhaps we should
                     // remove and just upgrade?
+                    //
+                    // Note that this only works with $, and will stop working if we implement
+                    // something like `join` in the language (it inserts things that the user never
+                    // inserted).
                     } else if ix < v.len() + 16 {
                         while ix > v.len() {
                             v.push(Default::default())
@@ -154,8 +159,6 @@ impl RegexCache {
             |x| f(x),
         )
     }
-    // TODO: refactor LR, etc. so it also includes split_line? That way we wont even have to copy
-    // to get things into the existing splitting infrastructure. It also hides LazyVec.
     // TODO: build constructor, CLI options for the interp path, see that it works.
     // TODO: build the same path and implement handling for LLVM (no polymorphism, just do an
     // Either<> of either the CSV or legacy paths).
@@ -167,16 +170,23 @@ impl RegexCache {
         reg: &mut FileRead<LR>,
     ) -> Result<Str<'a>> {
         Ok(reg
-            .with_file(file, |reader| reader.read_line(pat, self))?
-            .as_str()
-            .clone())
+            .with_file(file, |reader| {
+                self.with_regex(pat, |re| reader.read_line_regex(re))
+            })?
+            .clone()
+            .upcast())
     }
+
+    // This only gets used if getline is invoked explicitly without an input file argument.
     pub(crate) fn get_line_stdin<'a, LR: LineReader>(
         &mut self,
         pat: &Str<'a>,
         reg: &mut FileRead<LR>,
     ) -> Result<Str<'a>> {
-        Ok(reg.stdin.read_line(pat, self)?.as_str().clone())
+        let mut line = reg.stdin.read_line(pat, self)?;
+        // NB both of these `pat`s are "wrong" but we are fine because they are only used
+        // when the column is nonzero, or someone has overwritten a nonzero column.
+        Ok(line.get_col(0, pat, pat, self)?.clone().upcast())
     }
     pub(crate) fn get_line_stdin_reuse<'a, LR: LineReader>(
         &mut self,

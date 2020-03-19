@@ -3,7 +3,7 @@ use crate::bytecode::{Get, Instr, Label, Pop, Reg};
 use crate::builtins::Variable;
 use crate::common::{NumTy, Result};
 use crate::compile::{self, Ty};
-use crate::runtime::{self, Float, Int, LazyVec, Line, LineReader, Str};
+use crate::runtime::{self, Float, Int, Line, LineReader, Str};
 
 use std::cmp;
 
@@ -24,7 +24,6 @@ pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     vars: runtime::Variables<'a>,
 
     line: LR::Line,
-    split_line: LazyVec<Str<'a>>,
 
     regexes: runtime::RegexCache,
     write_files: runtime::FileWrite,
@@ -74,8 +73,7 @@ impl<'a> Interp<'a> {
             strs: default_of(regs(Str)),
             vars: Default::default(),
 
-            line: "".into(),
-            split_line: LazyVec::new(),
+            line: Default::default(),
             regexes: Default::default(),
             write_files: runtime::FileWrite::new(stdout),
             read_files: runtime::FileRead::new_transitional(stdin),
@@ -385,51 +383,19 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     }
                     SetColumn(dst, src) => {
                         let col = *self.get(*dst);
-                        if col < 0 {
-                            return err!("attempt to access field {}", col);
-                        }
-                        if col == 0 {
-                            self.split_line.clear();
-                            self.line.assign_from_str(index(&self.strs, src));
-                            self.vars.nf = -1;
-                            break cur + 1;
-                        }
-                        if self.split_line.len() == 0 {
-                            self.regexes.split_regex(
-                                &self.vars.fs,
-                                self.line.as_str(),
-                                &mut self.split_line,
-                            )?;
-                            self.vars.nf = self.split_line.len() as Int;
-                        }
-                        self.split_line
-                            .insert(col as usize - 1, self.get(*src).clone());
+                        let v = index(&self.strs, src);
                         self.line
-                            .assign_from_str(&self.split_line.join(&self.vars.ofs));
+                            .set_col(col, v, &self.vars.ofs, &mut self.regexes)?;
                     }
                     GetColumn(dst, src) => {
                         let col = *self.get(*src);
                         let dst = *dst;
-                        if col < 0 {
-                            return err!("attempt to access field {}", col);
-                        }
-                        if col == 0 {
-                            let line = self.line.as_str().clone();
-                            *self.get_mut(dst) = line;
-                            break cur + 1;
-                        }
-                        if self.split_line.len() == 0 {
-                            self.regexes.split_regex(
-                                &self.vars.fs,
-                                self.line.as_str(),
-                                &mut self.split_line,
-                            )?;
-                            self.vars.nf = self.split_line.len() as Int;
-                        }
-                        let res = self
-                            .split_line
-                            .get(col as usize - 1)
-                            .unwrap_or_else(Default::default);
+                        let res = self.line.get_col(
+                            col,
+                            &self.vars.fs,
+                            &self.vars.ofs,
+                            &mut self.regexes,
+                        )?;
                         *self.get_mut(dst) = res;
                     }
                     SplitInt(flds, to_split, arr, pat) => {
@@ -699,13 +665,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.vars.store_str(*var, s)?;
                     }
                     LoadVarInt(dst, var) => {
-                        if *var == NF && self.split_line.len() == 0 {
-                            self.regexes.split_regex(
-                                &self.vars.fs,
-                                self.line.as_str(),
-                                &mut self.split_line,
-                            )?;
-                            self.vars.nf = self.split_line.len() as Int;
+                        // If someone explicitly sets NF to a different value, this means we will
+                        // ignore it. I think that is fine.
+                        if let NF = *var {
+                            self.vars.nf = self.line.nf(&self.vars.fs, &mut self.regexes)? as Int;
                         }
                         let i = self.vars.load_int(*var)?;
                         let dst = *dst;
@@ -872,9 +835,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             &mut self.read_files,
                             &mut self.line,
                         )?;
-                        // TODO: figure out nf?
-                        self.split_line.clear();
-                        self.vars.nf = -1;
                     }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;
@@ -1039,8 +999,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     pub(crate) fn reset(&mut self) {
         self.stack = Default::default();
         self.vars = Default::default();
-        self.line.assign_from_str(&Default::default());
-        self.split_line = LazyVec::new();
+        self.line = Default::default();
         self.regexes = Default::default();
         self.floats.reset();
         self.ints.reset();
