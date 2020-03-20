@@ -108,6 +108,16 @@ pub(crate) fn bytecode<'a>(
     Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
 }
 
+pub(crate) fn bytecode_csv<'a, R: std::io::Read + 'static>(
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
+    // default to std::io::stdin()
+    reader: R,
+    // default to std::io::BufWriter::new(std::io::stdout())
+    writer: impl std::io::Write + 'static,
+) -> Result<bytecode::InterpCSV<'a, R>> {
+    Typer::init_from_ctx(ctx)?.to_interp_csv(reader, writer)
+}
+
 pub(crate) fn dump_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     cfg: llvm::Config,
@@ -352,6 +362,20 @@ impl<'a> Typer<'a> {
     ) -> Result<bytecode::Interp<'a>> {
         let instrs = self.to_bytecode()?;
         Ok(bytecode::Interp::new(
+            instrs,
+            self.main_offset,
+            |ty| self.regs.stats.count(ty) as usize,
+            reader,
+            writer,
+        ))
+    }
+    fn to_interp_csv<R: std::io::Read + 'static>(
+        &mut self,
+        reader: R,
+        writer: impl std::io::Write + 'static,
+    ) -> Result<bytecode::InterpCSV<'a, R>> {
+        let instrs = self.to_bytecode()?;
+        Ok(bytecode::Interp::new_csv(
             instrs,
             self.main_offset,
             |ty| self.regs.stats.count(ty) as usize,

@@ -5,7 +5,7 @@ use std::str;
 use super::Str;
 use crate::common::Result;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Offsets {
     pub start: usize,
     // NB We're using u64s to potentially handle huge input streams.
@@ -14,11 +14,17 @@ pub struct Offsets {
     fields: Vec<u64>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Line {
     raw: Str<'static>,
     fields: Vec<Str<'static>>,
     partial: Str<'static>,
+}
+
+impl Line {
+    pub fn len(&self) -> usize {
+        self.raw.len()
+    }
 }
 
 impl<'a> super::Line1<'a> for Line {
@@ -52,9 +58,15 @@ impl<'a> super::Line<'a> for Line {
         _ofs: &Str,
         _rc: &mut super::RegexCache,
     ) -> Result<Str<'a>> {
+        if col == 0 {
+            return Ok(self.raw.clone().upcast());
+        }
+        if col < 0 {
+            return err!("attempt to access negative index {}", col);
+        }
         Ok(self
             .fields
-            .get(col as usize)
+            .get(col as usize - 1)
             .cloned()
             .unwrap_or_else(Str::default)
             .upcast())
@@ -103,6 +115,7 @@ pub struct Stepper<'a> {
 
 impl<'a> Stepper<'a> {
     fn append(&mut self, s: Str<'static>) {
+        eprintln!("append={}", s);
         let partial = mem::replace(&mut self.line.raw, Str::default());
         self.line.partial = Str::concat(partial, s);
     }
@@ -115,14 +128,16 @@ impl<'a> Stepper<'a> {
     }
     pub fn promote(&mut self) {
         self.line.promote();
+        eprintln!("promote={:?}", self.line.fields);
     }
 
-    fn get(&mut self, line_start: usize, j: usize, cur: usize) {
+    fn get(&mut self, line_start: usize, j: usize, cur: usize) -> usize {
         self.off.start = cur;
         let line = mem::replace(&mut self.line.raw, Str::default());
         self.line.raw = Str::concat(line, self.buf.slice(line_start, j));
+        self.prev_ix
     }
-    pub unsafe fn step(&mut self) {
+    pub unsafe fn step(&mut self) -> usize {
         const COMMA: u8 = ',' as u8;
         const QUOTE: u8 = '"' as u8;
         const NL: u8 = '\n' as u8;

@@ -63,7 +63,7 @@ where
 }
 
 #[derive(Debug)]
-pub(crate) struct CompileError(pub String);
+pub struct CompileError(pub String);
 
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {

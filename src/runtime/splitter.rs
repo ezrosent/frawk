@@ -179,14 +179,16 @@ impl<R: Read> LineReader for CSVReader<R> {
         _rc: &mut super::RegexCache,
         old: &'a mut csv::Line,
     ) -> Result<()> {
-        self.read_line_inner(old)
+        self.read_line_inner(old)?;
+        Ok(())
     }
     fn read_state(&self) -> i64 {
-        self.inner.read_state()
+        let res = self.inner.read_state();
+        res
     }
 }
 
-struct CSVReader<R> {
+pub struct CSVReader<R> {
     inner: Reader<R>,
     cur_offsets: csv::Offsets,
     prev_ix: usize,
@@ -195,9 +197,9 @@ struct CSVReader<R> {
 }
 
 impl<R: Read> CSVReader<R> {
-    pub fn new(r: R, chunk_size: usize) -> Self {
+    pub fn new(r: R) -> Self {
         CSVReader {
-            inner: Reader::new(r, chunk_size),
+            inner: Reader::new(r, super::CHUNK_SIZE),
             cur_offsets: Default::default(),
             prev_ix: 0,
             prev_iter_inside_quote: 0,
@@ -237,23 +239,25 @@ impl<R: Read> CSVReader<R> {
     }
     pub fn read_line_inner<'a, 'b: 'a>(&'b mut self, mut line: &'a mut csv::Line) -> Result<()> {
         line.clear();
-        if self.prev_ix == self.inner.cur.len() {
-            if self.refresh_buf()? {
-                return Ok(());
-            }
-        }
         let mut st = csv::State::Init;
+        let mut prev_ix = self.prev_ix;
         loop {
+            self.prev_ix = prev_ix;
+            // TODO: should this be ==? We get failures in that case, but is that a bug?
+            if self.prev_ix >= self.inner.cur.len() {
+                if self.refresh_buf()? {
+                    self.inner.last_len = 0;
+                    return Ok(());
+                }
+                self.prev_ix = 0;
+            }
             let mut stepper = self.stepper(st, &mut line);
-            unsafe { stepper.step() };
+            prev_ix = unsafe { stepper.step() };
             if let csv::State::Done = stepper.st {
+                self.inner.last_len = line.len();
                 return Ok(());
             }
             st = stepper.st;
-            if self.refresh_buf()? {
-                line.promote();
-                return Ok(());
-            }
         }
     }
 }
@@ -372,7 +376,11 @@ impl<R: Read> Reader<R> {
             if let Some(u) = opt {
                 u
             } else {
-                return err!("invalid UTF8");
+                // Invalid utf8. Get the error.
+                return match std::str::from_utf8(bytes) {
+                    Ok(_) => err!("bug in UTF8 validation!"),
+                    Err(e) => err!("invalid utf8: {}", e),
+                };
             }
         };
         if !done && ulen != bytes_read {
