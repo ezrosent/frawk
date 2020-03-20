@@ -52,9 +52,10 @@ pub(crate) fn run_program<'a>(
     a: &'a Arena,
     prog: &str,
     stdin: impl Into<String>,
+    csv: bool,
 ) -> ProgResult<'a> {
     let stmt = parse_program(prog, a)?;
-    run_prog(a, stmt, stdin)
+    run_prog(a, stmt, stdin, csv)
 }
 
 #[allow(unused)]
@@ -156,6 +157,7 @@ pub(crate) fn run_prog<'a>(
     arena: &'a Arena,
     prog: Prog<'a>,
     stdin: impl Into<String>,
+    csv: bool,
 ) -> ProgResult<'a> {
     let mut ctx = cfg::ProgramContext::from_prog(arena, prog)?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
@@ -193,24 +195,41 @@ pub(crate) fn run_prog<'a>(
             .iter()
             .flat_map(|((ident, _, _), ty)| ident_map.get(&ident._base()).map(|s| (*s, ty.clone())))
             .collect();
-        let mut interp = compile::bytecode(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?;
-        for (i, func) in interp.instrs().iter().enumerate() {
-            write!(&mut instrs_buf, "function {} {{\n", i).unwrap();
-            for (j, inst) in func.iter().enumerate() {
-                write!(&mut instrs_buf, "\t[{:2}] {:?}\n", j, inst).unwrap();
+        macro_rules! with_interp {
+            ($interp:ident, $body: expr) => {
+                if csv {
+                    let mut $interp = compile::bytecode_csv(
+                        &mut ctx,
+                        std::io::Cursor::new(stdin),
+                        stdout.clone(),
+                    )?;
+                    $body
+                } else {
+                    let mut $interp =
+                        compile::bytecode(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?;
+                    $body
+                }
+            };
+        }
+        with_interp!(interp, {
+            for (i, func) in interp.instrs().iter().enumerate() {
+                write!(&mut instrs_buf, "function {} {{\n", i).unwrap();
+                for (j, inst) in func.iter().enumerate() {
+                    write!(&mut instrs_buf, "\t[{:2}] {:?}\n", j, inst).unwrap();
+                }
+                write!(&mut instrs_buf, "}}\n").unwrap();
             }
-            write!(&mut instrs_buf, "}}\n").unwrap();
-        }
-        let instrs = String::from_utf8(instrs_buf).unwrap();
-        if _PRINT_DEBUG_INFO {
-            eprintln!(
-                "func_tys={:?}\nvar_tys={:?}\n=========\n",
-                func_tys, var_tys
-            );
-            eprintln!("{}", instrs);
-        }
-        interp.run()?;
-        (instrs, type_map)
+            let instrs = String::from_utf8(instrs_buf).unwrap();
+            if _PRINT_DEBUG_INFO {
+                eprintln!(
+                    "func_tys={:?}\nvar_tys={:?}\n=========\n",
+                    func_tys, var_tys
+                );
+                eprintln!("{}", instrs);
+            }
+            interp.run()?;
+            (instrs, type_map)
+        })
     };
 
     let v = match Rc::try_unwrap(stdout.0) {
@@ -243,7 +262,7 @@ mod tests {
                 #[test]
                 fn bytecode() {
                     let a = Arena::default();
-                    let out = run_program(&a, $e, $inp);
+                    let out = run_program(&a, $e, $inp, false);
                     match out {
                         Ok((out, instrs, ts)) => {
                             let expected = $out;

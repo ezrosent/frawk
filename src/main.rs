@@ -69,6 +69,8 @@ struct Opts {
         help = "output to --out-file is buffered; this flag determines buffer size"
     )]
     out_file_bufsize: usize,
+    #[clap(long = "csv")]
+    csv: bool,
 }
 macro_rules! fail {
     ($($t:tt)*) => {{
@@ -107,15 +109,30 @@ fn get_context<'a>(prog: &str, a: &'a Arena) -> cfg::ProgramContext<'a, &'a str>
     }
 }
 
-fn run_interp(prog: &str, stdin: impl io::Read + 'static, stdout: impl io::Write + 'static) {
+fn run_interp(
+    prog: &str,
+    stdin: impl io::Read + 'static,
+    stdout: impl io::Write + 'static,
+    csv: bool,
+) {
     let a = Arena::default();
     let mut ctx = get_context(prog, &a);
-    let mut interp = match compile::bytecode(&mut ctx, stdin, stdout) {
-        Ok(ctx) => ctx,
-        Err(e) => fail!("bytecode compilation failure: {}", e),
-    };
-    if let Err(e) = interp.run() {
-        fail!("fatal error during execution: {}", e);
+    if csv {
+        let mut interp = match compile::bytecode_csv(&mut ctx, stdin, stdout) {
+            Ok(ctx) => ctx,
+            Err(e) => fail!("bytecode compilation failure: {}", e),
+        };
+        if let Err(e) = interp.run() {
+            fail!("fatal error during execution: {}", e);
+        }
+    } else {
+        let mut interp = match compile::bytecode(&mut ctx, stdin, stdout) {
+            Ok(ctx) => ctx,
+            Err(e) => fail!("bytecode compilation failure: {}", e),
+        };
+        if let Err(e) = interp.run() {
+            fail!("fatal error during execution: {}", e);
+        }
     }
 }
 
@@ -251,7 +268,7 @@ fn main() {
     }
 
     if opts.opt_level < 0 {
-        with_io!(|inp, oup| run_interp(program_string.as_str(), inp, oup));
+        with_io!(|inp, oup| run_interp(program_string.as_str(), inp, oup, opts.csv));
     } else {
         with_io!(|inp, oup| run_llvm(
             program_string.as_str(),

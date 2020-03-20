@@ -3,11 +3,13 @@ use crate::bytecode::{Get, Instr, Label, Pop, Reg};
 use crate::builtins::Variable;
 use crate::common::{NumTy, Result};
 use crate::compile::{self, Ty};
-use crate::runtime::{self, Float, Int, Line, LineReader, Str};
+use crate::runtime::{self, splitter::CSVReader, Float, Int, Line, LineReader, Str};
 
 use std::cmp;
+use std::io;
 
 type ClassicReader = runtime::splitter::RegexSplitter<Box<dyn std::io::Read>>;
+pub(crate) type InterpCSV<'a, R> = Interp<'a, CSVReader<R>>;
 
 #[derive(Default)]
 pub(crate) struct Storage<T> {
@@ -77,6 +79,43 @@ impl<'a> Interp<'a> {
             regexes: Default::default(),
             write_files: runtime::FileWrite::new(stdout),
             read_files: runtime::FileRead::new_transitional(stdin),
+
+            maps_int_float: default_of(regs(MapIntFloat)),
+            maps_int_int: default_of(regs(MapIntInt)),
+            maps_int_str: default_of(regs(MapIntStr)),
+
+            maps_str_float: default_of(regs(MapStrFloat)),
+            maps_str_int: default_of(regs(MapStrInt)),
+            maps_str_str: default_of(regs(MapStrStr)),
+
+            iters_int: default_of(regs(IterInt)),
+            iters_str: default_of(regs(IterStr)),
+        }
+    }
+}
+
+impl<'a, R: io::Read> InterpCSV<'a, R> {
+    pub(crate) fn new_csv(
+        instrs: Vec<Vec<Instr<'a>>>,
+        main_func: usize,
+        regs: impl Fn(compile::Ty) -> usize,
+        stdin: R,
+        stdout: impl std::io::Write + 'static,
+    ) -> Self {
+        use compile::Ty::*;
+        Interp {
+            main_func,
+            instrs,
+            stack: Default::default(),
+            floats: default_of(regs(Float)),
+            ints: default_of(regs(Int)),
+            strs: default_of(regs(Str)),
+            vars: Default::default(),
+
+            line: Default::default(),
+            regexes: Default::default(),
+            write_files: runtime::FileWrite::new(stdout),
+            read_files: runtime::FileRead::new(CSVReader::new(stdin)),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -422,13 +461,20 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     }
                     PrintStdout(txt) => {
                         let txt = index(&self.strs, txt);
-                        self.write_files.write_str_stdout(txt)?;
-                        self.write_files.write_str_stdout(&newline)?;
+                        let mut res = self.write_files.write_str_stdout(txt).is_err();
+                        res = res || self.write_files.write_str_stdout(&newline).is_err();
+                        // Why do this? We want to exit cleanly when output is closed. We use this
+                        // pattern for other IO functions as well.
+                        if res {
+                            return Ok(());
+                        }
                     }
                     Print(txt, out, append) => {
                         let txt = index(&self.strs, txt);
                         let out = index(&self.strs, out);
-                        self.write_files.write_line(out, txt, *append)?;
+                        if self.write_files.write_line(out, txt, *append).is_err() {
+                            return Ok(());
+                        };
                     }
                     Sprintf { dst, fmt, args } => {
                         debug_assert_eq!(scratch.len(), 0);
@@ -450,7 +496,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             scratch.push(self.format_arg(*a)?);
                         }
                         let fmt_str = index(&self.strs, fmt);
-                        if let Some((out_path_reg, append)) = output {
+                        let res = if let Some((out_path_reg, append)) = output {
                             let out_path = index(&self.strs, out_path_reg);
                             self.write_files.printf(
                                 Some((out_path, *append)),
@@ -460,7 +506,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         } else {
                             // print to stdout.
                             self.write_files.printf(None, fmt_str, &scratch[..])
-                        }?;
+                        };
+                        if res.is_err() {
+                            return Ok(());
+                        }
                         scratch.clear();
                     }
                     Close(file) => {

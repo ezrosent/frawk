@@ -468,7 +468,10 @@ impl<'a> Str<'a> {
             let bs = unsafe { &*self.get_bytes() };
             assert!(
                 (from == to && to == bs.len()) || from < bs.len(),
-                "internal error: invalid index"
+                "internal error: invalid index len={}, from={}, to={}",
+                bs.len(),
+                from,
+                to,
             );
             assert!(to <= bs.len(), "internal error: invalid index");
             assert!(
