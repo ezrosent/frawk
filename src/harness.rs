@@ -86,6 +86,7 @@ pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
         std::io::Cursor::new(stdin),
         stdout.clone(),
         LLVM_CONFIG,
+        false,
     )?;
     let v = match Rc::try_unwrap(stdout.0) {
         Ok(v) => v.into_inner(),

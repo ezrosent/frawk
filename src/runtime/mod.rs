@@ -22,12 +22,6 @@ pub(crate) use float_parse::{strtod, strtoi};
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
-// TODO: remove
-pub(crate) trait Line1<'a> {
-    fn as_str(&self) -> &Str<'a>;
-    fn split(&self, pat: &Str, rc: &mut RegexCache, push: impl FnMut(Str<'a>)) -> Result<()>;
-    fn assign_from_str(&mut self, s: &Str<'a>);
-}
 pub(crate) trait Line<'a>: Default {
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
     fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
@@ -48,18 +42,6 @@ pub(crate) trait LineReader {
         Ok(())
     }
     fn read_state(&self) -> i64;
-}
-
-impl<'a> Line1<'a> for Str<'static> {
-    fn as_str(&self) -> &Str<'a> {
-        self.upcast_ref()
-    }
-    fn split(&self, pat: &Str, rc: &mut RegexCache, mut push: impl FnMut(Str<'a>)) -> Result<()> {
-        rc.with_regex(pat, |re| self.split(re, |s| push(s.upcast())))
-    }
-    fn assign_from_str(&mut self, s: &Str<'a>) {
-        *self = s.clone().unmoor();
-    }
 }
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
@@ -345,6 +327,7 @@ impl FileWrite {
     }
 }
 
+// const CHUNK_SIZE: usize = 2 << 10;
 const CHUNK_SIZE: usize = 16 << 10;
 
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read>>> {
@@ -585,11 +568,10 @@ impl<S> FromIterator<S> for Iter<S> {
 }
 
 impl<S> Iter<S> {
-    #[inline]
+    #[inline(always)]
     pub(crate) fn has_next(&self) -> bool {
         self.cur.get() < self.items.len()
     }
-    #[inline]
     pub(crate) unsafe fn get_next(&self) -> &S {
         debug_assert!(self.has_next());
         let cur = self.cur.get();

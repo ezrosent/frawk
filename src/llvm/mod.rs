@@ -301,8 +301,9 @@ impl<'a, 'b> Generator<'a, 'b> {
         &mut self,
         stdin: impl std::io::Read + 'static,
         stdout: impl std::io::Write + 'static,
+        csv: bool,
     ) -> Result<()> {
-        let mut rt = intrinsics::Runtime::new(stdin, stdout);
+        let mut rt = intrinsics::Runtime::new(stdin, stdout, csv);
         self.gen_main()?;
         self.verify()?;
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
@@ -1416,11 +1417,7 @@ impl<'a> View<'a> {
                 self.bind_reg(dst, resv);
             }
             NextLineStdinFused() => {
-                let resv = self.call("next_line_stdin", &mut [self.runtime_val()]);
-                let res_loc = self.alloca(Ty::Str);
-                LLVMBuildStore(self.f.builder, resv, res_loc);
-                let zero = LLVMConstInt(self.tmap.get_ty(Ty::Int), 0, /*sign_extend=*/ 0);
-                self.call("set_col", &mut [self.runtime_val(), zero, res_loc]);
+                self.call("next_line_stdin_fused", &mut [self.runtime_val()]);
             }
             LookupIntInt(res, arr, k) => {
                 self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?

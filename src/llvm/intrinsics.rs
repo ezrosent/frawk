@@ -4,9 +4,9 @@ use crate::common::Either;
 use crate::compile::Ty;
 use crate::libc::c_void;
 use crate::runtime::{
-    self,
+    self, csv,
     printf::{printf, FormatArg},
-    splitter::RegexLine,
+    splitter::{CSVReader, RegexLine},
     FileRead, FileWrite, Float, Int, IntMap, Line, RegexCache, Str, StrMap, Variables,
 };
 
@@ -59,26 +59,30 @@ macro_rules! exit {
 
 pub(crate) struct Runtime<'a> {
     vars: Variables<'a>,
-    line: RegexLine,
+    input_data:
+        Either<(RegexLine, FileRead), (csv::Line, FileRead<CSVReader<Box<dyn std::io::Read>>>)>,
     regexes: RegexCache,
     write_files: FileWrite,
-    // TODO: get Interp working, then make this an enum (along with line)
-    // We could monomorphize everything here, but keeping it to a predictable branch seems pretty
-    // reasonable as a first pass.
-    read_files: FileRead,
 }
 
 impl<'a> Runtime<'a> {
     pub(crate) fn new(
         stdin: impl std::io::Read + 'static,
         stdout: impl std::io::Write + 'static,
+        csv: bool,
     ) -> Runtime<'a> {
         Runtime {
             vars: Default::default(),
-            line: Default::default(),
+            input_data: if csv {
+                Either::Right((
+                    Default::default(),
+                    FileRead::new(CSVReader::new(Box::new(stdin))),
+                ))
+            } else {
+                Either::Left((Default::default(), FileRead::new_transitional(stdin)))
+            },
             regexes: Default::default(),
             write_files: FileWrite::new(stdout),
-            read_files: FileRead::new_transitional(stdin),
         }
     }
 }
@@ -218,6 +222,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         read_err_stdin(rt_ty) -> int_ty;
         next_line(rt_ty, str_ref_ty) -> str_ty;
         next_line_stdin(rt_ty) -> str_ty;
+        next_line_stdin_fused(rt_ty);
 
         load_var_str(rt_ty, int_ty) -> str_ty;
         store_var_str(rt_ty, int_ty, str_ref_ty);
@@ -296,7 +301,9 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
-        runtime.read_files.read_err(&*(file as *mut Str)),
+        for_either!(&mut runtime.input_data, |(_, read_files)| {
+            read_files.read_err(&*(file as *mut Str))
+        }),
         "unexpected error when reading error status of file:"
     );
     res
@@ -305,16 +312,30 @@ pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> In
 #[no_mangle]
 pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
-    runtime.read_files.read_err_stdin()
+    for_either!(&mut runtime.input_data, |(_, read_files)| read_files
+        .read_err_stdin())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
+    let runtime = &mut *(runtime as *mut Runtime);
+    try_abort!(
+        for_either!(&mut runtime.input_data, |(line, read_files)| {
+            runtime
+                .regexes
+                .get_line_stdin_reuse(&runtime.vars.rs, read_files, line)
+        }),
+        "unexpected error when reading line from stdin:"
+    )
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
-        runtime
-            .regexes
-            .get_line_stdin(&runtime.vars.rs, &mut runtime.read_files),
+        for_either!(&mut runtime.input_data, |(_, read_files)| {
+            runtime.regexes.get_line_stdin(&runtime.vars.rs, read_files)
+        }),
         "unexpected error when reading line from stdin:"
     );
     mem::transmute::<Str, u128>(res)
@@ -324,10 +345,10 @@ pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
 pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let file = &*(file as *mut Str);
-    match runtime
-        .regexes
-        .get_line(file, &runtime.vars.rs, &mut runtime.read_files)
-    {
+    let res = for_either!(&mut runtime.input_data, |(_, read_files)| {
+        runtime.regexes.get_line(file, &runtime.vars.rs, read_files)
+    });
+    match res {
         Ok(res) => mem::transmute::<Str, u128>(res),
         Err(_) => mem::transmute::<Str, u128>("".into()),
     }
@@ -414,12 +435,15 @@ pub unsafe extern "C" fn split_int(
 #[no_mangle]
 pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
-    let res = match runtime.line.get_col(
-        col,
-        &runtime.vars.fs,
-        &runtime.vars.ofs,
-        &mut runtime.regexes,
-    ) {
+    let col_str = for_either!(&mut runtime.input_data, |(line, _)| {
+        line.get_col(
+            col,
+            &runtime.vars.fs,
+            &runtime.vars.ofs,
+            &mut runtime.regexes,
+        )
+    });
+    let res = match col_str {
         Ok(s) => s,
         Err(e) => fail!("get_col: {}", e),
     };
@@ -430,10 +454,12 @@ pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> u128 {
 pub unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let s = &*(s as *mut Str);
-    if let Err(e) = runtime
-        .line
-        .set_col(col, s, &runtime.vars.ofs, &mut runtime.regexes)
-    {
+    if let Err(e) = for_either!(&mut runtime.input_data, |(line, _)| line.set_col(
+        col,
+        s,
+        &runtime.vars.ofs,
+        &mut runtime.regexes,
+    )) {
         fail!("set_col: {}", e);
     }
 }
@@ -607,7 +633,9 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     let rt = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         if let Variable::NF = var {
-            rt.vars.nf = match rt.line.nf(&rt.vars.fs, &mut rt.regexes) {
+            rt.vars.nf = match for_either!(&mut rt.input_data, |(line, _)| line
+                .nf(&rt.vars.fs, &mut rt.regexes))
+            {
                 Ok(nf) => nf as Int,
                 Err(e) => fail!("nf: {}", e),
             };
@@ -767,7 +795,7 @@ pub unsafe extern "C" fn printf_impl_stdout(
 pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut u128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
-    rt.read_files.close(file);
+    for_either!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
     rt.write_files.close(file);
 }
 
