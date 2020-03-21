@@ -115,8 +115,7 @@ pub struct Stepper<'a> {
 
 impl<'a> Stepper<'a> {
     fn append(&mut self, s: Str<'static>) {
-        eprintln!("append={}", s);
-        let partial = mem::replace(&mut self.line.raw, Str::default());
+        let partial = mem::replace(&mut self.line.partial, Str::default());
         self.line.partial = Str::concat(partial, s);
     }
     fn append_slice(&mut self, i: usize, j: usize) {
@@ -128,7 +127,6 @@ impl<'a> Stepper<'a> {
     }
     pub fn promote(&mut self) {
         self.line.promote();
-        eprintln!("promote={:?}", self.line.fields);
     }
 
     fn get(&mut self, line_start: usize, j: usize, cur: usize) -> usize {
