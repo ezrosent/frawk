@@ -195,7 +195,6 @@ impl<'a> StrRep<'a> {
         let old = self.hi;
         self.hi = old & !0x7;
         ptr::drop_in_place(mem::transmute::<&mut StrRep<'a>, *mut T>(self));
-        self.hi = old;
     }
 
     unsafe fn copy(&self) -> StrRep<'a> {
