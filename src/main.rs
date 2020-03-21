@@ -78,11 +78,20 @@ macro_rules! fail {
         std::process::exit(1)
     }}
 }
+
 fn open_file_read(f: &str) -> io::BufReader<File> {
     match File::open(f) {
         Ok(f) => BufReader::new(f),
         Err(e) => fail!("failed to open file {}: {}", f, e),
     }
+}
+
+fn csv_supported() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    const IS_X64: bool = true;
+    #[cfg(not(target_arch = "x86_64"))]
+    const IS_X64: bool = false;
+    IS_X64 && is_x86_feature_detected!("avx2")
 }
 
 fn get_context<'a>(prog: &str, a: &'a Arena) -> cfg::ProgramContext<'a, &'a str> {
@@ -141,10 +150,11 @@ fn run_llvm(
     stdin: impl io::Read + 'static,
     stdout: impl io::Write + 'static,
     cfg: llvm::Config,
+    csv: bool,
 ) {
     let a = Arena::default();
     let mut ctx = get_context(prog, &a);
-    if let Err(e) = compile::run_llvm(&mut ctx, stdin, stdout, cfg) {
+    if let Err(e) = compile::run_llvm(&mut ctx, stdin, stdout, cfg, csv) {
         fail!("error compiling llvm: {}", e)
     }
 }
@@ -180,6 +190,9 @@ fn dump_bytecode(prog: &str) -> String {
 
 fn main() {
     let opts: Opts = Opts::parse();
+    if opts.csv && !csv_supported() {
+        fail!("CSV requires an x86 processor with AVX2 support");
+    }
     let program_string = {
         if let Some(p) = &opts.program {
             p.clone()
@@ -276,7 +289,8 @@ fn main() {
             oup,
             llvm::Config {
                 opt_level: opts.opt_level as usize
-            }
+            },
+            opts.csv,
         ));
     }
 }

@@ -27,25 +27,6 @@ impl Line {
     }
 }
 
-impl<'a> super::Line1<'a> for Line {
-    fn as_str(&self) -> &Str<'a> {
-        &self.raw.upcast_ref()
-    }
-    fn split(
-        &self,
-        _pat: &Str,
-        _rc: &mut super::RegexCache,
-        mut push: impl FnMut(Str<'a>),
-    ) -> Result<()> {
-        for f in self.fields.iter().cloned() {
-            push(f.upcast())
-        }
-        Ok(())
-    }
-
-    fn assign_from_str(&mut self, _s: &Str<'a>) {}
-}
-
 impl<'a> super::Line<'a> for Line {
     fn nf(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<usize> {
         Ok(self.fields.len())
@@ -106,6 +87,7 @@ pub enum State {
 }
 
 pub struct Stepper<'a> {
+    // TODO: make this a Buf and do the slicing manually.
     pub buf: &'a Str<'static>,
     pub off: &'a mut Offsets,
     pub prev_ix: usize,
@@ -139,6 +121,7 @@ impl<'a> Stepper<'a> {
         const COMMA: u8 = ',' as u8;
         const QUOTE: u8 = '"' as u8;
         const NL: u8 = '\n' as u8;
+        const CR: u8 = '\r' as u8;
         const BS: u8 = '\\' as u8;
         let line_start = self.prev_ix;
         let bs = &*self.buf.get_bytes();
@@ -160,6 +143,10 @@ impl<'a> Stepper<'a> {
                 State::Init => loop {
                     let ix = get_next!();
                     match *bs.get_unchecked(ix) {
+                        CR => {
+                            self.push_past(ix);
+                            continue;
+                        }
                         COMMA => {
                             self.push_past(ix);
                             self.promote();
@@ -408,7 +395,7 @@ mod avx2 {
                 // Allow for either \r\n or \n.
                 let end = (lf & cr_adjusted) | lf;
                 prev_iter_cr_end = cr.wrapping_shr(63);
-                (((end | sep) & !quote_mask) | (esc & quote_mask) | quote_locs)
+                (((end | sep | cr) & !quote_mask) | (esc & quote_mask) | quote_locs)
             }};
         }
         if len_minus_64 > INPUT_SIZE * BUFFER_SIZE {

@@ -149,12 +149,13 @@ pub(crate) fn run_llvm<'a>(
     // default to std::io::BufWriter::new(std::io::stdout())
     writer: impl std::io::Write + 'static,
     cfg: llvm::Config,
+    csv: bool,
 ) -> Result<()> {
     use crate::llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main(reader, writer)
+        gen.run_main(reader, writer, csv)
     }
 }
 

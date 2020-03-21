@@ -246,7 +246,9 @@ impl<R: Read> CSVReader<R> {
             // TODO: should this be ==? We get failures in that case, but is that a bug?
             if self.prev_ix >= self.inner.cur.len() {
                 if self.refresh_buf()? {
+                    // Out of space.
                     self.inner.last_len = 0;
+                    line.promote();
                     return Ok(());
                 }
                 self.prev_ix = 0;
@@ -254,6 +256,7 @@ impl<R: Read> CSVReader<R> {
             let mut stepper = self.stepper(st, &mut line);
             prev_ix = unsafe { stepper.step() };
             if let csv::State::Done = stepper.st {
+                self.prev_ix = prev_ix;
                 self.inner.last_len = line.len();
                 return Ok(());
             }
@@ -363,7 +366,12 @@ impl<R: Read> Reader<R> {
             bytes = &mut bytes[..bytes_read];
         }
 
-        let ulen = {
+        // For the odd benchmark to measure the impact of utf8 validation
+        const SKIP_UTF8: bool = false;
+
+        let ulen = if SKIP_UTF8 {
+            bytes.len()
+        } else {
             let opt = if done {
                 if is_utf8(bytes) {
                     Some(bytes.len())
