@@ -463,6 +463,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         tc
     }
     pub(crate) fn from_prog<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
+        use hashbrown::hash_map::Entry;
         let mut tc = TypeContext::from_pc(pc);
         let main = &pc.funcs[pc.main_offset];
         let main_base = tc.udf_nodes[pc.main_offset];
@@ -476,7 +477,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             for a in args.iter().cloned() {
                 flat_args.push(flatten(concrete(a))?);
             }
-            if let hashbrown::hash_map::Entry::Vacant(v) = func_tys.entry((*id, flat_args)) {
+            if let Entry::Vacant(v) = func_tys.entry((*id, flat_args)) {
                 v.insert(flatten(concrete(*tc.nw.read(*ix)))?);
             }
         }
@@ -489,15 +490,39 @@ impl<'b, 'c> TypeContext<'b, 'c> {
 
             // We won't use the function id if id.global, so setting it to 0 should be fine.
             // TODO clean up some of this to make it less misleading
-            if let Some(prev) = var_tys.insert((*id, func_id.unwrap_or(0), flat_args), v) {
-                if prev != v {
-                    return err!(
-                        "coherence violation! {:?} in args {:?}, we get both {:?} and {:?}",
-                        id,
-                        args,
-                        v,
-                        prev
-                    );
+            match var_tys.entry((*id, func_id.unwrap_or(0), flat_args)) {
+                Entry::Vacant(vac) => {
+                    vac.insert(v);
+                }
+                Entry::Occupied(mut occ) => {
+                    // In an earlier iteration wrt args, a variable could have been assigned Int,
+                    // but is now assigned Float. Pick the float copy, otherwise signal an error.
+                    //
+                    // TODO: this is a bit of a hack, This is only necessary because we aren't
+                    // filtering out calls to functions with (None) arguments, after solving. In
+                    // many cases, those functions are not here anymore. We should key this on
+                    // unflattened args.
+                    let prev = *occ.get();
+                    if prev != v {
+                        use compile::Ty;
+                        match (prev, v) {
+                            (Ty::Float, Ty::Int) => {}
+                            (Ty::Int, Ty::Float) => {
+                                occ.insert(v);
+                            }
+                            _ => {
+                                return err!(
+                                    "coherence violation! (func_id={:?}) {:?} in args {:?}, we get both {:?} and {:?}\nenv={:?}",
+                                    func_id,
+                                    id,
+                                    args,
+                                    v,
+                                    prev,
+                                    tc.env
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
