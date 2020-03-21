@@ -197,11 +197,11 @@ impl<'a> Stepper<'a> {
                         // burn the next entry. It should be a quote.
                         let _q = get_next!();
                         debug_assert_eq!(bs[_q], QUOTE);
+                        self.prev_ix += 1;
                     } else {
                         self.st = State::Init;
                     }
                 }
-                // TODO: CR/LF
                 State::BS => {
                     if bs.len() == self.prev_ix {
                         debug_assert_eq!(self.off.fields.len(), cur);
@@ -222,6 +222,7 @@ impl<'a> Stepper<'a> {
                             self.append(s);
                         }
                     }
+                    self.prev_ix += 1;
                     self.st = State::Quote;
                 }
                 State::Done => panic!("cannot start in Done state"),

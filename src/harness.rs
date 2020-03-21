@@ -326,8 +326,14 @@ mod tests {
         r#"function max(x, y) { return x<(y+0)?y:x; }
         { m=max($2, m);}
         END { print m; }"#,
-          "3\n",
-          @input "help,1\nsomeone,2\nout,3"
+          "3.5\n",
+          @input "help,1\nsomeone,2\nout,3.5"
+    );
+    test_program_csv!(
+        csv_quote_escape,
+        r#"{ print $2; }"#,
+          "1,2\t,3\"4\n",
+          @input r#"help,"1,2\t,3""4",5"#
     );
 
     test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
