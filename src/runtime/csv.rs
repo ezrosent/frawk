@@ -194,6 +194,9 @@ impl<'a> Stepper<'a> {
                     if *bs.get_unchecked(self.prev_ix) == QUOTE {
                         self.append("\"".into());
                         self.st = State::Quote;
+                        // burn the next entry. It should be a quote.
+                        let _q = get_next!();
+                        debug_assert_eq!(bs[_q], QUOTE);
                     } else {
                         self.st = State::Init;
                     }
