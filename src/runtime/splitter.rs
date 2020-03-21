@@ -247,8 +247,8 @@ impl<R: Read> CSVReader<R> {
             if self.prev_ix >= self.inner.cur.len() {
                 if self.refresh_buf()? {
                     // Out of space.
-                    self.inner.last_len = 0;
                     line.promote();
+                    self.inner.last_len = line.len();
                     return Ok(());
                 }
                 self.prev_ix = 0;

@@ -75,7 +75,7 @@ pub(crate) fn compile_llvm(prog: &str) -> Result<()> {
 }
 
 #[allow(unused)]
-pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
+pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>, csv: bool) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
@@ -86,7 +86,7 @@ pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>) -> Result<String> {
         std::io::Cursor::new(stdin),
         stdout.clone(),
         LLVM_CONFIG,
-        false,
+        csv,
     )?;
     let v = match Rc::try_unwrap(stdout.0) {
         Ok(v) => v.into_inner(),
@@ -251,19 +251,29 @@ mod tests {
 
     macro_rules! test_program {
         ($desc:ident, $e:expr, $out:expr) => {
-            test_program!($desc, $e, $out, @input "", @types []);
+            test_program!($desc, $e, $out, @input "", @types [], @csv false);
+        };
+        ($desc:ident, $e:expr, $out:expr, @csv $csv:expr) => {
+            test_program!($desc, $e, $out, @input "", @types [], @csv $csv);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr) => {
-            test_program!($desc, $e, $out, @input $inp, @types []);
+            test_program!($desc, $e, $out, @input $inp, @types [], @csv false);
+        };
+        ($desc:ident, $e:expr, $out:expr, @input $inp:expr, @csv $csv:expr) => {
+            test_program!($desc, $e, $out, @input $inp, @types [], @csv $csv);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr,
          @types [ $($i:ident :: $ty:expr),* ]) => {
+            test_program!($desc, $e, $out, @input $inp, @types [$($i :: $ty),*], @csv false);
+        };
+        ($desc:ident, $e:expr, $out:expr, @input $inp:expr,
+         @types [ $($i:ident :: $ty:expr),* ], @csv $csv:expr) => {
             mod $desc {
                 use super::*;
                 #[test]
                 fn bytecode() {
                     let a = Arena::default();
-                    let out = run_program(&a, $e, $inp, false);
+                    let out = run_program(&a, $e, $inp, $csv);
                     match out {
                         Ok((out, instrs, ts)) => {
                             let expected = $out;
@@ -286,7 +296,7 @@ mod tests {
                 }
                 #[test]
                 fn llvm() {
-                    match run_llvm($e, $inp) {
+                    match run_llvm($e, $inp, $csv) {
                         Ok(out) => assert_eq!(
                             out, $out,
                             "llvm=\n{}", dump_llvm($e).expect("failed to dump llvm")),
@@ -296,6 +306,29 @@ mod tests {
             }
         };
     }
+
+    macro_rules! test_program_csv {
+        ($desc:ident, $e:expr, $out:expr, @input $inp:expr) => {
+            test_program!($desc, $e, $out, @input $inp, @types [], @csv true);
+        };
+    }
+
+    test_program_csv!(
+        csv_no_escaping,
+        r#"function max(x, y) { return x<y?y:x; }
+        { m=max($2+0, m); }
+        END { print m; }"#,
+          "3.0\n",
+          @input "help,1\nsomeone,2\nout,3\n"
+    );
+    test_program_csv!(
+        csv_no_escaping_partial,
+        r#"function max(x, y) { return x<(y+0)?y:x; }
+        { m=max($2, m);}
+        END { print m; }"#,
+          "3\n",
+          @input "help,1\nsomeone,2\nout,3"
+    );
 
     test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
     test_program!(
@@ -733,7 +766,7 @@ Or this"#
                     #[bench]
                     fn end_to_end(b: &mut Bencher) {
                         b.iter(|| {
-                            black_box(run_llvm($e, $inp).unwrap());
+                            black_box(run_llvm($e, $inp, false).unwrap());
                         });
                     }
                     #[bench]
