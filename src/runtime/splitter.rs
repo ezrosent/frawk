@@ -4,7 +4,7 @@
 //! In addition to this API, it also handles reading in chunks, with appropriate handling of UTF8
 //! characters that cross chunk boundaries, or multi-chunk "lines".
 use super::csv;
-use super::str_impl::{Str, UniqueBuf};
+use super::str_impl::{Buf, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
 use super::{Int, LazyVec, Line, LineReader, RegexCache};
 use crate::common::Result;
@@ -13,6 +13,7 @@ use regex::Regex;
 use smallvec::SmallVec;
 
 use std::io::{ErrorKind, Read};
+use std::str;
 
 #[repr(i64)]
 #[derive(PartialEq, Eq, Copy, Clone)]
@@ -135,26 +136,26 @@ impl<R: Read> RegexSplitter<R> {
             // Why this map invocation? Match objects hold a reference to the substring, which
             // makes it harder for us to call mutable methods like advance in the body, so just get
             // the start and end pointers.
-            match self
-                .0
-                .cur
-                .with_str(|s| pat.find(s).map(|m| (m.start(), m.end())))
-            {
+            let s = unsafe {
+                str::from_utf8_unchecked(&self.0.buf.as_bytes()[self.0.start..self.0.end])
+            };
+            let start_offset = self.0.start;
+            match pat.find(s).map(|m| (m.start(), m.end())) {
                 Some((start, end)) => {
-                    let res = self.0.cur.slice(0, start);
+                    // Valid offsets guaranteed by correctness of regex `find`.
+                    let res =
+                        unsafe { self.0.buf.slice_to_str(start_offset, start_offset + start) };
                     // NOTE if we get a read error here, then we will stop one line early.
                     // That seems okay, but we could find out that it actually isn't, in which case
                     // we would want some more complicated error handling here.
                     handle_err!(self.0.advance(end));
-                    return if prefix.with_str(|s| s.len() > 0) {
-                        Str::concat(prefix, res.into())
-                    } else {
-                        res.into()
-                    };
+                    return Str::concat(prefix, res);
                 }
                 None => {
-                    let cur: Str = self.0.cur.clone();
-                    handle_err!(self.0.advance(self.0.cur.len()));
+                    // Valid offsets guaranteed by read_buf
+                    let cur: Str = unsafe { self.0.buf.slice_to_str(start_offset, self.0.end) };
+                    let remaining = self.0.remaining();
+                    handle_err!(self.0.advance(remaining));
                     prefix = Str::concat(prefix, cur);
                     if self.0.is_eof() {
                         // All done! Just return the rest of the buffer.
@@ -208,13 +209,13 @@ impl<R: Read> CSVReader<R> {
     }
     fn refresh_buf(&mut self) -> Result<bool> {
         // exhausted. Fetch a new `cur`.
-        self.inner.advance(self.inner.cur.len())?;
+        self.inner.advance(self.inner.remaining())?;
         if self.inner.is_eof() {
             return Ok(true);
         }
         let (next_iq, next_cre) = unsafe {
             csv::find_indexes(
-                &*self.inner.cur.get_bytes(),
+                &self.inner.buf.as_bytes()[self.inner.start..self.inner.end],
                 &mut self.cur_offsets,
                 self.prev_iter_inside_quote,
                 self.prev_iter_cr_end,
@@ -230,7 +231,12 @@ impl<R: Read> CSVReader<R> {
         line: &'a mut csv::Line,
     ) -> csv::Stepper<'a> {
         csv::Stepper {
-            buf: &self.inner.cur,
+            // TODO get rid of this
+            buf: unsafe {
+                self.inner
+                    .buf
+                    .slice_to_str(self.inner.start, self.inner.end)
+            },
             off: &mut self.cur_offsets,
             prev_ix: self.prev_ix,
             line,
@@ -244,7 +250,7 @@ impl<R: Read> CSVReader<R> {
         loop {
             self.prev_ix = prev_ix;
             // TODO: should this be ==? We get failures in that case, but is that a bug?
-            if self.prev_ix >= self.inner.cur.len() {
+            if self.prev_ix >= self.inner.remaining() {
                 if self.refresh_buf()? {
                     // Out of space.
                     line.promote();
@@ -271,7 +277,9 @@ struct Reader<R> {
     prefix: SmallVec<[u8; 8]>,
     // TODO we probably want this to be a Buf, not a Str, but Buf's API gives out bytes not
     // strings.
-    cur: Str<'static>,
+    buf: Buf,
+    start: usize,
+    end: usize,
     chunk_size: usize,
     state: ReaderState,
     last_len: usize,
@@ -304,7 +312,9 @@ impl<R: Read> Reader<R> {
         let res = Reader {
             inner: r,
             prefix: Default::default(),
-            cur: Default::default(),
+            buf: UniqueBuf::new(0).into_buf(),
+            start: 0,
+            end: 0,
             chunk_size,
             state: ReaderState::OK,
             last_len: 0,
@@ -312,8 +322,12 @@ impl<R: Read> Reader<R> {
         res
     }
 
+    fn remaining(&self) -> usize {
+        self.end - self.start
+    }
+
     pub(crate) fn is_eof(&self) -> bool {
-        self.cur.len() == 0 && self.state == ReaderState::EOF
+        self.end == self.start && self.state == ReaderState::EOF
     }
 
     fn read_state(&self) -> i64 {
@@ -330,22 +344,24 @@ impl<R: Read> Reader<R> {
     }
 
     fn advance(&mut self, n: usize) -> Result<()> {
-        let len = self.cur.len();
+        let len = self.end - self.start;
         if len > n {
-            self.cur = self.cur.slice(n, len);
+            self.start += n;
             return Ok(());
         }
         if self.is_eof() {
-            self.cur = Default::default();
             return Ok(());
         }
 
         let residue = n - len;
-        self.cur = self.get_next_buf()?;
+        let (next_buf, next_len) = self.get_next_buf()?;
+        self.buf = next_buf;
+        self.end = next_len;
+        self.start = 0;
         self.advance(residue)
     }
 
-    fn get_next_buf(&mut self) -> Result<Str<'static>> {
+    fn get_next_buf(&mut self) -> Result<(Buf, usize)> {
         // For CSV
         // TODO disable for regex-based splitting.
         const PADDING: usize = 32;
@@ -398,12 +414,12 @@ impl<R: Read> Reader<R> {
         if done {
             self.state = ReaderState::EOF;
         }
-        Ok(unsafe { data.into_buf().into_str() }.slice(0, ulen))
+        Ok((data.into_buf(), ulen))
     }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     // need to benchmark batched splitting vs. regular splitting to get a feel for things.
     extern crate test;
     use super::LineReader;
@@ -437,7 +453,15 @@ mod test {
         }
 
         let expected: Vec<_> = LINE.split(bs.as_str()).map(ref_str).collect();
-        assert_eq!(lines, expected);
+        if lines != expected {
+            eprintln!("lines.len={}, expected.len={}", lines.len(), expected.len());
+            for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
+                if l != e {
+                    eprintln!("mismatch at index {}:\ngot={:?}\nwant={:?}", i, l, e);
+                }
+            }
+            assert!(false, "lines do not match");
+        }
     }
 
     #[test]
@@ -465,7 +489,15 @@ mod test {
             lines.push(line);
         }
         let expected: Vec<_> = LINE.split(s.as_str()).map(ref_str).collect();
-        assert_eq!(lines, expected);
+        if lines != expected {
+            eprintln!("lines.len={}, expected.len={}", lines.len(), expected.len());
+            for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
+                if l != e {
+                    eprintln!("mismatch at index {}:\ngot={:?}\nwant={:?}", i, l, e);
+                }
+            }
+            assert!(false, "lines do not match");
+        }
     }
 
     #[bench]
