@@ -181,8 +181,11 @@ impl<'a> StrRep<'a> {
             StrTag::Shared => unsafe {
                 self.view_as(|s: &Shared| s.end as usize - s.start as usize)
             },
-            StrTag::Inline => unsafe { self.view_as(|i: &Inline| i.len()) },
+            StrTag::Inline => unsafe { self.view_as_inline(Inline::len) },
         }
+    }
+    unsafe fn view_as_inline<R>(&self, f: impl FnOnce(&Inline) -> R) -> R {
+        f(mem::transmute::<&StrRep<'a>, &Inline>(self))
     }
     unsafe fn view_as<T, R>(&mut self, f: impl FnOnce(&T) -> R) -> R {
         let old = self.hi;
@@ -531,7 +534,7 @@ impl<'a> Str<'a> {
             cur = loop {
                 match tag {
                     StrTag::Empty => {}
-                    StrTag::Inline => rep.view_as(|i: &Inline| {
+                    StrTag::Inline => rep.view_as_inline(|i| {
                         push_bytes!(i.bytes(), [0, i.len()]);
                     }),
                     StrTag::Literal => rep.view_as(|l: &Literal| {
@@ -570,7 +573,7 @@ impl<'a> Str<'a> {
         unsafe {
             match tag {
                 StrTag::Empty => &[],
-                StrTag::Inline => rep.view_as(|i: &Inline| i.bytes() as *const _),
+                StrTag::Inline => rep.view_as_inline(|i| i.bytes() as *const _),
                 StrTag::Literal => rep.view_as(|lit: &Literal| {
                     slice::from_raw_parts(lit.ptr, lit.len as usize) as *const _
                 }),
@@ -948,6 +951,32 @@ impl Buf {
         unsafe { self.0.offset(1) as *const u8 }
     }
 
+    // Unsafe because `from` and `to` must point to the start of characters.
+    pub unsafe fn slice_to_str<'a>(&self, from: usize, to: usize) -> Str<'a> {
+        debug_assert!(from <= self.len());
+        debug_assert!(to <= self.len());
+        debug_assert!(from <= to);
+        let len = to.saturating_sub(from);
+        if len == 0 {
+            Str::default()
+        } else if len <= MAX_INLINE_SIZE {
+            Str::from_rep(Inline::from_raw(self.as_ptr().offset(from as isize), len).into())
+        } else if std::intrinsics::likely(
+            from <= u32::max_value() as usize && to <= u32::max_value() as usize,
+        ) {
+            Str::from_rep(
+                Shared {
+                    buf: self.clone(),
+                    start: from as u32,
+                    end: to as u32,
+                }
+                .into(),
+            )
+        } else {
+            self.clone().into_str().slice(from, to)
+        }
+    }
+
     pub unsafe fn read_from_raw(ptr: *const u8, len: usize) -> Buf {
         let mut ubuf = UniqueBuf::new(len);
         ptr::copy_nonoverlapping(ptr, ubuf.as_mut_ptr(), len);
@@ -1108,7 +1137,7 @@ mod formatting {
                 match rep.get_tag() {
                     StrTag::Empty => write!(f, "Str(EMPTY)"),
                     StrTag::Inline => {
-                        rep.view_as(|i: &Inline| write!(f, "Str(Inline({:?}))", i.bytes()))
+                        rep.view_as_inline(|i| write!(f, "Str(Inline({:?}))", i.bytes()))
                     }
                     StrTag::Literal => rep.view_as(|l: &Literal| write!(f, "Str({:?})", l)),
                     StrTag::Shared => rep.view_as(|s: &Shared| write!(f, "Str({:?})", s)),
@@ -1141,7 +1170,7 @@ mod formatting {
                 "Buf {{ size: {}, count: {}, contents: {:?} }}",
                 header.size,
                 header.count.get(),
-                str::from_utf8(self.as_bytes()).unwrap(),
+                self.as_bytes(),
             )
         }
     }
