@@ -232,11 +232,8 @@ impl<R: Read> CSVReader<R> {
     ) -> csv::Stepper<'a> {
         csv::Stepper {
             // TODO get rid of this
-            buf: unsafe {
-                self.inner
-                    .buf
-                    .slice_to_str(self.inner.start, self.inner.end)
-            },
+            buf: &self.inner.buf,
+            buf_len: self.inner.end,
             off: &mut self.cur_offsets,
             prev_ix: self.prev_ix,
             line,

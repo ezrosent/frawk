@@ -2,8 +2,8 @@
 use std::mem;
 use std::str;
 
-use super::Str;
 use crate::common::Result;
+use crate::runtime::str_impl::{Buf, Str};
 
 #[derive(Default, Debug)]
 pub struct Offsets {
@@ -88,7 +88,8 @@ pub enum State {
 
 pub struct Stepper<'a> {
     // TODO: make this a Buf and do the slicing manually.
-    pub buf: Str<'static>,
+    pub buf: &'a Buf,
+    pub buf_len: usize,
     pub off: &'a mut Offsets,
     pub prev_ix: usize,
     pub st: State,
@@ -100,10 +101,10 @@ impl<'a> Stepper<'a> {
         let partial = mem::replace(&mut self.line.partial, Str::default());
         self.line.partial = Str::concat(partial, s);
     }
-    fn append_slice(&mut self, i: usize, j: usize) {
-        self.append(self.buf.slice(i, j));
+    unsafe fn append_slice(&mut self, i: usize, j: usize) {
+        self.append(self.buf.slice_to_str(i, j));
     }
-    fn push_past(&mut self, i: usize) {
+    unsafe fn push_past(&mut self, i: usize) {
         self.append_slice(self.prev_ix, i);
         self.prev_ix = i + 1;
     }
@@ -114,7 +115,7 @@ impl<'a> Stepper<'a> {
     fn get(&mut self, line_start: usize, j: usize, cur: usize) -> usize {
         self.off.start = cur;
         let line = mem::replace(&mut self.line.raw, Str::default());
-        self.line.raw = Str::concat(line, self.buf.slice(line_start, j));
+        self.line.raw = Str::concat(line, unsafe { self.buf.slice_to_str(line_start, j) });
         self.prev_ix
     }
     pub unsafe fn step(&mut self) -> usize {
@@ -124,7 +125,7 @@ impl<'a> Stepper<'a> {
         const CR: u8 = '\r' as u8;
         const BS: u8 = '\\' as u8;
         let line_start = self.prev_ix;
-        let bs = &*self.buf.get_bytes();
+        let bs = &self.buf.as_bytes()[0..self.buf_len];
         let mut cur = self.off.start;
         macro_rules! get_next {
             () => {
@@ -238,7 +239,10 @@ pub unsafe fn find_indexes(
     prev_iter_inside_quote: u64,
     prev_iter_cr_end: u64,
 ) -> (u64, u64) {
-    // TODO: cross-platform, sse2 version
+    // TODO: cross-platform, sse2 version. We have a gate for this in main for the time being.
+    //
+    // An sse2 version would be pretty easy. I'm not eager to build a fallback option; it may be
+    // better to build it with an existing regex library.
     avx2::find_indexes(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
 }
 
