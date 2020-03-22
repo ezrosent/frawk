@@ -87,7 +87,6 @@ pub enum State {
 }
 
 pub struct Stepper<'a> {
-    // TODO: make this a Buf and do the slicing manually.
     pub buf: &'a Buf,
     pub buf_len: usize,
     pub off: &'a mut Offsets,

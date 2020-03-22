@@ -31,18 +31,33 @@ pub enum Pattern<'a, 'b, I> {
 }
 
 pub struct Prog<'a, 'b, I> {
+    pub field_sep: Option<&'b str>,
+    pub prelude_vardecs: Vec<(I, &'a Expr<'a, 'b, I>)>,
     pub decs: Vec<FunDec<'a, 'b, I>>,
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
     pub end: Option<&'a Stmt<'a, 'b, I>>,
     pub pats: Vec<(Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
 }
 
-impl<'a, 'b, I> Prog<'a, 'b, I> {
+impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
     pub(crate) fn desugar<'outer>(&self, arena: &'a Arena<'outer>) -> Stmt<'a, 'b, I> {
         use {self::Binop::*, self::Expr::*, Stmt::*};
         let mut conds = 0;
         let mut res = vec![];
 
+        // Desugar -F flag
+        if let Some(sep) = self.field_sep {
+            res.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
+                arena.alloc_v(Var("FS".into())),
+                arena.alloc_v(StrLit(sep)),
+            )))));
+        }
+        // Desugar -v flags
+        for (ident, exp) in self.prelude_vardecs.iter() {
+            res.push(arena.alloc_v(Expr(
+                arena.alloc_v(Assign(arena.alloc_v(Var(ident.clone())), exp)),
+            )));
+        }
         if let Some(begin) = self.begin {
             res.push(begin);
         }

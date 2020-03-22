@@ -9,9 +9,16 @@ use crate::{
 
 grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>);
 
+
+pub VarDef: (&'a str, &'a Expr<'a, 'a, &'a str>) = {
+    <id:"IDENT"> "=" <e:BaseTerm> => (id, e),
+}
+
 pub Prog: Prog<'a,'a,&'a str> = {
     <fs:(NL <Function>)*> NL <begin:Begin?> <pats:PatAction*> <sa:Expr?> <end:End?> =>
         Prog {
+            field_sep: None,
+            prelude_vardecs: Default::default(),
             decs: fs,
             begin,
             end,

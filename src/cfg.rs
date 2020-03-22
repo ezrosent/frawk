@@ -253,11 +253,18 @@ impl<'a> ProgramContext<'a, &'a str> {
     }
 }
 
-impl<'a, I: Hash + Eq + Clone + Default + std::fmt::Display + std::fmt::Debug> ProgramContext<'a, I>
+impl<'a, I> ProgramContext<'a, I>
 where
     builtins::Variable: TryFrom<I>,
     builtins::Function: TryFrom<I>,
-    I: IsSprintf,
+    I: IsSprintf
+        + Hash
+        + Eq
+        + Clone
+        + Default
+        + std::fmt::Display
+        + std::fmt::Debug
+        + From<&'a str>,
 {
     pub(crate) fn local_globals(&mut self) -> HashSet<NumTy> {
         std::mem::replace(&mut self.shared.local_globals, Default::default())
