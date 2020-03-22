@@ -49,19 +49,28 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[derive(Clap, Debug)]
 struct Opts {
-    program: Option<String>,
-    input_files: Vec<String>,
-    #[clap(short = "f", long = "f")]
+    #[clap(
+        short = "f",
+        long = "f",
+        help = "a file containing a valid frawk program"
+    )]
     program_file: Option<String>,
-    #[clap(short = "O", long = "opt-level", default_value = "-1")]
+    #[clap(
+        short = "O",
+        long = "opt-level",
+        default_value = "3",
+        help = "the optimization level for the program. Levels 0 through 3 are passed \
+to LLVM. To force bytecode interpretation pass level -1. The bytecode interpreter is \
+good for debugging, and it will execute much faster for small scripts."
+    )]
     opt_level: i32,
     #[clap(short = "o", long = "out-file")]
     out_file: Option<String>,
-    #[clap(long = "dump-llvm")]
+    #[clap(long = "dump-llvm", help = "dump llvm-ir for input program")]
     dump_llvm: bool,
-    #[clap(long = "dump-bytecode")]
+    #[clap(long = "dump-bytecode", help = "dump typed bytecode for input program")]
     dump_bytecode: bool,
-    #[clap(long = "dump-cfg")]
+    #[clap(long = "dump-cfg", help = "dump untyped SSA form for input program")]
     dump_cfg: bool,
     #[clap(
         default_value = "32768",
@@ -69,14 +78,40 @@ struct Opts {
         help = "output to --out-file is buffered; this flag determines buffer size"
     )]
     out_file_bufsize: usize,
-    #[clap(long = "csv")]
+    #[clap(
+        long = "csv",
+        short = "c",
+        help = "input is split according to the rules of csv. \
+$0 contains the unescaped line, assigning to any columns including $0 does \
+nothing. To drive home the experimental nature of this feature, CSV requires \
+AVX2 support on the current CPU"
+    )]
     csv: bool,
+    #[clap(
+        long = "var",
+        short = "v",
+        multiple = true,
+        help = "Has the form <ident> = <expr>"
+    )]
+    var: Vec<String>,
+    #[clap(
+        short = "F",
+        help = "Field separator for frawk program. This is interpreted as a regular expression"
+    )]
+    field_sep: Option<String>,
+    program: Option<String>,
+    input_files: Vec<String>,
 }
 macro_rules! fail {
     ($($t:tt)*) => {{
         eprintln!($($t)*);
         std::process::exit(1)
     }}
+}
+
+struct Prelude<'a> {
+    var_decs: Vec<(&'a str, &'a ast::Expr<'a, 'a, &'a str>)>,
+    field_sep: Option<&'a str>,
 }
 
 fn open_file_read(f: &str) -> io::BufReader<File> {
@@ -94,13 +129,56 @@ fn csv_supported() -> bool {
     IS_X64 && is_x86_feature_detected!("avx2")
 }
 
-fn get_context<'a>(prog: &str, a: &'a Arena) -> cfg::ProgramContext<'a, &'a str> {
+fn get_vars<'a, 'b>(
+    vars: impl Iterator<Item = &'b str>,
+    a: &'a Arena,
+) -> Vec<(&'a str, &'a ast::Expr<'a, 'a, &'a str>)> {
+    let mut buf = Vec::new();
+    let mut stmts = Vec::new();
+    for (i, var) in vars.enumerate() {
+        buf.clear();
+        let var = a.alloc_str(var);
+        let lexer = lexer::Tokenizer::new(var);
+        let parser = parsing::syntax::VarDefParser::new();
+        match parser.parse(a, &mut buf, lexer) {
+            Ok(stmt) => stmts.push(stmt),
+            Err(e) => fail!(
+                "failed to parse var at index {}:\n{}\nerror:{:?}",
+                i + 1,
+                var,
+                e
+            ),
+        }
+    }
+    stmts
+}
+
+fn get_prelude<'a>(
+    a: &'a Arena,
+    field_sep: &Option<String>,
+    var_decs: &Vec<String>,
+) -> Prelude<'a> {
+    Prelude {
+        field_sep: field_sep.as_ref().map(|s| a.alloc_str(s.as_str())),
+        var_decs: get_vars(var_decs.iter().map(|s| s.as_str()), a),
+    }
+}
+
+fn get_context<'a>(
+    prog: &str,
+    a: &'a Arena,
+    prelude: Prelude<'a>,
+) -> cfg::ProgramContext<'a, &'a str> {
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = parsing::syntax::ProgParser::new();
     let stmt = match parser.parse(a, &mut buf, lexer) {
-        Ok(program) => a.alloc_v(program),
+        Ok(mut program) => {
+            program.field_sep = prelude.field_sep;
+            program.prelude_vardecs = prelude.var_decs;
+            a.alloc_v(program)
+        }
         Err(e) => {
             let mut ix = 0;
             let mut msg: Vec<u8> = "failed to parse program:\n======\n".as_bytes().into();
@@ -122,10 +200,12 @@ fn run_interp(
     prog: &str,
     stdin: impl io::Read + 'static,
     stdout: impl io::Write + 'static,
+    field_sep: &Option<String>,
+    var_decs: &Vec<String>,
     csv: bool,
 ) {
     let a = Arena::default();
-    let mut ctx = get_context(prog, &a);
+    let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
     if csv {
         let mut interp = match compile::bytecode_csv(&mut ctx, stdin, stdout) {
             Ok(ctx) => ctx,
@@ -150,28 +230,35 @@ fn run_llvm(
     stdin: impl io::Read + 'static,
     stdout: impl io::Write + 'static,
     cfg: llvm::Config,
+    field_sep: &Option<String>,
+    var_decs: &Vec<String>,
     csv: bool,
 ) {
     let a = Arena::default();
-    let mut ctx = get_context(prog, &a);
+    let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
     if let Err(e) = compile::run_llvm(&mut ctx, stdin, stdout, cfg, csv) {
         fail!("error compiling llvm: {}", e)
     }
 }
 
-fn dump_llvm(prog: &str, cfg: llvm::Config) -> String {
+fn dump_llvm(
+    prog: &str,
+    cfg: llvm::Config,
+    field_sep: &Option<String>,
+    var_decs: &Vec<String>,
+) -> String {
     let a = Arena::default();
-    let mut ctx = get_context(prog, &a);
+    let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
     match compile::dump_llvm(&mut ctx, cfg) {
         Ok(s) => s,
         Err(e) => fail!("error compiling llvm: {}", e),
     }
 }
 
-fn dump_bytecode(prog: &str) -> String {
+fn dump_bytecode(prog: &str, field_sep: &Option<String>, var_decs: &Vec<String>) -> String {
     use std::io::Cursor;
     let a = Arena::default();
-    let mut ctx = get_context(prog, &a);
+    let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
     let fake_io = Cursor::new(vec![]);
     let interp = match compile::bytecode(&mut ctx, fake_io.clone(), fake_io) {
         Ok(ctx) => ctx,
@@ -224,19 +311,23 @@ fn main() {
         let _ = write!(
             std::io::stdout(),
             "{}",
-            dump_llvm(program_string.as_str(), config)
+            dump_llvm(program_string.as_str(), config, &opts.field_sep, &opts.var)
         );
     }
     if opts.dump_bytecode {
         let _ = write!(
             std::io::stdout(),
             "{}",
-            dump_bytecode(program_string.as_str()),
+            dump_bytecode(program_string.as_str(), &opts.field_sep, &opts.var),
         );
     }
     if opts.dump_cfg {
         let a = Arena::default();
-        let ctx = get_context(program_string.as_str(), &a);
+        let ctx = get_context(
+            program_string.as_str(),
+            &a,
+            get_prelude(&a, &opts.field_sep, &opts.var),
+        );
         let mut stdout = std::io::stdout();
         let _ = ctx.dbg_print(&mut stdout);
     }
@@ -281,7 +372,14 @@ fn main() {
     }
 
     if opts.opt_level < 0 {
-        with_io!(|inp, oup| run_interp(program_string.as_str(), inp, oup, opts.csv));
+        with_io!(|inp, oup| run_interp(
+            program_string.as_str(),
+            inp,
+            oup,
+            &opts.field_sep,
+            &opts.var,
+            opts.csv
+        ));
     } else {
         with_io!(|inp, oup| run_llvm(
             program_string.as_str(),
@@ -290,6 +388,8 @@ fn main() {
             llvm::Config {
                 opt_level: opts.opt_level as usize
             },
+            &opts.field_sep,
+            &opts.var,
             opts.csv,
         ));
     }
