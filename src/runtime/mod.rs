@@ -94,8 +94,15 @@ where
         }
     }
     fn next_file(&mut self) -> bool {
-        self.0.pop();
-        self.0.len() > 0
+        match self.0.last_mut() {
+            Some(e) => {
+                if !e.next_file() {
+                    self.0.pop();
+                }
+                true
+            }
+            None => false,
+        }
     }
 }
 
