@@ -304,11 +304,9 @@ fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) 
 macro_rules! impl_pop {
     ($t:ty, $fld:ident) => {
         impl<'a, LR: runtime::LineReader> Pop<$t> for Interp<'a, LR> {
-            #[inline(always)]
             fn push(&mut self, r: Reg<$t>) {
                 push(&mut self.$fld, &r)
             }
-            #[inline(always)]
             fn pop(&mut self, r: Reg<$t>) {
                 let v = pop(&mut self.$fld);
                 *self.get_mut(r) = v;

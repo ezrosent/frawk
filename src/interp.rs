@@ -1020,13 +1020,11 @@ pub(crate) fn index_mut<'a, T>(
     }
 }
 
-#[inline(always)]
 pub(crate) fn push<'a, T: Clone>(s: &'a mut Storage<T>, reg: &Reg<T>) {
     let v = index(s, reg).clone();
     s.stack.push(v);
 }
 
-#[inline(always)]
 pub(crate) fn pop<'a, T: Clone>(s: &'a mut Storage<T>) -> T {
     s.stack.pop().expect("pop must be called on nonempty stack")
 }
