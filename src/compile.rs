@@ -1314,6 +1314,9 @@ impl<'a, 'b> View<'a, 'b> {
                 self.convert(dst_reg, dst_ty, target_reg, elt_ty)?
             }
             PrimExpr::LoadBuiltin(bv) => {
+                if dst_reg == UNUSED {
+                    return Ok(());
+                }
                 let target_ty = Ty::from(*bv);
                 let target_reg = if target_ty == dst_ty {
                     dst_reg

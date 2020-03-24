@@ -63,16 +63,28 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         }
 
         // Desugar patterns into if statements, with the usual desugaring for an empty action.
-        let mut inner = vec![];
+        let mut inner = vec![
+            arena.alloc_v(Expr(arena.alloc_v(Inc {
+                is_inc: true,
+                is_post: false,
+                x: arena.alloc_v(Var("NR".into())),
+            }))),
+            arena.alloc_v(Expr(arena.alloc_v(Inc {
+                is_inc: true,
+                is_post: false,
+                x: arena.alloc_v(Var("FNR".into())),
+            }))),
+        ];
+        let init_len = inner.len();
         for (pat, body) in self.pats.iter() {
             let body = if let Some(body) = body {
                 body
             } else {
-                arena.alloc(|| Print(vec![], None))
+                arena.alloc_v(Print(vec![], None))
             };
             match pat {
                 Pattern::Null => inner.push(body),
-                Pattern::Bool(pat) => inner.push(arena.alloc(|| If(pat, body, None))),
+                Pattern::Bool(pat) => inner.push(arena.alloc_v(If(pat, body, None))),
                 Pattern::Comma(l, r) => {
                     // We desugar pat1,pat2
                     // TODO: This doesn't totally work as a desugaring,
@@ -88,7 +100,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             }
         }
 
-        if inner.len() > 0 {
+        if self.end.is_some() || inner.len() > init_len {
             // Wrap the whole thing in a while((getline) > 0) { } statement.
             res.push(arena.alloc(move || {
                 While(

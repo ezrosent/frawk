@@ -100,6 +100,11 @@ impl<R: Read> LineReader for RegexSplitter<R> {
     fn read_state(&self) -> i64 {
         self.0.read_state()
     }
+    fn next_file(&mut self) -> bool {
+        // There is just one file. Set EOF.
+        self.0.force_eof();
+        false
+    }
 }
 
 pub struct RegexSplitter<R>(Reader<R>);
@@ -186,6 +191,10 @@ impl<R: Read> LineReader for CSVReader<R> {
     fn read_state(&self) -> i64 {
         let res = self.inner.read_state();
         res
+    }
+    fn next_file(&mut self) -> bool {
+        self.inner.force_eof();
+        false
     }
 }
 
@@ -325,6 +334,11 @@ impl<R: Read> Reader<R> {
 
     pub(crate) fn is_eof(&self) -> bool {
         self.end == self.start && self.state == ReaderState::EOF
+    }
+
+    fn force_eof(&mut self) {
+        self.start = self.end;
+        self.state = ReaderState::EOF;
     }
 
     fn read_state(&self) -> i64 {

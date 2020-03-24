@@ -42,6 +42,61 @@ pub(crate) trait LineReader {
         Ok(())
     }
     fn read_state(&self) -> i64;
+    fn next_file(&mut self) -> bool;
+    // read_line gets a reference to FNR?, Filename?
+    // Next: design `next` in terms of an annotated loop. next NextFile could be an instruction,
+    // followed by next (and banned inside UDFs)
+}
+
+pub struct ChainedReader<R>(Vec<R>);
+
+impl<R> ChainedReader<R> {
+    pub fn new(rs: impl Iterator<Item = R>) {
+        let mut v: Vec<_> = rs.collect();
+        v.reverse();
+        ChainedReader(v);
+    }
+}
+
+impl<R: LineReader> LineReader for ChainedReader<R>
+where
+    R::Line: Default,
+{
+    type Line = R::Line;
+    fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<R::Line> {
+        let mut line = R::Line::default();
+        self.read_line_reuse(pat, rc, &mut line)?;
+        Ok(line)
+    }
+    fn read_line_reuse<'a, 'b: 'a>(
+        &'b mut self,
+        pat: &Str,
+        rc: &mut RegexCache,
+        old: &'a mut Self::Line,
+    ) -> Result<()> {
+        let cur = match self.0.last_mut() {
+            Some(cur) => cur,
+            None => {
+                *old = Default::default();
+                return Ok(());
+            }
+        };
+        cur.read_line_reuse(pat, rc, old)?;
+        if cur.read_state() == 0 /* EOF */ && self.next_file() {
+            return self.read_line_reuse(pat, rc, old);
+        }
+        Ok(())
+    }
+    fn read_state(&self) -> i64 {
+        match self.0.last() {
+            Some(cur) => cur.read_state(),
+            None => 0, /* EOF */
+        }
+    }
+    fn next_file(&mut self) -> bool {
+        self.0.pop();
+        self.0.len() > 0
+    }
 }
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
@@ -568,7 +623,6 @@ impl<S> FromIterator<S> for Iter<S> {
 }
 
 impl<S> Iter<S> {
-    #[inline(always)]
     pub(crate) fn has_next(&self) -> bool {
         self.cur.get() < self.items.len()
     }
