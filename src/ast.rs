@@ -92,6 +92,20 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                     //   /\/*/,/*\// { comment++; next; }
                     // we would never finish the comment because `next` would bail out before
                     // EndCond. Something to consider once we add `next` support.
+                    // Idea 1: instead of
+                    //   if (l) { startcond; }
+                    //   if (incond) { <body> }
+                    //   if (r) { endcond; }
+                    // Do:
+                    //   if (l) { startcond; }
+                    //   if (r) { endcond; <body> }
+                    //   else if (incond) { <body> }
+                    // This works at the cost of code bloat. If we wanted to we could point these
+                    // into the same location... Except that doesn't work.
+                    // Idea 2: add a new auxiliary variable (or a new state to Cond)
+                    //  if (l) { startcond; }
+                    //  if (r) { lastcond; }
+                    //  if (incond || lastcond) { if (lastcond) endcond; <body> }
                     inner.push(arena.alloc_v(If(l, arena.alloc_v(StartCond(conds)), None)));
                     inner.push(arena.alloc_v(If(arena.alloc_v(Cond(conds)), body, None)));
                     inner.push(arena.alloc_v(If(r, arena.alloc_v(EndCond(conds)), None)));
