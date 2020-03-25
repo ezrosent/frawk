@@ -128,7 +128,7 @@ impl<'a> StrRep<'a> {
     fn get_tag(&self) -> StrTag {
         use StrTag::*;
         let tag = self.hi & 0x7;
-        assert!(tag < NUM_VARIANTS);
+        debug_assert!(tag < NUM_VARIANTS);
         match tag {
             0 => Empty,
             1 => Literal,
