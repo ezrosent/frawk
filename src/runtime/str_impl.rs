@@ -27,21 +27,19 @@ use std::str;
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(usize)]
 enum StrTag {
-    // TODO we probably do not need Empty, now that we have Inline
-    Empty = 0,
-    Literal = 1,
-    Shared = 2,
-    Concat = 3,
-    Boxed = 4,
-    Inline = 5,
+    Literal = 0,
+    Shared = 1,
+    Concat = 2,
+    Boxed = 3,
+    Inline = 4,
 }
-const NUM_VARIANTS: usize = 6;
+const NUM_VARIANTS: usize = 5;
 
 impl StrTag {
     fn forced(self) -> bool {
         use StrTag::*;
         match self {
-            Empty | Literal | Boxed | Inline => true,
+            Literal | Boxed | Inline => true,
             Concat | Shared => false,
         }
     }
@@ -53,6 +51,12 @@ impl StrTag {
 #[repr(transparent)]
 struct Inline(u128);
 const MAX_INLINE_SIZE: usize = 15;
+
+impl Default for Inline {
+    fn default() -> Inline {
+        Inline(StrTag::Inline as u128)
+    }
+}
 
 impl Inline {
     unsafe fn from_raw(ptr: *const u8, len: usize) -> Inline {
@@ -116,12 +120,18 @@ struct Concat<'a> {
     len: u64,
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 #[repr(C)]
 struct StrRep<'a> {
     hi: usize,
     low: u64,
     _marker: PhantomData<&'a ()>,
+}
+
+impl<'a> Default for StrRep<'a> {
+    fn default() -> StrRep<'a> {
+        Inline::default().into()
+    }
 }
 
 impl<'a> StrRep<'a> {
@@ -130,12 +140,11 @@ impl<'a> StrRep<'a> {
         let tag = self.hi & 0x7;
         debug_assert!(tag < NUM_VARIANTS);
         match tag {
-            0 => Empty,
-            1 => Literal,
-            2 => Shared,
-            3 => Concat,
-            4 => Boxed,
-            5 => Inline,
+            0 => Literal,
+            1 => Shared,
+            2 => Concat,
+            3 => Boxed,
+            4 => Inline,
             _ => unreachable!(),
         }
     }
@@ -156,7 +165,13 @@ macro_rules! impl_tagged_from {
 impl_tagged_from!(Shared, StrTag::Shared);
 impl_tagged_from!(Concat<'a>, StrTag::Concat);
 impl_tagged_from!(Boxed, StrTag::Boxed);
-impl_tagged_from!(Inline, StrTag::Inline);
+// Unlike the other variants, `Inline` always has the tag in place, so we can just cast it
+// directly.
+impl<'a> From<Inline> for StrRep<'a> {
+    fn from(i: Inline) -> StrRep<'a> {
+        unsafe { mem::transmute::<Inline, StrRep>(i) }
+    }
+}
 
 impl<'a> From<Literal<'a>> for StrRep<'a> {
     fn from(s: Literal<'a>) -> StrRep<'a> {
@@ -176,7 +191,6 @@ impl<'a> From<Literal<'a>> for StrRep<'a> {
 impl<'a> StrRep<'a> {
     fn len(&mut self) -> usize {
         match self.get_tag() {
-            StrTag::Empty => 0,
             StrTag::Boxed | StrTag::Literal | StrTag::Concat => self.low as usize,
             StrTag::Shared => unsafe {
                 self.view_as(|s: &Shared| s.end as usize - s.start as usize)
@@ -217,7 +231,7 @@ impl<'a> Drop for StrRep<'a> {
                 StrTag::Shared => self.drop_as::<Shared>(),
                 StrTag::Boxed => self.drop_as::<Boxed>(),
                 StrTag::Concat => self.drop_as::<Concat>(),
-                StrTag::Inline | StrTag::Literal | StrTag::Empty => {}
+                StrTag::Inline | StrTag::Literal => {}
             }
         };
     }
@@ -241,7 +255,7 @@ impl<'a> Str<'a> {
     // repeatedly.
     pub fn drop_is_trivial(&self) -> bool {
         match unsafe { self.rep() }.get_tag() {
-            StrTag::Empty | StrTag::Literal | StrTag::Inline => true,
+            StrTag::Literal | StrTag::Inline => true,
             StrTag::Shared | StrTag::Concat | StrTag::Boxed => false,
         }
     }
@@ -400,7 +414,7 @@ impl<'a> Str<'a> {
                 }
                 .into()
             }),
-            StrTag::Empty | StrTag::Inline | StrTag::Concat => unreachable!(),
+            StrTag::Inline | StrTag::Concat => unreachable!(),
         };
         Str::from_rep(new_rep)
     }
@@ -533,7 +547,6 @@ impl<'a> Str<'a> {
             let tag = rep.get_tag();
             cur = loop {
                 match tag {
-                    StrTag::Empty => {}
                     StrTag::Inline => rep.view_as_inline(|i| {
                         push_bytes!(i.bytes(), [0, i.len()]);
                     }),
@@ -572,7 +585,6 @@ impl<'a> Str<'a> {
         let tag = rep.get_tag();
         unsafe {
             match tag {
-                StrTag::Empty => &[],
                 StrTag::Inline => rep.view_as_inline(|i| i.bytes() as *const _),
                 StrTag::Literal => rep.view_as(|lit: &Literal| {
                     slice::from_raw_parts(lit.ptr, lit.len as usize) as *const _
@@ -618,7 +630,7 @@ impl<'a> Clone for Str<'a> {
         let tag = rep.get_tag();
         let cloned_rep: StrRep<'a> = unsafe {
             match tag {
-                StrTag::Empty | StrTag::Literal | StrTag::Inline => rep.copy(),
+                StrTag::Literal | StrTag::Inline => rep.copy(),
                 StrTag::Shared => rep.view_as(|s: &Shared| s.clone()).into(),
                 StrTag::Boxed => rep.view_as(|b: &Boxed| b.clone()).into(),
                 StrTag::Concat => rep.view_as(|c: &Concat<'a>| c.clone()).into(),
@@ -1135,7 +1147,6 @@ mod formatting {
             unsafe {
                 let rep = self.rep_mut();
                 match rep.get_tag() {
-                    StrTag::Empty => write!(f, "Str(EMPTY)"),
                     StrTag::Inline => {
                         rep.view_as_inline(|i| write!(f, "Str(Inline({:?}))", i.bytes()))
                     }
