@@ -24,7 +24,7 @@ clap = { git = "https://github.com/clap-rs/clap/" }
 
 [profile.release]
 lto = "fat"
-# debug=true
+debug=true
 # codegen-units=1
 
 [build-dependencies]
