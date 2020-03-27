@@ -27,11 +27,11 @@ use std::str;
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(usize)]
 enum StrTag {
-    Literal = 0,
-    Shared = 1,
-    Concat = 2,
-    Boxed = 3,
-    Inline = 4,
+    Inline = 0,
+    Literal = 1,
+    Shared = 2,
+    Concat = 3,
+    Boxed = 4,
 }
 const NUM_VARIANTS: usize = 5;
 
@@ -61,6 +61,9 @@ impl Default for Inline {
 impl Inline {
     unsafe fn from_raw(ptr: *const u8, len: usize) -> Inline {
         debug_assert!(len <= MAX_INLINE_SIZE);
+        if len > MAX_INLINE_SIZE {
+            std::hint::unreachable_unchecked();
+        }
         let mut res = ((len << 3) | StrTag::Inline as usize) as u128;
         ptr::copy_nonoverlapping(
             ptr,
@@ -140,11 +143,11 @@ impl<'a> StrRep<'a> {
         let tag = self.hi & 0x7;
         debug_assert!(tag < NUM_VARIANTS);
         match tag {
-            0 => Literal,
-            1 => Shared,
-            2 => Concat,
-            3 => Boxed,
-            4 => Inline,
+            0 => Inline,
+            1 => Literal,
+            2 => Shared,
+            3 => Concat,
+            4 => Boxed,
             _ => unreachable!(),
         }
     }
@@ -245,6 +248,9 @@ impl<'a> Drop for StrRep<'a> {
 pub struct Str<'a>(UnsafeCell<StrRep<'a>>);
 
 impl<'a> Str<'a> {
+    fn is_empty(&self) -> bool {
+        unsafe { mem::transmute::<&Str, &Inline>(self) == &Inline::default() }
+    }
     unsafe fn rep(&self) -> &StrRep<'a> {
         &*self.0.get()
     }
@@ -344,14 +350,14 @@ impl<'a> Str<'a> {
     }
 
     pub fn concat(left: Str<'a>, right: Str<'a>) -> Str<'a> {
-        let llen = left.len();
-        if llen == 0 {
+        if left.is_empty() {
             return right;
         }
-        let rlen = right.len();
-        if rlen == 0 {
+        if right.is_empty() {
             return left;
         }
+        let llen = left.len();
+        let rlen = right.len();
         let new_len = llen + rlen;
         if new_len <= MAX_INLINE_SIZE {
             let mut b = DynamicBuf::new(0);
@@ -793,10 +799,16 @@ impl DynamicBufHeap {
 impl Write for DynamicBufHeap {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let cap = self.size();
+        debug_assert!(
+            cap >= self.write_head,
+            "cap={}, write_head={}",
+            cap,
+            self.write_head
+        );
         let remaining = cap - self.write_head;
         unsafe {
             if remaining < buf.len() {
-                let new_cap = std::cmp::max(buf.len(), cap * 2);
+                let new_cap = std::cmp::max(cap + buf.len(), cap * 2);
                 self.realloc(new_cap);
                 ptr::copy(
                     buf.as_ptr(),
@@ -826,6 +838,12 @@ impl Write for DynamicBufHeap {
 pub enum DynamicBuf {
     Inline(smallvec::SmallVec<[u8; MAX_INLINE_SIZE]>),
     Heap(DynamicBufHeap),
+}
+
+impl Default for DynamicBuf {
+    fn default() -> DynamicBuf {
+        DynamicBuf::Inline(Default::default())
+    }
 }
 
 impl DynamicBuf {
