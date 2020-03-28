@@ -374,16 +374,13 @@ impl FileWrite {
         }
     }
 
-    pub(crate) fn write_line(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
+    pub(crate) fn write_str(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
         self.with_handle(append, path, |writer| {
             s.with_str(|s| {
                 if let Err(e) = writer.write_all(s.as_bytes()) {
-                    err!("failed to write to file: {}", e)
-                } else if let Err(e) = writer.write_all("\n".as_bytes()) {
-                    err!("failed to write newline to file: {}", e)
-                } else {
-                    Ok(())
+                    return err!("failed to write to {}: {}", path, e);
                 }
+                Ok(())
             })
         })
     }

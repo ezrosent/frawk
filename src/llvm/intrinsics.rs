@@ -356,13 +356,9 @@ pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> u
 
 #[no_mangle]
 pub unsafe extern "C" fn print_stdout(runtime: *mut c_void, txt: *mut c_void) {
-    let newline: Str<'static> = "\n".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let txt = &*(txt as *mut Str);
-    if runtime.write_files.write_str_stdout(txt).is_err() {
-        exit!(runtime);
-    }
-    if runtime.write_files.write_str_stdout(&newline).is_err() {
+    if let Err(_) = runtime.write_files.write_str_stdout(txt) {
         exit!(runtime);
     }
 }
@@ -379,7 +375,7 @@ pub unsafe extern "C" fn print(
     let out = &*(out as *mut Str);
     if runtime
         .write_files
-        .write_line(out, txt, append != 0)
+        .write_str(out, txt, append != 0)
         .is_err()
     {
         exit!(runtime);

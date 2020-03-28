@@ -146,7 +146,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
 
     pub(crate) fn run(&mut self) -> Result<()> {
         use Instr::*;
-        let newline: Str = "\n".into();
         let mut scratch: Vec<runtime::FormatArg> = Vec::new();
         // We are only accessing one vector at a time here, but it's hard to convince the borrow
         // checker of this fact, so we access the vectors through raw pointers.
@@ -461,18 +460,16 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     }
                     PrintStdout(txt) => {
                         let txt = index(&self.strs, txt);
-                        let mut res = self.write_files.write_str_stdout(txt).is_err();
-                        res = res || self.write_files.write_str_stdout(&newline).is_err();
                         // Why do this? We want to exit cleanly when output is closed. We use this
                         // pattern for other IO functions as well.
-                        if res {
+                        if let Err(_) = self.write_files.write_str_stdout(txt) {
                             return Ok(());
                         }
                     }
                     Print(txt, out, append) => {
                         let txt = index(&self.strs, txt);
                         let out = index(&self.strs, out);
-                        if self.write_files.write_line(out, txt, *append).is_err() {
+                        if let Err(_) = self.write_files.write_str(out, txt, *append) {
                             return Ok(());
                         };
                     }
