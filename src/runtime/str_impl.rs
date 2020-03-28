@@ -27,21 +27,19 @@ use std::str;
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(usize)]
 enum StrTag {
-    // TODO we probably do not need Empty, now that we have Inline
-    Empty = 0,
+    Inline = 0,
     Literal = 1,
     Shared = 2,
     Concat = 3,
     Boxed = 4,
-    Inline = 5,
 }
-const NUM_VARIANTS: usize = 6;
+const NUM_VARIANTS: usize = 5;
 
 impl StrTag {
     fn forced(self) -> bool {
         use StrTag::*;
         match self {
-            Empty | Literal | Boxed | Inline => true,
+            Literal | Boxed | Inline => true,
             Concat | Shared => false,
         }
     }
@@ -54,9 +52,18 @@ impl StrTag {
 struct Inline(u128);
 const MAX_INLINE_SIZE: usize = 15;
 
+impl Default for Inline {
+    fn default() -> Inline {
+        Inline(StrTag::Inline as u128)
+    }
+}
+
 impl Inline {
     unsafe fn from_raw(ptr: *const u8, len: usize) -> Inline {
         debug_assert!(len <= MAX_INLINE_SIZE);
+        if len > MAX_INLINE_SIZE {
+            std::hint::unreachable_unchecked();
+        }
         let mut res = ((len << 3) | StrTag::Inline as usize) as u128;
         ptr::copy_nonoverlapping(
             ptr,
@@ -109,19 +116,45 @@ struct ConcatInner<'a> {
     left: Str<'a>,
     right: Str<'a>,
 }
-#[derive(Clone, Debug)]
+
+#[derive(Clone)]
 #[repr(C)]
 struct Concat<'a> {
     inner: Rc<ConcatInner<'a>>,
     len: u64,
 }
 
-#[derive(Default, PartialEq, Eq)]
+impl<'a> Concat<'a> {
+    // unsafe because len must be left.len() + right.len(). It must also be greater than
+    // MAX_INLINE_LEN.
+    unsafe fn new(len: u64, left: Str<'a>, right: Str<'a>) -> Concat<'a> {
+        debug_assert!(len > MAX_INLINE_SIZE as u64);
+        debug_assert_eq!(len, (left.len() + right.len()) as u64);
+        Concat {
+            len,
+            inner: Rc::new(ConcatInner { left, right }),
+        }
+    }
+    fn left(&self) -> Str<'a> {
+        self.inner.left.clone()
+    }
+    fn right(&self) -> Str<'a> {
+        self.inner.right.clone()
+    }
+}
+
+#[derive(PartialEq, Eq)]
 #[repr(C)]
 struct StrRep<'a> {
     hi: usize,
     low: u64,
     _marker: PhantomData<&'a ()>,
+}
+
+impl<'a> Default for StrRep<'a> {
+    fn default() -> StrRep<'a> {
+        Inline::default().into()
+    }
 }
 
 impl<'a> StrRep<'a> {
@@ -130,12 +163,11 @@ impl<'a> StrRep<'a> {
         let tag = self.hi & 0x7;
         debug_assert!(tag < NUM_VARIANTS);
         match tag {
-            0 => Empty,
+            0 => Inline,
             1 => Literal,
             2 => Shared,
             3 => Concat,
             4 => Boxed,
-            5 => Inline,
             _ => unreachable!(),
         }
     }
@@ -156,7 +188,13 @@ macro_rules! impl_tagged_from {
 impl_tagged_from!(Shared, StrTag::Shared);
 impl_tagged_from!(Concat<'a>, StrTag::Concat);
 impl_tagged_from!(Boxed, StrTag::Boxed);
-impl_tagged_from!(Inline, StrTag::Inline);
+// Unlike the other variants, `Inline` always has the tag in place, so we can just cast it
+// directly.
+impl<'a> From<Inline> for StrRep<'a> {
+    fn from(i: Inline) -> StrRep<'a> {
+        unsafe { mem::transmute::<Inline, StrRep>(i) }
+    }
+}
 
 impl<'a> From<Literal<'a>> for StrRep<'a> {
     fn from(s: Literal<'a>) -> StrRep<'a> {
@@ -176,7 +214,6 @@ impl<'a> From<Literal<'a>> for StrRep<'a> {
 impl<'a> StrRep<'a> {
     fn len(&mut self) -> usize {
         match self.get_tag() {
-            StrTag::Empty => 0,
             StrTag::Boxed | StrTag::Literal | StrTag::Concat => self.low as usize,
             StrTag::Shared => unsafe {
                 self.view_as(|s: &Shared| s.end as usize - s.start as usize)
@@ -217,7 +254,7 @@ impl<'a> Drop for StrRep<'a> {
                 StrTag::Shared => self.drop_as::<Shared>(),
                 StrTag::Boxed => self.drop_as::<Boxed>(),
                 StrTag::Concat => self.drop_as::<Concat>(),
-                StrTag::Inline | StrTag::Literal | StrTag::Empty => {}
+                StrTag::Inline | StrTag::Literal => {}
             }
         };
     }
@@ -231,6 +268,9 @@ impl<'a> Drop for StrRep<'a> {
 pub struct Str<'a>(UnsafeCell<StrRep<'a>>);
 
 impl<'a> Str<'a> {
+    fn is_empty(&self) -> bool {
+        unsafe { mem::transmute::<&Str, &Inline>(self) == &Inline::default() }
+    }
     unsafe fn rep(&self) -> &StrRep<'a> {
         &*self.0.get()
     }
@@ -241,7 +281,7 @@ impl<'a> Str<'a> {
     // repeatedly.
     pub fn drop_is_trivial(&self) -> bool {
         match unsafe { self.rep() }.get_tag() {
-            StrTag::Empty | StrTag::Literal | StrTag::Inline => true,
+            StrTag::Literal | StrTag::Inline => true,
             StrTag::Shared | StrTag::Concat | StrTag::Boxed => false,
         }
     }
@@ -330,14 +370,16 @@ impl<'a> Str<'a> {
     }
 
     pub fn concat(left: Str<'a>, right: Str<'a>) -> Str<'a> {
-        let llen = left.len();
-        if llen == 0 {
+        if left.is_empty() {
+            mem::forget(left);
             return right;
         }
-        let rlen = right.len();
-        if rlen == 0 {
+        if right.is_empty() {
+            mem::forget(right);
             return left;
         }
+        let llen = left.len();
+        let rlen = right.len();
         let new_len = llen + rlen;
         if new_len <= MAX_INLINE_SIZE {
             let mut b = DynamicBuf::new(0);
@@ -352,10 +394,7 @@ impl<'a> Str<'a> {
             // allocation. We _only_ want to do this if we reevaluate the `realloc` that DynamicBuf
             // does when you convert it back into a string, though. We would have to keep a
             // capacity around as well as a length.
-            let concat = Concat {
-                len: new_len as u64,
-                inner: Rc::new(ConcatInner { left, right }),
-            };
+            let concat = unsafe { Concat::new(new_len as u64, left, right) };
             Str::from_rep(concat.into())
         }
     }
@@ -400,7 +439,7 @@ impl<'a> Str<'a> {
                 }
                 .into()
             }),
-            StrTag::Empty | StrTag::Inline | StrTag::Concat => unreachable!(),
+            StrTag::Inline | StrTag::Concat => unreachable!(),
         };
         Str::from_rep(new_rep)
     }
@@ -533,7 +572,6 @@ impl<'a> Str<'a> {
             let tag = rep.get_tag();
             cur = loop {
                 match tag {
-                    StrTag::Empty => {}
                     StrTag::Inline => rep.view_as_inline(|i| {
                         push_bytes!(i.bytes(), [0, i.len()]);
                     }),
@@ -548,8 +586,8 @@ impl<'a> Str<'a> {
                     }),
                     StrTag::Concat => {
                         break rep.view_as(|c: &Concat| {
-                            todos.push(c.inner.right.clone());
-                            c.inner.left.clone()
+                            todos.push(c.right());
+                            c.left()
                         })
                     }
                 }
@@ -572,7 +610,6 @@ impl<'a> Str<'a> {
         let tag = rep.get_tag();
         unsafe {
             match tag {
-                StrTag::Empty => &[],
                 StrTag::Inline => rep.view_as_inline(|i| i.bytes() as *const _),
                 StrTag::Literal => rep.view_as(|lit: &Literal| {
                     slice::from_raw_parts(lit.ptr, lit.len as usize) as *const _
@@ -618,7 +655,7 @@ impl<'a> Clone for Str<'a> {
         let tag = rep.get_tag();
         let cloned_rep: StrRep<'a> = unsafe {
             match tag {
-                StrTag::Empty | StrTag::Literal | StrTag::Inline => rep.copy(),
+                StrTag::Literal | StrTag::Inline => rep.copy(),
                 StrTag::Shared => rep.view_as(|s: &Shared| s.clone()).into(),
                 StrTag::Boxed => rep.view_as(|b: &Boxed| b.clone()).into(),
                 StrTag::Concat => rep.view_as(|c: &Concat<'a>| c.clone()).into(),
@@ -781,10 +818,16 @@ impl DynamicBufHeap {
 impl Write for DynamicBufHeap {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let cap = self.size();
+        debug_assert!(
+            cap >= self.write_head,
+            "cap={}, write_head={}",
+            cap,
+            self.write_head
+        );
         let remaining = cap - self.write_head;
         unsafe {
             if remaining < buf.len() {
-                let new_cap = std::cmp::max(buf.len(), cap * 2);
+                let new_cap = std::cmp::max(cap + buf.len(), cap * 2);
                 self.realloc(new_cap);
                 ptr::copy(
                     buf.as_ptr(),
@@ -814,6 +857,12 @@ impl Write for DynamicBufHeap {
 pub enum DynamicBuf {
     Inline(smallvec::SmallVec<[u8; MAX_INLINE_SIZE]>),
     Heap(DynamicBufHeap),
+}
+
+impl Default for DynamicBuf {
+    fn default() -> DynamicBuf {
+        DynamicBuf::Inline(Default::default())
+    }
 }
 
 impl DynamicBuf {
@@ -1135,13 +1184,14 @@ mod formatting {
             unsafe {
                 let rep = self.rep_mut();
                 match rep.get_tag() {
-                    StrTag::Empty => write!(f, "Str(EMPTY)"),
                     StrTag::Inline => {
                         rep.view_as_inline(|i| write!(f, "Str(Inline({:?}))", i.bytes()))
                     }
                     StrTag::Literal => rep.view_as(|l: &Literal| write!(f, "Str({:?})", l)),
                     StrTag::Shared => rep.view_as(|s: &Shared| write!(f, "Str({:?})", s)),
-                    StrTag::Concat => rep.view_as(|c: &Concat| write!(f, "Str({:?})", c)),
+                    StrTag::Concat => rep.view_as(|c: &Concat| {
+                        write!(f, "Str(Concat({:?}, {:?}))", c.left(), c.right())
+                    }),
                     StrTag::Boxed => rep.view_as(|b: &Boxed| write!(f, "Str({:?})", b)),
                 }?
             }

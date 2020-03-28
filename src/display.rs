@@ -153,6 +153,7 @@ impl Display for Variable {
                 ARGC => "ARGC",
                 ARGV => "ARGV",
                 OFS => "OFS",
+                ORS => "ORS",
                 FS => "FS",
                 RS => "RS",
                 NF => "NF",
