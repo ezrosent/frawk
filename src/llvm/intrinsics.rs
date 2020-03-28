@@ -4,10 +4,11 @@ use crate::common::Either;
 use crate::compile::Ty;
 use crate::libc::c_void;
 use crate::runtime::{
-    self, csv,
+    self,
     printf::{printf, FormatArg},
-    splitter::{CSVReader, RegexLine, RegexSplitter},
-    FileRead, FileWrite, Float, Int, IntMap, Line, RegexCache, Str, StrMap, Variables,
+    splitter::{CSVReader, RegexSplitter},
+    ChainedReader, FileRead, FileWrite, Float, Int, IntMap, Line, LineReader, RegexCache, Str,
+    StrMap, Variables,
 };
 
 use hashbrown::HashMap;
@@ -20,6 +21,7 @@ type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
 use std::cell::RefCell;
 use std::convert::TryFrom;
+use std::io;
 use std::mem;
 use std::slice;
 
@@ -57,36 +59,67 @@ macro_rules! exit {
     }};
 }
 
+type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
+type InputData = Either<
+    InputTuple<ChainedReader<RegexSplitter<Box<dyn io::Read>>>>,
+    InputTuple<ChainedReader<CSVReader<Box<dyn io::Read>>>>,
+>;
+
+pub(crate) trait IntoRuntime {
+    fn into_runtime<'a>(self, stdout: impl io::Write + 'static) -> Runtime<'a>;
+}
+
+impl IntoRuntime for ChainedReader<CSVReader<Box<dyn io::Read>>> {
+    fn into_runtime<'a>(self, stdout: impl io::Write + 'static) -> Runtime<'a> {
+        Runtime {
+            vars: Default::default(),
+            input_data: Either::Right((Default::default(), FileRead::new(self))),
+            regexes: Default::default(),
+            write_files: FileWrite::new(stdout),
+        }
+    }
+}
+
+impl IntoRuntime for ChainedReader<RegexSplitter<Box<dyn io::Read>>> {
+    fn into_runtime<'a>(self, stdout: impl io::Write + 'static) -> Runtime<'a> {
+        Runtime {
+            vars: Default::default(),
+            input_data: Either::Left((Default::default(), FileRead::new(self))),
+            regexes: Default::default(),
+            write_files: FileWrite::new(stdout),
+        }
+    }
+}
+
 pub(crate) struct Runtime<'a> {
     vars: Variables<'a>,
-    input_data:
-        Either<(RegexLine, FileRead), (csv::Line, FileRead<CSVReader<Box<dyn std::io::Read>>>)>,
+    input_data: InputData,
     regexes: RegexCache,
     write_files: FileWrite,
 }
 
 impl<'a> Runtime<'a> {
+    // TODO get rid of this function
     pub(crate) fn new(
-        stdin: impl std::io::Read + 'static,
-        stdout: impl std::io::Write + 'static,
+        stdin: impl io::Read + 'static,
+        stdout: impl io::Write + 'static,
         csv: bool,
     ) -> Runtime<'a> {
-        Runtime {
-            vars: Default::default(),
-            input_data: if csv {
-                Either::Right((
-                    Default::default(),
-                    FileRead::new(CSVReader::new(Box::new(stdin), /*name=*/ "-")),
-                ))
-            } else {
-                let stdin_name = "-";
-                let boxed_stdin: Box<dyn std::io::Read + 'static> = Box::new(stdin);
-                let rs = RegexSplitter::new(boxed_stdin, runtime::CHUNK_SIZE, stdin_name);
-                Either::Left((Default::default(), FileRead::new(rs)))
-            },
-            regexes: Default::default(),
-            write_files: FileWrite::new(stdout),
+        use std::iter::once;
+        let stdin: Box<dyn io::Read> = Box::new(stdin);
+        if csv {
+            ChainedReader::new(once(CSVReader::new(stdin, "-"))).into_runtime(stdout)
+        } else {
+            ChainedReader::new(once(RegexSplitter::new(stdin, runtime::CHUNK_SIZE, "-")))
+                .into_runtime(stdout)
         }
+    }
+
+    fn reset_file_vars(&mut self) {
+        self.vars.fnr = 0;
+        self.vars.filename = for_either!(&mut self.input_data, |(_, read_files)| {
+            read_files.stdin_filename().upcast()
+        });
     }
 }
 
@@ -322,7 +355,7 @@ pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
 #[no_mangle]
 pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
-    let _changed = try_abort!(
+    let changed = try_abort!(
         for_either!(&mut runtime.input_data, |(line, read_files)| {
             runtime
                 .regexes
@@ -330,17 +363,23 @@ pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
         }),
         "unexpected error when reading line from stdin:"
     );
+    if changed {
+        runtime.reset_file_vars();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
-    let (_changed, res) = try_abort!(
+    let (changed, res) = try_abort!(
         for_either!(&mut runtime.input_data, |(_, read_files)| {
             runtime.regexes.get_line_stdin(&runtime.vars.rs, read_files)
         }),
         "unexpected error when reading line from stdin:"
     );
+    if changed {
+        runtime.reset_file_vars();
+    }
     mem::transmute::<Str, u128>(res)
 }
 
@@ -607,9 +646,9 @@ pub unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
 
 #[no_mangle]
 pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> u128 {
-    let rt = &*(rt as *mut Runtime);
+    let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        let res = try_abort!(rt.vars.load_str(var));
+        let res = try_abort!(runtime.vars.load_str(var));
         mem::transmute::<Str, u128>(res)
     } else {
         fail!("invalid variable code={}", var)
@@ -618,10 +657,10 @@ pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> u128 {
 
 #[no_mangle]
 pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) {
-    let rt = &mut *(rt as *mut Runtime);
+    let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let s = (&*(s as *mut Str)).clone();
-        try_abort!(rt.vars.store_str(var, s))
+        try_abort!(runtime.vars.store_str(var, s))
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -629,17 +668,17 @@ pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_vo
 
 #[no_mangle]
 pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
-    let rt = &mut *(rt as *mut Runtime);
+    let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         if let Variable::NF = var {
-            rt.vars.nf = match for_either!(&mut rt.input_data, |(line, _)| line
-                .nf(&rt.vars.fs, &mut rt.regexes))
+            runtime.vars.nf = match for_either!(&mut runtime.input_data, |(line, _)| line
+                .nf(&runtime.vars.fs, &mut runtime.regexes))
             {
                 Ok(nf) => nf as Int,
                 Err(e) => fail!("nf: {}", e),
             };
         }
-        try_abort!(rt.vars.load_int(var))
+        try_abort!(runtime.vars.load_int(var))
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -647,9 +686,9 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
 
 #[no_mangle]
 pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
-    let rt = &mut *(rt as *mut Runtime);
+    let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        try_abort!(rt.vars.store_int(var, i));
+        try_abort!(runtime.vars.store_int(var, i));
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -657,9 +696,9 @@ pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
 
 #[no_mangle]
 pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
-    let rt = &*(rt as *mut Runtime);
+    let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        let res = try_abort!(rt.vars.load_intmap(var));
+        let res = try_abort!(runtime.vars.load_intmap(var));
         mem::transmute::<IntMap<_>, *mut c_void>(res)
     } else {
         fail!("invalid variable code={}", var)
@@ -668,10 +707,10 @@ pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_
 
 #[no_mangle]
 pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_void) {
-    let rt = &mut *(rt as *mut Runtime);
+    let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
-        try_abort!(rt.vars.store_intmap(var, map.clone()));
+        try_abort!(runtime.vars.store_intmap(var, map.clone()));
         mem::forget(map);
     } else {
         fail!("invalid variable code={}", var)

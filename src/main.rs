@@ -40,6 +40,11 @@ extern crate unicode_xid;
 use clap::Clap;
 
 use arena::Arena;
+use llvm::IntoRuntime;
+use runtime::{
+    splitter::{CSVReader, RegexSplitter},
+    ChainedReader, LineReader, CHUNK_SIZE,
+};
 use std::fs::File;
 use std::io::{self, BufReader, Write};
 
@@ -91,7 +96,7 @@ AVX2 support on the current CPU"
         long = "var",
         short = "v",
         multiple = true,
-        help = "Has the form <ident> = <expr>"
+        help = "Has the form <identifier> = <expr>"
     )]
     var: Vec<String>,
     #[clap(
@@ -119,6 +124,10 @@ fn open_file_read(f: &str) -> io::BufReader<File> {
         Ok(f) => BufReader::new(f),
         Err(e) => fail!("failed to open file {}: {}", f, e),
     }
+}
+
+fn chained<LR: LineReader>(lr: LR) -> ChainedReader<LR> {
+    ChainedReader::new(std::iter::once(lr))
 }
 
 fn csv_supported() -> bool {
@@ -198,45 +207,33 @@ fn get_context<'a>(
 
 fn run_interp(
     prog: &str,
-    stdin: impl io::Read + 'static,
+    stdin: impl LineReader,
     stdout: impl io::Write + 'static,
     field_sep: &Option<String>,
     var_decs: &Vec<String>,
-    csv: bool,
 ) {
     let a = Arena::default();
     let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
-    if csv {
-        let mut interp = match compile::bytecode_csv(&mut ctx, stdin, stdout) {
-            Ok(ctx) => ctx,
-            Err(e) => fail!("bytecode compilation failure: {}", e),
-        };
-        if let Err(e) = interp.run() {
-            fail!("fatal error during execution: {}", e);
-        }
-    } else {
-        let mut interp = match compile::bytecode(&mut ctx, stdin, stdout) {
-            Ok(ctx) => ctx,
-            Err(e) => fail!("bytecode compilation failure: {}", e),
-        };
-        if let Err(e) = interp.run() {
-            fail!("fatal error during execution: {}", e);
-        }
+    let mut interp = match compile::bytecode(&mut ctx, stdin, stdout) {
+        Ok(ctx) => ctx,
+        Err(e) => fail!("bytecode compilation failure: {}", e),
+    };
+    if let Err(e) = interp.run() {
+        fail!("fatal error during execution: {}", e);
     }
 }
 
 fn run_llvm(
     prog: &str,
-    stdin: impl io::Read + 'static,
+    stdin: impl IntoRuntime,
     stdout: impl io::Write + 'static,
     cfg: llvm::Config,
     field_sep: &Option<String>,
     var_decs: &Vec<String>,
-    csv: bool,
 ) {
     let a = Arena::default();
     let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
-    if let Err(e) = compile::run_llvm(&mut ctx, stdin, stdout, cfg, csv) {
+    if let Err(e) = compile::run_llvm(&mut ctx, stdin, stdout, cfg) {
         fail!("error compiling llvm: {}", e)
     }
 }
@@ -260,7 +257,7 @@ fn dump_bytecode(prog: &str, field_sep: &Option<String>, var_decs: &Vec<String>)
     let a = Arena::default();
     let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
     let fake_io = Cursor::new(vec![]);
-    let interp = match compile::bytecode(&mut ctx, fake_io.clone(), fake_io) {
+    let interp = match compile::bytecode_regex(&mut ctx, fake_io.clone(), fake_io) {
         Ok(ctx) => ctx,
         Err(e) => fail!("bytecode compilation failure: {}", e),
     };
@@ -336,19 +333,29 @@ fn main() {
     }
     macro_rules! with_inp {
         ($inp:ident, $body:expr) => {
-            match opts.input_files.len() {
-                0 => {
-                    let $inp = std::io::stdin();
+            if opts.input_files.len() == 0 {
+                let _reader: Box<dyn io::Read> = Box::new(io::stdin());
+                if opts.csv {
+                    let $inp = chained(CSVReader::new(_reader, "-"));
+                    $body
+                } else {
+                    let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
                     $body
                 }
-                1 => {
-                    let $inp = open_file_read(opts.input_files[0].as_str());
-                    $body
-                }
-                _ => {
-                    eprintln!("multiple files not yet implemented");
-                    std::process::exit(1);
-                }
+            } else if opts.csv {
+                let iter = opts.input_files.iter().cloned().map(|file| {
+                    let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
+                    CSVReader::new(reader, file)
+                });
+                let $inp = ChainedReader::new(iter);
+                $body
+            } else {
+                let iter = opts.input_files.iter().cloned().map(|file| {
+                    let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
+                    RegexSplitter::new(reader, CHUNK_SIZE, file)
+                });
+                let $inp = ChainedReader::new(iter);
+                $body
             }
         };
     }
@@ -378,7 +385,6 @@ fn main() {
             oup,
             &opts.field_sep,
             &opts.var,
-            opts.csv
         ));
     } else {
         with_io!(|inp, oup| run_llvm(
@@ -390,7 +396,6 @@ fn main() {
             },
             &opts.field_sep,
             &opts.var,
-            opts.csv,
         ));
     }
 }

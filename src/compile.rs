@@ -3,10 +3,12 @@ use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result, WorkList};
 use crate::llvm;
+use crate::runtime;
 use crate::smallvec::{self, smallvec};
 use crate::types;
 
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
+use std::io;
 use std::mem;
 
 pub(crate) const UNUSED: u32 = u32::max_value();
@@ -98,14 +100,14 @@ impl Ty {
 
 pub(crate) const NUM_TYPES: usize = Ty::IterStr as usize + 1;
 
-pub(crate) fn bytecode<'a>(
+pub(crate) fn bytecode_regex<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     // default to std::io::stdin()
-    reader: impl std::io::Read + 'static,
+    reader: impl io::Read + 'static,
     // default to std::io::BufWriter::new(std::io::stdout())
-    writer: impl std::io::Write + 'static,
+    writer: impl io::Write + 'static,
 ) -> Result<bytecode::Interp<'a>> {
-    Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
+    Typer::init_from_ctx(ctx)?.to_interp_regex(reader, writer)
 }
 
 pub(crate) fn bytecode_csv<'a, R: std::io::Read + 'static>(
@@ -113,9 +115,17 @@ pub(crate) fn bytecode_csv<'a, R: std::io::Read + 'static>(
     // default to std::io::stdin()
     reader: R,
     // default to std::io::BufWriter::new(std::io::stdout())
-    writer: impl std::io::Write + 'static,
+    writer: impl io::Write + 'static,
 ) -> Result<bytecode::InterpCSV<'a, R>> {
     Typer::init_from_ctx(ctx)?.to_interp_csv(reader, writer)
+}
+
+pub(crate) fn bytecode<'a, LR: runtime::LineReader>(
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
+    reader: LR,
+    writer: impl io::Write + 'static,
+) -> Result<bytecode::Interp<'a, LR>> {
+    Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
 }
 
 pub(crate) fn dump_llvm<'a>(
@@ -144,6 +154,22 @@ pub(crate) fn _compile_llvm<'a>(
 
 pub(crate) fn run_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
+    reader: impl llvm::IntoRuntime,
+    writer: impl io::Write + 'static,
+    cfg: llvm::Config,
+) -> Result<()> {
+    use crate::llvm::Generator;
+    let mut typer = Typer::init_from_ctx(ctx)?;
+    unsafe {
+        let mut gen = Generator::init(&mut typer, cfg)?;
+        gen.run_main(reader, writer)
+    }
+}
+
+// The _trad functions are an old interface that is still used for convenience when testing. It
+// uses different defaults when plumbing through input and output.
+pub(crate) fn run_llvm_trad<'a>(
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
     // default to std::io::stdin()
     reader: impl std::io::Read + 'static,
     // default to std::io::BufWriter::new(std::io::stdout())
@@ -155,7 +181,7 @@ pub(crate) fn run_llvm<'a>(
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main(reader, writer, csv)
+        gen.run_main_trad(reader, writer, csv)
     }
 }
 
@@ -356,13 +382,27 @@ fn accum<'a>(inst: &Instr<'a>, mut f: impl FnMut(NumTy, Ty)) {
 }
 
 impl<'a> Typer<'a> {
-    fn to_interp(
+    fn to_interp<LR: runtime::LineReader>(
         &mut self,
-        reader: impl std::io::Read + 'static,
-        writer: impl std::io::Write + 'static,
-    ) -> Result<bytecode::Interp<'a>> {
+        reader: LR,
+        writer: impl io::Write + 'static,
+    ) -> Result<bytecode::Interp<'a, LR>> {
         let instrs = self.to_bytecode()?;
         Ok(bytecode::Interp::new(
+            instrs,
+            self.main_offset,
+            |ty| self.regs.stats.count(ty) as usize,
+            reader,
+            writer,
+        ))
+    }
+    fn to_interp_regex(
+        &mut self,
+        reader: impl io::Read + 'static,
+        writer: impl io::Write + 'static,
+    ) -> Result<bytecode::Interp<'a>> {
+        let instrs = self.to_bytecode()?;
+        Ok(bytecode::Interp::new_regex(
             instrs,
             self.main_offset,
             |ty| self.regs.stats.count(ty) as usize,

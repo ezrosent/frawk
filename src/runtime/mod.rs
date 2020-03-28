@@ -22,8 +22,6 @@ pub(crate) use float_parse::{strtod, strtoi};
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
-// TODO: set FILENAME when read_line etc. indicate file has changed. Also set FNR=0
-//      (in interp and llvm)
 // TODO: wire it all in.
 // TODO: add `next` and `nextfile` support. (where nextfile just calls next_file on stdin and then
 // does whatever next does)
@@ -67,10 +65,10 @@ pub(crate) trait LineReader {
 pub struct ChainedReader<R>(Vec<R>);
 
 impl<R> ChainedReader<R> {
-    pub fn new(rs: impl Iterator<Item = R>) {
+    pub fn new(rs: impl Iterator<Item = R>) -> ChainedReader<R> {
         let mut v: Vec<_> = rs.collect();
         v.reverse();
-        ChainedReader(v);
+        ChainedReader(v)
     }
 }
 
@@ -426,6 +424,9 @@ impl<LR: LineReader> FileRead<LR> {
             files: Default::default(),
             stdin,
         }
+    }
+    pub(crate) fn stdin_filename(&self) -> Str<'static> {
+        self.stdin.filename()
     }
     pub(crate) fn read_err_stdin<'a>(&mut self) -> Int {
         self.stdin.read_state()

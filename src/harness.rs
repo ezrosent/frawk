@@ -81,7 +81,7 @@ pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>, csv: bool) -> Resul
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
-    compile::run_llvm(
+    compile::run_llvm_trad(
         &mut ctx,
         std::io::Cursor::new(stdin),
         stdout.clone(),
@@ -137,7 +137,7 @@ fn compile_program<'a, 'inp, 'outer>(
     let stdin = stdin.into();
     let stdout = FakeStdout::default();
     Ok((
-        compile::bytecode(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?,
+        compile::bytecode_regex(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?,
         stdout,
     ))
 }
@@ -206,8 +206,11 @@ pub(crate) fn run_prog<'a>(
                     )?;
                     $body
                 } else {
-                    let mut $interp =
-                        compile::bytecode(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?;
+                    let mut $interp = compile::bytecode_regex(
+                        &mut ctx,
+                        std::io::Cursor::new(stdin),
+                        stdout.clone(),
+                    )?;
                     $body
                 }
             };

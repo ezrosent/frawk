@@ -1,6 +1,8 @@
 mod attr;
 mod intrinsics;
 
+pub(crate) use intrinsics::IntoRuntime;
+
 use crate::builtins::Variable;
 use crate::bytecode::{self, Accum};
 use crate::common::{Either, NodeIx, NumTy, Result};
@@ -296,8 +298,21 @@ impl<'a, 'b> Generator<'a, 'b> {
         ptr::read_volatile(&addr);
         Ok(())
     }
-
     pub unsafe fn run_main(
+        &mut self,
+        stdin: impl IntoRuntime,
+        writer: impl std::io::Write + 'static,
+    ) -> Result<()> {
+        let mut rt = stdin.into_runtime(writer);
+        self.gen_main()?;
+        self.verify()?;
+        let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
+        let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
+        main_fn((&mut rt) as *mut _ as *mut libc::c_void);
+        Ok(())
+    }
+
+    pub unsafe fn run_main_trad(
         &mut self,
         stdin: impl std::io::Read + 'static,
         stdout: impl std::io::Write + 'static,

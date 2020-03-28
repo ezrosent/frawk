@@ -158,6 +158,7 @@ impl Display for Variable {
                 RS => "RS",
                 NF => "NF",
                 NR => "NR",
+                FNR => "FNR",
                 FILENAME => "FILENAME",
                 RSTART => "RSTART",
                 RLENGTH => "RLENGTH",
