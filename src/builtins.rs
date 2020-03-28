@@ -241,6 +241,7 @@ pub(crate) enum Variable {
     RSTART = 8,
     RLENGTH = 9,
     ORS = 10,
+    FNR = 11,
 }
 
 impl From<Variable> for compile::Ty {
@@ -248,7 +249,7 @@ impl From<Variable> for compile::Ty {
         use Variable::*;
         match v {
             FS | OFS | ORS | RS | FILENAME => compile::Ty::Str,
-            ARGC | NF | NR | RSTART | RLENGTH => compile::Ty::Int,
+            ARGC | NF | NR | FNR | RSTART | RLENGTH => compile::Ty::Int,
             ARGV => compile::Ty::MapIntStr,
         }
     }
@@ -263,6 +264,7 @@ pub(crate) struct Variables<'a> {
     pub rs: Str<'a>,
     pub nf: Int,
     pub nr: Int,
+    pub fnr: Int,
     pub filename: Str<'a>,
     pub rstart: Int,
     pub rlength: Int,
@@ -278,6 +280,7 @@ impl<'a> Default for Variables<'a> {
             ors: "\n".into(),
             rs: "\n".into(),
             nr: 0,
+            fnr: 0,
             nf: 0,
             filename: Default::default(),
             rstart: 0,
@@ -292,6 +295,7 @@ impl<'a> Variables<'a> {
             ARGC => self.argc,
             NF => self.nf,
             NR => self.nr,
+            FNR => self.fnr,
             RSTART => self.rstart,
             RLENGTH => self.rlength,
             ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
@@ -304,6 +308,7 @@ impl<'a> Variables<'a> {
             ARGC => self.argc = i,
             NF => self.nf = i,
             NR => self.nr = i,
+            FNR => self.fnr = i,
             RSTART => self.rstart = i,
             RLENGTH => self.rlength = i,
             ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
@@ -318,7 +323,9 @@ impl<'a> Variables<'a> {
             ORS => self.ors.clone(),
             RS => self.rs.clone(),
             FILENAME => self.filename.clone(),
-            ARGC | ARGV | NF | NR | RSTART | RLENGTH => return err!("var {} not a string", var),
+            ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+                return err!("var {} not a string", var)
+            }
         })
     }
 
@@ -330,7 +337,9 @@ impl<'a> Variables<'a> {
             ORS => self.ors = s,
             RS => self.rs = s,
             FILENAME => self.filename = s,
-            ARGC | ARGV | NF | NR | RSTART | RLENGTH => return err!("var {} not a string", var),
+            ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+                return err!("var {} not a string", var)
+            }
         })
     }
 
@@ -338,7 +347,7 @@ impl<'a> Variables<'a> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv.clone()),
-            ORS | OFS | ARGC | NF | NR | FS | RS | FILENAME | RSTART | RLENGTH => {
+            ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
                 err!("var {} is not a map", var)
             }
         }
@@ -348,7 +357,7 @@ impl<'a> Variables<'a> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv = m),
-            ORS | OFS | ARGC | NF | NR | FS | RS | FILENAME | RSTART | RLENGTH => {
+            ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
                 err!("var {} is not a map", var)
             }
         }
@@ -358,7 +367,7 @@ impl Variable {
     pub(crate) fn ty(&self) -> types::TVar<types::BaseTy> {
         use Variable::*;
         match self {
-            ARGC | NF | NR | RSTART | RLENGTH => types::TVar::Scalar(types::BaseTy::Int),
+            ARGC | NF | FNR | NR | RSTART | RLENGTH => types::TVar::Scalar(types::BaseTy::Int),
             // TODO(ezr): For full compliance, this may have to be Str -> Str
             //  If we had
             //  m["x"] = 1;
@@ -378,6 +387,9 @@ impl Variable {
             //  types.
             //  I think the solution here is just to have ARGV be a local variable. It doesn't
             //  actually have to be a builtin.
+            //
+            //  OTOH... maybe it's not so bad that we get type errors when putting strings as keys
+            //  in ARGV.
             ARGV => types::TVar::Map {
                 key: types::BaseTy::Int,
                 val: types::BaseTy::Str,
@@ -413,6 +425,7 @@ impl<'a> TryFrom<usize> for Variable {
             8 => Ok(RSTART),
             9 => Ok(RLENGTH),
             10 => Ok(ORS),
+            11 => Ok(FNR),
             _ => Err(()),
         }
     }
@@ -428,6 +441,7 @@ static_map!(
     ["RS", Variable::RS],
     ["NF", Variable::NF],
     ["NR", Variable::NR],
+    ["FNR", Variable::FNR],
     ["FILENAME", Variable::FILENAME],
     ["RSTART", Variable::RSTART],
     ["RLENGTH", Variable::RLENGTH]

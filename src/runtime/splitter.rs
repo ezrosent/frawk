@@ -99,6 +99,8 @@ impl<'a> Line<'a> for RegexLine {
 pub struct RegexSplitter<R> {
     reader: Reader<R>,
     name: Str<'static>,
+    // Used to trigger updating FILENAME on the first read.
+    start: bool,
 }
 
 impl<R: Read> LineReader for RegexSplitter<R> {
@@ -107,12 +109,14 @@ impl<R: Read> LineReader for RegexSplitter<R> {
         self.name.clone()
     }
     fn read_line(&mut self, pat: &Str, rc: &mut super::RegexCache) -> Result<(bool, Self::Line)> {
+        let start = self.start;
+        self.start = false;
         let line = rc.with_regex(pat, |re| RegexLine {
             line: self.read_line_regex(re),
             fields: LazyVec::new(),
             diverged: false,
         })?;
-        Ok((/* file changed */ false, line))
+        Ok((/* file changed */ start, line))
     }
     fn read_state(&self) -> i64 {
         self.reader.read_state()
@@ -129,6 +133,7 @@ impl<R: Read> RegexSplitter<R> {
         RegexSplitter {
             reader: Reader::new(r, chunk_size),
             name: name.into(),
+            start: true,
         }
     }
 
@@ -203,6 +208,8 @@ pub struct CSVReader<R> {
     prev_ix: usize,
     prev_iter_inside_quote: u64,
     prev_iter_cr_end: u64,
+    // Used to trigger updating FILENAME on the first read.
+    start: bool,
 }
 
 impl<R: Read> LineReader for CSVReader<R> {
@@ -212,8 +219,8 @@ impl<R: Read> LineReader for CSVReader<R> {
     }
     fn read_line(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<(bool, csv::Line)> {
         let mut line = csv::Line::default();
-        self.read_line_inner(&mut line)?;
-        Ok((false, line))
+        let changed = self.read_line_reuse(_pat, _rc, &mut line)?;
+        Ok((changed, line))
     }
     fn read_line_reuse<'a, 'b: 'a>(
         &'b mut self,
@@ -221,8 +228,10 @@ impl<R: Read> LineReader for CSVReader<R> {
         _rc: &mut super::RegexCache,
         old: &'a mut csv::Line,
     ) -> Result<bool> {
+        let start = self.start;
+        self.start = false;
         self.read_line_inner(old)?;
-        Ok(false)
+        Ok(start)
     }
     fn read_state(&self) -> i64 {
         let res = self.inner.read_state();
@@ -239,6 +248,7 @@ impl<R: Read> CSVReader<R> {
     // two constructors)
     pub fn new(r: R, name: impl Into<Str<'static>>) -> Self {
         CSVReader {
+            start: true,
             inner: Reader::new(r, super::CHUNK_SIZE),
             name: name.into(),
             cur_offsets: Default::default(),

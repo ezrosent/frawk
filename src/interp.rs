@@ -61,53 +61,12 @@ fn default_of<T: Default>(n: usize) -> Storage<T> {
     }
 }
 
-impl<'a> Interp<'a> {
+impl<'a, LR: LineReader> Interp<'a, LR> {
     pub(crate) fn new(
         instrs: Vec<Vec<Instr<'a>>>,
         main_func: usize,
         regs: impl Fn(compile::Ty) -> usize,
-        stdin: impl std::io::Read + 'static,
-        stdout: impl std::io::Write + 'static,
-    ) -> Interp<'a> {
-        use compile::Ty::*;
-        let stdin_boxed: Box<dyn std::io::Read + 'static> = Box::new(stdin);
-        // TODO pass in a name
-        let stdin_name = "-";
-        let stdin_reader = RegexSplitter::new(stdin_boxed, runtime::CHUNK_SIZE, stdin_name);
-        Interp {
-            main_func,
-            instrs,
-            stack: Default::default(),
-            floats: default_of(regs(Float)),
-            ints: default_of(regs(Int)),
-            strs: default_of(regs(Str)),
-            vars: Default::default(),
-
-            line: Default::default(),
-            regexes: Default::default(),
-            write_files: runtime::FileWrite::new(stdout),
-            read_files: runtime::FileRead::new(stdin_reader),
-
-            maps_int_float: default_of(regs(MapIntFloat)),
-            maps_int_int: default_of(regs(MapIntInt)),
-            maps_int_str: default_of(regs(MapIntStr)),
-
-            maps_str_float: default_of(regs(MapStrFloat)),
-            maps_str_int: default_of(regs(MapStrInt)),
-            maps_str_str: default_of(regs(MapStrStr)),
-
-            iters_int: default_of(regs(IterInt)),
-            iters_str: default_of(regs(IterStr)),
-        }
-    }
-}
-
-impl<'a, R: io::Read> InterpCSV<'a, R> {
-    pub(crate) fn new_csv(
-        instrs: Vec<Vec<Instr<'a>>>,
-        main_func: usize,
-        regs: impl Fn(compile::Ty) -> usize,
-        stdin: R,
+        stdin: LR,
         stdout: impl std::io::Write + 'static,
     ) -> Self {
         use compile::Ty::*;
@@ -123,7 +82,7 @@ impl<'a, R: io::Read> InterpCSV<'a, R> {
             line: Default::default(),
             regexes: Default::default(),
             write_files: runtime::FileWrite::new(stdout),
-            read_files: runtime::FileRead::new(CSVReader::new(stdin, /*name=*/ "-")),
+            read_files: runtime::FileRead::new(stdin),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -139,6 +98,39 @@ impl<'a, R: io::Read> InterpCSV<'a, R> {
     }
 }
 
+impl<'a> Interp<'a> {
+    pub(crate) fn new_regex(
+        instrs: Vec<Vec<Instr<'a>>>,
+        main_func: usize,
+        regs: impl Fn(compile::Ty) -> usize,
+        stdin: impl std::io::Read + 'static,
+        stdout: impl std::io::Write + 'static,
+    ) -> Interp<'a> {
+        let stdin_boxed: Box<dyn std::io::Read + 'static> = Box::new(stdin);
+        let stdin_name = "-";
+        let stdin_reader = RegexSplitter::new(stdin_boxed, runtime::CHUNK_SIZE, stdin_name);
+        Interp::new(instrs, main_func, regs, stdin_reader, stdout)
+    }
+}
+
+impl<'a, R: io::Read> InterpCSV<'a, R> {
+    pub(crate) fn new_csv(
+        instrs: Vec<Vec<Instr<'a>>>,
+        main_func: usize,
+        regs: impl Fn(compile::Ty) -> usize,
+        stdin: R,
+        stdout: impl std::io::Write + 'static,
+    ) -> Self {
+        Interp::new(
+            instrs,
+            main_func,
+            regs,
+            CSVReader::new(stdin, /*name=*/ "-"),
+            stdout,
+        )
+    }
+}
+
 impl<'a, LR: LineReader> Interp<'a, LR> {
     pub(crate) fn instrs(&self) -> &Vec<Vec<Instr<'a>>> {
         &self.instrs
@@ -150,6 +142,11 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             Ty::Float => self.get(Reg::<Float>::from(reg)).clone().into(),
             _ => return err!("non-scalar (s)printf argument type {:?}", ty),
         })
+    }
+
+    fn reset_file_vars(&mut self) {
+        self.vars.fnr = 0;
+        self.vars.filename = self.read_files.stdin_filename().upcast();
     }
 
     pub(crate) fn run(&mut self) -> Result<()> {
@@ -878,17 +875,23 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     }
                     NextLineStdin(dst) => {
                         let dst = *dst;
-                        let (_changed, res) = self
+                        let (changed, res) = self
                             .regexes
                             .get_line_stdin(&self.vars.rs, &mut self.read_files)?;
+                        if changed {
+                            self.reset_file_vars();
+                        }
                         *self.get_mut(dst) = res;
                     }
                     NextLineStdinFused() => {
-                        let _changed = self.regexes.get_line_stdin_reuse(
+                        let changed = self.regexes.get_line_stdin_reuse(
                             &self.vars.rs,
                             &mut self.read_files,
                             &mut self.line,
                         )?;
+                        if changed {
+                            self.reset_file_vars()
+                        }
                     }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;
