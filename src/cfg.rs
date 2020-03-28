@@ -1,5 +1,5 @@
 use crate::arena;
-use crate::ast::{self, Binop, Expr, Stmt, Unop};
+use crate::ast::{self, Expr, Stmt, Unop};
 use crate::builtins::{self, IsSprintf};
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result};
 use crate::dom;
@@ -615,18 +615,17 @@ where
                 current_open
             }
             Print(vs, out) => {
-                // TODO: why not just print a bunch of things in a row?
-                // Concatenation is cheap, but that might be cheaper! We would need to change the
-                // semantics of the underlying instruction to avoid a newline.
-                if vs.len() == 0 {
-                    return self.convert_stmt(
-                        &ast::Stmt::Print(
-                            vec![&ast::Expr::Unop(Unop::Column, &ast::Expr::ILit(0))],
-                            out.clone(),
-                        ),
+                let ors = {
+                    let ors = self.fresh_local();
+                    self.add_stmt(
                         current_open,
-                    );
-                }
+                        PrimStmt::AsgnVar(
+                            ors.clone(),
+                            PrimExpr::LoadBuiltin(builtins::Variable::ORS),
+                        ),
+                    )?;
+                    PrimVal::Var(ors)
+                };
                 let (next, out) = if let Some((o, append)) = out {
                     let (next, e) = self.convert_val(o, current_open)?;
                     (next, Some((e, append)))
@@ -636,10 +635,10 @@ where
                 current_open = next;
                 let print = {
                     |v| {
-                        if let Some((o, append)) = out {
+                        if let Some((o, append)) = &out {
                             PrimExpr::CallBuiltin(
                                 builtins::Function::Print,
-                                smallvec![v, o.clone(), PrimVal::ILit(*append as i64)],
+                                smallvec![v, o.clone(), PrimVal::ILit(**append as i64)],
                             )
                         } else {
                             PrimExpr::CallBuiltin(builtins::Function::PrintStdout, smallvec![v])
@@ -647,6 +646,7 @@ where
                     }
                 };
                 if vs.len() == 0 {
+                    // 0 args: print $0
                     let tmp = self.fresh_local();
                     self.add_stmt(
                         current_open,
@@ -662,16 +662,10 @@ where
                         current_open,
                         PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
                     )?;
-                    current_open
-                } else if vs.len() == 1 {
-                    let (next, v) = self.convert_val(vs[0], current_open)?;
-                    current_open = next;
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)))?;
+                    self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(ors)))?;
                     current_open
                 } else {
-                    const EMPTY: PrimVal<'static> = PrimVal::StrLit("");
-
-                    // Assign the field separator to a local variable.
+                    // Multiple args: print each argument, separated with OFS, followed by ORS.
                     let fs = {
                         let fs = self.fresh_local();
                         self.add_stmt(
@@ -683,52 +677,22 @@ where
                         )?;
                         PrimVal::Var(fs)
                     };
-
-                    // For each argument in the comma-separated list, concatenate in sequence along
-                    // with the field separator. Doing this now because (1) concatenation of
-                    // strings lazy, making this cheap and (2) because it simplifies how some of
-                    // the downstream analysis goes. Depending on how this impacts performance we
-                    // may add support for var-arg printing later on.
-                    //
-                    // (e.g.  how will printf work? Will we disallow dynamically computed printf
-                    // strings? We probably should...)
-                    let mut tmp = self.fresh_local();
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(tmp, PrimExpr::Val(EMPTY)))?;
                     for (i, v) in vs.iter().enumerate() {
                         let (next, v) = self.convert_val(*v, current_open)?;
                         current_open = next;
-                        if i != 0 {
-                            let new_tmp = self.fresh_local();
+                        self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)))?;
+                        if i != vs.len() - 1 {
                             self.add_stmt(
                                 current_open,
-                                PrimStmt::AsgnVar(
-                                    new_tmp,
-                                    PrimExpr::CallBuiltin(
-                                        builtins::Function::Binop(Binop::Concat),
-                                        smallvec![PrimVal::Var(tmp), fs.clone()],
-                                    ),
-                                ),
+                                PrimStmt::AsgnVar(Self::unused(), print(fs.clone())),
                             )?;
-                            tmp = new_tmp;
+                        } else {
+                            self.add_stmt(
+                                current_open,
+                                PrimStmt::AsgnVar(Self::unused(), print(ors.clone())),
+                            )?;
                         }
-                        let new_tmp = self.fresh_local();
-                        self.add_stmt(
-                            current_open,
-                            PrimStmt::AsgnVar(
-                                new_tmp,
-                                PrimExpr::CallBuiltin(
-                                    builtins::Function::Binop(Binop::Concat),
-                                    smallvec![PrimVal::Var(tmp), v],
-                                ),
-                            ),
-                        )?;
-                        tmp = new_tmp;
                     }
-                    self.add_stmt(
-                        current_open,
-                        PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
-                    )?;
-
                     current_open
                 }
             }

@@ -16,11 +16,11 @@ use std::cell::{Cell, UnsafeCell};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::marker::PhantomData;
-use std::mem::{self, MaybeUninit};
-use std::ptr::{self, NonNull};
+use std::mem;
+use std::ptr;
+use std::rc::Rc;
 use std::slice;
 use std::str;
-use std::thread_local;
 
 // TODO look into a design based on unions
 
@@ -113,135 +113,33 @@ struct Shared {
 
 #[derive(Clone, Debug)]
 struct ConcatInner<'a> {
-    rc: usize,
     left: Str<'a>,
     right: Str<'a>,
-}
-
-const USE_POOL: bool = true;
-
-#[repr(transparent)]
-struct ConcatBox<'a>(*mut ConcatInner<'a>);
-
-impl<'a> ConcatBox<'a> {
-    fn new(left: Str<'a>, right: Str<'a>) -> ConcatBox<'a> {
-        if USE_POOL {
-            unsafe { POOL.with(|k| (*k.get()).alloc(left, right)) }
-        } else {
-            let inner = Box::new(ConcatInner { rc: 1, left, right });
-            ConcatBox(Box::into_raw(inner))
-        }
-    }
-    fn left(&self) -> Str<'a> {
-        unsafe { (*self.0).left.clone() }
-    }
-    fn right(&self) -> Str<'a> {
-        unsafe { (*self.0).right.clone() }
-    }
-}
-
-impl<'a> Clone for ConcatBox<'a> {
-    fn clone(&self) -> ConcatBox<'a> {
-        unsafe { (*self.0).rc += 1 };
-        ConcatBox(self.0)
-    }
-}
-
-impl<'a> Drop for ConcatBox<'a> {
-    fn drop(&mut self) {
-        let count = unsafe { &mut (*self.0).rc };
-        if *count == 1 {
-            unsafe {
-                if USE_POOL {
-                    POOL.with(|k| (*k.get()).free(self.0))
-                } else {
-                    mem::drop(Box::from_raw(self.0));
-                }
-            }
-        } else {
-            *count -= 1;
-        }
-    }
 }
 
 #[derive(Clone)]
 #[repr(C)]
 struct Concat<'a> {
-    inner: ConcatBox<'a>,
+    inner: Rc<ConcatInner<'a>>,
     len: u64,
 }
 
-thread_local! {
-    static POOL: UnsafeCell<ConcatCache> = UnsafeCell::new(ConcatCache::new(512));
-}
-
-type ConcatHusk = MaybeUninit<ConcatInner<'static>>;
-
-// For now, we just keep a vector around with a max size. The best solution here is to use
-// something like slab allocation, but working set sizes for scripts can be pretty small so even
-// this solution should help.
-struct ConcatCache {
-    old_slabs: Vec<Slab>,
-    cur_slab: Slab,
-    free: Vec<NonNull<ConcatHusk>>,
-}
-
-impl ConcatCache {
-    fn new(slab_size: usize) -> ConcatCache {
-        ConcatCache {
-            old_slabs: Vec::new(),
-            free: Vec::new(),
-            cur_slab: Slab::new(slab_size),
+impl<'a> Concat<'a> {
+    // unsafe because len must be left.len() + right.len(). It must also be greater than
+    // MAX_INLINE_LEN.
+    unsafe fn new(len: u64, left: Str<'a>, right: Str<'a>) -> Concat<'a> {
+        debug_assert!(len > MAX_INLINE_SIZE as u64);
+        debug_assert_eq!(len, (left.len() + right.len()) as u64);
+        Concat {
+            len,
+            inner: Rc::new(ConcatInner { left, right }),
         }
     }
-    fn alloc<'a>(&mut self, left: Str<'a>, right: Str<'a>) -> ConcatBox<'a> {
-        let mut loc = if let Some(l) = self.free.pop() {
-            l
-        } else if let Some(l) = self.cur_slab.alloc() {
-            l
-        } else {
-            let size = self.cur_slab.base.len();
-            let old_slab = mem::replace(&mut self.cur_slab, Slab::new(size));
-            self.old_slabs.push(old_slab);
-            return self.alloc(left, right);
-        };
-        unsafe {
-            let box_uninit = loc.as_mut();
-            let box_ptr = mem::transmute::<*mut ConcatInner<'static>, *mut ConcatInner<'a>>(
-                box_uninit.as_mut_ptr(),
-            );
-            box_ptr.write(ConcatInner { rc: 1, left, right });
-            ConcatBox(box_ptr)
-        }
+    fn left(&self) -> Str<'a> {
+        self.inner.left.clone()
     }
-    unsafe fn free<'a>(&mut self, ci: *mut ConcatInner<'a>) {
-        debug_assert!(!ci.is_null());
-        let ci = ci as *mut _;
-        self.free.push(NonNull::new_unchecked(ci));
-    }
-}
-
-// An extremely simple, memory-profligate slab allocator. Currently here for experimental purposes.
-// The biggest issue with it is that while it reuses freed pointers, it never returns them to the
-// OS.
-struct Slab {
-    base: Vec<ConcatHusk>,
-    cur: usize,
-}
-impl Slab {
-    fn new(cap: usize) -> Slab {
-        let mut base = Vec::new();
-        base.resize_with(cap, MaybeUninit::uninit);
-        Slab { base, cur: 0 }
-    }
-    fn alloc(&mut self) -> Option<NonNull<ConcatHusk>> {
-        if self.cur == self.base.len() {
-            None
-        } else {
-            let res = unsafe { NonNull::new_unchecked(self.base.get_unchecked_mut(self.cur)) };
-            self.cur += 1;
-            Some(res)
-        }
+    fn right(&self) -> Str<'a> {
+        self.inner.right.clone()
     }
 }
 
@@ -473,9 +371,11 @@ impl<'a> Str<'a> {
 
     pub fn concat(left: Str<'a>, right: Str<'a>) -> Str<'a> {
         if left.is_empty() {
+            mem::forget(left);
             return right;
         }
         if right.is_empty() {
+            mem::forget(right);
             return left;
         }
         let llen = left.len();
@@ -494,10 +394,7 @@ impl<'a> Str<'a> {
             // allocation. We _only_ want to do this if we reevaluate the `realloc` that DynamicBuf
             // does when you convert it back into a string, though. We would have to keep a
             // capacity around as well as a length.
-            let concat = Concat {
-                len: new_len as u64,
-                inner: ConcatBox::new(left, right),
-            };
+            let concat = unsafe { Concat::new(new_len as u64, left, right) };
             Str::from_rep(concat.into())
         }
     }
@@ -689,8 +586,8 @@ impl<'a> Str<'a> {
                     }),
                     StrTag::Concat => {
                         break rep.view_as(|c: &Concat| {
-                            todos.push(c.inner.right());
-                            c.inner.left()
+                            todos.push(c.right());
+                            c.left()
                         })
                     }
                 }
@@ -1293,12 +1190,7 @@ mod formatting {
                     StrTag::Literal => rep.view_as(|l: &Literal| write!(f, "Str({:?})", l)),
                     StrTag::Shared => rep.view_as(|s: &Shared| write!(f, "Str({:?})", s)),
                     StrTag::Concat => rep.view_as(|c: &Concat| {
-                        write!(
-                            f,
-                            "Str(Concat({:?}, {:?}))",
-                            c.inner.left(),
-                            c.inner.right()
-                        )
+                        write!(f, "Str(Concat({:?}, {:?}))", c.left(), c.right())
                     }),
                     StrTag::Boxed => rep.view_as(|b: &Boxed| write!(f, "Str({:?})", b)),
                 }?
