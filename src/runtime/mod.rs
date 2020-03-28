@@ -22,6 +22,16 @@ pub(crate) use float_parse::{strtod, strtoi};
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
+// TODO: set FILENAME when read_line etc. indicate file has changed. Also set FNR=0
+//      (in interp and llvm)
+// TODO: wire it all in.
+// TODO: add `next` and `nextfile` support. (where nextfile just calls next_file on stdin and then
+// does whatever next does)
+//      * next can be implemented as "tagging" loops in the stack with whether or not they are at
+//      the top (while loops can get a boolean). `next` can pop off elements until it reaches that
+//      and jump straight there.
+// TODO: fix desugaring of comma patterns.
+
 pub(crate) trait Line<'a>: Default {
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
     fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
@@ -30,16 +40,22 @@ pub(crate) trait Line<'a>: Default {
 
 pub(crate) trait LineReader {
     type Line: for<'a> Line<'a>;
-    fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<Self::Line>;
+    fn filename(&self) -> Str<'static>;
+    // TODO we should probably have the default impl the other way around.
+    fn read_line(
+        &mut self,
+        pat: &Str,
+        rc: &mut RegexCache,
+    ) -> Result<(/*file changed*/ bool, Self::Line)>;
     fn read_line_reuse<'a, 'b: 'a>(
         &'b mut self,
         pat: &Str,
         rc: &mut RegexCache,
         old: &'a mut Self::Line,
-    ) -> Result<()> {
-        let mut new = self.read_line(pat, rc)?;
+    ) -> Result</* file changed */ bool> {
+        let (changed, mut new) = self.read_line(pat, rc)?;
         std::mem::swap(old, &mut new);
-        Ok(())
+        Ok(changed)
     }
     fn read_state(&self) -> i64;
     fn next_file(&mut self) -> bool;
@@ -63,29 +79,37 @@ where
     R::Line: Default,
 {
     type Line = R::Line;
-    fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<R::Line> {
+    fn filename(&self) -> Str<'static> {
+        self.0
+            .last()
+            .map(LineReader::filename)
+            .unwrap_or_else(Str::default)
+    }
+    fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<(bool, R::Line)> {
         let mut line = R::Line::default();
-        self.read_line_reuse(pat, rc, &mut line)?;
-        Ok(line)
+        let changed = self.read_line_reuse(pat, rc, &mut line)?;
+        Ok((changed, line))
     }
     fn read_line_reuse<'a, 'b: 'a>(
         &'b mut self,
         pat: &Str,
         rc: &mut RegexCache,
         old: &'a mut Self::Line,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let cur = match self.0.last_mut() {
             Some(cur) => cur,
             None => {
                 *old = Default::default();
-                return Ok(());
+                return Ok(false);
             }
         };
-        cur.read_line_reuse(pat, rc, old)?;
+        let changed = cur.read_line_reuse(pat, rc, old)?;
         if cur.read_state() == 0 /* EOF */ && self.next_file() {
-            return self.read_line_reuse(pat, rc, old);
+            self.read_line_reuse(pat, rc, old)?;
+            Ok(true)
+        } else {
+            Ok(changed)
         }
-        Ok(())
     }
     fn read_state(&self) -> i64 {
         match self.0.last() {
@@ -226,18 +250,18 @@ impl RegexCache {
         &mut self,
         pat: &Str<'a>,
         reg: &mut FileRead<LR>,
-    ) -> Result<Str<'a>> {
-        let mut line = reg.stdin.read_line(pat, self)?;
+    ) -> Result<(/* file changed */ bool, Str<'a>)> {
+        let (changed, mut line) = reg.stdin.read_line(pat, self)?;
         // NB both of these `pat`s are "wrong" but we are fine because they are only used
         // when the column is nonzero, or someone has overwritten a nonzero column.
-        Ok(line.get_col(0, pat, pat, self)?.clone().upcast())
+        Ok((changed, line.get_col(0, pat, pat, self)?.clone().upcast()))
     }
     pub(crate) fn get_line_stdin_reuse<'a, LR: LineReader>(
         &mut self,
         pat: &Str<'a>,
         reg: &mut FileRead<LR>,
         old_line: &mut LR::Line,
-    ) -> Result<()> {
+    ) -> Result</*file changed */ bool> {
         reg.stdin.read_line_reuse(pat, self, old_line)
     }
     pub(crate) fn split_regex<'a>(
@@ -386,22 +410,11 @@ impl FileWrite {
     }
 }
 
-// const CHUNK_SIZE: usize = 2 << 10;
-const CHUNK_SIZE: usize = 16 << 10;
+pub const CHUNK_SIZE: usize = 16 << 10;
 
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read>>> {
     files: Registry<RegexSplitter<File>>,
     stdin: LR,
-}
-
-impl FileRead {
-    pub(crate) fn new_transitional(r: impl io::Read + 'static) -> FileRead {
-        let d: Box<dyn io::Read> = Box::new(r);
-        FileRead {
-            files: Default::default(),
-            stdin: RegexSplitter::new(d, CHUNK_SIZE),
-        }
-    }
 }
 
 impl<LR: LineReader> FileRead<LR> {
@@ -427,9 +440,26 @@ impl<LR: LineReader> FileRead<LR> {
     ) -> Result<R> {
         self.files.get_fallible(
             path,
-            |s| match File::open(s) {
-                Ok(f) => Ok(RegexSplitter::new(f, CHUNK_SIZE)),
-                Err(e) => err!("failed to open file '{}': {}", s, e),
+            |s| {
+                // XXX Why are we doing String::from(s) and not path.clone().unmoor()?
+                // The implementation of get_fallible calls with_str on path, which clears its tag
+                // before calling this function on it. Cloning it now could yield an invalid
+                // string!
+                //
+                // TODO Doesn't that make the `with_str` API horribly unsafe? Yes! It's an
+                // oversight that we didn't see when making the API initially. There are a few
+                // options for fixing it:
+                //
+                // 1) have with_str consume self by value and pass it back. That would be very
+                //    disruptive.
+                // 2) within with_str make a copy of self and never call drop on it, mutating the
+                //    copy.
+                //
+                // I prefer (2).
+                match File::open(s) {
+                    Ok(f) => Ok(RegexSplitter::new(f, CHUNK_SIZE, String::from(s))),
+                    Err(e) => err!("failed to open file '{}': {}", s, e),
+                }
             },
             f,
         )

@@ -3,7 +3,11 @@ use crate::bytecode::{Get, Instr, Label, Pop, Reg};
 use crate::builtins::Variable;
 use crate::common::{NumTy, Result};
 use crate::compile::{self, Ty};
-use crate::runtime::{self, splitter::CSVReader, Float, Int, Line, LineReader, Str};
+use crate::runtime::{
+    self,
+    splitter::{CSVReader, RegexSplitter},
+    Float, Int, Line, LineReader, Str,
+};
 
 use std::cmp;
 use std::io;
@@ -66,6 +70,10 @@ impl<'a> Interp<'a> {
         stdout: impl std::io::Write + 'static,
     ) -> Interp<'a> {
         use compile::Ty::*;
+        let stdin_boxed: Box<dyn std::io::Read + 'static> = Box::new(stdin);
+        // TODO pass in a name
+        let stdin_name = "-";
+        let stdin_reader = RegexSplitter::new(stdin_boxed, runtime::CHUNK_SIZE, stdin_name);
         Interp {
             main_func,
             instrs,
@@ -78,7 +86,7 @@ impl<'a> Interp<'a> {
             line: Default::default(),
             regexes: Default::default(),
             write_files: runtime::FileWrite::new(stdout),
-            read_files: runtime::FileRead::new_transitional(stdin),
+            read_files: runtime::FileRead::new(stdin_reader),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -115,7 +123,7 @@ impl<'a, R: io::Read> InterpCSV<'a, R> {
             line: Default::default(),
             regexes: Default::default(),
             write_files: runtime::FileWrite::new(stdout),
-            read_files: runtime::FileRead::new(CSVReader::new(stdin)),
+            read_files: runtime::FileRead::new(CSVReader::new(stdin, /*name=*/ "-")),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -870,13 +878,13 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     }
                     NextLineStdin(dst) => {
                         let dst = *dst;
-                        let res = self
+                        let (_changed, res) = self
                             .regexes
                             .get_line_stdin(&self.vars.rs, &mut self.read_files)?;
                         *self.get_mut(dst) = res;
                     }
                     NextLineStdinFused() => {
-                        self.regexes.get_line_stdin_reuse(
+                        let _changed = self.regexes.get_line_stdin_reuse(
                             &self.vars.rs,
                             &mut self.read_files,
                             &mut self.line,
