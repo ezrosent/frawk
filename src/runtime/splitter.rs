@@ -26,6 +26,14 @@ pub(crate) enum ReaderState {
 pub struct RegexLine {
     line: Str<'static>,
     fields: LazyVec<Str<'static>>,
+    // Has someone assigned into `fields` without us regenerating `line`?
+    // AWK lets you do
+    //  $1 = "turnip"
+    //  $2 = "rutabaga"
+    //  print $0; # "turnip rutabaga ..."
+    //
+    // After that first line, we set diverged to true, so we know to regenerate $0 when $0 is asked
+    // for. This speeds up cases where multiple fields are assigned in a row.
     diverged: bool,
 }
 
@@ -88,36 +96,46 @@ impl<'a> Line<'a> for RegexLine {
     }
 }
 
+pub struct RegexSplitter<R> {
+    reader: Reader<R>,
+    name: Str<'static>,
+}
+
 impl<R: Read> LineReader for RegexSplitter<R> {
     type Line = RegexLine;
-    fn read_line(&mut self, pat: &Str, rc: &mut super::RegexCache) -> Result<Self::Line> {
-        rc.with_regex(pat, |re| RegexLine {
+    fn filename(&self) -> Str<'static> {
+        self.name.clone()
+    }
+    fn read_line(&mut self, pat: &Str, rc: &mut super::RegexCache) -> Result<(bool, Self::Line)> {
+        let line = rc.with_regex(pat, |re| RegexLine {
             line: self.read_line_regex(re),
             fields: LazyVec::new(),
             diverged: false,
-        })
+        })?;
+        Ok((/* file changed */ false, line))
     }
     fn read_state(&self) -> i64 {
-        self.0.read_state()
+        self.reader.read_state()
     }
     fn next_file(&mut self) -> bool {
         // There is just one file. Set EOF.
-        self.0.force_eof();
+        self.reader.force_eof();
         false
     }
 }
 
-pub struct RegexSplitter<R>(Reader<R>);
-
 impl<R: Read> RegexSplitter<R> {
-    pub fn new(r: R, chunk_size: usize) -> Self {
-        RegexSplitter(Reader::new(r, chunk_size))
+    pub fn new(r: R, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
+        RegexSplitter {
+            reader: Reader::new(r, chunk_size),
+            name: name.into(),
+        }
     }
 
     pub fn read_line_regex(&mut self, pat: &Regex) -> Str<'static> {
         // We keep this as a separate method because it helps in writing tests.
         let res = self.read_line_inner(pat);
-        self.0.last_len = res.len();
+        self.reader.last_len = res.len();
         res
     }
 
@@ -127,42 +145,48 @@ impl<R: Read> RegexSplitter<R> {
                 if let Ok(e) = $e {
                     e
                 } else {
-                    self.0.state = ReaderState::ERROR;
+                    self.reader.state = ReaderState::ERROR;
                     return Str::default();
                 }
             };
         }
         let mut prefix: Str<'static> = Default::default();
-        if self.0.is_eof() {
+        if self.reader.is_eof() {
             return prefix;
         }
-        self.0.state = ReaderState::OK;
+        self.reader.state = ReaderState::OK;
         loop {
             // Why this map invocation? Match objects hold a reference to the substring, which
             // makes it harder for us to call mutable methods like advance in the body, so just get
             // the start and end pointers.
             let s = unsafe {
-                str::from_utf8_unchecked(&self.0.buf.as_bytes()[self.0.start..self.0.end])
+                str::from_utf8_unchecked(
+                    &self.reader.buf.as_bytes()[self.reader.start..self.reader.end],
+                )
             };
-            let start_offset = self.0.start;
+            let start_offset = self.reader.start;
             match pat.find(s).map(|m| (m.start(), m.end())) {
                 Some((start, end)) => {
                     // Valid offsets guaranteed by correctness of regex `find`.
-                    let res =
-                        unsafe { self.0.buf.slice_to_str(start_offset, start_offset + start) };
+                    let res = unsafe {
+                        self.reader
+                            .buf
+                            .slice_to_str(start_offset, start_offset + start)
+                    };
                     // NOTE if we get a read error here, then we will stop one line early.
                     // That seems okay, but we could find out that it actually isn't, in which case
                     // we would want some more complicated error handling here.
-                    handle_err!(self.0.advance(end));
+                    handle_err!(self.reader.advance(end));
                     return Str::concat(prefix, res);
                 }
                 None => {
                     // Valid offsets guaranteed by read_buf
-                    let cur: Str = unsafe { self.0.buf.slice_to_str(start_offset, self.0.end) };
-                    let remaining = self.0.remaining();
-                    handle_err!(self.0.advance(remaining));
+                    let cur: Str =
+                        unsafe { self.reader.buf.slice_to_str(start_offset, self.reader.end) };
+                    let remaining = self.reader.remaining();
+                    handle_err!(self.reader.advance(remaining));
                     prefix = Str::concat(prefix, cur);
-                    if self.0.is_eof() {
+                    if self.reader.is_eof() {
                         // All done! Just return the rest of the buffer.
                         return prefix;
                     }
@@ -172,21 +196,33 @@ impl<R: Read> RegexSplitter<R> {
     }
 }
 
+pub struct CSVReader<R> {
+    inner: Reader<R>,
+    name: Str<'static>,
+    cur_offsets: csv::Offsets,
+    prev_ix: usize,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+}
+
 impl<R: Read> LineReader for CSVReader<R> {
     type Line = csv::Line;
-    fn read_line(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<csv::Line> {
+    fn filename(&self) -> Str<'static> {
+        self.name.clone()
+    }
+    fn read_line(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<(bool, csv::Line)> {
         let mut line = csv::Line::default();
         self.read_line_inner(&mut line)?;
-        Ok(line)
+        Ok((false, line))
     }
     fn read_line_reuse<'a, 'b: 'a>(
         &'b mut self,
         _pat: &Str,
         _rc: &mut super::RegexCache,
         old: &'a mut csv::Line,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.read_line_inner(old)?;
-        Ok(())
+        Ok(false)
     }
     fn read_state(&self) -> i64 {
         let res = self.inner.read_state();
@@ -198,18 +234,13 @@ impl<R: Read> LineReader for CSVReader<R> {
     }
 }
 
-pub struct CSVReader<R> {
-    inner: Reader<R>,
-    cur_offsets: csv::Offsets,
-    prev_ix: usize,
-    prev_iter_inside_quote: u64,
-    prev_iter_cr_end: u64,
-}
-
 impl<R: Read> CSVReader<R> {
-    pub fn new(r: R) -> Self {
+    // TODO give this the same signature as RegexSplitter (passing in chunk size, or just making
+    // two constructors)
+    pub fn new(r: R, name: impl Into<Str<'static>>) -> Self {
         CSVReader {
             inner: Reader::new(r, super::CHUNK_SIZE),
+            name: name.into(),
             cur_offsets: Default::default(),
             prev_ix: 0,
             prev_iter_inside_quote: 0,
@@ -455,9 +486,9 @@ mod tests {
         let chunk_size = 1 << 9;
         let bs: String = crate::test_string_constants::PRIDE_PREJUDICE_CH2.into();
         let c = Cursor::new(bs.clone());
-        let mut rdr = super::RegexSplitter::new(c, chunk_size);
+        let mut rdr = super::RegexSplitter::new(c, chunk_size, "");
         let mut lines = Vec::new();
-        while !rdr.0.is_eof() {
+        while !rdr.reader.is_eof() {
             let line = rdr.read_line_regex(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
@@ -492,9 +523,9 @@ mod tests {
 
         let s = String::from_utf8(bs).unwrap();
         let c = Cursor::new(s.clone());
-        let mut rdr = super::RegexSplitter::new(c, chunk_size);
+        let mut rdr = super::RegexSplitter::new(c, chunk_size, "");
         let mut lines = Vec::new();
-        while !rdr.0.is_eof() {
+        while !rdr.reader.is_eof() {
             let line = rdr.read_line_regex(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);

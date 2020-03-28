@@ -6,7 +6,7 @@ use crate::libc::c_void;
 use crate::runtime::{
     self, csv,
     printf::{printf, FormatArg},
-    splitter::{CSVReader, RegexLine},
+    splitter::{CSVReader, RegexLine, RegexSplitter},
     FileRead, FileWrite, Float, Int, IntMap, Line, RegexCache, Str, StrMap, Variables,
 };
 
@@ -76,10 +76,13 @@ impl<'a> Runtime<'a> {
             input_data: if csv {
                 Either::Right((
                     Default::default(),
-                    FileRead::new(CSVReader::new(Box::new(stdin))),
+                    FileRead::new(CSVReader::new(Box::new(stdin), /*name=*/ "-")),
                 ))
             } else {
-                Either::Left((Default::default(), FileRead::new_transitional(stdin)))
+                let stdin_name = "-";
+                let boxed_stdin: Box<dyn std::io::Read + 'static> = Box::new(stdin);
+                let rs = RegexSplitter::new(boxed_stdin, runtime::CHUNK_SIZE, stdin_name);
+                Either::Left((Default::default(), FileRead::new(rs)))
             },
             regexes: Default::default(),
             write_files: FileWrite::new(stdout),
@@ -319,20 +322,20 @@ pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
 #[no_mangle]
 pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
-    try_abort!(
+    let _changed = try_abort!(
         for_either!(&mut runtime.input_data, |(line, read_files)| {
             runtime
                 .regexes
                 .get_line_stdin_reuse(&runtime.vars.rs, read_files, line)
         }),
         "unexpected error when reading line from stdin:"
-    )
+    );
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
-    let res = try_abort!(
+    let (_changed, res) = try_abort!(
         for_either!(&mut runtime.input_data, |(_, read_files)| {
             runtime.regexes.get_line_stdin(&runtime.vars.rs, read_files)
         }),
