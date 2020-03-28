@@ -312,21 +312,6 @@ impl<'a, 'b> Generator<'a, 'b> {
         Ok(())
     }
 
-    pub unsafe fn run_main_trad(
-        &mut self,
-        stdin: impl std::io::Read + 'static,
-        stdout: impl std::io::Write + 'static,
-        csv: bool,
-    ) -> Result<()> {
-        let mut rt = intrinsics::Runtime::new(stdin, stdout, csv);
-        self.gen_main()?;
-        self.verify()?;
-        let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
-        let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
-        main_fn((&mut rt) as *mut _ as *mut libc::c_void);
-        Ok(())
-    }
-
     unsafe fn build_map(&mut self) {
         use mem::size_of;
         let make = |ty| TypeRef {

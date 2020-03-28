@@ -3,17 +3,11 @@ use crate::bytecode::{Get, Instr, Label, Pop, Reg};
 use crate::builtins::Variable;
 use crate::common::{NumTy, Result};
 use crate::compile::{self, Ty};
-use crate::runtime::{
-    self,
-    splitter::{CSVReader, RegexSplitter},
-    Float, Int, Line, LineReader, Str,
-};
+use crate::runtime::{self, Float, Int, Line, LineReader, Str};
 
 use std::cmp;
-use std::io;
 
 type ClassicReader = runtime::splitter::RegexSplitter<Box<dyn std::io::Read>>;
-pub(crate) type InterpCSV<'a, R> = Interp<'a, CSVReader<R>>;
 
 #[derive(Default)]
 pub(crate) struct Storage<T> {
@@ -95,39 +89,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             iters_int: default_of(regs(IterInt)),
             iters_str: default_of(regs(IterStr)),
         }
-    }
-}
-
-impl<'a> Interp<'a> {
-    pub(crate) fn new_regex(
-        instrs: Vec<Vec<Instr<'a>>>,
-        main_func: usize,
-        regs: impl Fn(compile::Ty) -> usize,
-        stdin: impl std::io::Read + 'static,
-        stdout: impl std::io::Write + 'static,
-    ) -> Interp<'a> {
-        let stdin_boxed: Box<dyn std::io::Read + 'static> = Box::new(stdin);
-        let stdin_name = "-";
-        let stdin_reader = RegexSplitter::new(stdin_boxed, runtime::CHUNK_SIZE, stdin_name);
-        Interp::new(instrs, main_func, regs, stdin_reader, stdout)
-    }
-}
-
-impl<'a, R: io::Read> InterpCSV<'a, R> {
-    pub(crate) fn new_csv(
-        instrs: Vec<Vec<Instr<'a>>>,
-        main_func: usize,
-        regs: impl Fn(compile::Ty) -> usize,
-        stdin: R,
-        stdout: impl std::io::Write + 'static,
-    ) -> Self {
-        Interp::new(
-            instrs,
-            main_func,
-            regs,
-            CSVReader::new(stdin, /*name=*/ "-"),
-            stdout,
-        )
     }
 }
 

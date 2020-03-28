@@ -256,8 +256,13 @@ fn dump_bytecode(prog: &str, field_sep: &Option<String>, var_decs: &Vec<String>)
     use std::io::Cursor;
     let a = Arena::default();
     let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
-    let fake_io = Cursor::new(vec![]);
-    let interp = match compile::bytecode_regex(&mut ctx, fake_io.clone(), fake_io) {
+    let fake_inp: Box<dyn io::Read> = Box::new(Cursor::new(vec![]));
+    let fake_out: Box<dyn io::Write> = Box::new(Cursor::new(vec![]));
+    let interp = match compile::bytecode(
+        &mut ctx,
+        chained(CSVReader::new(fake_inp, "unuse")),
+        fake_out,
+    ) {
         Ok(ctx) => ctx,
         Err(e) => fail!("bytecode compilation failure: {}", e),
     };

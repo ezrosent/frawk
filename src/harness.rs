@@ -9,6 +9,11 @@ use crate::{
     common::Result,
     compile, lexer, llvm,
     parsing::syntax,
+    runtime::{
+        self,
+        splitter::{CSVReader, RegexSplitter},
+        ChainedReader,
+    },
     types::{self, get_types},
 };
 use hashbrown::HashMap;
@@ -16,6 +21,7 @@ use std::cell::RefCell;
 use std::io;
 use std::io::Write;
 use std::rc::Rc;
+
 #[derive(Clone, Default)]
 struct FakeStdout(Rc<RefCell<Vec<u8>>>);
 impl io::Write for FakeStdout {
@@ -32,6 +38,36 @@ impl FakeStdout {
     fn clear(&self) {
         self.0.borrow_mut().truncate(0);
     }
+}
+
+const FILE_BREAK: &'static str = "<<<FILE BREAK>>>";
+
+fn simulate_stdin_csv(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtime::LineReader {
+    let stdin: String = inp.into();
+    let inputs: Vec<_> = stdin
+        .split(FILE_BREAK)
+        .map(String::from)
+        .enumerate()
+        .map(|(i, x)| {
+            let reader: Box<dyn io::Read> = Box::new(std::io::Cursor::new(x));
+            CSVReader::new(reader, format!("fake_stdin_{}", i))
+        })
+        .collect();
+    ChainedReader::new(inputs.into_iter())
+}
+
+fn simulate_stdin_regex(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtime::LineReader {
+    let stdin: String = inp.into();
+    let inputs: Vec<_> = stdin
+        .split(FILE_BREAK)
+        .map(String::from)
+        .enumerate()
+        .map(|(i, x)| {
+            let reader: Box<dyn io::Read> = Box::new(std::io::Cursor::new(x));
+            RegexSplitter::new(reader, runtime::CHUNK_SIZE, format!("fake_stdin_{}", i))
+        })
+        .collect();
+    ChainedReader::new(inputs.into_iter())
 }
 
 const _PRINT_DEBUG_INFO: bool = false;
@@ -76,18 +112,26 @@ pub(crate) fn compile_llvm(prog: &str) -> Result<()> {
 
 #[allow(unused)]
 pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>, csv: bool) -> Result<String> {
+    use std::iter::once;
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
-    let stdin = stdin.into();
     let stdout = FakeStdout::default();
-    compile::run_llvm_trad(
-        &mut ctx,
-        std::io::Cursor::new(stdin),
-        stdout.clone(),
-        LLVM_CONFIG,
-        csv,
-    )?;
+    if csv {
+        compile::run_llvm(
+            &mut ctx,
+            simulate_stdin_csv(stdin),
+            stdout.clone(),
+            LLVM_CONFIG,
+        )?;
+    } else {
+        compile::run_llvm(
+            &mut ctx,
+            simulate_stdin_regex(stdin),
+            stdout.clone(),
+            LLVM_CONFIG,
+        )?;
+    }
     let v = match Rc::try_unwrap(stdout.0) {
         Ok(v) => v.into_inner(),
         Err(rc) => rc.borrow().clone(),
@@ -132,17 +176,19 @@ fn compile_program<'a, 'inp, 'outer>(
     a: &'a Arena<'outer>,
     prog: Prog<'a>,
     stdin: impl Into<String>,
-) -> Result<(Interp<'a>, FakeStdout)> {
+) -> Result<(Interp<'a, impl runtime::LineReader>, FakeStdout)> {
     let mut ctx = cfg::ProgramContext::from_prog(a, prog)?;
-    let stdin = stdin.into();
     let stdout = FakeStdout::default();
     Ok((
-        compile::bytecode_regex(&mut ctx, std::io::Cursor::new(stdin), stdout.clone())?,
+        compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), stdout.clone())?,
         stdout,
     ))
 }
 
-fn run_prog_nodebug<'a>(interp: &mut Interp<'a>, stdout: FakeStdout) -> Result<String /*output*/> {
+fn run_prog_nodebug<'a, LR: runtime::LineReader>(
+    interp: &mut Interp<'a, LR>,
+    stdout: FakeStdout,
+) -> Result<String /*output*/> {
     interp.run()?;
     let v = match Rc::try_unwrap(stdout.0) {
         Ok(v) => v.into_inner(),
@@ -164,7 +210,6 @@ pub(crate) fn run_prog<'a>(
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
     // a limited capacity for locals, but it would require a lot more bookkeeping.
     let ident_map = ctx._invert_ident();
-    let stdin = stdin.into();
     let stdout = FakeStdout::default();
     let (instrs, type_map) = {
         let mut instrs_buf = Vec::<u8>::new();
@@ -199,18 +244,12 @@ pub(crate) fn run_prog<'a>(
         macro_rules! with_interp {
             ($interp:ident, $body: expr) => {
                 if csv {
-                    let mut $interp = compile::bytecode_csv(
-                        &mut ctx,
-                        std::io::Cursor::new(stdin),
-                        stdout.clone(),
-                    )?;
+                    let mut $interp =
+                        compile::bytecode(&mut ctx, simulate_stdin_csv(stdin), stdout.clone())?;
                     $body
                 } else {
-                    let mut $interp = compile::bytecode_regex(
-                        &mut ctx,
-                        std::io::Cursor::new(stdin),
-                        stdout.clone(),
-                    )?;
+                    let mut $interp =
+                        compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), stdout.clone())?;
                     $body
                 }
             };
@@ -315,7 +354,21 @@ mod tests {
             test_program!($desc, $e, $out, @input $inp, @types [], @csv true);
         };
     }
-
+    test_program!(
+        basic_multi_file,
+        r#"{ print "["FILENAME,NR,FNR"]", $0; }"#,
+          r#"[fake_stdin_0 1 1] this is
+[fake_stdin_0 2 2] the first file
+[fake_stdin_1 3 1] And this
+[fake_stdin_1 4 2] is the second file
+[fake_stdin_1 5 3] it has one more line
+"#,
+          @input r#"this is
+the first file
+<<<FILE BREAK>>>And this
+is the second file
+it has one more line"#
+    );
     test_program_csv!(
         csv_no_escaping,
         r#"function max(x, y) { return x<y?y:x; }

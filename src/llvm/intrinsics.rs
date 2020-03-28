@@ -99,22 +99,6 @@ pub(crate) struct Runtime<'a> {
 }
 
 impl<'a> Runtime<'a> {
-    // TODO get rid of this function
-    pub(crate) fn new(
-        stdin: impl io::Read + 'static,
-        stdout: impl io::Write + 'static,
-        csv: bool,
-    ) -> Runtime<'a> {
-        use std::iter::once;
-        let stdin: Box<dyn io::Read> = Box::new(stdin);
-        if csv {
-            ChainedReader::new(once(CSVReader::new(stdin, "-"))).into_runtime(stdout)
-        } else {
-            ChainedReader::new(once(RegexSplitter::new(stdin, runtime::CHUNK_SIZE, "-")))
-                .into_runtime(stdout)
-        }
-    }
-
     fn reset_file_vars(&mut self) {
         self.vars.fnr = 0;
         self.vars.filename = for_either!(&mut self.input_data, |(_, read_files)| {

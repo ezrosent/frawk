@@ -100,26 +100,6 @@ impl Ty {
 
 pub(crate) const NUM_TYPES: usize = Ty::IterStr as usize + 1;
 
-pub(crate) fn bytecode_regex<'a>(
-    ctx: &mut cfg::ProgramContext<'a, &'a str>,
-    // default to std::io::stdin()
-    reader: impl io::Read + 'static,
-    // default to std::io::BufWriter::new(std::io::stdout())
-    writer: impl io::Write + 'static,
-) -> Result<bytecode::Interp<'a>> {
-    Typer::init_from_ctx(ctx)?.to_interp_regex(reader, writer)
-}
-
-pub(crate) fn bytecode_csv<'a, R: std::io::Read + 'static>(
-    ctx: &mut cfg::ProgramContext<'a, &'a str>,
-    // default to std::io::stdin()
-    reader: R,
-    // default to std::io::BufWriter::new(std::io::stdout())
-    writer: impl io::Write + 'static,
-) -> Result<bytecode::InterpCSV<'a, R>> {
-    Typer::init_from_ctx(ctx)?.to_interp_csv(reader, writer)
-}
-
 pub(crate) fn bytecode<'a, LR: runtime::LineReader>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     reader: LR,
@@ -163,25 +143,6 @@ pub(crate) fn run_llvm<'a>(
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
         gen.run_main(reader, writer)
-    }
-}
-
-// The _trad functions are an old interface that is still used for convenience when testing. It
-// uses different defaults when plumbing through input and output.
-pub(crate) fn run_llvm_trad<'a>(
-    ctx: &mut cfg::ProgramContext<'a, &'a str>,
-    // default to std::io::stdin()
-    reader: impl std::io::Read + 'static,
-    // default to std::io::BufWriter::new(std::io::stdout())
-    writer: impl std::io::Write + 'static,
-    cfg: llvm::Config,
-    csv: bool,
-) -> Result<()> {
-    use crate::llvm::Generator;
-    let mut typer = Typer::init_from_ctx(ctx)?;
-    unsafe {
-        let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main_trad(reader, writer, csv)
     }
 }
 
@@ -389,34 +350,6 @@ impl<'a> Typer<'a> {
     ) -> Result<bytecode::Interp<'a, LR>> {
         let instrs = self.to_bytecode()?;
         Ok(bytecode::Interp::new(
-            instrs,
-            self.main_offset,
-            |ty| self.regs.stats.count(ty) as usize,
-            reader,
-            writer,
-        ))
-    }
-    fn to_interp_regex(
-        &mut self,
-        reader: impl io::Read + 'static,
-        writer: impl io::Write + 'static,
-    ) -> Result<bytecode::Interp<'a>> {
-        let instrs = self.to_bytecode()?;
-        Ok(bytecode::Interp::new_regex(
-            instrs,
-            self.main_offset,
-            |ty| self.regs.stats.count(ty) as usize,
-            reader,
-            writer,
-        ))
-    }
-    fn to_interp_csv<R: std::io::Read + 'static>(
-        &mut self,
-        reader: R,
-        writer: impl std::io::Write + 'static,
-    ) -> Result<bytecode::InterpCSV<'a, R>> {
-        let instrs = self.to_bytecode()?;
-        Ok(bytecode::Interp::new_csv(
             instrs,
             self.main_offset,
             |ty| self.regs.stats.count(ty) as usize,
