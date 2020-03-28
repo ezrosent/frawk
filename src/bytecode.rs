@@ -6,7 +6,7 @@ use crate::compile::{self, Ty};
 use crate::interp::{index, index_mut, pop, push, Storage};
 use crate::runtime::{self, Float, Int, Str};
 
-pub(crate) use crate::interp::{Interp, InterpCSV};
+pub(crate) use crate::interp::{Interp};
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct Label(pub usize);
