@@ -1,7 +1,7 @@
 use crate::arena;
 use crate::ast::{self, Expr, Stmt, Unop};
 use crate::builtins::{self, IsSprintf};
-use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result};
+use crate::common::{Either, Graph, NodeIx, NumTy, Result};
 use crate::dom;
 
 use hashbrown::{HashMap, HashSet};
@@ -286,6 +286,7 @@ where
         arena: &'a arena::Arena<'outer>,
         p: &ast::Prog<'a, 'b, I>,
     ) -> Result<Self> {
+        // TODO this function is a bit of a slog. It would be nice to break it up.
         let mut shared: GlobalContext<I> = GlobalContext {
             hm: Default::default(),
             local_globals: Default::default(),
@@ -342,6 +343,7 @@ where
                 entry,
                 exit,
                 loop_ctx: Default::default(),
+                toplevel_header: None,
                 dt: Default::default(),
                 df: Default::default(),
             };
@@ -364,6 +366,7 @@ where
             entry,
             exit,
             loop_ctx: Default::default(),
+            toplevel_header: None,
             dt: Default::default(),
             df: Default::default(),
         };
@@ -459,6 +462,11 @@ pub(crate) struct Function<'a, I> {
     // Stack of the entry and exit nodes for the loops within which the current statement is
     // nested.
     loop_ctx: SmallVec<(NodeIx, NodeIx)>,
+    // Header node for the toplevel "pattern matching" loop of the AWK program. This is used to
+    // implement the nonlocal continue of the `next` and `nextfile` statements.
+    //
+    // NB: We only support doing this from main.
+    toplevel_header: Option<NodeIx>,
 
     // Dominance information about `cfg`.
     dt: dom::Tree,
@@ -711,8 +719,13 @@ where
                 } else {
                     current_open
                 };
-                let (h, b_start, _b_end, f) =
-                    self.make_loop(body, update.clone(), init_end, false)?;
+                let (h, b_start, _b_end, f) = self.make_loop(
+                    body,
+                    update.clone(),
+                    init_end,
+                    /*is_do*/ false,
+                    /*is_toplevel*/ false,
+                )?;
                 let (h_end, cond_val) = if let Some(c) = cond {
                     self.convert_val(c, h)?
                 } else {
@@ -724,8 +737,9 @@ where
                 self.f.cfg.add_edge(h_end, f, Transition::null());
                 f
             }
-            While(cond, body) => {
-                let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, false)?;
+            While(is_toplevel, cond, body) => {
+                let (h, b_start, _b_end, f) =
+                    self.make_loop(body, None, current_open, /*is_do*/ false, *is_toplevel)?;
                 let (h_end, cond_val) = self.convert_val(cond, h)?;
                 self.f
                     .cfg
@@ -734,7 +748,13 @@ where
                 f
             }
             DoWhile(cond, body) => {
-                let (h, b_start, _b_end, f) = self.make_loop(body, None, current_open, true)?;
+                let (h, b_start, _b_end, f) = self.make_loop(
+                    body,
+                    None,
+                    current_open,
+                    /*is_do*/ true,
+                    /*is_toplevel*/ false,
+                )?;
                 let (h_end, cond_val) = self.convert_val(cond, h)?;
                 self.f
                     .cfg
@@ -783,41 +803,21 @@ where
 
                 footer
             }
-            // TODO we may want checking here to avoid folks doing "continue" and "break" inside a
-            // toplevel statement that was desugared into a loop.
-            //
-            // This should become more doable once we add more metadata to AST nodes.
             Break => {
-                match self.f.loop_ctx.pop() {
-                    Some((_, footer)) => {
-                        // Break statements unconditionally jump to the end of the loop.
-                        self.f
-                            .cfg
-                            .add_edge(current_open, footer, Transition::null());
-                        self.seal(current_open);
-                        current_open
-                    }
-                    None => {
-                        return Err(CompileError("break statement must be inside a loop".into()))
-                    }
-                }
+                self.do_break_continue(current_open, /*is_break*/ true)?;
+                current_open
             }
             Continue => {
-                match self.f.loop_ctx.pop() {
-                    Some((header, _)) => {
-                        // Continue statements unconditionally jump to the top of the loop.
-                        self.f
-                            .cfg
-                            .add_edge(current_open, header, Transition::null());
-                        self.seal(current_open);
-                        current_open
-                    }
-                    None => {
-                        return Err(CompileError(
-                            "continue statement must be inside a loop".into(),
-                        ))
-                    }
-                }
+                self.do_break_continue(current_open, /*is_break*/ false)?;
+                current_open
+            }
+            Next => {
+                self.do_next(current_open, /*is_next_file*/ false)?;
+                current_open
+            }
+            NextFile => {
+                self.do_next(current_open, /*is_next_file*/ true)?;
+                current_open
             }
             Return(ret) => {
                 let (current_open, e) = if let Some(ret) = ret {
@@ -1298,12 +1298,60 @@ where
         Ok((next_open, self.to_val(e, next_open)?))
     }
 
+    // Handles "break", "continue" statements.
+    fn do_break_continue(&mut self, current_open: NodeIx, is_break: bool) -> Result<()> {
+        let name = if is_break { "break" } else { "continue" };
+        if self.f.loop_ctx.len() == 1 && self.f.toplevel_header.is_some() {
+            return err!("{} statement must be inside a loop", name);
+        }
+        match self.f.loop_ctx.pop() {
+            Some((header, footer)) => {
+                // Break statements unconditionally jump to the end of the loop.
+                // Continue statements jump to the beginning.
+                let dst = if is_break { footer } else { header };
+                self.f.cfg.add_edge(current_open, dst, Transition::null());
+                self.seal(current_open);
+                Ok(())
+            }
+            None => {
+                return err!("{} statement must be inside a loop", name);
+            }
+        }
+    }
+
+    // Handles "next", "nextfile" statements.
+    fn do_next(&mut self, current_open: NodeIx, is_next_file: bool) -> Result<()> {
+        if let Some(header) = self.f.toplevel_header {
+            if is_next_file {
+                self.add_stmt(
+                    current_open,
+                    PrimStmt::AsgnVar(
+                        Self::unused(),
+                        PrimExpr::CallBuiltin(builtins::Function::NextFile, smallvec![]),
+                    ),
+                )?;
+            }
+            self.f
+                .cfg
+                .add_edge(current_open, header, Transition::null());
+            self.seal(current_open);
+            Ok(())
+        } else {
+            err!(
+                "Cannot use `{}` from outside of the toplevel loop! \
+                 Note that frawk does not support `next` or `nextfile` from inside functions.",
+                if is_next_file { "nextfile" } else { "next" }
+            )
+        }
+    }
+
     fn make_loop<'c>(
         &mut self,
         body: &'c Stmt<'c, 'b, I>,
         update: Option<&'c Stmt<'c, 'b, I>>,
         current_open: NodeIx,
         is_do: bool,
+        is_toplevel: bool,
     ) -> Result<(
         NodeIx, // header
         NodeIx, // body header
@@ -1314,6 +1362,9 @@ where
         let h = self.f.cfg.add_node(Default::default());
         let f = self.f.cfg.add_node(Default::default());
         self.f.loop_ctx.push((h, f));
+        if is_toplevel {
+            self.f.toplevel_header = Some(h);
+        }
 
         // The body is a standalone graph.
         let (b_start, b_end) = if let Some(u) = update {

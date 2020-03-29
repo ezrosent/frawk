@@ -1419,6 +1419,9 @@ impl<'a> View<'a> {
             NextLineStdinFused() => {
                 self.call("next_line_stdin_fused", &mut [self.runtime_val()]);
             }
+            NextFile() => {
+                self.call("next_file", &mut [self.runtime_val()]);
+            }
             LookupIntInt(res, arr, k) => {
                 self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
             }

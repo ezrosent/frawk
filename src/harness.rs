@@ -213,25 +213,9 @@ pub(crate) fn run_prog<'a>(
     let stdout = FakeStdout::default();
     let (instrs, type_map) = {
         let mut instrs_buf = Vec::<u8>::new();
-        for func in ctx.funcs.iter() {
-            let name = func.name.unwrap_or("<main>");
-            write!(&mut instrs_buf, "cfg:\nfunction {}/{}(", name, func.ident).unwrap();
-            for (i, arg) in func.args.iter().enumerate() {
-                // Help with pretty-printing
-                use crate::display::Wrap;
-                if i == func.args.len() - 1 {
-                    write!(&mut instrs_buf, "{}/{}", arg.name, Wrap(arg.id)).unwrap()
-                } else {
-                    write!(&mut instrs_buf, "{}/{}, ", arg.name, Wrap(arg.id)).unwrap()
-                }
-            }
-            write!(
-                &mut instrs_buf,
-                ") {{\n {}\n}}\nbytecode:\n",
-                petgraph::dot::Dot::new(&func.cfg)
-            )
-            .unwrap();
-        }
+        write!(&mut instrs_buf, "\nCFG:\n").unwrap();
+        ctx.dbg_print(&mut instrs_buf).unwrap();
+        write!(&mut instrs_buf, "\n").unwrap();
         let types::TypeInfo { var_tys, func_tys } = get_types(&ctx)?;
         // ident_map : Ident -> &str (but only has globals)
         // ts: Ident -> Type
@@ -354,13 +338,31 @@ mod tests {
             test_program!($desc, $e, $out, @input $inp, @types [], @csv true);
         };
     }
+
     test_program!(
         basic_multi_file,
-        r#"{ print "["FILENAME,NR,FNR"]", $0; }"#,
+        // test some OFS/ORS behavior for good measure
+        r#"BEGIN { OFS="  "; ORS="~\n"} { print "["FILENAME,NR,FNR"]", $0; }"#,
+          r#"[fake_stdin_0  1  1]  this is~
+[fake_stdin_0  2  2]  the first file~
+[fake_stdin_1  3  1]  And this~
+[fake_stdin_1  4  2]  is the second file~
+[fake_stdin_1  5  3]  it has one more line~
+"#,
+          @input r#"this is
+the first file
+<<<FILE BREAK>>>And this
+is the second file
+it has one more line"#
+    );
+
+    test_program!(
+        basic_next,
+        r#"{
+        if ((NR%2) == 0) { next; };
+        print "["FILENAME,NR,FNR"]", $0;}"#,
           r#"[fake_stdin_0 1 1] this is
-[fake_stdin_0 2 2] the first file
 [fake_stdin_1 3 1] And this
-[fake_stdin_1 4 2] is the second file
 [fake_stdin_1 5 3] it has one more line
 "#,
           @input r#"this is
@@ -369,6 +371,22 @@ the first file
 is the second file
 it has one more line"#
     );
+    test_program!(
+        basic_next_file,
+        r#"
+        NR == 1 { nextfile; }
+        { print "["FILENAME,NR,FNR"]", $0;}"#,
+          r#"[fake_stdin_1 2 1] And this
+[fake_stdin_1 3 2] is the second file
+[fake_stdin_1 4 3] it has one more line
+"#,
+          @input r#"this is
+the first file
+<<<FILE BREAK>>>And this
+is the second file
+it has one more line"#
+    );
+
     test_program_csv!(
         csv_no_escaping,
         r#"function max(x, y) { return x<y?y:x; }

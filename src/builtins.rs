@@ -20,6 +20,7 @@ pub enum Function {
     ReadErrStdin,
     NextlineStdin,
     ReadLineStdinFused,
+    NextFile,
     Setcol,
     Split,
     Length,
@@ -31,6 +32,9 @@ pub enum Function {
     Substr,
 }
 
+// This map is used to look up functions that are called in the program source and determine if
+// they are builtin functions. Note that not all members of the Function enum are present here.
+// This includes only the "public" functions.
 static_map!(
     FUNCTIONS<&'static str, Function>,
     ["close", Function::Close],
@@ -159,7 +163,7 @@ impl Function {
             PrintStdout => (smallvec![Str], Int),
             Nextline => (smallvec![Str], Str),
             ReadErr => (smallvec![Str], Int),
-            ReadLineStdinFused => (smallvec![], Int),
+            NextFile | ReadLineStdinFused => (smallvec![], Int),
             NextlineStdin => (smallvec![], Str),
             ReadErrStdin => (smallvec![], Int),
             // irrelevant return type
@@ -183,7 +187,7 @@ impl Function {
     pub(crate) fn arity(&self) -> Option<usize> {
         use Function::*;
         Some(match self {
-            ReadErrStdin | NextlineStdin | ReadLineStdinFused => 0,
+            ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
             Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Match | Setcol | Binop(_) => 2,
             Delete | Contains => 2,
@@ -223,7 +227,7 @@ impl Function {
             Substr | Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())
             }
-            ReadLineStdinFused | Close => Ok(None),
+            NextFile | ReadLineStdinFused | Close => Ok(None),
         }
     }
 }
