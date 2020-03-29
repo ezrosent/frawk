@@ -576,19 +576,15 @@ where
         use Stmt::*;
         Ok(match stmt {
             StartCond(cond) => {
-                let cond_ident = self.get_cond(*cond);
-                self.add_stmt(
-                    current_open,
-                    PrimStmt::AsgnVar(cond_ident, PrimExpr::Val(PrimVal::ILit(1))),
-                )?;
+                self.set_cond(current_open, *cond, 1)?;
                 current_open
             }
             EndCond(cond) => {
-                let cond_ident = self.get_cond(*cond);
-                self.add_stmt(
-                    current_open,
-                    PrimStmt::AsgnVar(cond_ident, PrimExpr::Val(PrimVal::ILit(0))),
-                )?;
+                self.set_cond(current_open, *cond, 0)?;
+                current_open
+            }
+            LastCond(cond) => {
+                self.set_cond(current_open, *cond, 2)?;
                 current_open
             }
             Expr(e) => {
@@ -1317,6 +1313,14 @@ where
                 return err!("{} statement must be inside a loop", name);
             }
         }
+    }
+
+    fn set_cond(&mut self, current_open: NodeIx, cond: usize, cond_val: i64) -> Result<()> {
+        let cond_ident = self.get_cond(cond);
+        self.add_stmt(
+            current_open,
+            PrimStmt::AsgnVar(cond_ident, PrimExpr::Val(PrimVal::ILit(cond_val))),
+        )
     }
 
     // Handles "next", "nextfile" statements.

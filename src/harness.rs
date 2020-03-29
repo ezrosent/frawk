@@ -721,6 +721,25 @@ Or this"#
     );
 
     test_program!(
+        comma_patterns_next,
+        r#"
+        /START/,/END/ { next; }
+        { print; }
+        "#,
+        r#"This will get printed
+and this!
+this as well
+"#,
+        @input r#"This will get printed
+START
+this shant be printed
+nor this
+END
+and this!
+this as well"#
+    );
+
+    test_program!(
         basic_match_loc,
         r#"BEGIN {
         x=match("something that should match", /t.?h/)
