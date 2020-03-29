@@ -243,6 +243,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         next_line(rt_ty, str_ref_ty) -> str_ty;
         next_line_stdin(rt_ty) -> str_ty;
         next_line_stdin_fused(rt_ty);
+        next_file(rt_ty);
 
         load_var_str(rt_ty, int_ty) -> str_ty;
         store_var_str(rt_ty, int_ty, str_ref_ty);
@@ -350,6 +351,13 @@ pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     if changed {
         runtime.reset_file_vars();
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn next_file(runtime: *mut c_void) {
+    let runtime = &mut *(runtime as *mut Runtime);
+    for_either!(&mut runtime.input_data, |(_, read_files)| read_files
+        .next_file());
 }
 
 #[no_mangle]

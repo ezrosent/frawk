@@ -6,7 +6,7 @@ use crate::compile::{self, Ty};
 use crate::interp::{index, index_mut, pop, push, Storage};
 use crate::runtime::{self, Float, Int, Str};
 
-pub(crate) use crate::interp::{Interp};
+pub(crate) use crate::interp::Interp;
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct Label(pub usize);
@@ -141,6 +141,8 @@ pub(crate) enum Instr<'a> {
     NextLineStdin(Reg<Str<'a>>),
     // Fetches line directly into $0.
     NextLineStdinFused(),
+    // Advances early to the next file in our sequence
+    NextFile(),
 
     // Split
     SplitInt(
@@ -869,7 +871,7 @@ impl<'a> Instr<'a> {
             PopStrInt(reg) => reg.accum(&mut f),
             PopStrFloat(reg) => reg.accum(&mut f),
             PopStrStr(reg) => reg.accum(&mut f),
-            NextLineStdinFused() | Call(_) | Jmp(_) | Ret | Halt => {}
+            NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret | Halt => {}
         }
     }
 }

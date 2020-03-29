@@ -854,6 +854,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             self.reset_file_vars()
                         }
                     }
+                    NextFile() => {
+                        self.read_files.next_file();
+                        self.reset_file_vars();
+                    }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;
                         if *self.get(cond) != 0 {

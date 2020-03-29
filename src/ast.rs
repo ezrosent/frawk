@@ -1,3 +1,24 @@
+/// An "Abstract Syntax Tree" that fairly closely resembles the structure of an AWK program. This
+/// is the representation that the parser returns. A couple of basic desugaring rules are applied
+/// that translate a `Prog` into a bare `Stmt`, along with its accompanying function definitions.
+/// Those materials are consumed by the `cfg` module, which produces an untyped SSA form.
+///
+/// A couple things to note:
+///  * The Expr and Stmt types are trees supporting arbitrary nesting. With limited exceptions, we
+///    do not allocate each node separately on the heap. We instead use an arena for these
+///    allocations. This is a win on all fronts: it's strictly faster because allocation is
+///    extremely cheap, and destructors are fairly cheap, _and_ it's much easier to program because
+///    references are Copy.
+///  * The common way of introducing AWK: that it is a language structured around patterns and
+///    actions to execute when the input matches that pattern is desugared in this module. We do
+///    not handle it specially.
+///
+///    TODO It is not clear that this is the right move long-term: lots of regex implementations
+///    (like HyperScan, or BurntSushi's engine in use here) achieve higher throughput by matching a
+///    string against several patterns at once. There is probably a transormation we could do here
+///    to take advantage of that, but it would probably involve building out def-use chains (which
+///    we currently don't do), and we'd want to verify that performance didn't degrade when the
+///    patterns are _not sparse_ in the input.
 use crate::arena::Arena;
 use crate::builtins::Function;
 use crate::common::Either;
@@ -118,6 +139,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             // Wrap the whole thing in a while((getline) > 0) { } statement.
             res.push(arena.alloc(move || {
                 While(
+                    /*is_toplevel=*/ true,
                     arena.alloc(|| Binop(GT, arena.alloc(|| ReadStdin), arena.alloc(|| ILit(0)))),
                     arena.alloc(move || Block(inner)),
                 )
@@ -153,9 +175,6 @@ pub enum Binop {
 // TODO add support for "next"; just continue to the toplevel loop -- annotate while loop?
 // TODO add "close", make cache for regexes LRU.
 // TODO trig functions, !=, any missing operators.
-// TODO CLI
-// TODO multiple files
-// TODO full /pat1/../pat2/ patterns
 //
 // Improvements:
 // * Remove `Vec`s in ASTs. This may be hard for lalrpop for now, but we should at least be able to
@@ -242,9 +261,17 @@ pub enum Stmt<'a, 'b, I> {
         &'a Stmt<'a, 'b, I>,
     ),
     DoWhile(&'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
-    While(&'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
+    // We mark some while loops as "special" because of the special "next" and "nextfile" commands,
+    // that work as a special "labelled continue" for the toplevel loop.
+    While(
+        /*is_toplevel*/ bool,
+        &'a Expr<'a, 'b, I>,
+        &'a Stmt<'a, 'b, I>,
+    ),
     ForEach(I, &'a Expr<'a, 'b, I>, &'a Stmt<'a, 'b, I>),
     Break,
     Continue,
+    Next,
+    NextFile,
     Return(Option<&'a Expr<'a, 'b, I>>),
 }

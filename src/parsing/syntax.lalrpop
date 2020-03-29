@@ -1,3 +1,6 @@
+/// This is the parser we have. I am by no means comfortable writing parsing
+/// code like this, but I do think that this code is better and more
+/// maintainable than if I had written the parser by hand.
 use crate::{
   arena::Arena,
   ast::{Pattern, Expr, Stmt, Binop, Unop, Prog, FunDec},
@@ -70,7 +73,7 @@ Stmt: &'a Stmt<'a,'a,&'a str> = {
            arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
     "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
     "do" NL <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
-    "while" NL "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(cond, body)),
+    "while" NL "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(false, cond, body)),
     "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> ")" NL <body:BaseStmt> =>
         arena.alloc_v(Stmt::For(
                 init.map(|x| arena.alloc_v(Stmt::Expr(x))),
@@ -103,6 +106,8 @@ BaseStmt: &'a Stmt<'a,'a,&'a str> = {
         arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
     "break" => arena.alloc_v(Stmt::Break),
     "continue" => arena.alloc_v(Stmt::Continue),
+    "next" => arena.alloc_v(Stmt::Next),
+    "nextfile" => arena.alloc_v(Stmt::NextFile),
     "return" <Expr?> => arena.alloc_v(Stmt::Return(<>)),
     Block,
 }
@@ -331,6 +336,8 @@ extern {
       "END" =>  Tok::End,
       "break" =>  Tok::Break,
       "continue" =>  Tok::Continue,
+      "next" =>  Tok::Next,
+      "nextfile" =>  Tok::NextFile,
       "for" =>  Tok::For,
       "if" =>  Tok::If,
       "else" => Tok::Else,

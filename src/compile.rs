@@ -1027,6 +1027,7 @@ impl<'a, 'b> View<'a, 'b> {
             ReadErrStdin => self.pushl(LL::ReadErrStdin(res_reg.into())),
             NextlineStdin => self.pushl(LL::NextLineStdin(res_reg.into())),
             ReadLineStdinFused => self.pushl(LL::NextLineStdinFused()),
+            NextFile => self.pushl(LL::NextFile()),
             Setcol => self.pushl(LL::SetColumn(conv_regs[0].into(), conv_regs[1].into())),
             Sub => self.pushl(LL::Sub(
                 res_reg.into(),
