@@ -107,29 +107,64 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                 Pattern::Null => inner.push(body),
                 Pattern::Bool(pat) => inner.push(arena.alloc_v(If(pat, body, None))),
                 Pattern::Comma(l, r) => {
-                    // We desugar pat1,pat2
-                    // TODO: This doesn't totally work as a desugaring,
-                    // If we had
-                    //   /\/*/,/*\// { comment++; next; }
-                    // we would never finish the comment because `next` would bail out before
-                    // EndCond. Something to consider once we add `next` support.
-                    // Idea 1: instead of
-                    //   if (l) { startcond; }
-                    //   if (incond) { <body> }
-                    //   if (r) { endcond; }
-                    // Do:
-                    //   if (l) { startcond; }
-                    //   if (r) { endcond; <body> }
-                    //   else if (incond) { <body> }
-                    // This works at the cost of code bloat. If we wanted to we could point these
-                    // into the same location... Except that doesn't work.
-                    // Idea 2: add a new auxiliary variable (or a new state to Cond)
-                    //  if (l) { startcond; }
-                    //  if (r) { lastcond; }
-                    //  if (incond || lastcond) { if (lastcond) endcond; <body> }
+                    // Comma patterns run the corresponding action between pairs of lines matching
+                    // patterns `l` and `r`, inclusive. One common example is the patterh
+                    //  /\/*/,/*\//
+                    // Matching block comments in several propular languages. We desugar these with
+                    // special statements StartCond, LastCond, EndCond, as well as the Cond
+                    // expression. Each of these is tagged with an identifier indicating which
+                    // comma pattern the statement or expression is referencing. In the cfg module,
+                    // these are compiled to simple assignments and reads on a pattern-specific
+                    // local variable:
+                    //
+                    // StartCond sets the variable to 1
+                    // EndCond sets the variable to 0
+                    // LastCond stes the variable to 2
+                    // Cond reads the variable.
+                    //
+                    // Why do you need LastCond? We can mostly make due without it. Consider the
+                    // fragment:
+                    //   /\/*/,/*\// { i++ }
+                    // We can desugar this quite easily as:
+                    //   /\/*/ { StartCond(0); } # _cond_0 = 1
+                    //   Cond(0) { i++; }        # if _cond_0
+                    //   /*\// { EndCond(0); }   # _cond_0 = 0
+                    // We get into trouble, however, if control flow is more complex. If we wanted
+                    // to strip comments we might right:
+                    //   /\/*/,/*\// { next; }
+                    //   { print; }
+                    // But applying the above desugaring rules leads us to running `next` before we
+                    // can set EndCond. No output will be printed after we encounter our first
+                    // comment, regardless of what comes after.
+                    //
+                    // To fix this, we introduce LastCond and use it to signal that the pattern
+                    // should not match in the next iteration.
+                    //   /\/*/ { StartCond(0); } # _cond_0 = 1
+                    //   /*\// { LastCond(0); }  # _cond_0 = 2
+                    //   Cond(0) {
+                    //      # We matched the end of a comment. End the condition before `next`;
+                    //      if (Cond(0) == 2) EndCond(0); # _cond_0 = 0;
+                    //      next;
+                    //  }
                     inner.push(arena.alloc_v(If(l, arena.alloc_v(StartCond(conds)), None)));
-                    inner.push(arena.alloc_v(If(arena.alloc_v(Cond(conds)), body, None)));
-                    inner.push(arena.alloc_v(If(r, arena.alloc_v(EndCond(conds)), None)));
+                    inner.push(arena.alloc_v(If(r, arena.alloc_v(LastCond(conds)), None)));
+                    let block = vec![
+                        arena.alloc_v(If(
+                            arena.alloc_v(Binop(
+                                EQ,
+                                arena.alloc_v(Cond(conds)),
+                                arena.alloc_v(ILit(2)),
+                            )),
+                            arena.alloc_v(EndCond(conds)),
+                            None,
+                        )),
+                        body,
+                    ];
+                    inner.push(arena.alloc_v(If(
+                        arena.alloc_v(Cond(conds)),
+                        arena.alloc_v(Block(block)),
+                        None,
+                    )));
                     conds += 1;
                 }
             }
@@ -237,6 +272,7 @@ pub enum Expr<'a, 'b, I> {
 pub enum Stmt<'a, 'b, I> {
     StartCond(usize),
     EndCond(usize),
+    LastCond(usize),
     Expr(&'a Expr<'a, 'b, I>),
     Block(Vec<&'a Stmt<'a, 'b, I>>),
     Print(
