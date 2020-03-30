@@ -228,7 +228,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         subst_first(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_all(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         substr(str_ref_ty, int_ty, int_ty) -> str_ty;
-        get_col(rt_ty, int_ty) -> str_ty;
+        [ReadOnly] get_col(rt_ty, int_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
         split_str(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
