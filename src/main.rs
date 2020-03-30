@@ -278,21 +278,28 @@ fn dump_bytecode(prog: &str, field_sep: &Option<String>, var_decs: &Vec<String>)
 }
 
 fn main() {
-    let opts: Opts = Opts::parse();
+    let mut opts: Opts = Opts::parse();
     if opts.csv && !csv_supported() {
         fail!("CSV requires an x86 processor with AVX2 support");
     }
     let program_string = {
-        if let Some(p) = &opts.program {
-            p.clone()
-        } else if let Some(pfile) = &opts.program_file {
+        if let Some(pfile) = &opts.program_file {
             match std::fs::read_to_string(pfile) {
-                Ok(p) => p,
+                Ok(p) => {
+                    // We specified a file on the command line, so the "program" will be
+                    // interpreted as another input file.
+                    if let Some(p) = &opts.program {
+                        opts.input_files.push(p.clone());
+                    }
+                    p
+                }
                 Err(e) => {
                     eprintln!("failed to read program from {}: {}", pfile, e);
                     std::process::exit(1)
                 }
             }
+        } else if let Some(p) = &opts.program {
+            p.clone()
         } else {
             eprintln!("must specify program at command line, or in a file via -f");
             std::process::exit(1)
