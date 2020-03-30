@@ -194,7 +194,10 @@ impl<'a> Stepper<'a> {
                     if *bs.get_unchecked(self.prev_ix) == QUOTE {
                         self.append("\"".into());
                         self.st = State::Quote;
-                        // burn the next entry. It should be a quote.
+                        // burn the next entry. It should be a quote. Using get_next here is a
+                        // convenience: if we hit the branch that returns early within the macro,
+                        // there's a bug somewhere! But there shouldn't be one, because all quotes
+                        // should appear in the offsets vector.
                         let _q = get_next!();
                         debug_assert_eq!(bs[_q], QUOTE);
                         self.prev_ix += 1;

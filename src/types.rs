@@ -506,8 +506,11 @@ impl<'b, 'c> TypeContext<'b, 'c> {
                     if prev != v {
                         use compile::Ty;
                         match (prev, v) {
-                            (Ty::Float, Ty::Int) => {}
-                            (Ty::Int, Ty::Float) => {
+                            // TODO: unclear if this is safe in all cases of Str => Float. It only
+                            // makes sense when the Str _was_ null. Perhaps we can propagate that
+                            // null information into this map.
+                            (Ty::Float, _) => {}
+                            (_, Ty::Float) => {
                                 occ.insert(v);
                             }
                             _ => {
