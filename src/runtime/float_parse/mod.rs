@@ -55,7 +55,6 @@ const POWERS_OF_TEN: &[f64] = &[
 fn compute_float_64(power: i64, mut i: u64, negative: bool) -> Option<f64> {
     debug_assert!(power >= FASTFLOAT_SMALLEST_POWER);
     debug_assert!(power <= FASTFLOAT_LARGEST_POWER);
-    debug_assert_ne!(i, 0);
     // Very fast path: we can fit in 53 bits. We can just dump i in an f64 and multiply.
     const MAX_MANTISSA: u64 = (1 << 53) - 1;
     if -22 <= power && power <= 22 && i <= MAX_MANTISSA {
