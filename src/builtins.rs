@@ -12,6 +12,7 @@ use std::convert::TryFrom;
 pub enum Function {
     Unop(ast::Unop),
     Binop(ast::Binop),
+    FloatFunc(FloatFunc),
     Print,
     PrintStdout,
     Close,
@@ -32,6 +33,89 @@ pub enum Function {
     Substr,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FloatFunc {
+    Cos,
+    Sin,
+    Atan,
+    Atan2,
+    // Natural log
+    Log,
+    // Log base 2
+    Log2,
+    // Log base 10
+    Log10,
+    Sqrt,
+}
+
+impl FloatFunc {
+    pub fn eval1(&self, op: f64) -> f64 {
+        use FloatFunc::*;
+        match self {
+            Cos => op.cos(),
+            Sin => op.sin(),
+            Atan => op.atan(),
+            Log => op.ln(),
+            Log2 => op.log2(),
+            Log10 => op.log10(),
+            Sqrt => op.sqrt(),
+            Atan2 => unreachable!(),
+        }
+    }
+    pub fn eval2(&self, x: f64, y: f64) -> f64 {
+        use FloatFunc::*;
+        match self {
+            Atan2 => x.atan2(y),
+            Sqrt | Cos | Sin | Atan | Log | Log2 | Log10 => unreachable!(),
+        }
+    }
+
+    pub fn func_name(&self) -> &'static str {
+        use FloatFunc::*;
+        match self {
+            Cos => "cos",
+            Sin => "sin",
+            Atan => "atan",
+            Log => "log",
+            Log2 => "log2",
+            Log10 => "log10",
+            Sqrt => "sqrt",
+            Atan2 => "atan2",
+        }
+    }
+
+    pub fn intrinsic_name(&self) -> &'static str {
+        use FloatFunc::*;
+        // NB these must match the corresponding function name in llvm/intrinsics. New functions
+        // added here must also be stubbed out there with semantics matching the `eval` methods.
+        match self {
+            Cos => "_frawk_cos",
+            Sin => "_frawk_sin",
+            Atan => "_frawk_atan",
+            Log => "_frawk_log",
+            Log2 => "_frawk_log2",
+            Log10 => "_frawk_log10",
+            Sqrt => "_frawk_sqrt",
+            Atan2 => "_frawk_atan2",
+        }
+    }
+
+    pub fn arity(&self) -> usize {
+        use FloatFunc::*;
+        match self {
+            Sqrt | Cos | Sin | Atan | Log | Log2 | Log10 => 1,
+            Atan2 => 2,
+        }
+    }
+    fn sig(&self) -> (SmallVec<compile::Ty>, compile::Ty) {
+        use compile::Ty;
+        (smallvec![Ty::Float; self.arity()], Ty::Float)
+    }
+    fn ret_state(&self) -> types::State {
+        types::TVar::Scalar(types::BaseTy::Float).abs()
+    }
+}
+
 // This map is used to look up functions that are called in the program source and determine if
 // they are builtin functions. Note that not all members of the Function enum are present here.
 // This includes only the "public" functions.
@@ -44,7 +128,16 @@ static_map!(
     ["match", Function::Match],
     ["sub", Function::Sub],
     ["gsub", Function::GSub],
-    ["substr", Function::Substr]
+    ["substr", Function::Substr],
+    // TODO finish these
+    ["cos", Function::FloatFunc(FloatFunc::Cos)],
+    ["sin", Function::FloatFunc(FloatFunc::Sin)],
+    ["atan", Function::FloatFunc(FloatFunc::Atan)],
+    ["log", Function::FloatFunc(FloatFunc::Log)],
+    ["log2", Function::FloatFunc(FloatFunc::Log2)],
+    ["log10", Function::FloatFunc(FloatFunc::Log10)],
+    ["sqrt", Function::FloatFunc(FloatFunc::Sqrt)],
+    ["atan2", Function::FloatFunc(FloatFunc::Atan2)]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -115,6 +208,7 @@ impl Function {
             }
         }
         Ok(match self {
+            FloatFunc(ff) => ff.sig(),
             Unop(Neg) | Unop(Pos) => match &incoming[0] {
                 Str | Float => (smallvec![Float], Float),
                 _ => (smallvec![Int], Int),
@@ -187,6 +281,7 @@ impl Function {
     pub(crate) fn arity(&self) -> Option<usize> {
         use Function::*;
         Some(match self {
+            FloatFunc(ff) => ff.arity(),
             ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
             Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
             Match | Setcol | Binop(_) => 2,
@@ -203,6 +298,7 @@ impl Function {
             Function::*,
         };
         match self {
+            FloatFunc(ff) => Ok(ff.ret_state()),
             Unop(Neg) | Unop(Pos) => match &args[0] {
                 Some(Scalar(Some(BaseTy::Str))) | Some(Scalar(Some(BaseTy::Float))) => {
                     Ok(Scalar(BaseTy::Float).abs())

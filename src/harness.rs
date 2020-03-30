@@ -530,6 +530,16 @@ for (k in m) {
     );
 
     test_program!(
+        float_funcs,
+        r#"BEGIN {
+        print sqrt(4);
+        print log10("100");
+        print log2("32");
+        }"#,
+        "2.0\n2.0\n5.0\n"
+    );
+
+    test_program!(
         explicit_split_fs,
         r#" BEGIN {
     split("where is all of this going", m1);

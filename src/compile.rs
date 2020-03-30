@@ -1012,6 +1012,15 @@ impl<'a, 'b> View<'a, 'b> {
             Binop(LTE) => gen_op!(LTE, [Float, LTEFloat], [Int, LTEInt], [Str, LTEStr]),
             Binop(GTE) => gen_op!(GTE, [Float, GTEFloat], [Int, GTEInt], [Str, GTEStr]),
             Binop(EQ) => gen_op!(EQ, [Float, EQFloat], [Int, EQInt], [Str, EQStr]),
+            FloatFunc(ff) => {
+                if res_reg != UNUSED {
+                    match ff.arity() {
+                        1 => self.pushl(LL::Float1(*ff, res_reg.into(), conv_regs[0].into())),
+                        2 => self.pushl(LL::Float2(*ff, res_reg.into(), conv_regs[0].into(), conv_regs[1].into())),
+                        a => return err!("only known float functions have arity 1 and 2, but this one has arity {}", a),
+                    }
+                }
+            }
             Match => gen_op!(Match, [Str, Match]),
             Contains => gen_op!(
                 Contains,
