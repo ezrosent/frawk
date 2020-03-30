@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::builtins::Variable;
+use crate::builtins::{FloatFunc, Variable};
 use crate::common::NumTy;
 use crate::compile::{self, Ty};
 use crate::interp::{index, index_mut, pop, push, Storage};
@@ -93,6 +93,8 @@ pub(crate) enum Instr<'a> {
     NotStr(Reg<Int>, Reg<Str<'a>>),
     NegInt(Reg<Int>, Reg<Int>),
     NegFloat(Reg<Float>, Reg<Float>),
+    Float1(FloatFunc, Reg<Float>, Reg<Float>),
+    Float2(FloatFunc, Reg<Float>, Reg<Float>, Reg<Float>),
 
     // String processing
     Concat(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Str<'a>>),
@@ -473,6 +475,15 @@ impl<'a> Instr<'a> {
             NegFloat(res, fr) => {
                 res.accum(&mut f);
                 fr.accum(&mut f)
+            }
+            Float1(_, dst, src) => {
+                dst.accum(&mut f);
+                src.accum(&mut f);
+            }
+            Float2(_, dst, x, y) => {
+                dst.accum(&mut f);
+                x.accum(&mut f);
+                y.accum(&mut f);
             }
             Concat(res, l, r) => {
                 res.accum(&mut f);

@@ -122,6 +122,7 @@ impl Display for Function {
         match self {
             Unop(u) => write!(f, "{}", u),
             Binop(b) => write!(f, "{}", b),
+            FloatFunc(ff) => write!(f, "{}", ff.func_name()),
             Print => write!(f, "print"),
             PrintStdout => write!(f, "print(stdout)"),
             ReadErr => write!(f, "hasline"),

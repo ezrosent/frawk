@@ -1166,6 +1166,19 @@ impl<'a> View<'a> {
                 let neg = LLVMBuildFNeg(self.f.builder, operand, c_str!(""));
                 self.bind_reg(res, neg);
             }
+            Float1(ff, dst, src) => {
+                let op = self.get_local(src.reflect())?;
+                let fname = ff.intrinsic_name();
+                let resv = self.call(fname, &mut [op]);
+                self.bind_reg(dst, resv);
+            }
+            Float2(ff, dst, x, y) => {
+                let opx = self.get_local(x.reflect())?;
+                let opy = self.get_local(y.reflect())?;
+                let fname = ff.intrinsic_name();
+                let resv = self.call(fname, &mut [opx, opy]);
+                self.bind_reg(dst, resv);
+            }
             Concat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;

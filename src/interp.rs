@@ -241,6 +241,17 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let f = *self.get(*fr);
                         *self.get_mut(res) = -f;
                     }
+                    Float1(ff, dst, src) => {
+                        let f = *index(&self.floats, src);
+                        let dst = *dst;
+                        *self.get_mut(dst) = ff.eval1(f);
+                    }
+                    Float2(ff, dst, x, y) => {
+                        let fx = *index(&self.floats, x);
+                        let fy = *index(&self.floats, y);
+                        let dst = *dst;
+                        *self.get_mut(dst) = ff.eval2(fx, fy);
+                    }
                     Concat(res, l, r) => {
                         let res = *res;
                         let l = self.get(*l).clone();
