@@ -225,11 +225,10 @@ impl<'a> StrRep<'a> {
         f(mem::transmute::<&StrRep<'a>, &Inline>(self))
     }
     unsafe fn view_as<T, R>(&mut self, f: impl FnOnce(&T) -> R) -> R {
-        let new_hi = self.hi & !0x7;
-        let mut c = self.copy();
-        c.hi = new_hi;
-        let res = f(mem::transmute::<&StrRep<'a>, &T>(&c));
-        mem::forget(c);
+        let old = self.hi;
+        self.hi = old & !0x7;
+        let res = f(mem::transmute::<&mut StrRep<'a>, &T>(self));
+        self.hi = old;
         res
     }
     unsafe fn drop_as<T>(&mut self) {
