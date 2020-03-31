@@ -22,14 +22,6 @@ pub(crate) use float_parse::{strtod, strtoi};
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
-// TODO: wire it all in.
-// TODO: add `next` and `nextfile` support. (where nextfile just calls next_file on stdin and then
-// does whatever next does)
-//      * next can be implemented as "tagging" loops in the stack with whether or not they are at
-//      the top (while loops can get a boolean). `next` can pop off elements until it reaches that
-//      and jump straight there.
-// TODO: fix desugaring of comma patterns.
-
 pub(crate) trait Line<'a>: Default {
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
     fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
@@ -444,26 +436,9 @@ impl<LR: LineReader> FileRead<LR> {
     ) -> Result<R> {
         self.files.get_fallible(
             path,
-            |s| {
-                // XXX Why are we doing String::from(s) and not path.clone().unmoor()?
-                // The implementation of get_fallible calls with_str on path, which clears its tag
-                // before calling this function on it. Cloning it now could yield an invalid
-                // string!
-                //
-                // TODO Doesn't that make the `with_str` API horribly unsafe? Yes! It's an
-                // oversight that we didn't see when making the API initially. There are a few
-                // options for fixing it:
-                //
-                // 1) have with_str consume self by value and pass it back. That would be very
-                //    disruptive.
-                // 2) within with_str make a copy of self and never call drop on it, mutating the
-                //    copy.
-                //
-                // I prefer (2).
-                match File::open(s) {
-                    Ok(f) => Ok(RegexSplitter::new(f, CHUNK_SIZE, String::from(s))),
-                    Err(e) => err!("failed to open file '{}': {}", s, e),
-                }
+            |s| match File::open(s) {
+                Ok(f) => Ok(RegexSplitter::new(f, CHUNK_SIZE, path.clone().unmoor())),
+                Err(e) => err!("failed to open file '{}': {}", s, e),
             },
             f,
         )
