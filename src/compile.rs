@@ -12,6 +12,7 @@ use std::io;
 use std::mem;
 
 pub(crate) const UNUSED: u32 = u32::max_value();
+pub(crate) const NULL_REG: u32 = UNUSED - 1;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum Ty {
@@ -26,7 +27,10 @@ pub(crate) enum Ty {
     MapStrStr = 8,
     IterInt = 9,
     IterStr = 10,
+    Null = 11,
 }
+
+pub(crate) const NUM_TYPES: usize = Ty::Null as usize + 1;
 
 impl std::convert::TryFrom<u32> for Ty {
     type Error = ();
@@ -44,6 +48,7 @@ impl std::convert::TryFrom<u32> for Ty {
             8 => MapStrStr,
             9 => IterInt,
             10 => IterStr,
+            11 => Null,
             _ => return Err(()),
         })
     }
@@ -51,7 +56,7 @@ impl std::convert::TryFrom<u32> for Ty {
 
 impl Default for Ty {
     fn default() -> Ty {
-        Ty::Str
+        Ty::Null
     }
 }
 
@@ -69,8 +74,10 @@ impl Ty {
         match self {
             IterInt => Ok(Int),
             IterStr => Ok(Str),
-            Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
-            | MapStrStr => err!("attempt to get element of non-iterator type: {:?}", self),
+            Null | Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt
+            | MapStrFloat | MapStrStr => {
+                err!("attempt to get element of non-iterator type: {:?}", self)
+            }
         }
     }
 
@@ -79,7 +86,7 @@ impl Ty {
         match self {
             MapIntInt | MapIntFloat | MapIntStr => Ok(Int),
             MapStrInt | MapStrFloat | MapStrStr => Ok(Str),
-            Int | Float | Str | IterInt | IterStr => {
+            Null | Int | Float | Str | IterInt | IterStr => {
                 err!("attempt to get key of non-map type: {:?}", self)
             }
         }
@@ -91,14 +98,12 @@ impl Ty {
             MapStrInt | MapIntInt => Ok(Int),
             MapStrFloat | MapIntFloat => Ok(Float),
             MapStrStr | MapIntStr => Ok(Str),
-            Int | Float | Str | IterInt | IterStr => {
+            Null | Int | Float | Str | IterInt | IterStr => {
                 err!("attempt to get val of non-map type: {:?}", self)
             }
         }
     }
 }
-
-pub(crate) const NUM_TYPES: usize = Ty::IterStr as usize + 1;
 
 pub(crate) fn bytecode<'a, LR: runtime::LineReader>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
@@ -184,9 +189,13 @@ impl RegStatuses {
         self.new_reg(ty, RegStatus::Local)
     }
     fn new_reg(&mut self, ty: Ty, status: RegStatus) -> NumTy {
+        if let Ty::Null = ty {
+            return NULL_REG;
+        }
         let v = &mut self.0[ty as usize];
         let res = v.len();
         v.push(status);
+
         res as NumTy
     }
 
@@ -195,6 +204,9 @@ impl RegStatuses {
     }
 
     fn get_status(&self, reg: NumTy, ty: Ty) -> RegStatus {
+        if ty == Ty::Null {
+            return RegStatus::Local;
+        }
         self.0[ty as usize][reg as usize]
     }
 }
@@ -268,6 +280,7 @@ struct View<'a, 'b> {
 fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
     instrs.push(match ty {
+        Null => return Ok(()),
         Int => LL::PopInt(reg.into()),
         Float => LL::PopFloat(reg.into()),
         Str => LL::PopStr(reg.into()),
@@ -285,6 +298,7 @@ fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
 fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
     instrs.push(match ty {
+        Null => return Ok(()),
         Int => LL::PushInt(reg.into()),
         Float => LL::PushFloat(reg.into()),
         Str => LL::PushStr(reg.into()),
@@ -306,6 +320,7 @@ fn mov<'a>(dst_reg: u32, src_reg: u32, ty: Ty) -> Result<Option<LL<'a>>> {
     }
 
     let res = match ty {
+        Null => return Ok(None),
         Int => LL::MovInt(dst_reg.into(), src_reg.into()),
         Float => LL::MovFloat(dst_reg.into(), src_reg.into()),
         Str => LL::MovStr(dst_reg.into(), src_reg.into()),
@@ -814,6 +829,10 @@ impl<'a, 'b> View<'a, 'b> {
         }
 
         let res = match (dst_ty, src_ty) {
+            (Null, _) => return Ok(()),
+            (Float, Null) => LL::StoreConstFloat(dst_reg.into(), Default::default()),
+            (Int, Null) => LL::StoreConstInt(dst_reg.into(), Default::default()),
+            (Str, Null) => LL::StoreConstStr(dst_reg.into(), Default::default()),
             (Float, Int) => LL::IntToFloat(dst_reg.into(), src_reg.into()),
             (Str, Int) => LL::IntToStr(dst_reg.into(), src_reg.into()),
 
@@ -919,7 +938,7 @@ impl<'a, 'b> View<'a, 'b> {
             MapStrInt => LL::LookupStrInt(load_reg.into(), arr_reg.into(), key_reg.into()),
             MapStrFloat => LL::LookupStrFloat(load_reg.into(), arr_reg.into(), key_reg.into()),
             MapStrStr => LL::LookupStrStr(load_reg.into(), arr_reg.into(), key_reg.into()),
-            Int | Float | Str | IterInt | IterStr => {
+            Null | Int | Float | Str | IterInt | IterStr => {
                 return err!("[load_map] expected map type, found {:?}", arr_ty)
             }
         });
@@ -960,6 +979,7 @@ impl<'a, 'b> View<'a, 'b> {
                 *creg = areg;
             } else {
                 let reg = self.regs.stats.reg_of_ty(cty);
+
                 self.convert(reg, cty, areg, aty)?;
                 *creg = reg;
             }
@@ -1079,6 +1099,7 @@ impl<'a, 'b> View<'a, 'b> {
                 })
             }
             Length => self.pushl(match conv_tys[0] {
+                Ty::Null => LL::StoreConstInt(res_reg.into(), 0),
                 Ty::MapIntInt => LL::LenIntInt(res_reg.into(), conv_regs[0].into()),
                 Ty::MapIntStr => LL::LenIntStr(res_reg.into(), conv_regs[0].into()),
                 Ty::MapIntFloat => LL::LenIntFloat(res_reg.into(), conv_regs[0].into()),
@@ -1261,7 +1282,7 @@ impl<'a, 'b> View<'a, 'b> {
                     Ty::MapStrInt => LL::IterBeginStrInt(dst_reg.into(), arr_reg.into()),
                     Ty::MapStrFloat => LL::IterBeginStrFloat(dst_reg.into(), arr_reg.into()),
                     Ty::MapStrStr => LL::IterBeginStrStr(dst_reg.into(), arr_reg.into()),
-                    Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
+                    Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
                         // covered by the error check above
                         unreachable!()
                     }
@@ -1336,7 +1357,7 @@ impl<'a, 'b> View<'a, 'b> {
                     MapStrInt => LL::StoreStrInt(a_reg.into(), k_reg.into(), v_reg.into()),
                     MapStrFloat => LL::StoreStrFloat(a_reg.into(), k_reg.into(), v_reg.into()),
                     MapStrStr => LL::StoreStrStr(a_reg.into(), k_reg.into(), v_reg.into()),
-                    Int | Float | Str | IterInt | IterStr => {
+                    Null | Int | Float | Str | IterInt | IterStr => {
                         return err!(
                             "in stmt {:?} computed type is non-map type {:?}",
                             stmt,

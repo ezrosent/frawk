@@ -39,11 +39,13 @@ pub(crate) enum BaseTy {
 
 impl BaseTy {
     fn lift_null(self) -> BaseTy {
-        if let BaseTy::Null = self {
-            BaseTy::Str
-        } else {
-            self
-        }
+        // TODO: remove this function
+        self
+        // if let BaseTy::Null = self {
+        //     BaseTy::Str
+        // } else {
+        //     self
+        // }
     }
 }
 
@@ -212,6 +214,7 @@ impl Rule {
         fn value_rule(b1: BaseTy, b2: BaseTy) -> BaseTy {
             use BaseTy::*;
             match (b1, b2) {
+                // (Null, x) | (x, Null) => x,
                 (Null, _) | (_, Null) | (Str, _) | (_, Str) => Str,
                 (Float, _) | (_, Float) => Float,
                 (Int, Int) => Int,
@@ -277,57 +280,49 @@ impl Rule {
 }
 
 fn concrete(state: State) -> TVar<BaseTy> {
-    fn concrete_scalar(o: Option<BaseTy>) -> BaseTy {
-        match o {
-            Some(s) => s,
-            None => BaseTy::Null,
-        }
+    fn concrete_scalar(o: &Option<BaseTy>) -> BaseTy {
+        o.unwrap_or(BaseTy::Null)
     }
-
-    {
-        use TVar::*;
-        match state {
-            Some(Iter(i)) => Iter(concrete_scalar(i)),
-            Some(Scalar(i)) => Scalar(concrete_scalar(i)),
-            Some(Map { key, val }) => Map {
-                key: {
-                    let k = concrete_scalar(key);
-                    if let BaseTy::Null = k {
-                        BaseTy::Str
-                    } else {
-                        k
-                    }
-                },
-                val: concrete_scalar(val),
-            },
-            None => Scalar(BaseTy::Null),
-        }
+    match state {
+        Some(x) => x.map(concrete_scalar),
+        None => TVar::Scalar(BaseTy::Null),
     }
 }
 
 fn flatten(tv: TVar<BaseTy>) -> Result<compile::Ty> {
     use compile::Ty;
     use {BaseTy::*, TVar::*};
+    fn flatten_base(b: BaseTy) -> Ty {
+        match b {
+            Int => Ty::Int,
+            Float => Ty::Float,
+            Str => Ty::Str,
+            Null => Ty::Null,
+        }
+    }
     match tv.map(|b| b.lift_null()) {
-        Scalar(Int) => Ok(Ty::Int),
-        Scalar(Float) => Ok(Ty::Float),
-        Scalar(Null) | Scalar(Str) => Ok(Ty::Str),
+        Scalar(b) => Ok(flatten_base(b)),
         Iter(Int) => Ok(Ty::IterInt),
         Iter(Null) | Iter(Str) => Ok(Ty::IterStr),
         Iter(x) => err!("Iterator over an unsupported type: {:?}", x),
-        Map { key: Int, val: Int } => Ok(Ty::MapIntInt),
-        Map {
-            key: Int,
-            val: Float,
-        } => Ok(Ty::MapIntFloat),
-        Map { key: Int, val: Str } => Ok(Ty::MapIntStr),
-        Map { key: Str, val: Int } => Ok(Ty::MapStrInt),
-        Map {
-            key: Str,
-            val: Float,
-        } => Ok(Ty::MapStrFloat),
-        Map { key: Str, val: Str } => Ok(Ty::MapStrStr),
-        Map { key, val } => err!("Map with unsupported type (key={:?} val={:?})", key, val),
+        Map { key, val } => {
+            let f = |ty| {
+                if ty == Null {
+                    Ty::Str
+                } else {
+                    flatten_base(ty)
+                }
+            };
+            match (f(key), f(val)) {
+                (Ty::Int, Ty::Int) => Ok(Ty::MapIntInt),
+                (Ty::Int, Ty::Float) => Ok(Ty::MapIntFloat),
+                (Ty::Int, Ty::Str) => Ok(Ty::MapIntStr),
+                (Ty::Str, Ty::Int) => Ok(Ty::MapStrInt),
+                (Ty::Str, Ty::Float) => Ok(Ty::MapStrFloat),
+                (Ty::Str, Ty::Str) => Ok(Ty::MapStrStr),
+                (k, v) => err!("Map with unsupported type (key={:?} val={:?})", k, v),
+            }
+        }
     }
 }
 
