@@ -116,6 +116,11 @@ pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>, csv: bool) -> Resul
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
+    if _PRINT_DEBUG_INFO {
+        let mut buf = Vec::<u8>::new();
+        ctx.dbg_print(&mut buf).unwrap();
+        eprintln!("{}", String::from_utf8(buf).unwrap());
+    }
     let stdout = FakeStdout::default();
     if csv {
         compile::run_llvm(

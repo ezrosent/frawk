@@ -22,6 +22,13 @@ unicode-xid = "0.2.0"
 llvm-sys = "90.0.0"
 clap = { git = "https://github.com/clap-rs/clap/" }
 
+[features]
+default = []
+# Certain features leverage the AVX2 instruction set, but AVX2 can often make
+# the entire application slightly slower, even on chips that support it. As a
+# result, we default to SSE2 implementations unless this feature is enabled.
+allow_avx2 = []
+
 [profile.release]
 lto = "fat"
 # debug=true

@@ -33,6 +33,8 @@ impl<T> std::fmt::Debug for Reg<T> {
 
 impl<T> From<u32> for Reg<T> {
     fn from(u: u32) -> Reg<T> {
+        assert_ne!(u, compile::UNUSED, "creating an unused register");
+        assert_ne!(u, compile::NULL_REG, "creating a null register");
         Reg(u, PhantomData)
     }
 }
