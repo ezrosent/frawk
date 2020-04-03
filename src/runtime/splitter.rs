@@ -210,6 +210,10 @@ pub struct CSVReader<R> {
     prev_iter_cr_end: u64,
     // Used to trigger updating FILENAME on the first read.
     start: bool,
+
+    // This is a function pointer because we query the preferred instruction set at construction
+    // time.
+    find_indexes: unsafe fn(&[u8], &mut csv::Offsets, u64, u64) -> (u64, u64),
 }
 
 impl<R: Read> LineReader for CSVReader<R> {
@@ -255,6 +259,7 @@ impl<R: Read> CSVReader<R> {
             prev_ix: 0,
             prev_iter_inside_quote: 0,
             prev_iter_cr_end: 0,
+            find_indexes: csv::get_find_indexes(),
         }
     }
     fn refresh_buf(&mut self) -> Result<bool> {
@@ -264,7 +269,7 @@ impl<R: Read> CSVReader<R> {
             return Ok(true);
         }
         let (next_iq, next_cre) = unsafe {
-            csv::find_indexes(
+            (self.find_indexes)(
                 &self.inner.buf.as_bytes()[self.inner.start..self.inner.end],
                 &mut self.cur_offsets,
                 self.prev_iter_inside_quote,

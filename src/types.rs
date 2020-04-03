@@ -37,18 +37,6 @@ pub(crate) enum BaseTy {
     Str,
 }
 
-impl BaseTy {
-    fn lift_null(self) -> BaseTy {
-        // TODO: remove this function
-        self
-        // if let BaseTy::Null = self {
-        //     BaseTy::Str
-        // } else {
-        //     self
-        // }
-    }
-}
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum TVar<T> {
     Iter(T),
@@ -212,8 +200,8 @@ impl Rule {
         fn value_rule(b1: BaseTy, b2: BaseTy) -> BaseTy {
             use BaseTy::*;
             match (b1, b2) {
-                // (Null, x) | (x, Null) => x,
-                (Null, _) | (_, Null) | (Str, _) | (_, Str) => Str,
+                (Null, x) | (x, Null) => x,
+                (Str, _) | (_, Str) => Str,
                 (Float, _) | (_, Float) => Float,
                 (Int, Int) => Int,
             }
@@ -298,7 +286,7 @@ fn flatten(tv: TVar<BaseTy>) -> Result<compile::Ty> {
             Null => Ty::Null,
         }
     }
-    match tv.map(|b| b.lift_null()) {
+    match tv {
         Scalar(b) => Ok(flatten_base(b)),
         Iter(Int) => Ok(Ty::IterInt),
         Iter(Null) | Iter(Str) => Ok(Ty::IterStr),

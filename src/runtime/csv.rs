@@ -234,59 +234,47 @@ impl<'a> Stepper<'a> {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-pub unsafe fn find_indexes(
-    buf: &[u8],
-    offsets: &mut Offsets,
-    prev_iter_inside_quote: u64,
-    prev_iter_cr_end: u64,
-) -> (u64, u64) {
-    // TODO: cross-platform, sse2 version. We have a gate for this in main for the time being.
-    //
-    // An sse2 version would be pretty easy. I'm not eager to build a fallback option; it may be
-    // better to build it with an existing regex library.
-    avx2::find_indexes(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+pub fn get_find_indexes() -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
+    #[cfg(target_arch = "x86_64")]
+    const IS_X64: bool = true;
+    #[cfg(not(target_arch = "x86_64"))]
+    const IS_X64: bool = false;
+    #[cfg(feature = "allow_avx2")]
+    const ALLOW_AVX2: bool = true;
+    #[cfg(not(feature = "allow_avx2"))]
+    const ALLOW_AVX2: bool = false;
+    assert!(IS_X64, "CSV is only supported on x86_64 machines");
+
+    if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
+        generic::find_indexes::<avx2::Impl>
+    } else if is_x86_feature_detected!("sse2") {
+        generic::find_indexes::<sse2::Impl>
+    } else {
+        panic!("CSV requires at least SSE2 support");
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
-#[allow(unused)]
-mod avx2 {
+mod generic {
     use super::Offsets;
-    // This is in a large part based on geofflangdale/simdcsv, which is an adaptation of some of
-    // the techniques from the simdjson paper (by that paper's authors, it appears) to CSV parsing.
     use std::arch::x86_64::*;
-    #[derive(Copy, Clone)]
-    struct Input {
-        lo: __m256i,
-        hi: __m256i,
+    const MAX_INPUT_SIZE: usize = 64;
+
+    pub trait Vector {
+        const VEC_BYTES: usize;
+        const INPUT_SIZE: usize = Self::VEC_BYTES * 2;
+        const _ASSERT_LTE_MAX: usize = MAX_INPUT_SIZE - Self::INPUT_SIZE;
+        type Input: Copy;
+
+        // Precondition: bptr points to at least INPUT_SIZE bytes.
+        unsafe fn fill_input(btr: *const u8) -> Self::Input;
+
+        // Compute a mask of which bits in input match (bytewise) `m`.
+        unsafe fn cmp_mask_against_input(inp: Self::Input, m: u8) -> u64;
     }
 
-    const VEC_BYTES: usize = 32;
-    const INPUT_SIZE: usize = VEC_BYTES * 2;
-
-    #[inline(always)]
-    unsafe fn fill_input(bptr: *const u8) -> Input {
-        Input {
-            lo: _mm256_loadu_si256(bptr as *const _),
-            hi: _mm256_loadu_si256(bptr.offset(VEC_BYTES as isize) as *const _),
-        }
-    }
-
-    #[inline(always)]
-    unsafe fn cmp_mask_against_input(inp: Input, m: u8) -> u64 {
-        // Load the mask into all lanes.
-        let mask = _mm256_set1_epi8(m as i8);
-        // Compare against lo and hi. Store them in a single u64.
-        let cmp_res_0 = _mm256_cmpeq_epi8(inp.lo, mask);
-        let res_0 = _mm256_movemask_epi8(cmp_res_0) as u32 as u64;
-        let cmp_res_1 = _mm256_cmpeq_epi8(inp.hi, mask);
-        let res_1 = _mm256_movemask_epi8(cmp_res_1) as u64;
-        res_0 | (res_1 << 32)
-    }
-
-    #[inline(always)]
-    unsafe fn find_quote_mask(
-        inp: Input,
+    unsafe fn find_quote_mask<V: Vector>(
+        inp: V::Input,
         prev_iter_inside_quote: &mut u64,
     ) -> (/*inside quotes*/ u64, /*quote locations*/ u64) {
         // This is about finding a mask that has 1s for all characters inside a quoted pair, plus
@@ -296,7 +284,7 @@ mod avx2 {
         // [000000000000001111111111110]
         // We will use this mask to avoid splitting on commas that are inside a quoted field. We
         // start by generating a mask for all the quote characters appearing in the string.
-        let quote_bits = cmp_mask_against_input(inp, '"' as u8);
+        let quote_bits = V::cmp_mask_against_input(inp, '"' as u8);
         // Then we pull this trick from the simdjson paper. Lets use the example from the comments
         // above:
         // [unquoted text "quoted text"]
@@ -321,61 +309,61 @@ mod avx2 {
         *prev_iter_inside_quote = (quote_mask as i64).wrapping_shr(63) as u64;
         (quote_mask, quote_bits)
     }
-
-    #[inline(always)]
-    unsafe fn flatten_bits(base_p: *mut u64, start_offset: &mut u64, start_ix: u64, mut bits: u64) {
-        // We want to write indexes of set bits into the array base_p.
-        // start_offset is the initial offset into base_p where we start writing.
-        // start_ix is the index into the corpus pointed to by the initial bits of `bits`.
-        if bits == 0 {
-            return;
-        }
-        let count = bits.count_ones();
-        let next_start = (*start_offset) + count as u64;
-        // Unroll the loop for the first 8 bits. As in simdjson, we are potentially "overwriting"
-        // here. We do not know if we have 8 bits to write, but we are writing them anyway! This is
-        // "safe" so long as we have enough space in the array pointed to by base_p because:
-        // * Excessive writes will only write a zero
-        // * we will set next start to point to the right location.
-        // Why do the extra work? We want to avoid extra branches.
-        macro_rules! write_offset_inner {
-            ($ix:expr) => {
-                *base_p.offset(*start_offset as isize + $ix) =
-                    start_ix + bits.trailing_zeros() as u64;
-                bits = bits & bits.wrapping_sub(1);
-            };
-        }
-        macro_rules! write_offsets {
-            ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
-        }
-        write_offsets!(0, 1, 2, 3, 4, 5, 6, 7);
-        // Similarlty for bits 8->16
-        if count > 8 {
-            write_offsets!(8, 9, 10, 11, 12, 13, 14, 15);
-        }
-        // Just do a loop for the last 48 bits.
-        if count > 16 {
-            *start_offset += 16;
-            loop {
-                write_offsets!(0);
-                if bits == 0 {
-                    break;
-                }
-                *start_offset += 1;
-            }
-        }
-        *start_offset = next_start;
-    }
-
-    // unsafe because `buf` must have padding 32 bytes past the end, and has to have its length be
-    // a multiple of 64.
-    pub unsafe fn find_indexes(
+    pub unsafe fn find_indexes<V: Vector>(
         buf: &[u8],
         offsets: &mut Offsets,
         mut prev_iter_inside_quote: u64, /*start at 0*/
         mut prev_iter_cr_end: u64,       /*start at 0*/
     ) -> (u64, u64) {
-        // debug_assert_eq!(buf.len() % INPUT_SIZE, 0);
+        #[inline(always)]
+        unsafe fn flatten_bits(
+            base_p: *mut u64,
+            start_offset: &mut u64,
+            start_ix: u64,
+            mut bits: u64,
+        ) {
+            // We want to write indexes of set bits into the array base_p.
+            // start_offset is the initial offset into base_p where we start writing.
+            // start_ix is the index into the corpus pointed to by the initial bits of `bits`.
+            if bits == 0 {
+                return;
+            }
+            let count = bits.count_ones();
+            let next_start = (*start_offset) + count as u64;
+            // Unroll the loop for the first 8 bits. As in simdjson, we are potentially "overwriting"
+            // here. We do not know if we have 8 bits to write, but we are writing them anyway! This is
+            // "safe" so long as we have enough space in the array pointed to by base_p because:
+            // * Excessive writes will only write a zero
+            // * we will set next start to point to the right location.
+            // Why do the extra work? We want to avoid extra branches.
+            macro_rules! write_offset_inner {
+                ($ix:expr) => {
+                    *base_p.offset(*start_offset as isize + $ix) =
+                        start_ix + bits.trailing_zeros() as u64;
+                    bits = bits & bits.wrapping_sub(1);
+                };
+            }
+            macro_rules! write_offsets {
+                    ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
+                }
+            write_offsets!(0, 1, 2, 3, 4, 5, 6, 7);
+            // Similarlty for bits 8->16
+            if count > 8 {
+                write_offsets!(8, 9, 10, 11, 12, 13, 14, 15);
+            }
+            // Just do a loop for the last 48 bits.
+            if count > 16 {
+                *start_offset += 16;
+                loop {
+                    write_offsets!(0);
+                    if bits == 0 {
+                        break;
+                    }
+                    *start_offset += 1;
+                }
+            }
+            *start_offset = next_start;
+        }
         offsets.fields.clear();
         offsets.start = 0;
         // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
@@ -383,7 +371,7 @@ mod avx2 {
         offsets.fields.reserve(buf.len());
         let buf_ptr = buf.as_ptr();
         let len = buf.len();
-        let len_minus_64 = len.saturating_sub(INPUT_SIZE);
+        let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
         let mut ix = 0;
         let base_ptr: *mut u64 = offsets.fields.get_unchecked_mut(0);
         let mut base = 0;
@@ -394,43 +382,44 @@ mod avx2 {
             ($buf:expr) => {{
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 // find commas not inside quotes
-                let inp = fill_input($buf);
-                let (quote_mask, quote_locs) = find_quote_mask(inp, &mut prev_iter_inside_quote);
-                let sep = cmp_mask_against_input(inp, ',' as u8);
-                let esc = cmp_mask_against_input(inp, '\\' as u8);
+                let inp = V::fill_input($buf);
+                let (quote_mask, quote_locs) =
+                    find_quote_mask::<V>(inp, &mut prev_iter_inside_quote);
+                let sep = V::cmp_mask_against_input(inp, ',' as u8);
+                let esc = V::cmp_mask_against_input(inp, '\\' as u8);
 
-                let cr = cmp_mask_against_input(inp, 0x0d);
+                let cr = V::cmp_mask_against_input(inp, 0x0d);
                 let cr_adjusted = cr.wrapping_shl(1) | prev_iter_cr_end;
-                let lf = cmp_mask_against_input(inp, 0x0a);
+                let lf = V::cmp_mask_against_input(inp, 0x0a);
                 // Allow for either \r\n or \n.
                 let end = (lf & cr_adjusted) | lf;
                 prev_iter_cr_end = cr.wrapping_shr(63);
                 (((end | sep | cr) & !quote_mask) | (esc & quote_mask) | quote_locs)
             }};
         }
-        if len_minus_64 > INPUT_SIZE * BUFFER_SIZE {
+        if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
             let mut fields = [0u64; BUFFER_SIZE];
-            while ix < len_minus_64 - INPUT_SIZE * BUFFER_SIZE + 1 {
+            while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
                 for b in 0..BUFFER_SIZE {
-                    fields[b] = iterate!(buf_ptr.offset((INPUT_SIZE * b + ix) as isize));
+                    fields[b] = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
                 }
                 for b in 0..BUFFER_SIZE {
-                    let internal_ix = INPUT_SIZE * b + ix;
+                    let internal_ix = V::INPUT_SIZE * b + ix;
                     flatten_bits(base_ptr, &mut base, internal_ix as u64, fields[b]);
                 }
-                ix += INPUT_SIZE * BUFFER_SIZE;
+                ix += V::INPUT_SIZE * BUFFER_SIZE;
             }
         }
         // Do an unbuffered version for the remaining data
         while ix < len_minus_64 {
             let field_sep = iterate!(buf_ptr.offset(ix as isize));
             flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
-            ix += INPUT_SIZE;
+            ix += V::INPUT_SIZE;
         }
         // For any text that remains, just copy the results to the stack with some padding and do one more iteration.
         let remaining = len - ix;
         if remaining > 0 {
-            let mut rest = [0u8; INPUT_SIZE];
+            let mut rest = [0u8; MAX_INPUT_SIZE];
             std::ptr::copy_nonoverlapping(
                 buf_ptr.offset(ix as isize),
                 rest.as_mut_ptr(),
@@ -442,30 +431,118 @@ mod avx2 {
         offsets.fields.set_len(base as usize);
         (prev_iter_inside_quote, prev_iter_cr_end)
     }
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        #[test]
-        fn basic_impl() {
-            let text: &'static str = r#"This,is,"a line with a quoted, comma",and
-unquoted,commas,"as well, including some long ones", and there we have it."#;
-            let mut mem: Vec<u8> = text.as_bytes().iter().cloned().collect();
-            mem.reserve(32);
-            let mut offsets: Offsets = Default::default();
-            let (in_quote, in_cr) = unsafe { find_indexes(&mem[..], &mut offsets, 0, 0) };
-            assert_eq!(in_quote, 0);
-            assert_eq!(in_cr, 0);
-            assert_eq!(
-                &offsets.fields[..],
-                &[4, 7, 8, 36, 37, 41, 50, 57, 58, 92, 93],
-                "offset_fields={:?}",
-                offsets
-                    .fields
-                    .iter()
-                    .cloned()
-                    .map(|x| (x, mem[x as usize] as char))
-                    .collect::<Vec<_>>()
-            );
+}
+
+#[cfg(target_arch = "x86_64")]
+mod sse2 {
+    use super::generic::Vector;
+    // This is in a large part based on geofflangdale/simdcsv, which is an adaptation of some of
+    // the techniques from the simdjson paper (by that paper's authors, it appears) to CSV parsing.
+    use std::arch::x86_64::*;
+    pub struct Impl;
+    #[derive(Copy, Clone)]
+    pub struct Input {
+        lo: __m128i,
+        hi: __m128i,
+    }
+
+    impl Vector for Impl {
+        const VEC_BYTES: usize = 16;
+        type Input = Input;
+        #[inline(always)]
+        unsafe fn fill_input(bptr: *const u8) -> Input {
+            Input {
+                lo: _mm_loadu_si128(bptr as *const _),
+                hi: _mm_loadu_si128(bptr.offset(Self::VEC_BYTES as isize) as *const _),
+            }
         }
+
+        #[inline(always)]
+        unsafe fn cmp_mask_against_input(inp: Input, m: u8) -> u64 {
+            // Load the mask into all lanes.
+            let mask = _mm_set1_epi8(m as i8);
+            // Compare against lo and hi. Store them in a single u64.
+            let cmp_res_0 = _mm_cmpeq_epi8(inp.lo, mask);
+            let res_0 = _mm_movemask_epi8(cmp_res_0) as u32 as u64;
+            let cmp_res_1 = _mm_cmpeq_epi8(inp.hi, mask);
+            let res_1 = _mm_movemask_epi8(cmp_res_1) as u64;
+            res_0 | (res_1 << Self::VEC_BYTES)
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+mod avx2 {
+    use super::generic::Vector;
+    // This is in a large part based on geofflangdale/simdcsv, which is an adaptation of some of
+    // the techniques from the simdjson paper (by that paper's authors, it appears) to CSV parsing.
+    use std::arch::x86_64::*;
+    pub struct Impl;
+    #[derive(Copy, Clone)]
+    pub struct Input {
+        lo: __m256i,
+        hi: __m256i,
+    }
+
+    impl Vector for Impl {
+        const VEC_BYTES: usize = 32;
+        type Input = Input;
+        #[inline(always)]
+        unsafe fn fill_input(bptr: *const u8) -> Input {
+            Input {
+                lo: _mm256_loadu_si256(bptr as *const _),
+                hi: _mm256_loadu_si256(bptr.offset(Self::VEC_BYTES as isize) as *const _),
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn cmp_mask_against_input(inp: Input, m: u8) -> u64 {
+            // Load the mask into all lanes.
+            let mask = _mm256_set1_epi8(m as i8);
+            // Compare against lo and hi. Store them in a single u64.
+            let cmp_res_0 = _mm256_cmpeq_epi8(inp.lo, mask);
+            let res_0 = _mm256_movemask_epi8(cmp_res_0) as u32 as u64;
+            let cmp_res_1 = _mm256_cmpeq_epi8(inp.hi, mask);
+            let res_1 = _mm256_movemask_epi8(cmp_res_1) as u64;
+            res_0 | (res_1 << Self::VEC_BYTES)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn smoke_test<V: generic::Vector>() {
+        let text: &'static str = r#"This,is,"a line with a quoted, comma",and
+unquoted,commas,"as well, including some long ones", and there we have it."#;
+        let mut mem: Vec<u8> = text.as_bytes().iter().cloned().collect();
+        mem.reserve(32);
+        let mut offsets: Offsets = Default::default();
+        let (in_quote, in_cr) = unsafe { generic::find_indexes::<V>(&mem[..], &mut offsets, 0, 0) };
+        assert_eq!(in_quote, 0);
+        assert_eq!(in_cr, 0);
+        assert_eq!(
+            &offsets.fields[..],
+            &[4, 7, 8, 36, 37, 41, 50, 57, 58, 92, 93],
+            "offset_fields={:?}",
+            offsets
+                .fields
+                .iter()
+                .cloned()
+                .map(|x| (x, mem[x as usize] as char))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn avx2_smoke_test() {
+        if is_x86_feature_detected!("avx2") {
+            smoke_test::<avx2::Impl>();
+        }
+    }
+
+    #[test]
+    fn sse2_smoke_test() {
+        smoke_test::<sse2::Impl>();
     }
 }
