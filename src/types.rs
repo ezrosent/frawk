@@ -174,9 +174,7 @@ impl Constraint<State> {
                 f.step(&arg_state[..])
             }
             Constraint::CallUDF(nix, args, f) => {
-                let arg_state: SmallVec<State> =
-                    args.iter().map(|ix| tc.nw.read(*ix).clone()).collect();
-                let ret_ix = tc.get_function(&tc.func_table[*f as usize], &arg_state, *nix);
+                let ret_ix = tc.get_function(&tc.func_table[*f as usize], args.clone(), *nix);
                 Ok(tc.nw.read(ret_ix).clone())
             }
         }
@@ -462,8 +460,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         let mut tc = TypeContext::from_pc(pc);
         let main = &pc.funcs[pc.main_offset];
         let main_base = tc.udf_nodes[pc.main_offset];
-        let empty: SmallVec<State> = Default::default();
-        tc.get_function(main, &empty, main_base);
+        tc.get_function(main, /*arg_nodes=*/ Default::default(), main_base);
         tc.solve()?;
         let mut var_tys = HashMap::new();
         let mut func_tys = HashMap::new();
@@ -626,24 +623,30 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         Function {
             ident, cfg, args, ..
         }: &Function<'a, &'a str>,
-        arg_states: &SmallVec<State>,
+        mut arg_nodes: SmallVec<NodeIx>,
         base_node: NodeIx,
     ) -> NodeIx {
-        let mut key = Args {
-            id: *ident,
-            func_id: None,
-            args: arg_states.clone(),
-        };
         // First we want to normalize the provided arguments. If we provide too few arguments, the
         // rest are filled with nulls. If we provide too many arguments, we throw away the extras.
-        if key.args.len() < args.len() {
-            for _ in 0..(args.len() - key.args.len()) {
-                key.args.push(None);
+        if arg_nodes.len() < args.len() {
+            for _ in 0..(args.len() - arg_nodes.len()) {
+                arg_nodes.push(self.constant(None));
             }
         }
-        if args.len() < key.args.len() {
-            key.args.truncate(args.len());
+        if args.len() < arg_nodes.len() {
+            arg_nodes.truncate(args.len());
         }
+
+        let arg_states = arg_nodes
+            .iter()
+            .map(|ix| self.nw.read(*ix).clone())
+            .collect();
+
+        let key = Args {
+            id: *ident,
+            func_id: None,
+            args: arg_states,
+        };
 
         // Check if we have already created the function
         if let Some(ix) = self.funcs.get(&key) {
@@ -665,10 +668,9 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         };
 
         // Apply the arguments appropriately:
-        for (cfg::Arg { id, .. }, state) in args.iter().zip(key.args.iter()) {
+        for (cfg::Arg { id, .. }, arg_node) in args.iter().zip(arg_nodes.iter().cloned()) {
             let ix = view.ident_node(id);
-            let cnode = view.constant(*state);
-            view.nw.add_dep(cnode, ix, Constraint::Flows(()));
+            view.nw.add_dep(arg_node, ix, Constraint::Flows(()));
         }
         let nodes = cfg.raw_nodes();
         for bb in nodes {

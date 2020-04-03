@@ -635,7 +635,21 @@ impl<'a> View<'a> {
     }
     // TODO: rename this; it gets globals too :)
     unsafe fn get_local_inner(&self, local: (NumTy, Ty)) -> Option<LLVMValueRef> {
-        if let Some(v) = self.f.locals.get(&local) {
+        if local.1 == Ty::Null {
+            // Null values, while largely erased from the picture, are occasionally loaded for
+            // returns and for parameter passing. We could (as we do in the bytecode interpreter)
+            // just erase these null parameters from existence and make all null returns void
+            // returns. However, this could result in some special-casing and additional complexity
+            // around parameter list lengths for little apparent gain.
+            //
+            // Contrast this with the bytecode case, where we need only omit pushes and pops from
+            // the stack.
+            Some(LLVMConstInt(
+                self.tmap.get_ty(Ty::Null),
+                0,
+                /*sign_extend=*/ 0,
+            ))
+        } else if let Some(v) = self.f.locals.get(&local) {
             Some(*v)
         } else if let Some(ix) = self.decls[self.f.id].globals.get(&local) {
             let gv = LLVMGetParam(self.f.val, *ix as libc::c_uint);
@@ -823,6 +837,11 @@ impl<'a> View<'a> {
                 assert_eq!(LLVMGetTypeKind(LLVMTypeOf(to)), LLVMIntegerTypeKind);
             }
         }
+
+        if val.1 == Ty::Null {
+            // We do not store null values explicitly
+            return;
+        }
         // Note: we ref strings ahead of time, either before call8ing bind_val in a MovStr, or as
         // the result of a function call.
         use Ty::*;
@@ -852,7 +871,12 @@ impl<'a> View<'a> {
             };
             return;
         }
-        debug_assert!(self.f.locals.get(&val).is_none());
+        debug_assert!(
+            self.f.locals.get(&val).is_none(),
+            "we are inserting {:?}, but there is already something in there: {:?}",
+            val,
+            self.f.locals[&val]
+        );
         match val.1 {
             MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
                 self.call("ref_map", &mut [to]);
