@@ -43,6 +43,7 @@ use arena::Arena;
 use cfg::Escaper;
 use llvm::IntoRuntime;
 use runtime::{
+    csv::InputFormat,
     splitter::{CSVReader, RegexSplitter},
     ChainedReader, LineReader, CHUNK_SIZE,
 };
@@ -85,14 +86,13 @@ good for debugging, and it will execute much faster for small scripts."
     )]
     out_file_bufsize: usize,
     #[clap(
-        long = "csv",
-        short = "c",
-        help = "input is split according to the rules of csv. \
+        long = "input-format",
+        short = "i",
+        help = "Legal values are csv, tsv. Input is split according to the rules of (csv|tsv). \
 $0 contains the unescaped line, assigning to any columns including $0 does \
-nothing. To drive home the experimental nature of this feature, CSV requires \
-AVX2 support on the current CPU"
+nothing."
     )]
-    csv: bool,
+    input_format: Option<String>,
     #[clap(
         long = "var",
         short = "v",
@@ -113,7 +113,7 @@ AVX2 support on the current CPU"
     bytecode: bool,
     #[clap(
         long = "output-format",
-        help = "Legal values are empty, csv, tsv. If nonempty records output via print \
+        help = "Legal values are csv, tsv. If set, records output via print \
 are escaped accoring to the rules of the corresponding format"
     )]
     output_format: Option<String>,
@@ -157,7 +157,7 @@ fn csv_supported() -> bool {
     const IS_X64: bool = true;
     #[cfg(not(target_arch = "x86_64"))]
     const IS_X64: bool = false;
-    IS_X64 && is_x86_feature_detected!("avx2")
+    IS_X64 && is_x86_feature_detected!("sse2")
 }
 
 fn get_vars<'a, 'b>(
@@ -274,7 +274,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
     let fake_out: Box<dyn io::Write> = Box::new(Cursor::new(vec![]));
     let interp = match compile::bytecode(
         &mut ctx,
-        chained(CSVReader::new(fake_inp, "unuse")),
+        chained(CSVReader::new(fake_inp, InputFormat::CSV, "unused")),
         fake_out,
     ) {
         Ok(ctx) => ctx,
@@ -293,9 +293,15 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
 
 fn main() {
     let mut opts: Opts = Opts::parse();
-    if opts.csv && !csv_supported() {
-        fail!("CSV requires an x86 processor with AVX2 support");
+    if opts.input_format.is_some() && !csv_supported() {
+        fail!("CSV/TSV requires an x86 processor with SSE2 support");
     }
+    let ifmt = match opts.input_format.as_ref().map(String::as_str) {
+        Some("csv") | Some("CSV") => Some(InputFormat::CSV),
+        Some("tsv") | Some("TSV") => Some(InputFormat::TSV),
+        Some(x) => fail!("invalid input format: {}", x),
+        None => None,
+    };
     let program_string = {
         if let Some(pfile) = &opts.program_file {
             match std::fs::read_to_string(pfile) {
@@ -307,16 +313,12 @@ fn main() {
                     }
                     p
                 }
-                Err(e) => {
-                    eprintln!("failed to read program from {}: {}", pfile, e);
-                    std::process::exit(1)
-                }
+                Err(e) => fail!("failed to read program from {}: {}", pfile, e),
             }
         } else if let Some(p) = &opts.program {
             p.clone()
         } else {
-            eprintln!("must specify program at command line, or in a file via -f");
-            std::process::exit(1)
+            fail!("must specify program at command line, or in a file via -f");
         }
     };
     let (escaper, output_sep) = match opts.output_format.as_ref().map(String::as_str) {
@@ -372,17 +374,20 @@ fn main() {
         ($inp:ident, $body:expr) => {
             if opts.input_files.len() == 0 {
                 let _reader: Box<dyn io::Read> = Box::new(io::stdin());
-                if opts.csv {
-                    let $inp = chained(CSVReader::new(_reader, "-"));
-                    $body
-                } else {
-                    let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
-                    $body
+                match ifmt {
+                    Some(ifmt) => {
+                        let $inp = chained(CSVReader::new(_reader, ifmt, "-"));
+                        $body
+                    }
+                    None => {
+                        let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
+                        $body
+                    }
                 }
-            } else if opts.csv {
+            } else if let Some(ifmt) = ifmt {
                 let iter = opts.input_files.iter().cloned().map(|file| {
                     let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
-                    CSVReader::new(reader, file)
+                    CSVReader::new(reader, ifmt, file)
                 });
                 let $inp = ChainedReader::new(iter);
                 $body

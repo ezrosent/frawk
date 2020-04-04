@@ -11,6 +11,7 @@ use crate::{
     parsing::syntax,
     runtime::{
         self,
+        csv::InputFormat,
         splitter::{CSVReader, RegexSplitter},
         ChainedReader,
     },
@@ -50,7 +51,7 @@ fn simulate_stdin_csv(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtim
         .enumerate()
         .map(|(i, x)| {
             let reader: Box<dyn io::Read> = Box::new(std::io::Cursor::new(x));
-            CSVReader::new(reader, format!("fake_stdin_{}", i))
+            CSVReader::new(reader, InputFormat::CSV, format!("fake_stdin_{}", i))
         })
         .collect();
     ChainedReader::new(inputs.into_iter())

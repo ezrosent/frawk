@@ -210,6 +210,7 @@ pub struct CSVReader<R> {
     prev_iter_cr_end: u64,
     // Used to trigger updating FILENAME on the first read.
     start: bool,
+    ifmt: csv::InputFormat,
 
     // This is a function pointer because we query the preferred instruction set at construction
     // time.
@@ -247,10 +248,11 @@ impl<R: Read> LineReader for CSVReader<R> {
     }
 }
 
+// TODO rename as it handles CSV and TSV
 impl<R: Read> CSVReader<R> {
     // TODO give this the same signature as RegexSplitter (passing in chunk size, or just making
     // two constructors)
-    pub fn new(r: R, name: impl Into<Str<'static>>) -> Self {
+    pub fn new(r: R, ifmt: csv::InputFormat, name: impl Into<Str<'static>>) -> Self {
         CSVReader {
             start: true,
             inner: Reader::new(r, super::CHUNK_SIZE),
@@ -259,7 +261,8 @@ impl<R: Read> CSVReader<R> {
             prev_ix: 0,
             prev_iter_inside_quote: 0,
             prev_iter_cr_end: 0,
-            find_indexes: csv::get_find_indexes(/*csv=*/ true),
+            find_indexes: csv::get_find_indexes(ifmt),
+            ifmt,
         }
     }
     fn refresh_buf(&mut self) -> Result<bool> {
@@ -291,6 +294,7 @@ impl<R: Read> CSVReader<R> {
             buf_len: self.inner.end,
             off: &mut self.cur_offsets,
             prev_ix: self.prev_ix,
+            ifmt: self.ifmt,
             line,
             st,
         }

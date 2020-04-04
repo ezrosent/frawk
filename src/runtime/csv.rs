@@ -90,6 +90,7 @@ pub enum State {
 }
 
 pub struct Stepper<'a> {
+    pub ifmt: InputFormat,
     pub buf: &'a Buf,
     pub buf_len: usize,
     pub off: &'a mut Offsets,
@@ -121,11 +122,11 @@ impl<'a> Stepper<'a> {
         self.prev_ix
     }
     pub unsafe fn step(&mut self) -> usize {
-        const COMMA: u8 = ',' as u8;
         const QUOTE: u8 = '"' as u8;
         const NL: u8 = '\n' as u8;
         const CR: u8 = '\r' as u8;
         const BS: u8 = '\\' as u8;
+        let sep = self.ifmt.sep();
         let line_start = self.prev_ix;
         let bs = &self.buf.as_bytes()[0..self.buf_len];
         let mut cur = self.off.start;
@@ -150,11 +151,6 @@ impl<'a> Stepper<'a> {
                             self.push_past(ix);
                             continue;
                         }
-                        COMMA => {
-                            self.push_past(ix);
-                            self.promote();
-                            continue;
-                        }
                         NL => {
                             self.push_past(ix);
                             self.promote();
@@ -166,7 +162,12 @@ impl<'a> Stepper<'a> {
                             self.st = State::Quote;
                             continue 'outer;
                         }
-                        _ => unreachable!(),
+                        _x => {
+                            debug_assert_eq!(_x, sep);
+                            self.push_past(ix);
+                            self.promote();
+                            continue;
+                        }
                     }
                 },
                 State::Quote => {
@@ -237,7 +238,24 @@ impl<'a> Stepper<'a> {
     }
 }
 
-pub fn get_find_indexes(csv: bool) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
+#[derive(Copy, Clone)]
+pub enum InputFormat {
+    CSV,
+    TSV,
+}
+
+impl InputFormat {
+    fn sep(self) -> u8 {
+        match self {
+            InputFormat::CSV => ',' as u8,
+            InputFormat::TSV => '\t' as u8,
+        }
+    }
+}
+
+pub fn get_find_indexes(
+    ifmt: InputFormat,
+) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
     #[cfg(target_arch = "x86_64")]
     const IS_X64: bool = true;
     #[cfg(not(target_arch = "x86_64"))]
@@ -249,16 +267,14 @@ pub fn get_find_indexes(csv: bool) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -
     assert!(IS_X64, "CSV is only supported on x86_64 machines");
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        if csv {
-            generic::find_indexes_csv::<avx2::Impl>
-        } else {
-            generic::find_indexes_tsv::<avx2::Impl>
+        match ifmt {
+            InputFormat::CSV => generic::find_indexes_csv::<avx2::Impl>,
+            InputFormat::TSV => generic::find_indexes_tsv::<avx2::Impl>,
         }
     } else if is_x86_feature_detected!("sse2") {
-        if csv {
-            generic::find_indexes_csv::<sse2::Impl>
-        } else {
-            generic::find_indexes_tsv::<sse2::Impl>
+        match ifmt {
+            InputFormat::CSV => generic::find_indexes_csv::<sse2::Impl>,
+            InputFormat::TSV => generic::find_indexes_tsv::<sse2::Impl>,
         }
     } else {
         panic!("CSV requires at least SSE2 support");
