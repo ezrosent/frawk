@@ -237,7 +237,7 @@ impl<'a> Stepper<'a> {
     }
 }
 
-pub fn get_find_indexes() -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
+pub fn get_find_indexes(csv: bool) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
     #[cfg(target_arch = "x86_64")]
     const IS_X64: bool = true;
     #[cfg(not(target_arch = "x86_64"))]
@@ -249,9 +249,17 @@ pub fn get_find_indexes() -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u
     assert!(IS_X64, "CSV is only supported on x86_64 machines");
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        generic::find_indexes::<avx2::Impl>
+        if csv {
+            generic::find_indexes_csv::<avx2::Impl>
+        } else {
+            generic::find_indexes_tsv::<avx2::Impl>
+        }
     } else if is_x86_feature_detected!("sse2") {
-        generic::find_indexes::<sse2::Impl>
+        if csv {
+            generic::find_indexes_csv::<sse2::Impl>
+        } else {
+            generic::find_indexes_tsv::<sse2::Impl>
+        }
     } else {
         panic!("CSV requires at least SSE2 support");
     }
@@ -387,61 +395,58 @@ mod generic {
         *prev_iter_inside_quote = (quote_mask as i64).wrapping_shr(63) as u64;
         (quote_mask, quote_bits)
     }
-    pub unsafe fn find_indexes<V: Vector>(
+
+    #[inline(always)]
+    unsafe fn flatten_bits(base_p: *mut u64, start_offset: &mut u64, start_ix: u64, mut bits: u64) {
+        // We want to write indexes of set bits into the array base_p.
+        // start_offset is the initial offset into base_p where we start writing.
+        // start_ix is the index into the corpus pointed to by the initial bits of `bits`.
+        if bits == 0 {
+            return;
+        }
+        let count = bits.count_ones();
+        let next_start = (*start_offset) + count as u64;
+        // Unroll the loop for the first 8 bits. As in simdjson, we are potentially "overwriting"
+        // here. We do not know if we have 8 bits to write, but we are writing them anyway! This is
+        // "safe" so long as we have enough space in the array pointed to by base_p because:
+        // * Excessive writes will only write a zero
+        // * we will set next start to point to the right location.
+        // Why do the extra work? We want to avoid extra branches.
+        macro_rules! write_offset_inner {
+            ($ix:expr) => {
+                *base_p.offset(*start_offset as isize + $ix) =
+                    start_ix + bits.trailing_zeros() as u64;
+                bits = bits & bits.wrapping_sub(1);
+            };
+        }
+        macro_rules! write_offsets {
+                    ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
+                }
+        write_offsets!(0, 1, 2, 3, 4, 5, 6, 7);
+        // Similarlty for bits 8->16
+        if count > 8 {
+            write_offsets!(8, 9, 10, 11, 12, 13, 14, 15);
+        }
+        // Just do a loop for the last 48 bits.
+        if count > 16 {
+            *start_offset += 16;
+            loop {
+                write_offsets!(0);
+                if bits == 0 {
+                    break;
+                }
+                *start_offset += 1;
+            }
+        }
+        *start_offset = next_start;
+    }
+
+    pub unsafe fn find_indexes_csv<V: Vector>(
         buf: &[u8],
         offsets: &mut Offsets,
         mut prev_iter_inside_quote: u64, /*start at 0*/
         mut prev_iter_cr_end: u64,       /*start at 0*/
     ) -> (u64, u64) {
-        #[inline(always)]
-        unsafe fn flatten_bits(
-            base_p: *mut u64,
-            start_offset: &mut u64,
-            start_ix: u64,
-            mut bits: u64,
-        ) {
-            // We want to write indexes of set bits into the array base_p.
-            // start_offset is the initial offset into base_p where we start writing.
-            // start_ix is the index into the corpus pointed to by the initial bits of `bits`.
-            if bits == 0 {
-                return;
-            }
-            let count = bits.count_ones();
-            let next_start = (*start_offset) + count as u64;
-            // Unroll the loop for the first 8 bits. As in simdjson, we are potentially "overwriting"
-            // here. We do not know if we have 8 bits to write, but we are writing them anyway! This is
-            // "safe" so long as we have enough space in the array pointed to by base_p because:
-            // * Excessive writes will only write a zero
-            // * we will set next start to point to the right location.
-            // Why do the extra work? We want to avoid extra branches.
-            macro_rules! write_offset_inner {
-                ($ix:expr) => {
-                    *base_p.offset(*start_offset as isize + $ix) =
-                        start_ix + bits.trailing_zeros() as u64;
-                    bits = bits & bits.wrapping_sub(1);
-                };
-            }
-            macro_rules! write_offsets {
-                    ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
-                }
-            write_offsets!(0, 1, 2, 3, 4, 5, 6, 7);
-            // Similarlty for bits 8->16
-            if count > 8 {
-                write_offsets!(8, 9, 10, 11, 12, 13, 14, 15);
-            }
-            // Just do a loop for the last 48 bits.
-            if count > 16 {
-                *start_offset += 16;
-                loop {
-                    write_offsets!(0);
-                    if bits == 0 {
-                        break;
-                    }
-                    *start_offset += 1;
-                }
-            }
-            *start_offset = next_start;
-        }
         offsets.fields.clear();
         offsets.start = 0;
         // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
@@ -508,6 +513,73 @@ mod generic {
         }
         offsets.fields.set_len(base as usize);
         (prev_iter_inside_quote, prev_iter_cr_end)
+    }
+
+    pub unsafe fn find_indexes_tsv<V: Vector>(
+        buf: &[u8],
+        offsets: &mut Offsets,
+        // These two are ignored for CSV
+        _prev_iter_inside_quote: u64,
+        _prev_iter_cr_end: u64,
+    ) -> (u64, u64) {
+        offsets.fields.clear();
+        offsets.start = 0;
+        // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
+        // reuse this across different chunks.
+        offsets.fields.reserve(buf.len());
+        let buf_ptr = buf.as_ptr();
+        let len = buf.len();
+        let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
+        let mut ix = 0;
+        let base_ptr: *mut u64 = offsets.fields.get_unchecked_mut(0);
+        let mut base = 0;
+
+        // For ... reasons (better pipelining? better cache behavior?) we decode in blocks.
+        const BUFFER_SIZE: usize = 4;
+        macro_rules! iterate {
+            ($buf:expr) => {{
+                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
+                // find commas not inside quotes
+                let inp = V::fill_input($buf);
+                let sep = V::cmp_mask_against_input(inp, '\t' as u8);
+                let esc = V::cmp_mask_against_input(inp, '\\' as u8);
+                let lf = V::cmp_mask_against_input(inp, '\n' as u8);
+                (sep | esc | lf)
+            }};
+        }
+        if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
+            let mut fields = [0u64; BUFFER_SIZE];
+            while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
+                for b in 0..BUFFER_SIZE {
+                    fields[b] = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
+                }
+                for b in 0..BUFFER_SIZE {
+                    let internal_ix = V::INPUT_SIZE * b + ix;
+                    flatten_bits(base_ptr, &mut base, internal_ix as u64, fields[b]);
+                }
+                ix += V::INPUT_SIZE * BUFFER_SIZE;
+            }
+        }
+        // Do an unbuffered version for the remaining data
+        while ix < len_minus_64 {
+            let field_sep = iterate!(buf_ptr.offset(ix as isize));
+            flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
+            ix += V::INPUT_SIZE;
+        }
+        // For any text that remains, just copy the results to the stack with some padding and do one more iteration.
+        let remaining = len - ix;
+        if remaining > 0 {
+            let mut rest = [0u8; MAX_INPUT_SIZE];
+            std::ptr::copy_nonoverlapping(
+                buf_ptr.offset(ix as isize),
+                rest.as_mut_ptr(),
+                remaining,
+            );
+            let field_sep = iterate!(rest.as_mut_ptr());
+            flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
+        }
+        offsets.fields.set_len(base as usize);
+        (0, 0)
     }
 }
 
@@ -596,7 +668,8 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         let mut mem: Vec<u8> = text.as_bytes().iter().cloned().collect();
         mem.reserve(32);
         let mut offsets: Offsets = Default::default();
-        let (in_quote, in_cr) = unsafe { generic::find_indexes::<V>(&mem[..], &mut offsets, 0, 0) };
+        let (in_quote, in_cr) =
+            unsafe { generic::find_indexes_csv::<V>(&mem[..], &mut offsets, 0, 0) };
         assert_eq!(in_quote, 0);
         assert_eq!(in_cr, 0);
         assert_eq!(

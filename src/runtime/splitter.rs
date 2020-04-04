@@ -259,7 +259,7 @@ impl<R: Read> CSVReader<R> {
             prev_ix: 0,
             prev_iter_inside_quote: 0,
             prev_iter_cr_end: 0,
-            find_indexes: csv::get_find_indexes(),
+            find_indexes: csv::get_find_indexes(/*csv=*/ true),
         }
     }
     fn refresh_buf(&mut self) -> Result<bool> {

@@ -91,14 +91,14 @@ pub(crate) fn run_program<'a>(
     esc: Escaper,
     csv: bool,
 ) -> ProgResult<'a> {
-    let stmt = parse_program(prog, a)?;
+    let stmt = parse_program(prog, a, esc)?;
     run_prog(a, stmt, stdin, esc, csv)
 }
 
 #[allow(unused)]
 pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
     let a = Arena::default();
-    let stmt = parse_program(prog, &a)?;
+    let stmt = parse_program(prog, &a, esc)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     compile::dump_llvm(&mut ctx, LLVM_CONFIG)
 }
@@ -106,7 +106,7 @@ pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
 #[allow(unused)]
 pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
     let a = Arena::default();
-    let stmt = parse_program(prog, &a)?;
+    let stmt = parse_program(prog, &a, esc)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     compile::_compile_llvm(&mut ctx, LLVM_CONFIG)
 }
@@ -120,7 +120,7 @@ pub(crate) fn run_llvm(
 ) -> Result<String> {
     use std::iter::once;
     let a = Arena::default();
-    let stmt = parse_program(prog, &a)?;
+    let stmt = parse_program(prog, &a, esc)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     if _PRINT_DEBUG_INFO {
         let mut buf = Vec::<u8>::new();
@@ -156,7 +156,7 @@ pub(crate) fn run_llvm(
 #[allow(unused)]
 pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>, esc: Escaper) -> Result<String> {
     let a = Arena::default();
-    let stmt = parse_program(prog, &a)?;
+    let stmt = parse_program(prog, &a, esc)?;
     let (mut interp, stdout) = compile_program(&a, stmt, stdin, esc)?;
     run_prog_nodebug(&mut interp, stdout)
 }
@@ -164,13 +164,21 @@ pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>, esc: Escaper) 
 pub(crate) fn parse_program<'a, 'inp, 'outer>(
     prog: &'inp str,
     a: &'a Arena<'outer>,
+    esc: Escaper,
 ) -> Result<Prog<'a>> {
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = syntax::ProgParser::new();
     match parser.parse(a, &mut buf, lexer) {
-        Ok(program) => Ok(a.alloc_v(program)),
+        Ok(mut program) => {
+            match esc {
+                Escaper::CSV => program.output_sep = Some(","),
+                Escaper::TSV => program.output_sep = Some("\t"),
+                Escaper::Identity => {}
+            };
+            Ok(a.alloc_v(program))
+        }
         Err(e) => {
             let mut ix = 0;
             let mut msg: String = "failed to parse program:\n======\n".into();
@@ -290,29 +298,32 @@ mod tests {
 
     macro_rules! test_program {
         ($desc:ident, $e:expr, $out:expr) => {
-            test_program!($desc, $e, $out, @input "", @types [], @csv false);
+            test_program!($desc, $e, $out, @input "", @types [], @out_fmt Escaper::Identity, @csv false);
+        };
+        ($desc:ident, $e:expr, $out:expr, @out_fmt $esc:expr) => {
+            test_program!($desc, $e, $out, @input "", @types [], @out_fmt $esc, @csv false);
         };
         ($desc:ident, $e:expr, $out:expr, @csv $csv:expr) => {
-            test_program!($desc, $e, $out, @input "", @types [], @csv $csv);
+            test_program!($desc, $e, $out, @input "", @types [], @out_fmt Escaper::Identity, @csv $csv);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr) => {
-            test_program!($desc, $e, $out, @input $inp, @types [], @csv false);
+            test_program!($desc, $e, $out, @input $inp, @types [], @out_fmt Escaper::Identity, @csv false);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr, @csv $csv:expr) => {
-            test_program!($desc, $e, $out, @input $inp, @types [], @csv $csv);
+            test_program!($desc, $e, $out, @input $inp, @types [], @out_fmt Escaper::Identity, @csv $csv);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr,
          @types [ $($i:ident :: $ty:expr),* ]) => {
-            test_program!($desc, $e, $out, @input $inp, @types [$($i :: $ty),*], @csv false);
+            test_program!($desc, $e, $out, @input $inp, @types [$($i :: $ty),*], @out_fmt Escaper::Identity, @csv false);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr,
-         @types [ $($i:ident :: $ty:expr),* ], @csv $csv:expr) => {
+         @types [ $($i:ident :: $ty:expr),* ], @out_fmt $esc:expr, @csv $csv:expr) => {
             mod $desc {
                 use super::*;
                 #[test]
                 fn bytecode() {
                     let a = Arena::default();
-                    let out = run_program(&a, $e, $inp, Escaper::Identity, $csv);
+                    let out = run_program(&a, $e, $inp, $esc, $csv);
                     match out {
                         Ok((out, instrs, ts)) => {
                             let expected = $out;
@@ -335,10 +346,10 @@ mod tests {
                 }
                 #[test]
                 fn llvm() {
-                    match run_llvm($e, $inp, Escaper::Identity, $csv) {
+                    match run_llvm($e, $inp, $esc, $csv) {
                         Ok(out) => assert_eq!(
                             out, $out,
-                            "llvm=\n{}", dump_llvm($e, Escaper::Identity).expect("failed to dump llvm")),
+                            "llvm=\n{}", dump_llvm($e, $esc).expect("failed to dump llvm")),
                         Err(e) => panic!("{}", e),
                     }
                 }
@@ -348,9 +359,28 @@ mod tests {
 
     macro_rules! test_program_csv {
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr) => {
-            test_program!($desc, $e, $out, @input $inp, @types [], @csv true);
+            test_program!(
+                $desc, $e, $out, @input $inp,
+                @types [], @out_fmt Escaper::Identity, @csv true
+            );
         };
     }
+
+    test_program!(
+        basic_csv_render,
+        r#"BEGIN { print "hi", "there"; print "comma,\"in field","and a\ttab"; }"#,
+r#"hi,there
+"comma,""in field","and a\ttab"
+"#,
+        @out_fmt Escaper::CSV
+    );
+
+    test_program!(
+        basic_tsv_render,
+        r#"BEGIN { print "hi", "there"; print "comma,\"in field","and a\ttab"; }"#,
+        "hi\tthere\ncomma,\"in field\tand a\\ttab\n",
+        @out_fmt Escaper::TSV
+    );
 
     test_program!(
         basic_multi_file,
@@ -875,7 +905,7 @@ this as well"#
                     #[bench]
                     fn program_only(b: &mut Bencher) {
                         let a = Arena::default();
-                        let prog = parse_program($e, &a).unwrap();
+                        let prog = parse_program($e, &a, Escaper::Identity).unwrap();
                         let (mut interp, stdout) =
                             compile_program(&a, prog, $inp, Escaper::Identity).unwrap();
                         b.iter(|| {
