@@ -40,6 +40,7 @@ extern crate unicode_xid;
 use clap::Clap;
 
 use arena::Arena;
+use cfg::Escaper;
 use llvm::IntoRuntime;
 use runtime::{
     splitter::{CSVReader, RegexSplitter},
@@ -110,6 +111,12 @@ AVX2 support on the current CPU"
         help = "Execute the program with the bytecode interpreter."
     )]
     bytecode: bool,
+    #[clap(
+        long = "output-format",
+        help = "Legal values are empty, csv, tsv. If nonempty records output via print \
+are escaped accoring to the rules of the corresponding format"
+    )]
+    output_format: Option<String>,
     program: Option<String>,
     input_files: Vec<String>,
 }
@@ -120,9 +127,18 @@ macro_rules! fail {
     }}
 }
 
+struct RawPrelude {
+    var_decs: Vec<String>,
+    field_sep: Option<String>,
+    output_sep: Option<&'static str>,
+    escaper: Escaper,
+}
+
 struct Prelude<'a> {
     var_decs: Vec<(&'a str, &'a ast::Expr<'a, 'a, &'a str>)>,
     field_sep: Option<&'a str>,
+    output_sep: Option<&'a str>,
+    escaper: Escaper,
 }
 
 fn open_file_read(f: &str) -> io::BufReader<File> {
@@ -168,14 +184,12 @@ fn get_vars<'a, 'b>(
     stmts
 }
 
-fn get_prelude<'a>(
-    a: &'a Arena,
-    field_sep: &Option<String>,
-    var_decs: &Vec<String>,
-) -> Prelude<'a> {
+fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
     Prelude {
-        field_sep: field_sep.as_ref().map(|s| a.alloc_str(s.as_str())),
-        var_decs: get_vars(var_decs.iter().map(|s| s.as_str()), a),
+        field_sep: raw.field_sep.as_ref().map(|s| a.alloc_str(s.as_str())),
+        var_decs: get_vars(raw.var_decs.iter().map(|s| s.as_str()), a),
+        output_sep: raw.output_sep,
+        escaper: raw.escaper,
     }
 }
 
@@ -192,6 +206,7 @@ fn get_context<'a>(
         Ok(mut program) => {
             program.field_sep = prelude.field_sep;
             program.prelude_vardecs = prelude.var_decs;
+            program.output_sep = prelude.output_sep;
             a.alloc_v(program)
         }
         Err(e) => {
@@ -205,7 +220,7 @@ fn get_context<'a>(
             fail!("{}", String::from_utf8(msg).unwrap())
         }
     };
-    match cfg::ProgramContext::from_prog(a, stmt) {
+    match cfg::ProgramContext::from_prog(a, stmt, prelude.escaper) {
         Ok(ctx) => ctx,
         Err(e) => fail!("failed to create program context: {}", e),
     }
@@ -215,11 +230,10 @@ fn run_interp(
     prog: &str,
     stdin: impl LineReader,
     stdout: impl io::Write + 'static,
-    field_sep: &Option<String>,
-    var_decs: &Vec<String>,
+    raw: &RawPrelude,
 ) {
     let a = Arena::default();
-    let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
+    let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
     let mut interp = match compile::bytecode(&mut ctx, stdin, stdout) {
         Ok(ctx) => ctx,
         Err(e) => fail!("bytecode compilation failure: {}", e),
@@ -234,34 +248,28 @@ fn run_llvm(
     stdin: impl IntoRuntime,
     stdout: impl io::Write + 'static,
     cfg: llvm::Config,
-    field_sep: &Option<String>,
-    var_decs: &Vec<String>,
+    raw: &RawPrelude,
 ) {
     let a = Arena::default();
-    let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
+    let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
     if let Err(e) = compile::run_llvm(&mut ctx, stdin, stdout, cfg) {
         fail!("error compiling llvm: {}", e)
     }
 }
 
-fn dump_llvm(
-    prog: &str,
-    cfg: llvm::Config,
-    field_sep: &Option<String>,
-    var_decs: &Vec<String>,
-) -> String {
+fn dump_llvm(prog: &str, cfg: llvm::Config, raw: &RawPrelude) -> String {
     let a = Arena::default();
-    let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
+    let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
     match compile::dump_llvm(&mut ctx, cfg) {
         Ok(s) => s,
         Err(e) => fail!("error compiling llvm: {}", e),
     }
 }
 
-fn dump_bytecode(prog: &str, field_sep: &Option<String>, var_decs: &Vec<String>) -> String {
+fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
     use std::io::Cursor;
     let a = Arena::default();
-    let mut ctx = get_context(prog, &a, get_prelude(&a, field_sep, var_decs));
+    let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
     let fake_inp: Box<dyn io::Read> = Box::new(Cursor::new(vec![]));
     let fake_out: Box<dyn io::Write> = Box::new(Cursor::new(vec![]));
     let interp = match compile::bytecode(
@@ -311,6 +319,21 @@ fn main() {
             std::process::exit(1)
         }
     };
+    let (escaper, output_sep) = match opts.output_format.as_ref().map(String::as_str) {
+        Some("csv") => (Escaper::CSV, Some(",")),
+        Some("tsv") => (Escaper::TSV, Some("\t")),
+        Some(s) => fail!(
+            "invalid output format {:?}; expected csv or tsv (or the empty string)",
+            s
+        ),
+        None => (Escaper::Identity, None),
+    };
+    let raw = RawPrelude {
+        field_sep: opts.field_sep.clone(),
+        var_decs: opts.var.clone(),
+        output_sep,
+        escaper,
+    };
     if opts.opt_level > 3 {
         fail!("opt levels can only be negative, or in the range [0, 3]");
     }
@@ -326,23 +349,19 @@ fn main() {
         let _ = write!(
             std::io::stdout(),
             "{}",
-            dump_llvm(program_string.as_str(), config, &opts.field_sep, &opts.var)
+            dump_llvm(program_string.as_str(), config, &raw),
         );
     }
     if opts.dump_bytecode {
         let _ = write!(
             std::io::stdout(),
             "{}",
-            dump_bytecode(program_string.as_str(), &opts.field_sep, &opts.var),
+            dump_bytecode(program_string.as_str(), &raw),
         );
     }
     if opts.dump_cfg {
         let a = Arena::default();
-        let ctx = get_context(
-            program_string.as_str(),
-            &a,
-            get_prelude(&a, &opts.field_sep, &opts.var),
-        );
+        let ctx = get_context(program_string.as_str(), &a, get_prelude(&a, &raw));
         let mut stdout = std::io::stdout();
         let _ = ctx.dbg_print(&mut stdout);
     }
@@ -401,13 +420,7 @@ fn main() {
     }
 
     if opts.opt_level < 0 {
-        with_io!(|inp, oup| run_interp(
-            program_string.as_str(),
-            inp,
-            oup,
-            &opts.field_sep,
-            &opts.var,
-        ));
+        with_io!(|inp, oup| run_interp(program_string.as_str(), inp, oup, &raw,));
     } else {
         with_io!(|inp, oup| run_llvm(
             program_string.as_str(),
@@ -416,8 +429,7 @@ fn main() {
             llvm::Config {
                 opt_level: opts.opt_level as usize
             },
-            &opts.field_sep,
-            &opts.var,
+            &raw,
         ));
     }
 }

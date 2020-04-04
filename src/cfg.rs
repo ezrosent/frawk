@@ -14,6 +14,8 @@ use std::hash::Hash;
 use std::io;
 use std::mem;
 
+pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
+
 #[derive(Debug, Default)]
 pub(crate) struct BasicBlock<'a> {
     pub q: VecDeque<PrimStmt<'a>>,
@@ -99,7 +101,18 @@ impl Ident {
     }
 }
 
-pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
+#[derive(Copy, Clone, Debug)]
+pub enum Escaper {
+    CSV,
+    TSV,
+    Identity,
+}
+
+impl Default for Escaper {
+    fn default() -> Escaper {
+        Escaper::Identity
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum PrimVal<'a> {
@@ -285,6 +298,7 @@ where
     pub(crate) fn from_prog<'b, 'outer>(
         arena: &'a arena::Arena<'outer>,
         p: &ast::Prog<'a, 'b, I>,
+        esc: Escaper,
     ) -> Result<Self> {
         // TODO this function is a bit of a slog. It would be nice to break it up.
         let mut shared: GlobalContext<I> = GlobalContext {
@@ -293,6 +307,7 @@ where
             may_rename: Default::default(),
             max: 1, // 0 reserved for assigning to "unused" var for side-effecting operations
             conds: Default::default(),
+            esc,
         };
         let mut func_table: HashMap<Option<I>, NumTy> = Default::default();
         let mut funcs: Vec<Function<'a, I>> = Default::default();
@@ -421,6 +436,7 @@ struct GlobalContext<I> {
     may_rename: Vec<Ident>,
     max: NumTy,
     conds: HashMap<usize, Ident>,
+    esc: Escaper,
 }
 
 impl<I> GlobalContext<I> {
@@ -637,17 +653,29 @@ where
                     (current_open, None)
                 };
                 current_open = next;
-                let print = {
-                    |v| {
-                        if let Some((o, append)) = &out {
+
+                // Why a macro? breaking this out into methods too easily runs afoul of aliasing
+                // rules, a previous version here had to split out several local variables into
+                // parameters of outer functions; it was a lot more code.
+                macro_rules! print_stmt {
+                    ($v:expr) => {{
+                        let _v = $v;
+                        let v = if let Some((o, append)) = &out {
                             PrimExpr::CallBuiltin(
                                 builtins::Function::Print,
-                                smallvec![v, o.clone(), PrimVal::ILit(**append as i64)],
+                                smallvec![_v, o.clone(), PrimVal::ILit(**append as i64)],
                             )
                         } else {
-                            PrimExpr::CallBuiltin(builtins::Function::PrintStdout, smallvec![v])
-                        }
-                    }
+                            PrimExpr::CallBuiltin(builtins::Function::PrintStdout, smallvec![_v])
+                        };
+                        self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), v))
+                    }};
+                };
+                macro_rules! print_stmt_escaped {
+                    ($v:expr) => {{
+                        let escaped = self.escape($v, current_open)?;
+                        print_stmt!(escaped)
+                    }};
                 };
                 if vs.len() == 0 {
                     // 0 args: print $0
@@ -662,11 +690,8 @@ where
                             ),
                         ),
                     )?;
-                    self.add_stmt(
-                        current_open,
-                        PrimStmt::AsgnVar(Self::unused(), print(PrimVal::Var(tmp))),
-                    )?;
-                    self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(ors)))?;
+                    print_stmt_escaped!(PrimVal::Var(tmp))?;
+                    print_stmt!(ors)?;
                     current_open
                 } else {
                     // Multiple args: print each argument, separated with OFS, followed by ORS.
@@ -684,17 +709,11 @@ where
                     for (i, v) in vs.iter().enumerate() {
                         let (next, v) = self.convert_val(*v, current_open)?;
                         current_open = next;
-                        self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), print(v)))?;
+                        print_stmt_escaped!(v)?;
                         if i != vs.len() - 1 {
-                            self.add_stmt(
-                                current_open,
-                                PrimStmt::AsgnVar(Self::unused(), print(fs.clone())),
-                            )?;
+                            print_stmt!(fs.clone())?;
                         } else {
-                            self.add_stmt(
-                                current_open,
-                                PrimStmt::AsgnVar(Self::unused(), print(ors.clone())),
-                            )?;
+                            print_stmt!(ors.clone())?;
                         }
                     }
                     current_open
@@ -1407,6 +1426,17 @@ where
             self.add_stmt(current_open, PrimStmt::AsgnVar(f, exp))?;
             PrimVal::Var(f)
         })
+    }
+
+    fn escape(&mut self, v: PrimVal<'b>, current_open: NodeIx) -> Result<PrimVal<'b>> {
+        let builtin = match self.ctx.esc {
+            Escaper::CSV => builtins::Function::EscapeCSV,
+
+            Escaper::TSV => builtins::Function::EscapeTSV,
+            Escaper::Identity => return Ok(v),
+        };
+        let e = PrimExpr::CallBuiltin(builtin, smallvec![v]);
+        self.to_val(e, current_open)
     }
 
     fn fresh(&mut self) -> Ident {

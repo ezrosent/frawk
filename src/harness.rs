@@ -98,7 +98,7 @@ pub(crate) fn run_program<'a>(
 pub(crate) fn dump_llvm(prog: &str) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, Default::default())?;
     compile::dump_llvm(&mut ctx, LLVM_CONFIG)
 }
 
@@ -106,7 +106,7 @@ pub(crate) fn dump_llvm(prog: &str) -> Result<String> {
 pub(crate) fn compile_llvm(prog: &str) -> Result<()> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, Default::default())?;
     compile::_compile_llvm(&mut ctx, LLVM_CONFIG)
 }
 
@@ -115,7 +115,7 @@ pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>, csv: bool) -> Resul
     use std::iter::once;
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, Default::default())?;
     if _PRINT_DEBUG_INFO {
         let mut buf = Vec::<u8>::new();
         ctx.dbg_print(&mut buf).unwrap();
@@ -182,7 +182,7 @@ fn compile_program<'a, 'inp, 'outer>(
     prog: Prog<'a>,
     stdin: impl Into<String>,
 ) -> Result<(Interp<'a, impl runtime::LineReader>, FakeStdout)> {
-    let mut ctx = cfg::ProgramContext::from_prog(a, prog)?;
+    let mut ctx = cfg::ProgramContext::from_prog(a, prog, Default::default())?;
     let stdout = FakeStdout::default();
     Ok((
         compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), stdout.clone())?,
@@ -211,7 +211,7 @@ pub(crate) fn run_prog<'a>(
     stdin: impl Into<String>,
     csv: bool,
 ) -> ProgResult<'a> {
-    let mut ctx = cfg::ProgramContext::from_prog(arena, prog)?;
+    let mut ctx = cfg::ProgramContext::from_prog(arena, prog, Default::default())?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
     // a limited capacity for locals, but it would require a lot more bookkeeping.
     let ident_map = ctx._invert_ident();

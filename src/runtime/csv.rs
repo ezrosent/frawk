@@ -257,6 +257,7 @@ pub fn get_find_indexes() -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u
     }
 }
 
+// TODO: consider putting these into the runtime struct to avoid the extra indirection.
 lazy_static! {
     static ref QUOTE: Regex = Regex::new(r#"""#).unwrap();
     static ref TAB: Regex = Regex::new(r#"\t"#).unwrap();

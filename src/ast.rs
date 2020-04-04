@@ -54,6 +54,7 @@ pub enum Pattern<'a, 'b, I> {
 pub struct Prog<'a, 'b, I> {
     pub field_sep: Option<&'b str>,
     pub prelude_vardecs: Vec<(I, &'a Expr<'a, 'b, I>)>,
+    pub output_sep: Option<&'b str>,
     pub decs: Vec<FunDec<'a, 'b, I>>,
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
     pub end: Option<&'a Stmt<'a, 'b, I>>,
@@ -70,6 +71,13 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         if let Some(sep) = self.field_sep {
             res.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("FS".into())),
+                arena.alloc_v(StrLit(sep)),
+            )))));
+        }
+        // Support "output csv/tsv" mode
+        if let Some(sep) = self.output_sep {
+            res.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
+                arena.alloc_v(Var("OFS".into())),
                 arena.alloc_v(StrLit(sep)),
             )))));
         }

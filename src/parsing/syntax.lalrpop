@@ -21,6 +21,7 @@ pub Prog: Prog<'a,'a,&'a str> = {
     <fs:(NL <Function>)*> NL <begin:Begin?> <pats:PatAction*> <sa:Expr?> <end:End?> =>
         Prog {
             field_sep: None,
+            output_sep: None,
             prelude_vardecs: Default::default(),
             decs: fs,
             begin,
