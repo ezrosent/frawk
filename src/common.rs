@@ -84,6 +84,16 @@ macro_rules! err {
     };
 }
 
+// We use this for when we want to print an error message, but don't want to panic if we cannot
+// write to standard error.
+macro_rules! eprintln_ignore {
+    ($($t:tt)*) => {{
+        use std::io::Write;
+        let _ = write!(&mut std::io::stderr(), $($t)*);
+        ()
+    }};
+}
+
 macro_rules! static_map {
     ($name:ident<$kty:ty, $vty:ty>, $([$k:expr, $v:expr]),*) => {
         $crate::lazy_static::lazy_static! {

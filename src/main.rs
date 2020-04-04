@@ -109,7 +109,7 @@ AVX2 support on the current CPU"
 }
 macro_rules! fail {
     ($($t:tt)*) => {{
-        eprintln!($($t)*);
+        eprintln_ignore!($($t)*);
         std::process::exit(1)
     }}
 }

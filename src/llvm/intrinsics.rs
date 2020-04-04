@@ -33,7 +33,7 @@ macro_rules! fail {
         }
         #[cfg(not(test))]
         {
-            eprintln!("failure in runtime {}. Halting execution", format!($($es),*));
+            eprintln_ignore!("failure in runtime {}. Halting execution", format!($($es),*));
             std::process::abort()
         }
     }}
