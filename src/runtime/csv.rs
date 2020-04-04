@@ -2,6 +2,9 @@
 use std::mem;
 use std::str;
 
+use lazy_static::lazy_static;
+use regex::{Regex, RegexSet};
+
 use crate::common::Result;
 use crate::runtime::str_impl::{Buf, Str};
 
@@ -251,6 +254,80 @@ pub fn get_find_indexes() -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u
         generic::find_indexes::<sse2::Impl>
     } else {
         panic!("CSV requires at least SSE2 support");
+    }
+}
+
+lazy_static! {
+    static ref QUOTE: Regex = Regex::new(r#"""#).unwrap();
+    static ref TAB: Regex = Regex::new(r#"\t"#).unwrap();
+    static ref NEWLINE: Regex = Regex::new(r#"\n"#).unwrap();
+    static ref NEEDS_ESCAPE_TSV: RegexSet = RegexSet::new(&[r#"\t"#, r#"\n"#]).unwrap();
+    static ref NEEDS_ESCAPE_CSV: RegexSet =
+        RegexSet::new(&[r#"""#, r#"\t"#, r#"\n"#, ","]).unwrap();
+}
+
+pub fn escape_csv<'a>(s: &Str<'a>) -> Str<'a> {
+    let matches = s.with_str(|s| NEEDS_ESCAPE_CSV.matches(s));
+    if !matches.matched_any() {
+        return s.clone();
+    }
+    let mut cur = s.clone();
+    for m in matches.into_iter() {
+        let (pat, subst_for) = match m {
+            0 => (&*QUOTE, r#""""#),
+            1 => (&*TAB, r#"\t"#),
+            2 => (&*NEWLINE, r#"\n"#),
+            // This just necessitates the ""s
+            3 => continue,
+            _ => unreachable!(),
+        };
+        cur = cur.subst_all(pat, &Str::from(subst_for).upcast()).0;
+    }
+    let quote = Str::from("\"");
+    Str::concat(Str::concat(quote.clone(), cur), quote)
+}
+
+pub fn escape_tsv<'a>(s: &Str<'a>) -> Str<'a> {
+    let matches = s.with_str(|s| NEEDS_ESCAPE_TSV.matches(s));
+    if !matches.matched_any() {
+        return s.clone();
+    }
+    let mut cur = s.clone();
+    for m in matches.into_iter() {
+        let (pat, subst_for) = match m {
+            0 => (&*TAB, r#"\t"#),
+            1 => (&*NEWLINE, r#"\n"#),
+            _ => unreachable!(),
+        };
+        cur = cur.subst_all(pat, &Str::from(subst_for).upcast()).0;
+    }
+    cur
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::*;
+
+    #[test]
+    fn csv_escaping() {
+        let s1 = Str::from("no escaping");
+        let s2 = Str::from("This ought to be escaped, for two\treasons");
+        assert_eq!(escape_csv(&s1), s1);
+        assert_eq!(
+            escape_csv(&s2),
+            Str::from(r#""This ought to be escaped, for two\treasons""#)
+        );
+    }
+
+    #[test]
+    fn tsv_escaping() {
+        let s1 = Str::from("no, escaping");
+        let s2 = Str::from("This ought to be escaped, for one\treason");
+        assert_eq!(escape_tsv(&s1), s1);
+        assert_eq!(
+            escape_tsv(&s2),
+            Str::from(r#"This ought to be escaped, for one\treason"#)
+        );
     }
 }
 

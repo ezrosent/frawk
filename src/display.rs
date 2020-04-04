@@ -140,6 +140,8 @@ impl Display for Function {
             Match => write!(f, "match"),
             Sub => write!(f, "sub"),
             GSub => write!(f, "gsub"),
+            EscapeCSV => write!(f, "escape_csv"),
+            EscapeTSV => write!(f, "escape_tsv"),
             Substr => write!(f, "substr"),
         }
     }

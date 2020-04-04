@@ -299,6 +299,18 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         *index_mut(&mut self.strs, in_s) = subbed;
                         *index_mut(&mut self.ints, res) = subs_made;
                     }
+                    EscapeCSV(res, s) => {
+                        *index_mut(&mut self.strs, res) = {
+                            let s = index(&self.strs, s);
+                            runtime::csv::escape_csv(s)
+                        };
+                    }
+                    EscapeTSV(res, s) => {
+                        *index_mut(&mut self.strs, res) = {
+                            let s = index(&self.strs, s);
+                            runtime::csv::escape_tsv(s)
+                        };
+                    }
                     Substr(res, base, l, r) => {
                         let base = index(&self.strs, base);
                         let len = base.len();

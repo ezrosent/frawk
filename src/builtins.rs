@@ -30,6 +30,8 @@ pub enum Function {
     Match,
     Sub,
     GSub,
+    EscapeCSV,
+    EscapeTSV,
     Substr,
 }
 
@@ -265,6 +267,7 @@ impl Function {
             Length => (smallvec![incoming[0]], Int),
             Close => (smallvec![Str], Str),
             Sub | GSub => (smallvec![Str, Str, Str], Int),
+            EscapeCSV | EscapeTSV => (smallvec![Str], Str),
             Substr => (smallvec![Str, Int, Int], Str),
             Match => (smallvec![Str, Str], Int),
             // Split's second input can be a map of either type
@@ -283,7 +286,9 @@ impl Function {
         Some(match self {
             FloatFunc(ff) => ff.arity(),
             ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
-            Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => 1,
+            EscapeCSV | EscapeTSV | Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => {
+                1
+            }
             Match | Setcol | Binop(_) => 2,
             Delete | Contains => 2,
             Substr | Sub | GSub | Print | Split => 3,
@@ -320,9 +325,8 @@ impl Function {
             Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
             | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match
             | Sub | GSub => Ok(Scalar(BaseTy::Int).abs()),
-            Substr | Unop(Column) | Binop(Concat) | Nextline | NextlineStdin => {
-                Ok(Scalar(BaseTy::Str).abs())
-            }
+            EscapeCSV | EscapeTSV | Substr | Unop(Column) | Binop(Concat) | Nextline
+            | NextlineStdin => Ok(Scalar(BaseTy::Str).abs()),
             NextFile | ReadLineStdinFused | Close => Ok(None),
         }
     }

@@ -1070,6 +1070,8 @@ impl<'a, 'b> View<'a, 'b> {
                 conv_regs[1].into(),
                 conv_regs[2].into(),
             )),
+            EscapeCSV => self.pushl(LL::EscapeCSV(res_reg.into(), conv_regs[0].into())),
+            EscapeTSV => self.pushl(LL::EscapeTSV(res_reg.into(), conv_regs[0].into())),
             Substr => self.pushl(LL::Substr(
                 res_reg.into(),
                 conv_regs[0].into(),

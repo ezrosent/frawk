@@ -115,6 +115,8 @@ pub(crate) enum Instr<'a> {
         /*for*/ Reg<Str<'a>>,
         /*in*/ Reg<Str<'a>>,
     ),
+    EscapeCSV(Reg<Str<'a>>, Reg<Str<'a>>),
+    EscapeTSV(Reg<Str<'a>>, Reg<Str<'a>>),
     Substr(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Int>, Reg<Int>),
 
     // Comparison
@@ -511,6 +513,10 @@ impl<'a> Instr<'a> {
                 pat.accum(&mut f);
                 s.accum(&mut f);
                 in_s.accum(&mut f);
+            }
+            EscapeCSV(res, s) | EscapeTSV(res, s) => {
+                res.accum(&mut f);
+                s.accum(&mut f);
             }
             Substr(res, base, l, r) => {
                 res.accum(&mut f);

@@ -227,6 +227,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         [ReadOnly] match_pat_loc(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_first(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_all(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        escape_csv(str_ref_ty) -> str_ty;
+        escape_tsv(str_ref_ty) -> str_ty;
         substr(str_ref_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] get_col(rt_ty, int_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
@@ -588,6 +590,16 @@ pub unsafe extern "C" fn subst_all(
     let (subbed, nsubs) = try_abort!(runtime.regexes.with_regex(pat, |re| in_s.subst_all(re, s)));
     *in_s = subbed;
     nsubs
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn escape_csv(s: *mut u128) -> u128 {
+    mem::transmute::<Str, u128>(runtime::csv::escape_csv(&*(s as *mut Str)))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn escape_tsv(s: *mut u128) -> u128 {
+    mem::transmute::<Str, u128>(runtime::csv::escape_tsv(&*(s as *mut Str)))
 }
 
 #[no_mangle]

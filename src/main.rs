@@ -104,6 +104,12 @@ AVX2 support on the current CPU"
         help = "Field separator for frawk program. This is interpreted as a regular expression"
     )]
     field_sep: Option<String>,
+    #[clap(
+        short = "b",
+        long = "bytecode",
+        help = "Execute the program with the bytecode interpreter."
+    )]
+    bytecode: bool,
     program: Option<String>,
     input_files: Vec<String>,
 }
@@ -388,6 +394,10 @@ fn main() {
                 }
             }
         };
+    }
+
+    if opts.bytecode {
+        opts.opt_level = -1;
     }
 
     if opts.opt_level < 0 {

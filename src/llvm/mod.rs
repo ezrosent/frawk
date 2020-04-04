@@ -1246,6 +1246,16 @@ impl<'a> View<'a> {
                 let resv = self.call("subst_all", &mut [rt, patv, sv, in_sv]);
                 self.bind_reg(res, resv);
             }
+            EscapeCSV(res, s) => {
+                let sv = self.get_local(s.reflect())?;
+                let resv = self.call("escape_csv", &mut [sv]);
+                self.bind_reg(res, resv);
+            }
+            EscapeTSV(res, s) => {
+                let sv = self.get_local(s.reflect())?;
+                let resv = self.call("escape_tsv", &mut [sv]);
+                self.bind_reg(res, resv);
+            }
             Substr(res, base, l, r) => {
                 let basev = self.get_local(base.reflect())?;
                 let lv = self.get_local(l.reflect())?;
