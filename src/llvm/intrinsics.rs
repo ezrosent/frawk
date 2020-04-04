@@ -860,31 +860,38 @@ pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut u128) {
 
 #[no_mangle]
 pub unsafe extern "C" fn _frawk_cos(f: Float) -> Float {
+    // TODO: make these macos-only
+    std::ptr::read_volatile(&false);
     f.cos()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn _frawk_sin(f: Float) -> Float {
+    std::ptr::read_volatile(&false);
     f.sin()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn _frawk_atan(f: Float) -> Float {
+    std::ptr::read_volatile(&false);
     f.atan()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn _frawk_log(f: Float) -> Float {
+    std::ptr::read_volatile(&false);
     f.ln()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn _frawk_log2(f: Float) -> Float {
+    std::ptr::read_volatile(&false);
     f.log2()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn _frawk_log10(f: Float) -> Float {
+    std::ptr::read_volatile(&false);
     f.log10()
 }
 
@@ -895,6 +902,7 @@ pub unsafe extern "C" fn _frawk_sqrt(f: Float) -> Float {
 
 #[no_mangle]
 pub unsafe extern "C" fn _frawk_atan2(x: Float, y: Float) -> Float {
+    std::ptr::read_volatile(&false);
     x.atan2(y)
 }
 

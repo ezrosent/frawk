@@ -5,7 +5,7 @@ use crate::{
     arena::Arena,
     ast,
     bytecode::Interp,
-    cfg,
+    cfg::{self, Escaper},
     common::Result,
     compile, lexer, llvm,
     parsing::syntax,
@@ -88,34 +88,40 @@ pub(crate) fn run_program<'a>(
     a: &'a Arena,
     prog: &str,
     stdin: impl Into<String>,
+    esc: Escaper,
     csv: bool,
 ) -> ProgResult<'a> {
     let stmt = parse_program(prog, a)?;
-    run_prog(a, stmt, stdin, csv)
+    run_prog(a, stmt, stdin, esc, csv)
 }
 
 #[allow(unused)]
-pub(crate) fn dump_llvm(prog: &str) -> Result<String> {
+pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, Default::default())?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     compile::dump_llvm(&mut ctx, LLVM_CONFIG)
 }
 
 #[allow(unused)]
-pub(crate) fn compile_llvm(prog: &str) -> Result<()> {
+pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, Default::default())?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     compile::_compile_llvm(&mut ctx, LLVM_CONFIG)
 }
 
 #[allow(unused)]
-pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>, csv: bool) -> Result<String> {
+pub(crate) fn run_llvm(
+    prog: &str,
+    stdin: impl Into<String>,
+    esc: Escaper,
+    csv: bool,
+) -> Result<String> {
     use std::iter::once;
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, Default::default())?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     if _PRINT_DEBUG_INFO {
         let mut buf = Vec::<u8>::new();
         ctx.dbg_print(&mut buf).unwrap();
@@ -148,10 +154,10 @@ pub(crate) fn run_llvm(prog: &str, stdin: impl Into<String>, csv: bool) -> Resul
 }
 
 #[allow(unused)]
-pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>) -> Result<String> {
+pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>, esc: Escaper) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a)?;
-    let (mut interp, stdout) = compile_program(&a, stmt, stdin)?;
+    let (mut interp, stdout) = compile_program(&a, stmt, stdin, esc)?;
     run_prog_nodebug(&mut interp, stdout)
 }
 
@@ -181,8 +187,9 @@ fn compile_program<'a, 'inp, 'outer>(
     a: &'a Arena<'outer>,
     prog: Prog<'a>,
     stdin: impl Into<String>,
+    esc: Escaper,
 ) -> Result<(Interp<'a, impl runtime::LineReader>, FakeStdout)> {
-    let mut ctx = cfg::ProgramContext::from_prog(a, prog, Default::default())?;
+    let mut ctx = cfg::ProgramContext::from_prog(a, prog, esc)?;
     let stdout = FakeStdout::default();
     Ok((
         compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), stdout.clone())?,
@@ -209,9 +216,10 @@ pub(crate) fn run_prog<'a>(
     arena: &'a Arena,
     prog: Prog<'a>,
     stdin: impl Into<String>,
+    esc: Escaper,
     csv: bool,
 ) -> ProgResult<'a> {
-    let mut ctx = cfg::ProgramContext::from_prog(arena, prog, Default::default())?;
+    let mut ctx = cfg::ProgramContext::from_prog(arena, prog, esc)?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
     // a limited capacity for locals, but it would require a lot more bookkeeping.
     let ident_map = ctx._invert_ident();
@@ -304,7 +312,7 @@ mod tests {
                 #[test]
                 fn bytecode() {
                     let a = Arena::default();
-                    let out = run_program(&a, $e, $inp, $csv);
+                    let out = run_program(&a, $e, $inp, Escaper::Identity, $csv);
                     match out {
                         Ok((out, instrs, ts)) => {
                             let expected = $out;
@@ -327,10 +335,10 @@ mod tests {
                 }
                 #[test]
                 fn llvm() {
-                    match run_llvm($e, $inp, $csv) {
+                    match run_llvm($e, $inp, Escaper::Identity, $csv) {
                         Ok(out) => assert_eq!(
                             out, $out,
-                            "llvm=\n{}", dump_llvm($e).expect("failed to dump llvm")),
+                            "llvm=\n{}", dump_llvm($e, Escaper::Identity).expect("failed to dump llvm")),
                         Err(e) => panic!("{}", e),
                     }
                 }
@@ -537,6 +545,7 @@ for (k in m) {
     test_program!(
         float_funcs,
         r#"BEGIN {
+        cos(0);sin(0);atan(0);log(0);log2(0);log10(0);sqrt(0);atan2(0,0);
         print sqrt(4);
         print log10("100");
         print log2("32");
@@ -860,16 +869,22 @@ this as well"#
                     #[bench]
                     fn end_to_end(b: &mut Bencher) {
                         b.iter(|| {
-                            black_box(bench_program($e, $inp).unwrap());
+                            black_box(bench_program($e, $inp, Escaper::Identity).unwrap());
                         });
                     }
                     #[bench]
                     fn program_only(b: &mut Bencher) {
                         let a = Arena::default();
                         let prog = parse_program($e, &a).unwrap();
-                        let (mut interp, stdout) = compile_program(&a, prog, $inp).unwrap();
+                        let (mut interp, stdout) =
+                            compile_program(&a, prog, $inp, Escaper::Identity).unwrap();
                         b.iter(|| {
-                            black_box(run_prog_nodebug(&mut interp, stdout.clone()).unwrap());
+                            black_box(
+                                run_prog_nodebug(
+                                    &mut interp,
+                                    stdout.clone(),
+                                ).unwrap()
+                            );
                             interp.reset();
                             stdout.clear();
                         });
@@ -880,13 +895,13 @@ this as well"#
                     #[bench]
                     fn end_to_end(b: &mut Bencher) {
                         b.iter(|| {
-                            black_box(run_llvm($e, $inp, false).unwrap());
+                            black_box(run_llvm($e, $inp, Escaper::Identity, false).unwrap());
                         });
                     }
                     #[bench]
                     fn compile_only(b: &mut Bencher) {
                         b.iter(|| {
-                            black_box(compile_llvm($e).unwrap());
+                            black_box(compile_llvm($e, Escaper::Identity).unwrap());
                         });
                     }
                 }
