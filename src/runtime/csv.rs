@@ -1,4 +1,10 @@
-/// A WIP port (with modifications) of geofflangdale/simdcsv.
+/// CSV/TSV parsing geofflangdale/simdcsv.
+///
+/// As that repo name implies, it uses SIMD instructions to accelerate CSV and TSV parsing. It does
+/// this by performing a fast pass over the input that produces a list of "relevant indices" into
+/// the underlying input buffer, these play the same role as "control characters" in the SimdJSON
+/// paper (by the same authors). The higher-level state machine parser then operates on these
+/// control characters rather than on a byte-by-byte basis.
 use std::mem;
 use std::str;
 
@@ -104,13 +110,16 @@ impl<'a> Stepper<'a> {
         let partial = mem::replace(&mut self.line.partial, Str::default());
         self.line.partial = Str::concat(partial, s);
     }
+
     unsafe fn append_slice(&mut self, i: usize, j: usize) {
         self.append(self.buf.slice_to_str(i, j));
     }
+
     unsafe fn push_past(&mut self, i: usize) {
         self.append_slice(self.prev_ix, i);
         self.prev_ix = i + 1;
     }
+
     pub fn promote(&mut self) {
         self.line.promote();
     }
@@ -121,6 +130,7 @@ impl<'a> Stepper<'a> {
         self.line.raw = Str::concat(line, unsafe { self.buf.slice_to_str(line_start, j) });
         self.prev_ix
     }
+
     pub unsafe fn step(&mut self) -> usize {
         const QUOTE: u8 = '"' as u8;
         const NL: u8 = '\n' as u8;
@@ -130,6 +140,13 @@ impl<'a> Stepper<'a> {
         let line_start = self.prev_ix;
         let bs = &self.buf.as_bytes()[0..self.buf_len];
         let mut cur = self.off.start;
+        let bs_transition = match self.ifmt {
+            // Escape sequences only occur within quotes for CSV-formatted data.
+            InputFormat::CSV => State::Quote,
+            // There are no "quoted fields" in TSV, and escape sequences simply occur at any point
+            // in a field.
+            InputFormat::TSV => State::Init,
+        };
         macro_rules! get_next {
             () => {
                 if cur == self.off.fields.len() {
@@ -145,6 +162,7 @@ impl<'a> Stepper<'a> {
         'outer: loop {
             match self.st {
                 State::Init => loop {
+                    // Common case: Loop through records until the end of the line.
                     let ix = get_next!();
                     match *bs.get_unchecked(ix) {
                         CR => {
@@ -162,6 +180,12 @@ impl<'a> Stepper<'a> {
                             self.st = State::Quote;
                             continue 'outer;
                         }
+                        // Only happens in TSV mode
+                        BS => {
+                            self.push_past(ix);
+                            self.st = State::BS;
+                            continue 'outer;
+                        }
                         _x => {
                             debug_assert_eq!(_x, sep);
                             self.push_past(ix);
@@ -171,14 +195,22 @@ impl<'a> Stepper<'a> {
                     }
                 },
                 State::Quote => {
+                    // Parse a quoted field; this will only happen in CSV mode.
                     let ix = get_next!();
                     match *bs.get_unchecked(ix) {
                         QUOTE => {
+                            // We have found a quote, time to figure out if the next character is a
+                            // quote, or if it is the end of the quoted portion of the field.
+                            //
+                            // One interesting thing to note here is that this allows for a mixture
+                            // of quoted and unquoted portions of a single CSV field, which is
+                            // technically more than is supported by the standard IIUC.
                             self.push_past(ix);
                             self.st = State::QuoteInQuote;
                             continue;
                         }
                         BS => {
+                            // A similar lookahead case: handling escaped sequences.
                             self.push_past(ix);
                             self.st = State::BS;
                             continue;
@@ -201,7 +233,8 @@ impl<'a> Stepper<'a> {
                         // burn the next entry. It should be a quote. Using get_next here is a
                         // convenience: if we hit the branch that returns early within the macro,
                         // there's a bug somewhere! But there shouldn't be one, because all quotes
-                        // should appear in the offsets vector.
+                        // should appear in the offsets vector, and we know that there is more
+                        // space in `bs`.
                         let _q = get_next!();
                         debug_assert_eq!(bs[_q], QUOTE);
                         self.prev_ix += 1;
@@ -230,7 +263,7 @@ impl<'a> Stepper<'a> {
                         }
                     }
                     self.prev_ix += 1;
-                    self.st = State::Quote;
+                    self.st = bs_transition;
                 }
                 State::Done => panic!("cannot start in Done state"),
             }

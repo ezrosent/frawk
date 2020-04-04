@@ -43,7 +43,10 @@ impl FakeStdout {
 
 const FILE_BREAK: &'static str = "<<<FILE BREAK>>>";
 
-fn simulate_stdin_csv(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtime::LineReader {
+fn simulate_stdin_csv(
+    ifmt: InputFormat,
+    inp: impl Into<String>,
+) -> impl llvm::IntoRuntime + runtime::LineReader {
     let stdin: String = inp.into();
     let inputs: Vec<_> = stdin
         .split(FILE_BREAK)
@@ -51,7 +54,7 @@ fn simulate_stdin_csv(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtim
         .enumerate()
         .map(|(i, x)| {
             let reader: Box<dyn io::Read> = Box::new(std::io::Cursor::new(x));
-            CSVReader::new(reader, InputFormat::CSV, format!("fake_stdin_{}", i))
+            CSVReader::new(reader, ifmt, format!("fake_stdin_{}", i))
         })
         .collect();
     ChainedReader::new(inputs.into_iter())
@@ -90,10 +93,10 @@ pub(crate) fn run_program<'a>(
     prog: &str,
     stdin: impl Into<String>,
     esc: Escaper,
-    csv: bool,
+    ifmt: Option<InputFormat>,
 ) -> ProgResult<'a> {
     let stmt = parse_program(prog, a, esc)?;
-    run_prog(a, stmt, stdin, esc, csv)
+    run_prog(a, stmt, stdin, esc, ifmt)
 }
 
 #[allow(unused)]
@@ -117,7 +120,7 @@ pub(crate) fn run_llvm(
     prog: &str,
     stdin: impl Into<String>,
     esc: Escaper,
-    csv: bool,
+    ifmt: Option<InputFormat>,
 ) -> Result<String> {
     use std::iter::once;
     let a = Arena::default();
@@ -129,10 +132,10 @@ pub(crate) fn run_llvm(
         eprintln!("{}", String::from_utf8(buf).unwrap());
     }
     let stdout = FakeStdout::default();
-    if csv {
+    if let Some(ifmt) = ifmt {
         compile::run_llvm(
             &mut ctx,
-            simulate_stdin_csv(stdin),
+            simulate_stdin_csv(ifmt, stdin),
             stdout.clone(),
             LLVM_CONFIG,
         )?;
@@ -226,7 +229,7 @@ pub(crate) fn run_prog<'a>(
     prog: Prog<'a>,
     stdin: impl Into<String>,
     esc: Escaper,
-    csv: bool,
+    ifmt: Option<InputFormat>,
 ) -> ProgResult<'a> {
     let mut ctx = cfg::ProgramContext::from_prog(arena, prog, esc)?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
@@ -249,9 +252,12 @@ pub(crate) fn run_prog<'a>(
             .collect();
         macro_rules! with_interp {
             ($interp:ident, $body: expr) => {
-                if csv {
-                    let mut $interp =
-                        compile::bytecode(&mut ctx, simulate_stdin_csv(stdin), stdout.clone())?;
+                if let Some(ifmt) = ifmt {
+                    let mut $interp = compile::bytecode(
+                        &mut ctx,
+                        simulate_stdin_csv(ifmt, stdin),
+                        stdout.clone(),
+                    )?;
                     $body
                 } else {
                     let mut $interp =
@@ -299,23 +305,23 @@ mod tests {
 
     macro_rules! test_program {
         ($desc:ident, $e:expr, $out:expr) => {
-            test_program!($desc, $e, $out, @input "", @types [], @out_fmt Escaper::Identity, @csv false);
+            test_program!($desc, $e, $out, @input "", @types [], @out_fmt Escaper::Identity, @csv None);
         };
         ($desc:ident, $e:expr, $out:expr, @out_fmt $esc:expr) => {
-            test_program!($desc, $e, $out, @input "", @types [], @out_fmt $esc, @csv false);
+            test_program!($desc, $e, $out, @input "", @types [], @out_fmt $esc, @csv None);
         };
         ($desc:ident, $e:expr, $out:expr, @csv $csv:expr) => {
             test_program!($desc, $e, $out, @input "", @types [], @out_fmt Escaper::Identity, @csv $csv);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr) => {
-            test_program!($desc, $e, $out, @input $inp, @types [], @out_fmt Escaper::Identity, @csv false);
+            test_program!($desc, $e, $out, @input $inp, @types [], @out_fmt Escaper::Identity, @csv None);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr, @csv $csv:expr) => {
             test_program!($desc, $e, $out, @input $inp, @types [], @out_fmt Escaper::Identity, @csv $csv);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr,
          @types [ $($i:ident :: $ty:expr),* ]) => {
-            test_program!($desc, $e, $out, @input $inp, @types [$($i :: $ty),*], @out_fmt Escaper::Identity, @csv false);
+            test_program!($desc, $e, $out, @input $inp, @types [$($i :: $ty),*], @out_fmt Escaper::Identity, @csv None);
         };
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr,
          @types [ $($i:ident :: $ty:expr),* ], @out_fmt $esc:expr, @csv $csv:expr) => {
@@ -362,7 +368,16 @@ mod tests {
         ($desc:ident, $e:expr, $out:expr, @input $inp:expr) => {
             test_program!(
                 $desc, $e, $out, @input $inp,
-                @types [], @out_fmt Escaper::Identity, @csv true
+                @types [], @out_fmt Escaper::Identity, @csv Some(InputFormat::CSV)
+            );
+        };
+    }
+
+    macro_rules! test_program_tsv {
+        ($desc:ident, $e:expr, $out:expr, @input $inp:expr) => {
+            test_program!(
+                $desc, $e, $out, @input $inp,
+                @types [], @out_fmt Escaper::Identity, @csv Some(InputFormat::TSV)
             );
         };
     }
@@ -452,6 +467,12 @@ it has one more line"#
         r#"{ print $2; }"#,
           "1,2\t,3\"4\n",
           @input r#"help,"1,2\t,3""4",5"#
+    );
+    test_program_tsv!(
+        tsv_escaping,
+        r#"{ print $1,$2,$3; }"#,
+        "1 2 3\n1\t23 4 5\n\t6\n",
+        @input "1\t2\t3\n1\\t23\t4\t5\\n\\t6\n"
     );
 
     test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
@@ -926,7 +947,7 @@ this as well"#
                     #[bench]
                     fn end_to_end(b: &mut Bencher) {
                         b.iter(|| {
-                            black_box(run_llvm($e, $inp, Escaper::Identity, false).unwrap());
+                            black_box(run_llvm($e, $inp, Escaper::Identity, None).unwrap());
                         });
                     }
                     #[bench]
