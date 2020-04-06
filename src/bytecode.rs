@@ -1,3 +1,4 @@
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
 use crate::builtins::{FloatFunc, Variable};
@@ -23,7 +24,7 @@ impl From<usize> for Label {
     }
 }
 
-pub(crate) struct Reg<T>(u32, PhantomData<*const T>);
+pub struct Reg<T>(u32, PhantomData<*const T>);
 
 impl<T> std::fmt::Debug for Reg<T> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -44,6 +45,17 @@ impl<T> Clone for Reg<T> {
     }
 }
 impl<T> Copy for Reg<T> {}
+impl<T> Hash for Reg<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+impl<T> PartialEq for Reg<T> {
+    fn eq(&self, other: &Reg<T>) -> bool {
+        self.0 == other.0
+    }
+}
+impl<T> Eq for Reg<T> {}
 
 #[derive(Debug, Clone)]
 pub(crate) enum Instr<'a> {

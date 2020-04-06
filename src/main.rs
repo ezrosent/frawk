@@ -15,8 +15,9 @@ pub mod harness;
 pub mod interp;
 pub mod lexer;
 pub mod llvm;
-#[allow(unused_parens)]
+#[allow(unused_parens)] // Warnings appear in generated code
 pub mod parsing;
+pub mod pushdown;
 pub mod runtime;
 #[cfg(test)]
 mod test_string_constants;

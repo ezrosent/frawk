@@ -3,6 +3,7 @@ use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result, WorkList};
 use crate::llvm;
+use crate::pushdown::{self, FieldSet};
 use crate::runtime;
 use crate::smallvec::{self, smallvec};
 use crate::types;
@@ -244,6 +245,8 @@ pub(crate) struct Typer<'a> {
     pub frames: Vec<Frame<'a>>,
     pub main_offset: usize,
 
+    // For projection pushdown
+    used_fields: FieldSet,
     // Not used for bytecode generation.
     callgraph: Graph<HashSet<(NumTy, Ty)>, ()>,
 }
@@ -596,13 +599,46 @@ impl<'a> Typer<'a> {
             }
             .process_function(&pc.funcs[src_func])?;
         }
+        gen.compute_used_fields();
         Ok(gen)
+    }
+
+    fn compute_used_fields(&mut self) {
+        let mut ufa = pushdown::UsedFieldAnalysis::default();
+        for frame in self.frames.iter() {
+            for bb in frame.cfg.raw_nodes() {
+                for stmt in bb.weight.iter() {
+                    use std::cmp;
+                    // not tracking function calls
+                    match stmt {
+                        Either::Left(LL::StoreConstInt(dst, i)) if *i >= 0 => {
+                            ufa.add_field(*dst, cmp::min(u32::max_value() as i64, *i) as u32)
+                        }
+                        Either::Left(LL::MovInt(dst, src)) => {
+                            ufa.add_dep(/*from_reg=*/ *src, /*to_reg=*/ *dst);
+                        }
+                        Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
+                        Either::Right(HighLevel::Phi(dst, Ty::Int, preds)) => {
+                            for (_, pred_reg) in preds.iter() {
+                                use bytecode::Reg;
+                                ufa.add_dep(
+                                    /*from_reg=*/ Reg::from(*pred_reg),
+                                    /*to_reg=*/ Reg::from(*dst),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        self.used_fields = ufa.solve();
     }
 
     pub(crate) fn get_global_refs(&mut self) -> Vec<HashSet<(NumTy, Ty)>> {
         let mut globals = vec![HashSet::new(); self.frames.len()];
         // First, accumulate all the local and global registers referenced in all the functions.
-        // We need these for LLVM because relevant globals are passed as function parameterse, and
+        // We need these for LLVM because relevant globals are passed as function parameters, and
         // locals need to be allocated explicitly at the top of each function.
         for (i, frame) in self.frames.iter().enumerate() {
             // Manually borrow fields so that  we do not mutably borrow all of `self` in the
@@ -703,9 +739,9 @@ impl<'a, 'b> View<'a, 'b> {
                         let (mut reg, ty) = self.get_reg(val)?;
                         match ty {
                             Ty::Int => {}
-                            Ty::Float => {
+                            Ty::Null | Ty::Float => {
                                 let dst = self.regs.stats.reg_of_ty(Ty::Int);
-                                self.convert(dst, Ty::Int, reg, Ty::Float)?;
+                                self.convert(dst, Ty::Int, reg, ty)?;
                                 reg = dst;
                             }
                             Ty::Str => {

@@ -1,6 +1,6 @@
 //! This module includes some utility functions for running AWK programs from Rust code.
 //!
-//! TODO: make this test-only
+//! TODO: make this test-only and rename it.
 use crate::{
     arena::Arena,
     ast,
@@ -293,7 +293,7 @@ pub(crate) fn run_prog<'a>(
     };
     match String::from_utf8(v) {
         Ok(s) => Ok((s, instrs, type_map)),
-        Err(e) => err!("program produced invalid unicode: {}", e),
+        Err(e) => err!("program produced invalid UTF-8: {}", e),
     }
 }
 
@@ -303,6 +303,7 @@ mod tests {
     use super::*;
     use test::{black_box, Bencher};
 
+    // TODO our unprincipled way of parsing arguments for this macro is making it pretty unwieldy.
     macro_rules! test_program {
         ($desc:ident, $e:expr, $out:expr) => {
             test_program!($desc, $e, $out, @input "", @types [], @out_fmt Escaper::Identity, @csv None);
