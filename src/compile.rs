@@ -531,18 +531,20 @@ impl<'a> Typer<'a> {
         let local_globals = pc.local_globals();
         macro_rules! init_entry {
             ($v:expr, $func_id:expr, $args:expr) => {
-                let res = gen.frames.len() as NumTy;
-                $v.insert(res);
-                let ret_ty = func_tys[&($func_id, $args.clone())];
-                let mut f = Frame::default();
-                f.src_function = $func_id;
-                f.cur_ident = res;
-                gen.frames.push(f);
-                gen.callgraph.add_node(Default::default());
-                gen.func_info.push(FuncInfo {
-                    ret_ty,
-                    arg_tys: $args.clone(),
-                });
+                // If this returns None, it seems to mean that the function is never called.
+                if let Some(ret_ty) = func_tys.get(&($func_id, $args.clone())).cloned() {
+                    let res = gen.frames.len() as NumTy;
+                    $v.insert(res);
+                    let mut f = Frame::default();
+                    f.src_function = $func_id;
+                    f.cur_ident = res;
+                    gen.frames.push(f);
+                    gen.callgraph.add_node(Default::default());
+                    gen.func_info.push(FuncInfo {
+                        ret_ty,
+                        arg_tys: $args.clone(),
+                    });
+                }
             };
         }
         for (func_id, func) in pc.funcs.iter().enumerate() {

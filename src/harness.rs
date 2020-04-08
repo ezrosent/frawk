@@ -517,6 +517,13 @@ print w,z;
     );
 
     test_program!(
+        uncalled_function,
+        r#"function unused() { return 5; }
+        BEGIN { print "x"; }"#,
+        "x\n"
+    );
+
+    test_program!(
         map_ops_simple,
         r#"BEGIN {
         for (i=0; i<10; ++i) m[i]=2*i;
