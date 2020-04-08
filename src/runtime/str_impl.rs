@@ -6,6 +6,7 @@
 /// space, and it also makes for more ergonomic interop with LLVM.
 ///
 /// TODO explain more about what is going on here.
+use crate::pushdown::FieldSet;
 use crate::runtime::{Float, Int};
 
 use regex::Regex;
@@ -291,12 +292,13 @@ impl<'a> Str<'a> {
         unsafe { mem::transmute::<Str<'a>, u128>(self) }
     }
 
-    pub fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>)) {
+    pub fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>), used_fields: &FieldSet) {
         self.with_str(|s| {
             if s.len() == 0 {
                 return;
             }
             let mut prev = 0;
+            let mut cur_field = 1;
             for m in pat.find_iter(s) {
                 // Awk will trim whitespace off the beginning of a line and not create an empty
                 // field in $1, but this doesn't happen for other patterns: leading ','s when FS=,
@@ -305,10 +307,19 @@ impl<'a> Str<'a> {
                     prev = m.end();
                     continue;
                 }
-                push(self.slice(prev, m.start()));
+                if used_fields.get(cur_field) {
+                    push(self.slice(prev, m.start()));
+                } else {
+                    push(Str::default())
+                }
+                cur_field += 1;
                 prev = m.end();
             }
-            push(self.slice(prev, s.len()));
+            if used_fields.get(cur_field) {
+                push(self.slice(prev, s.len()));
+            } else {
+                push(Str::default())
+            }
         });
     }
 
@@ -1093,7 +1104,7 @@ mod tests {
             .skip_while(|x| x.len() == 0)
             .collect::<Vec<_>>();
         let mut got = Vec::new();
-        s.split(&pat, |sub| got.push(sub));
+        s.split(&pat, |sub| got.push(sub), &FieldSet::all());
         let total_got = got.len();
         let total = want.len();
         for (g, w) in got.iter().cloned().zip(want.iter().cloned()) {

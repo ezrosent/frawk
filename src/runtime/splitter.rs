@@ -26,6 +26,7 @@ pub(crate) enum ReaderState {
 
 pub struct RegexLine {
     line: Str<'static>,
+    used_fields: FieldSet,
     fields: LazyVec<Str<'static>>,
     // Has someone assigned into `fields` without us regenerating `line`?
     // AWK lets you do
@@ -42,6 +43,7 @@ impl Default for RegexLine {
     fn default() -> RegexLine {
         RegexLine {
             line: Str::default(),
+            used_fields: FieldSet::all(),
             fields: LazyVec::new(),
             diverged: false,
         }
@@ -51,7 +53,7 @@ impl Default for RegexLine {
 impl RegexLine {
     fn split_if_needed(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<()> {
         if self.fields.len() == 0 {
-            rc.split_regex(pat, &self.line, &mut self.fields)?;
+            rc.split_regex(pat, &self.line, &self.used_fields, &mut self.fields)?;
         }
         Ok(())
     }
@@ -69,6 +71,24 @@ impl<'a> Line<'a> for RegexLine {
         let res = if col == 0 && !self.diverged {
             self.line.clone()
         } else if col == 0 && self.diverged {
+            if self.used_fields != FieldSet::all() {
+                // We projected out fields, but now we have set one of the interior fields and need
+                // to print out $0. That means we have to split $0 in its entirety and then copy
+                // over the fields that were already set.
+                //
+                // This is strictly more work than just reading all of the fields in the first
+                // place; so once we hit this condition we overwrite the used fields with all() so
+                // this doesn't happen again for a while.
+                let old_set = std::mem::replace(&mut self.used_fields, FieldSet::all());
+                let mut new_vec = LazyVec::new();
+                rc.split_regex(pat, &self.line, &self.used_fields, &mut new_vec)?;
+                for i in 0..new_vec.len() {
+                    if old_set.get(i + 1) {
+                        new_vec.insert(i, self.fields.get(i).unwrap_or_else(Str::default));
+                    }
+                }
+                self.fields = new_vec;
+            }
             let res = self.fields.join(&ofs.clone().unmoor());
             self.line = res.clone();
             self.diverged = false;
@@ -100,6 +120,7 @@ impl<'a> Line<'a> for RegexLine {
 pub struct RegexSplitter<R> {
     reader: Reader<R>,
     name: Str<'static>,
+    used_fields: FieldSet,
     // Used to trigger updating FILENAME on the first read.
     start: bool,
 }
@@ -109,12 +130,36 @@ impl<R: Read> LineReader for RegexSplitter<R> {
     fn filename(&self) -> Str<'static> {
         self.name.clone()
     }
+
+    // The _reuse variant not only allows us to reuse the memory in the `fields` vec, it also
+    // allows us to reuse the old FieldSet, which may have been overwritten with all() if the more
+    // expensive join path was taken.
+    fn read_line_reuse<'a, 'b: 'a>(
+        &'b mut self,
+        pat: &Str,
+        rc: &mut super::RegexCache,
+        old: &'a mut Self::Line,
+    ) -> Result<bool> {
+        let start = self.start;
+        if start {
+            old.used_fields = self.used_fields.clone();
+        }
+        self.start = false;
+        old.diverged = false;
+        old.fields.clear();
+        rc.with_regex(pat, |re| {
+            old.line = self.read_line_regex(re);
+        })?;
+        Ok(/* file changed */ start)
+    }
+
     fn read_line(&mut self, pat: &Str, rc: &mut super::RegexCache) -> Result<(bool, Self::Line)> {
         let start = self.start;
         self.start = false;
         let line = rc.with_regex(pat, |re| RegexLine {
             line: self.read_line_regex(re),
             fields: LazyVec::new(),
+            used_fields: self.used_fields.clone(),
             diverged: false,
         })?;
         Ok((/* file changed */ start, line))
@@ -127,6 +172,9 @@ impl<R: Read> LineReader for RegexSplitter<R> {
         self.reader.force_eof();
         false
     }
+    fn set_used_fields(&mut self, used_fields: &FieldSet) {
+        self.used_fields = used_fields.clone();
+    }
 }
 
 impl<R: Read> RegexSplitter<R> {
@@ -134,6 +182,7 @@ impl<R: Read> RegexSplitter<R> {
         RegexSplitter {
             reader: Reader::new(r, chunk_size),
             name: name.into(),
+            used_fields: FieldSet::all(),
             start: true,
         }
     }

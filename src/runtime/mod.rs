@@ -263,9 +263,10 @@ impl RegexCache {
         &mut self,
         pat: &Str,
         s: &Str<'a>,
+        used_fields: &FieldSet,
         v: &mut LazyVec<Str<'a>>,
     ) -> Result<()> {
-        self.with_regex(pat, |re| s.split(re, |s| v.push(s)))
+        self.with_regex(pat, |re| s.split(re, |s| v.push(s), used_fields))
     }
 
     pub(crate) fn split_regex_intmap<'a>(
@@ -276,10 +277,14 @@ impl RegexCache {
     ) -> Result<()> {
         let mut i = 0i64;
         self.with_regex(pat, |re| {
-            s.split(re, |s| {
-                i += 1;
-                m.insert(i, s);
-            })
+            s.split(
+                re,
+                |s| {
+                    i += 1;
+                    m.insert(i, s);
+                },
+                &FieldSet::all(),
+            )
         })
     }
 
@@ -291,10 +296,14 @@ impl RegexCache {
     ) -> Result<()> {
         let mut i = 0i64;
         self.with_regex(pat, |re| {
-            s.split(re, |s| {
-                i += 1;
-                m.insert(convert::<i64, Str<'_>>(i), s);
-            })
+            s.split(
+                re,
+                |s| {
+                    i += 1;
+                    m.insert(convert::<i64, Str<'_>>(i), s);
+                },
+                &FieldSet::all(),
+            )
         })?;
         Ok(())
     }
