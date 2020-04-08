@@ -8,6 +8,7 @@ use crate::bytecode::{self, Accum};
 use crate::common::{Either, NodeIx, NumTy, Result};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
+use crate::pushdown::FieldSet;
 use crate::runtime;
 
 use crate::smallvec::{self, smallvec};
@@ -302,8 +303,9 @@ impl<'a, 'b> Generator<'a, 'b> {
         &mut self,
         stdin: impl IntoRuntime,
         writer: impl std::io::Write + 'static,
+        used_fields: &FieldSet,
     ) -> Result<()> {
-        let mut rt = stdin.into_runtime(writer);
+        let mut rt = stdin.into_runtime(writer, used_fields);
         self.gen_main()?;
         self.verify()?;
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));

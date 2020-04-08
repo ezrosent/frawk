@@ -12,6 +12,7 @@ use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 
 use crate::common::Result;
+use crate::pushdown::FieldSet;
 use crate::runtime::str_impl::{Buf, Str};
 
 #[derive(Default, Debug)]
@@ -26,13 +27,16 @@ pub struct Offsets {
 #[derive(Default, Clone, Debug)]
 pub struct Line {
     raw: Str<'static>,
+    // Why is len a separate value from raw? We don't always populate raw, but we need to report
+    // line lengths to maintain some invariants from the Reader type in splitter.rs.
+    len: usize,
     fields: Vec<Str<'static>>,
     partial: Str<'static>,
 }
 
 impl Line {
     pub fn len(&self) -> usize {
-        self.raw.len()
+        self.len
     }
 }
 
@@ -79,10 +83,15 @@ impl Line {
         let partial = mem::replace(&mut self.partial, Str::default());
         self.fields.push(partial);
     }
+    pub fn promote_null(&mut self) {
+        debug_assert_eq!(self.partial, Str::default());
+        self.fields.push(Str::default());
+    }
     pub fn clear(&mut self) {
         self.fields.clear();
         self.partial = Str::default();
         self.raw = Str::default();
+        self.len = 0;
     }
 }
 
@@ -103,6 +112,7 @@ pub struct Stepper<'a> {
     pub prev_ix: usize,
     pub st: State,
     pub line: &'a mut Line,
+    pub field_set: FieldSet,
 }
 
 impl<'a> Stepper<'a> {
@@ -120,14 +130,20 @@ impl<'a> Stepper<'a> {
         self.prev_ix = i + 1;
     }
 
+    pub fn promote_null(&mut self) {
+        self.line.promote_null();
+    }
     pub fn promote(&mut self) {
         self.line.promote();
     }
 
     fn get(&mut self, line_start: usize, j: usize, cur: usize) -> usize {
         self.off.start = cur;
-        let line = mem::replace(&mut self.line.raw, Str::default());
-        self.line.raw = Str::concat(line, unsafe { self.buf.slice_to_str(line_start, j) });
+        if self.field_set.get(0) {
+            let line = mem::replace(&mut self.line.raw, Str::default());
+            self.line.raw = Str::concat(line, unsafe { self.buf.slice_to_str(line_start, j) });
+        }
+        self.line.len += j - line_start;
         self.prev_ix
     }
 
@@ -161,7 +177,34 @@ impl<'a> Stepper<'a> {
         }
         'outer: loop {
             match self.st {
-                State::Init => loop {
+                State::Init => 'init: loop {
+                    // First, skip over any unused fields.
+                    let cur_field = self.line.fields.len() + 1;
+                    if !self.field_set.get(cur_field) {
+                        loop {
+                            if cur == self.off.fields.len() {
+                                self.prev_ix = bs.len() + 1;
+                                return self.get(line_start, bs.len(), cur);
+                            }
+                            let ix = *self.off.fields.get_unchecked(cur) as usize;
+                            cur += 1;
+                            match *bs.get_unchecked(ix) {
+                                CR | QUOTE | BS => {}
+                                NL => {
+                                    self.prev_ix = ix + 1;
+                                    self.promote_null();
+                                    self.st = State::Done;
+                                    return self.get(line_start, ix, cur);
+                                }
+                                _x => {
+                                    debug_assert_eq!(_x, sep);
+                                    self.prev_ix = ix + 1;
+                                    self.promote_null();
+                                    continue 'init;
+                                }
+                            }
+                        }
+                    }
                     // Common case: Loop through records until the end of the line.
                     let ix = get_next!();
                     match *bs.get_unchecked(ix) {

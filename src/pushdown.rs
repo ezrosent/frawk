@@ -21,10 +21,14 @@ impl Default for FieldSet {
     }
 }
 
-const MAX_INDEX: u32 = 63;
+// A note on the type we use for indexes: Why usize when shl, etc. take u32? The main clients of
+// this library will be field-splitting routines, which will often be passing in counters or vector
+// lengths. We may as well handle the (however unlikely to be exercised) overflow logic here rather
+// than up the stack, in more complicated code, in multiple locations.
+const MAX_INDEX: usize = 63;
 
 impl FieldSet {
-    pub fn singleton(index: u32) -> FieldSet {
+    pub fn singleton(index: usize) -> FieldSet {
         if index > MAX_INDEX {
             Self::all()
         } else {
@@ -43,11 +47,11 @@ impl FieldSet {
     pub fn union(&mut self, other: &FieldSet) {
         self.0 = self.0 | other.0;
     }
-    pub fn get(&self, index: u32) -> bool {
-        (1u64.wrapping_shl(index) & self.0) != 0
+    pub fn get(&self, index: usize) -> bool {
+        (index > MAX_INDEX) || (1u64 << (index as u32)) & self.0 != 0
     }
-    pub fn set(&mut self, index: u32) {
-        if index < MAX_INDEX {
+    pub fn set(&mut self, index: usize) {
+        if index <= MAX_INDEX {
             self.0 |= 1u64 << index;
         } else {
             *self = Self::all();
@@ -94,7 +98,7 @@ impl UsedFieldAnalysis {
             }
         }
     }
-    pub fn add_field(&mut self, reg: Reg<Int>, index: u32) {
+    pub fn add_field(&mut self, reg: Reg<Int>, index: usize) {
         use hashbrown::hash_map::Entry;
         match self.regs.entry(reg) {
             Entry::Occupied(o) => self

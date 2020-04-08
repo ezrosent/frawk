@@ -146,9 +146,10 @@ pub(crate) fn run_llvm<'a>(
 ) -> Result<()> {
     use crate::llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
+    let used_fields = typer.used_fields.clone();
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main(reader, writer)
+        gen.run_main(reader, writer, &used_fields)
     }
 }
 
@@ -373,6 +374,7 @@ impl<'a> Typer<'a> {
             |ty| self.regs.stats.count(ty) as usize,
             reader,
             writer,
+            &self.used_fields,
         ))
     }
     fn to_bytecode(&mut self) -> Result<Vec<Vec<LL<'a>>>> {
@@ -610,11 +612,10 @@ impl<'a> Typer<'a> {
         for frame in self.frames.iter() {
             for bb in frame.cfg.raw_nodes() {
                 for stmt in bb.weight.iter() {
-                    use std::cmp;
                     // not tracking function calls
                     match stmt {
                         Either::Left(LL::StoreConstInt(dst, i)) if *i >= 0 => {
-                            ufa.add_field(*dst, cmp::min(u32::max_value() as i64, *i) as u32)
+                            ufa.add_field(*dst, *i as usize)
                         }
                         Either::Left(LL::MovInt(dst, src)) => {
                             ufa.add_dep(/*from_reg=*/ *src, /*to_reg=*/ *dst);

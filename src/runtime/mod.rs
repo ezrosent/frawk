@@ -15,8 +15,10 @@ pub mod splitter;
 pub mod str_impl;
 pub mod utf8;
 
+use crate::pushdown::FieldSet;
 use splitter::RegexSplitter;
 
+// TODO: remove the pub use for Variables here.
 pub(crate) use crate::builtins::Variables;
 pub(crate) use float_parse::{strtod, strtoi};
 pub(crate) use printf::FormatArg;
@@ -49,9 +51,7 @@ pub(crate) trait LineReader {
     }
     fn read_state(&self) -> i64;
     fn next_file(&mut self) -> bool;
-    // read_line gets a reference to FNR?, Filename?
-    // Next: design `next` in terms of an annotated loop. next NextFile could be an instruction,
-    // followed by next (and banned inside UDFs)
+    fn set_used_fields(&mut self, _used_fields: &crate::pushdown::FieldSet) {}
 }
 
 pub struct ChainedReader<R>(Vec<R>);
@@ -116,6 +116,11 @@ where
                 true
             }
             None => false,
+        }
+    }
+    fn set_used_fields(&mut self, used_fields: &FieldSet) {
+        for i in self.0.iter_mut() {
+            i.set_used_fields(used_fields);
         }
     }
 }
@@ -411,11 +416,13 @@ impl<LR: LineReader> FileRead<LR> {
     pub(crate) fn close(&mut self, path: &Str) {
         self.files.remove(path);
     }
-    pub(crate) fn new(stdin: LR) -> FileRead<LR> {
-        FileRead {
+    pub(crate) fn new(stdin: LR, used_fields: &FieldSet) -> FileRead<LR> {
+        let mut res = FileRead {
             files: Default::default(),
             stdin,
-        }
+        };
+        res.stdin.set_used_fields(used_fields);
+        res
     }
     pub(crate) fn stdin_filename(&self) -> Str<'static> {
         self.stdin.filename()

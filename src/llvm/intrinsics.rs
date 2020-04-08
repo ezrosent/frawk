@@ -3,6 +3,7 @@ use crate::builtins::Variable;
 use crate::common::Either;
 use crate::compile::Ty;
 use crate::libc::c_void;
+use crate::pushdown::FieldSet;
 use crate::runtime::{
     self,
     printf::{printf, FormatArg},
@@ -66,14 +67,22 @@ type InputData = Either<
 >;
 
 pub(crate) trait IntoRuntime {
-    fn into_runtime<'a>(self, stdout: impl io::Write + 'static) -> Runtime<'a>;
+    fn into_runtime<'a>(
+        self,
+        stdout: impl io::Write + 'static,
+        used_fields: &FieldSet,
+    ) -> Runtime<'a>;
 }
 
 impl IntoRuntime for ChainedReader<CSVReader<Box<dyn io::Read>>> {
-    fn into_runtime<'a>(self, stdout: impl io::Write + 'static) -> Runtime<'a> {
+    fn into_runtime<'a>(
+        self,
+        stdout: impl io::Write + 'static,
+        used_fields: &FieldSet,
+    ) -> Runtime<'a> {
         Runtime {
             vars: Default::default(),
-            input_data: Either::Right((Default::default(), FileRead::new(self))),
+            input_data: Either::Right((Default::default(), FileRead::new(self, used_fields))),
             regexes: Default::default(),
             write_files: FileWrite::new(stdout),
         }
@@ -81,10 +90,14 @@ impl IntoRuntime for ChainedReader<CSVReader<Box<dyn io::Read>>> {
 }
 
 impl IntoRuntime for ChainedReader<RegexSplitter<Box<dyn io::Read>>> {
-    fn into_runtime<'a>(self, stdout: impl io::Write + 'static) -> Runtime<'a> {
+    fn into_runtime<'a>(
+        self,
+        stdout: impl io::Write + 'static,
+        used_fields: &FieldSet,
+    ) -> Runtime<'a> {
         Runtime {
             vars: Default::default(),
-            input_data: Either::Left((Default::default(), FileRead::new(self))),
+            input_data: Either::Left((Default::default(), FileRead::new(self, used_fields))),
             regexes: Default::default(),
             write_files: FileWrite::new(stdout),
         }

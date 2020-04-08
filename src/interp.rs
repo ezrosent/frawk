@@ -3,6 +3,7 @@ use crate::bytecode::{Get, Instr, Label, Pop, Reg};
 use crate::builtins::Variable;
 use crate::common::{NumTy, Result};
 use crate::compile::{self, Ty};
+use crate::pushdown::FieldSet;
 use crate::runtime::{self, Float, Int, Line, LineReader, Str};
 
 use std::cmp;
@@ -62,6 +63,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         regs: impl Fn(compile::Ty) -> usize,
         stdin: LR,
         stdout: impl std::io::Write + 'static,
+        used_fields: &FieldSet,
     ) -> Self {
         use compile::Ty::*;
         Interp {
@@ -76,7 +78,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             line: Default::default(),
             regexes: Default::default(),
             write_files: runtime::FileWrite::new(stdout),
-            read_files: runtime::FileRead::new(stdin),
+            read_files: runtime::FileRead::new(stdin, used_fields),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),

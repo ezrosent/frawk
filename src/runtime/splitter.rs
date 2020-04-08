@@ -8,6 +8,7 @@ use super::str_impl::{Buf, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
 use super::{Int, LazyVec, Line, LineReader, RegexCache};
 use crate::common::Result;
+use crate::pushdown::FieldSet;
 
 use regex::Regex;
 use smallvec::SmallVec;
@@ -211,6 +212,7 @@ pub struct CSVReader<R> {
     // Used to trigger updating FILENAME on the first read.
     start: bool,
     ifmt: csv::InputFormat,
+    field_set: FieldSet,
 
     // This is a function pointer because we query the preferred instruction set at construction
     // time.
@@ -246,6 +248,9 @@ impl<R: Read> LineReader for CSVReader<R> {
         self.inner.force_eof();
         false
     }
+    fn set_used_fields(&mut self, field_set: &FieldSet) {
+        self.field_set = field_set.clone();
+    }
 }
 
 // TODO rename as it handles CSV and TSV
@@ -262,6 +267,7 @@ impl<R: Read> CSVReader<R> {
             prev_iter_inside_quote: 0,
             prev_iter_cr_end: 0,
             find_indexes: csv::get_find_indexes(ifmt),
+            field_set: FieldSet::all(),
             ifmt,
         }
     }
@@ -289,12 +295,12 @@ impl<R: Read> CSVReader<R> {
         line: &'a mut csv::Line,
     ) -> csv::Stepper<'a> {
         csv::Stepper {
-            // TODO get rid of this
             buf: &self.inner.buf,
             buf_len: self.inner.end,
             off: &mut self.cur_offsets,
             prev_ix: self.prev_ix,
             ifmt: self.ifmt,
+            field_set: self.field_set.clone(),
             line,
             st,
         }
