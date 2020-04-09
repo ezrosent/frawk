@@ -1,7 +1,66 @@
 /// Support for basic "projection pushdown" for LineReader types.
 ///
-/// N.B this is not "pushdown" in the sense of  "pushdown control flow analysis", just in the sense
+/// NB this is not "pushdown" in the sense of  "pushdown control flow analysis", just in the sense
 /// of pushing down projections of relevant fields from the input storage.
+///
+/// Short scripts can spend a surprising amount of time just slicing and escaping strings for each
+/// input record; this module provides the core components of a static analysis that constructs a
+/// conservative representation of all fields referenced in a given program. By "conservative" we
+/// mean taht it will sometimes return more fields than a program actually uses, but it will never
+/// produce false negatives.
+///
+/// # Overview of the analysis
+///
+/// The basic idea is to keep track of every GetCol instruction and accumulate all of the numbers
+/// passed to that operation. In the IR, GetCol takes a register, so we need to be able to guess
+/// the numbers to which a given register corresponds. To do that, we track all StoreConstInt,
+/// MovInt and Phi instructions of the appropriate type. We place all of these registers in a graph
+/// where an edge from node X to node Y indicates that Y can take on at least any of the values
+/// that X can. Schematically, with constants in <angle brackets>
+///
+///     StoreConstInt(dst, c) : <c> =>  dst
+///     MovInt(dst, src) : src => dst
+///     Phi(dst, Int, [pred_i...]) : ... pred_i-1 => dst, pred_i => dst ...
+///
+/// This graph corresponds to a set of (recursive) equation of the form
+///
+/// Fields(<c>) = {c}
+/// Fields(node) = union_{n s.t. (n, node) is an edge} Fields(n)
+///
+/// By convention, empty unions produce the empty set {}. Starting off all non-constant nodes at
+/// the empty set and then iterating this rule will converge to the least fixed point of these
+/// equations as the set of possible constants is finite, sets ordered by inclusion form a lattice,
+/// and union is monotone on that lattice. (Apologies if I misstated something there).
+///
+/// Then, all we need to do is to union all of the field sets corresponding to registers passed to
+/// GetCol! Well, not quite. The rules for generating equations don't cover more complex operations
+/// like math, or functions. Suppose we had the following sequence:
+///
+///     GetCol(1, <2>);
+///     StrToInt(0, 1);
+///     GetCol(dst, 0)
+///
+/// Which corresponds roughly to the AWK snippet `$$2`, or "the field corresponding to the value of
+/// the second column." It's pretty clear that we cannot predict this value ahead of time, but our
+/// rules do not generate any constraints for the StrToInt instruction, or for any number of other
+/// instructions that can assign to integer registers. If we apply the algorithm as written,
+/// register 0 will have no incoming edges, and so will contribute no fields to the dst register,
+/// thereby producing false negatives.
+///
+/// The most direct solution here would be to contribute "full sets" (sets that contain all
+/// possible fields --- FieldSet::all below) to any register stored to by an instruction other than
+/// StoreConstInt, MovInt, or Phi. This would work, but it would require a lot more code, and we
+/// would have to continually update the analysis code as we added or removed instructions from the
+/// bytecode.
+///
+/// Instead, we do this implicitly by running the algorithm twice: the first time as is, the second
+/// time by replacing any empty nodes with no incoming edges with full sets. The reasoning here is
+/// that we will only produce nodes without incoming edges if we have a constant, or if they were
+/// the result of some "black box" instruction like StrToInt that we do not want to analyze. In the
+/// former case, there will always be at least one field present in the given node; that means any
+/// remaining nodes should be treated as potentially representing any arbitrary field number. Once
+/// we "flip" these empty nodes to full sets, we re-run the algorithm and read the result out of
+/// the GetCol registers.
 use std::fmt;
 
 use crate::bytecode::Reg;
@@ -12,6 +71,11 @@ use hashbrown::HashMap;
 use petgraph::Direction;
 use smallvec::SmallVec;
 
+// Most AWK scripts do not use more than 63 fields, so we represent our sets of used fields
+// "lossy bitsets" that can precisely represent subsets of [0, 63] but otherwise just say "yes" to
+// all queries. This is a lowsy choice for a general bitset type, but it's a sound and efficient
+// choice for this analysis, where we're free to overapproximate the fields that are used by a
+// particular program.
 #[derive(Clone, PartialEq, Eq)]
 pub struct FieldSet(u64);
 
@@ -25,6 +89,8 @@ impl Default for FieldSet {
 // this library will be field-splitting routines, which will often be passing in counters or vector
 // lengths. We may as well handle the (however unlikely to be exercised) overflow logic here rather
 // than up the stack, in more complicated code, in multiple locations.
+//
+// TODO: this could probably be 64, not that it matters a great deal.
 const MAX_INDEX: usize = 63;
 
 impl FieldSet {
@@ -69,16 +135,6 @@ impl fmt::Debug for FieldSet {
     }
 }
 
-// Good to think about this in two "stages":
-// - in the initialization phase we can't guarantee the order in which we will add nodes to the
-//   graph, so we'll start them off as empty sets and then fill nodes in as we encounter them.
-// - Before transitioning to the solving phase, we find all the empty sets and replace them with
-//   full sets.
-// - Then we enter the solving phase, where we just iteratively union nodes with their
-//   dependencies (and themselves)
-// This trick only works because no node will actually get an empty set to start with. The only way
-// to get an empty set is to have no GetCol instructions at all.
-
 #[derive(Default)]
 pub struct UsedFieldAnalysis {
     assign_graph: Graph<FieldSet, ()>,
@@ -87,6 +143,7 @@ pub struct UsedFieldAnalysis {
 }
 
 impl UsedFieldAnalysis {
+    // Get the node corresponding to a given regiter, or allocate a fresh one with an empty set.
     fn get_node(&mut self, reg: Reg<Int>) -> NodeIx {
         use hashbrown::hash_map::Entry;
         match self.regs.entry(reg) {
@@ -98,6 +155,8 @@ impl UsedFieldAnalysis {
             }
         }
     }
+
+    // Add a node with a constant: these correspond to the StoreConstInt nodes mentioned above.
     pub fn add_field(&mut self, reg: Reg<Int>, index: usize) {
         use hashbrown::hash_map::Entry;
         match self.regs.entry(reg) {
@@ -130,9 +189,14 @@ impl UsedFieldAnalysis {
         res
     }
     fn solve_internal(&mut self) {
+        // The core solving portion of the analysis. Start with a full worklist.
         let mut wl = WorkList::default();
         wl.extend((0..self.assign_graph.node_count()).map(|x| NodeIx::new(x)));
 
+        // We will do the core iteration twice: once with empties once with empty sets flipped to
+        // full.
+        //
+        // TODO We could probably just do a single pass and detect empty nodes initially.
         let mut last = false;
         loop {
             while let Some(n) = wl.pop() {
@@ -153,6 +217,10 @@ impl UsedFieldAnalysis {
                 break;
             }
             last = true;
+
+            // Flip "black box" nodes to full. The module comment talks about these nodes as though
+            // they are just the "root nodes" with no incoming edges. Here we take any empty nodes.
+            // The two approaches would appear to be equivalent.
             for n in self.assign_graph.node_indices() {
                 let redo = {
                     let w = self.assign_graph.node_weight_mut(n).unwrap();

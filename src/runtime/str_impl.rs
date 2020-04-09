@@ -758,18 +758,11 @@ impl<'a> From<Int> for Str<'a> {
 impl<'a> From<Float> for Str<'a> {
     fn from(f: Float) -> Str<'a> {
         // Per ryu's documentation, we will only ever use 24 bytes when printing an f64.
-        if f.is_finite() {
-            // TODO: fix this. Read it into a stack buffer, then write it in.
-            let mut ryubuf = ryu::Buffer::new();
-            let s = ryubuf.format(f);
-            let mut b = DynamicBuf::new(s.len());
-            b.write(s.as_bytes()).unwrap();
-            unsafe { b.into_str() }
-        } else {
-            let mut b = DynamicBuf::new(0);
-            write!(&mut b, "{}", f).unwrap();
-            unsafe { b.into_str() }
-        }
+        let mut ryubuf = ryu::Buffer::new();
+        let s = ryubuf.format(f);
+        let mut b = DynamicBuf::new(s.len());
+        b.write(s.as_bytes()).unwrap();
+        unsafe { b.into_str() }
     }
 }
 
