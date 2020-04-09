@@ -1051,7 +1051,9 @@ impl Buf {
 
 #[cfg(test)]
 mod tests {
+    extern crate test;
     use super::*;
+    use test::{black_box, Bencher};
 
     #[test]
     fn inline_basics() {
@@ -1177,6 +1179,64 @@ And this is the second part"#
         let (s7, subbed) = s6.subst_first(&re2, &s1);
         s7.with_str(|s| assert_eq!(s, "String number one substituted into another xxyz"));
         assert!(subbed);
+    }
+
+    #[bench]
+    fn bench_get_bytes_drop_empty(b: &mut Bencher) {
+        b.iter(|| {
+            let s = Str::default();
+            black_box(s.get_bytes());
+        });
+    }
+
+    #[bench]
+    fn bench_get_bytes_drop_literal(b: &mut Bencher) {
+        // Arena will align the string properly.
+        use crate::arena::Arena;
+        let a = Arena::default();
+        let literal = a.alloc_str("this is a string that is longer than the maximum inline size");
+        b.iter(|| {
+            let s: Str = literal.into();
+            black_box(s.get_bytes());
+        });
+    }
+
+    #[bench]
+    fn bench_get_bytes_drop_inline(b: &mut Bencher) {
+        let literal = "AAAAAAAA";
+        b.iter(|| {
+            let s: Str = literal.into();
+            black_box(s.get_bytes());
+        });
+    }
+
+    #[bench]
+    fn bench_substr_inline(b: &mut Bencher) {
+        let literal = "AAAAAAAA";
+        let mut i = 0;
+        let len = literal.len();
+        let s: Str = literal.into();
+        b.iter(|| {
+            i &= 7;
+            black_box(s.slice(i, len));
+            i += 1;
+        });
+    }
+
+    #[bench]
+    fn bench_substr_boxed(b: &mut Bencher) {
+        // Write 4KiB of As
+        let mut dbuf = DynamicBuf::new(4096);
+        let bs: Vec<u8> = (0..4096).map(|_| 'A' as u8).collect();
+        dbuf.write(&bs[..]).unwrap();
+        let s = unsafe { dbuf.into_str() };
+        let mut i = 0;
+        let len = 4096;
+        b.iter(|| {
+            i &= 4095;
+            black_box(s.slice(i, len));
+            i += 1;
+        });
     }
 }
 
