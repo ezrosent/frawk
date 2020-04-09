@@ -11,6 +11,7 @@ pub mod cfg;
 pub mod compile;
 mod display;
 pub mod dom;
+#[cfg(test)]
 pub mod harness;
 pub mod interp;
 pub mod lexer;

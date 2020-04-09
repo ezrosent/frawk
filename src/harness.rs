@@ -9,6 +9,7 @@ use crate::{
     common::Result,
     compile, lexer, llvm,
     parsing::syntax,
+    pushdown::FieldSet,
     runtime::{
         self,
         csv::InputFormat,
@@ -34,7 +35,6 @@ impl io::Write for FakeStdout {
     }
 }
 
-#[cfg(test)]
 impl FakeStdout {
     fn clear(&self) {
         self.0.borrow_mut().truncate(0);
@@ -78,7 +78,6 @@ const _PRINT_DEBUG_INFO: bool = false;
 
 type Prog<'a> = &'a ast::Prog<'a, 'a, &'a str>;
 
-#[allow(unused)]
 type ProgResult<'a> = Result<(
     String,                        /* output */
     String,                        /* debug info */
@@ -87,7 +86,6 @@ type ProgResult<'a> = Result<(
 
 const LLVM_CONFIG: llvm::Config = llvm::Config { opt_level: 3 };
 
-#[allow(unused)]
 pub(crate) fn run_program<'a>(
     a: &'a Arena,
     prog: &str,
@@ -99,7 +97,6 @@ pub(crate) fn run_program<'a>(
     run_prog(a, stmt, stdin, esc, ifmt)
 }
 
-#[allow(unused)]
 pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a, esc)?;
@@ -107,22 +104,19 @@ pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
     compile::dump_llvm(&mut ctx, LLVM_CONFIG)
 }
 
-#[allow(unused)]
 pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a, esc)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
-    compile::_compile_llvm(&mut ctx, LLVM_CONFIG)
+    compile::compile_llvm(&mut ctx, LLVM_CONFIG)
 }
 
-#[allow(unused)]
 pub(crate) fn run_llvm(
     prog: &str,
     stdin: impl Into<String>,
     esc: Escaper,
     ifmt: Option<InputFormat>,
 ) -> Result<String> {
-    use std::iter::once;
     let a = Arena::default();
     let stmt = parse_program(prog, &a, esc)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
@@ -157,12 +151,19 @@ pub(crate) fn run_llvm(
     }
 }
 
-#[allow(unused)]
 pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>, esc: Escaper) -> Result<String> {
     let a = Arena::default();
     let stmt = parse_program(prog, &a, esc)?;
     let (mut interp, stdout) = compile_program(&a, stmt, stdin, esc)?;
     run_prog_nodebug(&mut interp, stdout)
+}
+
+pub(crate) fn used_fields(prog: &str) -> Result<FieldSet> {
+    let a = Arena::default();
+    let esc = Escaper::Identity;
+    let stmt = parse_program(prog, &a, esc)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+    compile::used_fields(&mut ctx)
 }
 
 pub(crate) fn parse_program<'a, 'inp, 'outer>(
@@ -297,7 +298,6 @@ pub(crate) fn run_prog<'a>(
     }
 }
 
-#[cfg(test)]
 mod tests {
     extern crate test;
     use super::*;
@@ -381,6 +381,19 @@ mod tests {
                 @types [], @out_fmt Escaper::Identity, @csv Some(InputFormat::TSV)
             );
         };
+    }
+
+    #[test]
+    fn basic_used_fields() {
+        let p1 = r#"{ print $0; x=1; if (z) { x=3 } else { x=4 }; print $x, $5; }"#;
+        let mut s1 = FieldSet::singleton(0);
+        s1.set(3);
+        s1.set(4);
+        s1.set(5);
+        assert_eq!(s1, used_fields(p1).unwrap());
+
+        let p2 = r#"{ for (i=1; i<=NF; i++) { print $i; }; }"#;
+        assert_eq!(FieldSet::all(), used_fields(p2).unwrap());
     }
 
     test_program!(

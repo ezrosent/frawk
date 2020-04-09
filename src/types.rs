@@ -1,3 +1,6 @@
+/// Type inference for programs in untyped SSA form (i.e. the output of the cfg module).
+///
+/// TODO: explain what this module does.
 use crate::builtins;
 use crate::cfg::{self, Function, Ident, ProgramContext};
 use crate::common::{self, NodeIx, NumTy, Result};
@@ -7,28 +10,7 @@ use hashbrown::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
-// TODO: rationalize null handling. We want to infer that all 0-subscripted variables are null, and
-// use that information when doing type deduction. Conversions at he bytecode level just insert
-// constants. We want to make sure that
-// { SUM += 1} END {print SUM}
-// has SUM as an integer though.
-//  start:
-//  body:
-//  SUM_1 = phi [ SUM_0: start, SUM_2: body]
-//  SUM_2 = SUM_1 + 1;
-//  jmp body;
-// Seems like SUM_0 cannot be treated as a string here... That makes this difficult because we want
-// to also handle
-// function x(y) { if (y) { return 1;} }
-// print x(0),x(1) # " 1"
-// Which implies that we can't just coerce this to a phi node. What matters is the "use" of a
-// variable down the line. Perhaps we can encode that as some kind of constraint. For now, let's
-// proceed with the Integer semantics (breaking some uses of `x` for the moment).
-//
-// Yes. I think we will eventually have to compute an inductive IsPrinted relation on certain
-// types, and treat them differently when doing phi [ NULL, INT ]. Distinguishing Null from None
-// will help here, at least form a debugability perspective (None means we just haven't gotten to
-// the variable yet, Null means it was really never written to).
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum BaseTy {
     Null,

@@ -126,7 +126,8 @@ pub(crate) fn dump_llvm<'a>(
     }
 }
 
-pub(crate) fn _compile_llvm<'a>(
+#[cfg(test)]
+pub(crate) fn compile_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     cfg: llvm::Config,
 ) -> Result<()> {
@@ -134,8 +135,13 @@ pub(crate) fn _compile_llvm<'a>(
     let mut typer = Typer::init_from_ctx(ctx)?;
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
-        gen._compile_main()
+        gen.compile_main()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn used_fields<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<FieldSet> {
+    Ok(Typer::init_from_ctx(ctx)?.used_fields)
 }
 
 pub(crate) fn run_llvm<'a>(
@@ -787,7 +793,13 @@ impl<'a, 'b> View<'a, 'b> {
         let ((res_reg, res_ty), status) = if id.is_global(self.local_globals) {
             (self.regs.globals[id], RegStatus::Global)
         } else {
-            (self.frame.locals[id], RegStatus::Local)
+            match self.frame.locals.get(id) {
+                Some(x) => (x.clone(), RegStatus::Local),
+                // In some degenerate cases, we'll run into an uninitialized local. These are
+                // always null.
+                None if id.sub == 0 => ((NULL_REG, Ty::Null), RegStatus::Local),
+                None => panic!("uninitialized variable, malformed IR!"),
+            }
         };
         (res_reg, res_ty, status)
     }

@@ -292,7 +292,8 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     // For benchmarking.
-    pub unsafe fn _compile_main(&mut self) -> Result<()> {
+    #[cfg(test)]
+    pub unsafe fn compile_main(&mut self) -> Result<()> {
         self.gen_main()?;
         self.verify()?;
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
