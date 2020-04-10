@@ -1,66 +1,66 @@
-/// Support for basic "projection pushdown" for LineReader types.
-///
-/// NB this is not "pushdown" in the sense of  "pushdown control flow analysis", just in the sense
-/// of pushing down projections of relevant fields from the input storage.
-///
-/// Short scripts can spend a surprising amount of time just slicing and escaping strings for each
-/// input record; this module provides the core components of a static analysis that constructs a
-/// conservative representation of all fields referenced in a given program. By "conservative" we
-/// mean taht it will sometimes return more fields than a program actually uses, but it will never
-/// produce false negatives.
-///
-/// # Overview of the analysis
-///
-/// The basic idea is to keep track of every GetCol instruction and accumulate all of the numbers
-/// passed to that operation. In the IR, GetCol takes a register, so we need to be able to guess
-/// the numbers to which a given register corresponds. To do that, we track all StoreConstInt,
-/// MovInt and Phi instructions of the appropriate type. We place all of these registers in a graph
-/// where an edge from node X to node Y indicates that Y can take on at least any of the values
-/// that X can. Schematically, with constants in <angle brackets>
-///
-///     StoreConstInt(dst, c) : <c> =>  dst
-///     MovInt(dst, src) : src => dst
-///     Phi(dst, Int, [pred_i...]) : ... pred_i-1 => dst, pred_i => dst ...
-///
-/// This graph corresponds to a set of (recursive) equation of the form
-///
-/// Fields(<c>) = {c}
-/// Fields(node) = union_{n s.t. (n, node) is an edge} Fields(n)
-///
-/// By convention, empty unions produce the empty set {}. Starting off all non-constant nodes at
-/// the empty set and then iterating this rule will converge to the least fixed point of these
-/// equations as the set of possible constants is finite, sets ordered by inclusion form a lattice,
-/// and union is monotone on that lattice. (Apologies if I misstated something there).
-///
-/// Then, all we need to do is to union all of the field sets corresponding to registers passed to
-/// GetCol! Well, not quite. The rules for generating equations don't cover more complex operations
-/// like math, or functions. Suppose we had the following sequence:
-///
-///     GetCol(1, <2>);
-///     StrToInt(0, 1);
-///     GetCol(dst, 0)
-///
-/// Which corresponds roughly to the AWK snippet `$$2`, or "the field corresponding to the value of
-/// the second column." It's pretty clear that we cannot predict this value ahead of time, but our
-/// rules do not generate any constraints for the StrToInt instruction, or for any number of other
-/// instructions that can assign to integer registers. If we apply the algorithm as written,
-/// register 0 will have no incoming edges, and so will contribute no fields to the dst register,
-/// thereby producing false negatives.
-///
-/// The most direct solution here would be to contribute "full sets" (sets that contain all
-/// possible fields --- FieldSet::all below) to any register stored to by an instruction other than
-/// StoreConstInt, MovInt, or Phi. This would work, but it would require a lot more code, and we
-/// would have to continually update the analysis code as we added or removed instructions from the
-/// bytecode.
-///
-/// Instead, we do this implicitly by running the algorithm twice: the first time as is, the second
-/// time by replacing any empty nodes with no incoming edges with full sets. The reasoning here is
-/// that we will only produce nodes without incoming edges if we have a constant, or if they were
-/// the result of some "black box" instruction like StrToInt that we do not want to analyze. In the
-/// former case, there will always be at least one field present in the given node; that means any
-/// remaining nodes should be treated as potentially representing any arbitrary field number. Once
-/// we "flip" these empty nodes to full sets, we re-run the algorithm and read the result out of
-/// the GetCol registers.
+//! Support for basic "projection pushdown" for LineReader types.
+//!
+//! NB this is not "pushdown" in the sense of  "pushdown control flow analysis", just in the sense
+//! of pushing down projections of relevant fields from the input storage.
+//!
+//! Short scripts can spend a surprising amount of time just slicing and escaping strings for each
+//! input record; this module provides the core components of a static analysis that constructs a
+//! conservative representation of all fields referenced in a given program. By "conservative" we
+//! mean taht it will sometimes return more fields than a program actually uses, but it will never
+//! produce false negatives.
+//!
+//! # Overview of the analysis
+//!
+//! The basic idea is to keep track of every GetCol instruction and accumulate all of the numbers
+//! passed to that operation. In the IR, GetCol takes a register, so we need to be able to guess
+//! the numbers to which a given register corresponds. To do that, we track all StoreConstInt,
+//! MovInt and Phi instructions of the appropriate type. We place all of these registers in a graph
+//! where an edge from node X to node Y indicates that Y can take on at least any of the values
+//! that X can. Schematically, with constants in <angle brackets>
+//!
+//!     StoreConstInt(dst, c) : <c> =>  dst
+//!     MovInt(dst, src) : src => dst
+//!     Phi(dst, Int, [pred_i...]) : ... pred_i-1 => dst, pred_i => dst ...
+//!
+//! This graph corresponds to a set of (recursive) equation of the form
+//!
+//! Fields(<c>) = {c}
+//! Fields(node) = union_{n s.t. (n, node) is an edge} Fields(n)
+//!
+//! By convention, empty unions produce the empty set {}. Starting off all non-constant nodes at
+//! the empty set and then iterating this rule will converge to the least fixed point of these
+//! equations as the set of possible constants is finite, sets ordered by inclusion form a lattice,
+//! and union is monotone on that lattice. (Apologies if I misstated something there).
+//!
+//! Then, all we need to do is to union all of the field sets corresponding to registers passed to
+//! GetCol! Well, not quite. The rules for generating equations don't cover more complex operations
+//! like math, or functions. Suppose we had the following sequence:
+//!
+//!     GetCol(1, <2>);
+//!     StrToInt(0, 1);
+//!     GetCol(dst, 0)
+//!
+//! Which corresponds roughly to the AWK snippet `$$2`, or "the field corresponding to the value of
+//! the second column." It's pretty clear that we cannot predict this value ahead of time, but our
+//! rules do not generate any constraints for the StrToInt instruction, or for any number of other
+//! instructions that can assign to integer registers. If we apply the algorithm as written,
+//! register 0 will have no incoming edges, and so will contribute no fields to the dst register,
+//! thereby producing false negatives.
+//!
+//! The most direct solution here would be to contribute "full sets" (sets that contain all
+//! possible fields --- FieldSet::all below) to any register stored to by an instruction other than
+//! StoreConstInt, MovInt, or Phi. This would work, but it would require a lot more code, and we
+//! would have to continually update the analysis code as we added or removed instructions from the
+//! bytecode.
+//!
+//! Instead, we do this implicitly by running the algorithm twice: the first time as is, the second
+//! time by replacing any empty nodes with no incoming edges with full sets. The reasoning here is
+//! that we will only produce nodes without incoming edges if we have a constant, or if they were
+//! the result of some "black box" instruction like StrToInt that we do not want to analyze. In the
+//! former case, there will always be at least one field present in the given node; that means any
+//! remaining nodes should be treated as potentially representing any arbitrary field number. Once
+//! we "flip" these empty nodes to full sets, we re-run the algorithm and read the result out of
+//! the GetCol registers.
 use std::fmt;
 
 use crate::bytecode::Reg;
