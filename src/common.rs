@@ -89,7 +89,7 @@ macro_rules! err {
 macro_rules! eprintln_ignore {
     ($($t:tt)*) => {{
         use std::io::Write;
-        let _ = write!(&mut std::io::stderr(), $($t)*);
+        let _ = writeln!(&mut std::io::stderr(), $($t)*);
         ()
     }};
 }

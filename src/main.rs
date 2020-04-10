@@ -73,7 +73,7 @@ to LLVM. To force bytecode interpretation pass level -1. The bytecode interprete
 good for debugging, and it will execute much faster for small scripts."
     )]
     opt_level: i32,
-    #[clap(short = "o", long = "out-file")]
+    #[clap(long = "out-file")]
     out_file: Option<String>,
     #[clap(long = "dump-llvm", help = "dump llvm-ir for input program")]
     dump_llvm: bool,
@@ -114,6 +114,7 @@ nothing."
     )]
     bytecode: bool,
     #[clap(
+        short = "o",
         long = "output-format",
         help = "Legal values are csv, tsv. If set, records output via print \
 are escaped accoring to the rules of the corresponding format"
