@@ -1,6 +1,6 @@
-/// Type inference for programs in untyped SSA form (i.e. the output of the cfg module).
-///
-/// TODO: explain what this module does.
+//! Type inference for programs in untyped SSA form (i.e. the output of the cfg module).
+//!
+//! TODO: explain what this module does.
 use crate::builtins;
 use crate::cfg::{self, Function, Ident, ProgramContext};
 use crate::common::{self, NodeIx, NumTy, Result};
