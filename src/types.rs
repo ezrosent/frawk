@@ -1,6 +1,136 @@
 //! Type inference for programs in untyped SSA form (i.e. the output of the cfg module).
 //!
-//! TODO: explain what this module does.
+//! # Introduction
+//! One somewhat interesting aspect of frawk is that it assigns static types to its variables. It
+//! does this without breaking most of AWK's semantics --- the edge cases that do break could be
+//! fixed fixed dynamically if need be; but for now they are breaking changes. In order to operate
+//! on static types in modules "downstream" of the cfg module, we need to infer appropriate types
+//! for our variables.
+//!
+//! This algorithm is a bit different from the standard algorithms for inferring types. Like the
+//! classic [Hindley-Milner] setting, we want an algorithm that can assign types to variables and
+//! functions without any annotations from the programmer. Our job is easier than this classic
+//! setting in some ways, and harder in others.
+//!
+//! Unlike an ML-like language, we don't have all that many types. The interpreter really only
+//! handles 11 or so types, and two of those (map iterators with integer and string key types) are
+//! used in quite a limited way. This means that the types we infer are altogether simpler than
+//! ones that are inferred in a language like Rust, OCaml or Haskell.
+//!
+//! # Motivation
+//! Now onto the stuff that is harder. We can start by illustrating the types we assign in some
+//! cases where it's not obvious how to proceed using a standard static type system as a model.
+//!
+//! ## One Variable, Many Types
+//! However, some of these things are also harder. AWK variables can have multiple types over the
+//! course of a program. It's quite easy to write:
+//!
+//!     x = 1         : Int
+//!     x = "hello"   : String??
+//!
+//! An easy way to implement this would be to interpret all variables as a big sum type, and
+//! changing the dynamic type of a variable as it progresses through the program. We do not do
+//! this, instead we convert the program to SSA form, where most instances of this pattern become
+//!
+//!     x_0 = 1       : Int
+//!     x_1 = "hello" : String
+//!
+//! Thereby keeping each variable to a single type. For variables that we cannot move into SSA form
+//! (global variables, map keys), we insert coercions. Were `x` a global variable the example would
+//! become:
+//!
+//!     x = int-to-str(1)  : String
+//!     x = "hello"        : String
+//!
+//! *Digression*: This is probably slower than a fully dynamic implementation, but the hypothesis when
+//! implementing this was that global variables that are assigned multiple types are fairly rare.
+//! If that turns out not to be the case, we could make our implementation of strings closer to the
+//! sum type alluded to above.
+//!
+//! ## Types of Operations
+//! We would like to distinguish between integers and floating-point numbers. But this can make it
+//! tricky to interpret the types of even very simple expressions. For example, if we just consider
+//! the statement:
+//!
+//!     a = b + c
+//!
+//! The type of `a` will be a `Float` if either `b` or `c` are floats; otherwise it will be an
+//! integer. That doesn't sound too disturbing, but what if the whole program is something like
+//! (supposing for the moment that `b` and `c` are global):
+//!
+//!     a = b + c
+//!     b = a + c
+//!     c = a
+//!
+//! This is all perfectly valid; like AWK, frawk does not require variables to be declared before
+//! they are used. But it is a little strange: the types of `a`, `b` and `c` all depend on the
+//! types of the other two variables. Were we to "untie the knot" by stipulating that any one of
+//! them was an integer or floating point value, the other two variables would take on the same
+//! type. The algorithm in this module makes a "judgment call" that we should prefer integers here.
+//! More importantly, it handles this caes of recursive dependencies fairly gracefully.
+//!
+//! # The Basic Idea
+//!
+//! HM-style type inference is usually implemented using a form of unification. I'm no expert, but
+//! it seems like while unification could be used for inserting coercions like in the first
+//! example, it's a lot messier to get working when the types of functions' return types can depend
+//! on the types of the arguments. At the very least, in my experience with languages like Haskell,
+//! extensions like type families often require additional manual annotations.
+//!
+//! This module infers types based on a (hyper)graph, where nodes indicate our current information
+//! about the types of a variable and edges specify the relationship between the types in one node
+//! and another. Each node except for those representing constants starts off with no information
+//! about its type, but as new information arrives at a given node, it propagates that information
+//! along its outgoing edges. The most common edge type is `Flows`: for assignment statements like
+//!
+//!     a = b
+//!
+//! We might add to the graph
+//!
+//!     b --Flows--> a
+//!
+//! ## Edges are Directed
+//!
+//! If we learn that `b` is a map or scalar, then we learn the same about `a`. Unlike a
+//! unification-based system, information does not flow bidirectionally: information about the type
+//! of `b` flows into `a`, but not vice-versa. To see why, consider the following example,
+//! (supposing all of these variables are global, and no SSA tricks can save us):
+//!
+//!     b = 1
+//!     c = b + 1
+//!     a = b
+//!     a = a "3"
+//!
+//! `b` is assigned a single integer value: we'd like to give it the type `Int`. However, `a` is
+//! assigned to `b` as well as to the result of a string concatenation operation. String
+//! concatenation produces a string, so it would seem that we have no choice but to give it the
+//! type `Str`. That's what our algorithm does. It gives `b` and `c` type `Int` and `a` type `Str`,
+//! necessitating an integer to string conversion in the third assignment expression. This is the
+//! same number of coercions we would need with a fully dynamic representation of all the
+//! variables. If, however, we let the type information for `a` flow back into `b`, then we would
+//! find that `b` would have to be a string, and `c` would have to be a floating point number!
+//!
+//! ## Other Kinds of Edges
+//!
+//! In addition to `Flows`, some edges destructure map types. The `Key` and `KeyIn` relations
+//! jointly specify that a given node represents the type of the key of another; symmetrically we
+//! have `Val` and `ValOf` to specify the type of map values.. For the statement:
+//!
+//!     m[a] = 1
+//!
+//! We would have the subgraph:
+//!
+//!     +---ValIn---Int
+//!     |
+//!     v
+//!     m -- Key --> a
+//!     ^            |
+//!     |            |
+//!     +----KeyIn---+
+//!
+//! TODO: this is a bug! we shouldn't need the `key` type except when assigning out of keys!
+//!
+//! [Hindley-Milner]: https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
 use crate::builtins;
 use crate::cfg::{self, Function, Ident, ProgramContext};
 use crate::common::{self, NodeIx, NumTy, Result};
