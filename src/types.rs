@@ -1,5 +1,8 @@
 //! Type inference for programs in untyped SSA form (i.e. the output of the cfg module).
 //!
+//! This is one of the stranger parts of frawk. If anyone has a pointer to a language that does
+//! inference in this sort of way, I'd be very interested to read it!
+//!
 //! # Introduction
 //! One somewhat interesting aspect of frawk is that it assigns static types to its variables. It
 //! does this without breaking most of AWK's semantics --- the edge cases that do break could be
@@ -112,9 +115,11 @@
 //!
 //! ## Other Kinds of Edges
 //!
-//! In addition to `Flows`, some edges destructure map types. The `Key` and `KeyIn` relations
-//! jointly specify that a given node represents the type of the key of another; symmetrically we
-//! have `Val` and `ValOf` to specify the type of map values.. For the statement:
+//! In addition to `Flows`, some edges destructure map types. The `Key` constraint behaves like
+//! `Flows`, but only works for `Key`; symmetically there are also `Val` constraints on maps. When
+//! assigning to map keys, there is are also `KeyIn` and `MapIn`.
+//!
+//! For the statement:
 //!
 //!     m[a] = 1
 //!
@@ -123,13 +128,111 @@
 //!     +---ValIn---Int
 //!     |
 //!     v
-//!     m -- Key --> a
-//!     ^            |
+//!     m <--KeyIn-- a
+//!
+//! Similarly, loading from a map creates a different constraint. For:
+//!
+//!     x = m[a]
+//!
+//! We would have
+//!
+//!     x <--Val-- m <--KeyIn-- a
+//!
+//! There are corresponding constraints for iterators (the objects emitted by foreach loops).
+//!
+//! ## Functions
+//!
+//! We mentioned earlier that functions made some of this trickier. Let's focus on addition:
+//!
+//!     a = b + c
+//!
+//! By this point in the pipeline, the `+` expression is regarded as calling a "builtin function".
+//! Every builtin function provides a "best guess" on its result type given partial information.
+//! The full implementation can be found in the [crate::builtins] module, but for addition it will
+//! guess "integer" if it knows nothing or only knows about integer operands; if it sees a float or
+//! string operand it will guess "float", and if it sees a non-scalar operand it will yield a type
+//! error. Because functions can be arbitrary arity, this is materialized as a "hyper-edge" in the
+//! graph from all operand nodes (`b` and `c` in this case) to the result node (`a`). Whenever any
+//! operand updates, we will recompute our guess about the type of the result. There are a few more
+//! subtleties here (functions can have out-params), but that's the basic idea.
+//!
+//! User-defined functions are a great deal more complicated. Some AWK functions are polymorphic;
+//! consider the function:
+//!
+//!     function x(a, b) { return length(a) + b; }
+//!
+//! It is value to pass a string _or_ any map type to parameter `a`, and it is possible to pass any
+//! scalar as parameter `b`. Depending on how you count, that could be a few dozen possible
+//! function types! We monomorphize functions like this: we compute all the types `x` is called
+//! with and generate a separate function for each of them. When we see a function call: we first
+//! take our best guess of its argument types and check to see if we have a function corresponding
+//! to those arguments. If we do not, then we allocate a new node for the return type of the
+//! function and build a subgraph corresponding to it. This is a bit wasteful, as it leads to
+//! duplicate functions for a single callsite; we can probably improve something on that front.
+//!
+//! # Solving Constraints
+//!
+//! Once we have this graph, can push values of type [State] around according to the constraints
+//! along the edges. Once we reach a fixed point (i.e. our guess about the types of variables stops
+//! changing), we return our answer. When the answer is under-specified, we just make a guess. For
+//! statements like
+//!
+//!     x = 1
+//!
+//! We have the graph
+//!
+//!     x <--Flows-- 1
+//!
+//! It starts off as
+//!
+//!     x <--Flows-- 1
+//!     ?            Scalar(Int)
+//!
+//! And then stabilizes at
+//!
+//!     x <--Flows-- 1
+//!     Scalar(Int)  Scalar(Int)
+//!
+//! For the more complicated
+//!
+//!     b = 1
+//!     c = b + 1
+//!     a = b
+//!     a = a "3"
+//!
+//! We might have
+//!
+//!     +--------
+//!     |       |
+//!     |       v
+//!     a <--(concat)<--3
+//!     ^
+//!     |
+//!     Flows
+//!     |
+//!     b <--Flows-- 1
 //!     |            |
-//!     +----KeyIn---+
+//!     v            |
+//!     +<-----------+
+//!     |
+//!     Call
+//!     |
+//!     v
+//!     c
 //!
-//! TODO: this is a bug! we shouldn't need the `key` type except when assigning out of keys!
+//! We would start with `a`, `b` and `c` all having no information associated with them. The "no
+//! information" output for `concat` is String, and for `+` is Int, so in the first full iteration
+//! of the solver we would have a guess that `a` is a string, and that `b` and `c` are integers.
+//! Doing another full iteration (now evaluating `+` with two integer values and `concat` with a
+//! string and an integer) does not change these initial guesses; so the solver would return its
+//! current solution.
 //!
+//! This sort of achitecture is inspired by classic [static analysis algorithms] that find the least
+//! fixed points of recursive equations phrased as monotone functions on some partial order with
+//! finite height, along with [Propagators]
+//!
+//! [Propagators]: https://dspace.mit.edu/handle/1721.1/44215
+//! [static analysis algorithms]: https://cs.au.dk/~amoeller/spa/
 //! [Hindley-Milner]: https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
 use crate::builtins;
 use crate::cfg::{self, Function, Ident, ProgramContext};
@@ -486,6 +589,7 @@ impl Network {
     fn read(&self, ix: NodeIx) -> &State {
         &self.graph.node_weight(ix).unwrap().cur_val
     }
+
     pub(crate) fn add_dep(&mut self, from: NodeIx, to: NodeIx, constraint: Constraint<()>) {
         self.graph.add_edge(from, to, Edge { constraint });
         self.wl.insert(from);
@@ -497,6 +601,7 @@ pub(crate) struct TypeContext<'a, 'b> {
     base: HashMap<State, NodeIx>,
     env: HashMap<Args<Ident>, NodeIx>,
     funcs: HashMap<Args<NumTy>, NodeIx>,
+    maps: HashSet<NodeIx>,
     func_table: &'a [Function<'b, &'b str>],
     local_globals: &'a HashSet<NumTy>,
     udf_nodes: Vec<NodeIx>,
@@ -546,6 +651,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             base: Default::default(),
             env: Default::default(),
             funcs: Default::default(),
+            maps: Default::default(),
             func_table: &pc.funcs[..],
             local_globals: pc.local_globals_ref(),
             udf_nodes: Default::default(),
@@ -685,21 +791,6 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         Ok(())
     }
 
-    pub(crate) fn set_key(&mut self, arr: NodeIx, key: NodeIx) {
-        self.nw.add_dep(key, arr, Constraint::KeyIn(()));
-        self.nw.add_dep(arr, key, Constraint::Key(()));
-    }
-
-    fn set_val(&mut self, arr: NodeIx, val: NodeIx) {
-        self.nw.add_dep(val, arr, Constraint::ValIn(()));
-        self.nw.add_dep(arr, val, Constraint::Val(()));
-    }
-
-    fn set_iter_val(&mut self, iter: NodeIx, val: NodeIx) {
-        self.nw.add_dep(val, iter, Constraint::IterValIn(()));
-        self.nw.add_dep(iter, val, Constraint::IterVal(()));
-    }
-
     pub(crate) fn constant(&mut self, tv: State) -> NodeIx {
         use hashbrown::hash_map::Entry::*;
         match self.base.entry(tv) {
@@ -709,6 +800,17 @@ impl<'b, 'c> TypeContext<'b, 'c> {
                 v.insert(res);
                 res
             }
+        }
+    }
+    pub(crate) fn constrain_as_map(&mut self, ix: NodeIx) {
+        // To be completely explicit, this function assigns a unique `Flows` constaint into a map
+        // from the constant node that "just specifies the node is a Map".
+        if self.maps.insert(ix) {
+            let is_map = self.constant(Some(TVar::Map {
+                key: None,
+                val: None,
+            }));
+            self.nw.add_dep(is_map, ix, Constraint::Flows(()))
         }
     }
     pub(crate) fn get_node(&mut self, key: Args<Ident>) -> NodeIx {
@@ -816,10 +918,11 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
             AsgnIndex(arr, ix, v) => {
                 let arr_ix = self.ident_node(arr);
                 let ix_ix = self.val_node(ix);
+                self.constrain_as_map(arr_ix);
                 // TODO(ezr): set up caching for keys, values of maps and iterators?
-                self.set_key(arr_ix, ix_ix);
+                self.nw.add_dep(ix_ix, arr_ix, Constraint::KeyIn(()));
                 let val_ix = self.nw.add_rule(Rule::Var);
-                self.set_val(arr_ix, val_ix);
+                self.nw.add_dep(val_ix, arr_ix, Constraint::ValIn(()));
                 self.constrain_expr(v, val_ix);
             }
             AsgnVar(v, e) => {
@@ -902,17 +1005,23 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
             Index(arr, ix) => {
                 let arr_ix = self.val_node(arr);
                 let ix_ix = self.val_node(ix);
-                self.set_key(arr_ix, ix_ix);
-                self.set_val(arr_ix, to);
+                self.constrain_as_map(arr_ix);
+                self.nw.add_dep(arr_ix, ix_ix, Constraint::Key(()));
+                self.nw.add_dep(arr_ix, to, Constraint::Val(()));
             }
             IterBegin(arr) => {
                 let arr_ix = self.val_node(arr);
+                self.constrain_as_map(arr_ix);
                 let iter_ix = to;
                 let key_ix = self.nw.add_rule(Rule::Var);
 
-                // The key of the map and the iterator must be the same.
-                self.set_key(arr_ix, key_ix);
-                self.set_iter_val(iter_ix, key_ix);
+                // The `key_ix` is a proxy node that has a bidirectional constraint with the key of
+                // the array and the value of the iterator. Its presence ensures that the
+                // iterator's type and the map's key type remain the same.
+                self.nw.add_dep(key_ix, arr_ix, Constraint::KeyIn(()));
+                self.nw.add_dep(arr_ix, key_ix, Constraint::Key(()));
+                self.nw.add_dep(key_ix, iter_ix, Constraint::IterValIn(()));
+                self.nw.add_dep(iter_ix, key_ix, Constraint::IterVal(()));
             }
             HasNext(_) => {
                 let int = self.constant(TVar::Scalar(BaseTy::Int).abs());
@@ -920,7 +1029,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
             }
             Next(iter) => {
                 let iter_ix = self.val_node(iter);
-                self.set_iter_val(iter_ix, to);
+                self.nw.add_dep(iter_ix, to, Constraint::IterVal(()));
             }
             LoadBuiltin(bv) => {
                 let bv_ix = self.constant(bv.ty().abs());

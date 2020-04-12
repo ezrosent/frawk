@@ -176,10 +176,15 @@ impl Function {
                 );
                 ctx.nw.add_dep(arg1, args[1], Constraint::Flows(()));
             }
-            Function::Contains | Function::Delete => {
+            Function::Contains => {
                 let arr = args[0];
                 let query = args[1];
-                ctx.set_key(arr, query);
+                ctx.nw.add_dep(query, arr, Constraint::KeyIn(()));
+            }
+            Function::Delete => {
+                let arr = args[0];
+                let query = args[1];
+                ctx.nw.add_dep(query, arr, Constraint::KeyIn(()));
             }
             Function::Sub | Function::GSub => {
                 let out_str = args[2];
