@@ -5,15 +5,16 @@
 /// the underlying input buffer, these play the same role as "control characters" in the SimdJSON
 /// paper (by the same authors). The higher-level state machine parser then operates on these
 /// control characters rather than on a byte-by-byte basis.
+use std::io;
 use std::mem;
 use std::str;
 
 use lazy_static::lazy_static;
-use regex::{Regex, RegexSet};
+use regex::{bytes, Regex};
 
 use crate::common::Result;
 use crate::pushdown::FieldSet;
-use crate::runtime::str_impl::{Buf, Str};
+use crate::runtime::str_impl::{Buf, DynamicBuf, Str};
 
 #[derive(Default, Debug)]
 pub struct Offsets {
@@ -362,13 +363,71 @@ lazy_static! {
     static ref QUOTE: Regex = Regex::new(r#"""#).unwrap();
     static ref TAB: Regex = Regex::new(r#"\t"#).unwrap();
     static ref NEWLINE: Regex = Regex::new(r#"\n"#).unwrap();
-    static ref NEEDS_ESCAPE_TSV: RegexSet = RegexSet::new(&[r#"\t"#, r#"\n"#]).unwrap();
-    static ref NEEDS_ESCAPE_CSV: RegexSet =
-        RegexSet::new(&[r#"""#, r#"\t"#, r#"\n"#, ","]).unwrap();
+    static ref NEEDS_ESCAPE_TSV: bytes::RegexSet =
+        bytes::RegexSet::new(&[r#"\t"#, r#"\n"#]).unwrap();
+    static ref NEEDS_ESCAPE_CSV: bytes::RegexSet =
+        bytes::RegexSet::new(&[r#"""#, r#"\t"#, r#"\n"#, ","]).unwrap();
+}
+
+pub fn write_csv(bs: &[u8], mut w: impl io::Write) -> Result<()> {
+    macro_rules! try_io {
+        ($e:expr) => {
+            match $e {
+                Ok(o) => o,
+                Err(e) => return err!("write_csv failed: {}", e),
+            }
+        };
+    }
+    let matches = NEEDS_ESCAPE_CSV.matches(bs);
+    if !matches.matched_any() {
+        try_io!(w.write_all(bs));
+        return Ok(());
+    }
+    try_io!(w.write(&['"' as u8]));
+    for b in bs.iter().cloned() {
+        if b == '"' as u8 {
+            try_io!(w.write_all(&['"' as u8, '"' as u8]));
+        } else if b == '\t' as u8 {
+            try_io!(w.write_all(&['\\' as u8, 't' as u8]));
+        } else if b == '\n' as u8 {
+            try_io!(w.write_all(&['\\' as u8, 'n' as u8]));
+        } else {
+            try_io!(w.write(&[b]));
+        }
+    }
+    try_io!(w.write(&['"' as u8]));
+    Ok(())
+}
+
+pub fn write_tsv(bs: &[u8], mut w: impl io::Write) -> Result<()> {
+    macro_rules! try_io {
+        ($e:expr) => {
+            match $e {
+                Ok(o) => o,
+                Err(e) => return err!("write_tsv failed: {}", e),
+            }
+        };
+    }
+    let matches = NEEDS_ESCAPE_TSV.matches(bs);
+    if !matches.matched_any() {
+        try_io!(w.write_all(bs));
+        return Ok(());
+    }
+    for b in bs.iter().cloned() {
+        if b == '\t' as u8 {
+            try_io!(w.write_all(&['\\' as u8, 't' as u8]));
+        } else if b == '\n' as u8 {
+            try_io!(w.write_all(&['\\' as u8, 'n' as u8]));
+        } else {
+            try_io!(w.write_all(&[b]));
+        }
+    }
+    Ok(())
 }
 
 pub fn escape_csv<'a>(s: &Str<'a>) -> Str<'a> {
-    let matches = s.with_str(|s| NEEDS_ESCAPE_CSV.matches(s));
+    let bs = unsafe { &*s.get_bytes() };
+    let matches = NEEDS_ESCAPE_CSV.matches(bs);
     if !matches.matched_any() {
         return s.clone();
     }
@@ -389,7 +448,8 @@ pub fn escape_csv<'a>(s: &Str<'a>) -> Str<'a> {
 }
 
 pub fn escape_tsv<'a>(s: &Str<'a>) -> Str<'a> {
-    let matches = s.with_str(|s| NEEDS_ESCAPE_TSV.matches(s));
+    let bs = unsafe { &*s.get_bytes() };
+    let matches = NEEDS_ESCAPE_TSV.matches(bs);
     if !matches.matched_any() {
         return s.clone();
     }
