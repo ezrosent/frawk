@@ -5,7 +5,6 @@
 /// the underlying input buffer, these play the same role as "control characters" in the SimdJSON
 /// paper (by the same authors). The higher-level state machine parser then operates on these
 /// control characters rather than on a byte-by-byte basis.
-use std::io;
 use std::mem;
 use std::str;
 
@@ -14,7 +13,7 @@ use regex::{bytes, Regex};
 
 use crate::common::Result;
 use crate::pushdown::FieldSet;
-use crate::runtime::str_impl::{Buf, DynamicBuf, Str};
+use crate::runtime::str_impl::{Buf, Str};
 
 #[derive(Default, Debug)]
 pub struct Offsets {
@@ -367,62 +366,6 @@ lazy_static! {
         bytes::RegexSet::new(&[r#"\t"#, r#"\n"#]).unwrap();
     static ref NEEDS_ESCAPE_CSV: bytes::RegexSet =
         bytes::RegexSet::new(&[r#"""#, r#"\t"#, r#"\n"#, ","]).unwrap();
-}
-
-pub fn write_csv(bs: &[u8], mut w: impl io::Write) -> Result<()> {
-    macro_rules! try_io {
-        ($e:expr) => {
-            match $e {
-                Ok(o) => o,
-                Err(e) => return err!("write_csv failed: {}", e),
-            }
-        };
-    }
-    let matches = NEEDS_ESCAPE_CSV.matches(bs);
-    if !matches.matched_any() {
-        try_io!(w.write_all(bs));
-        return Ok(());
-    }
-    try_io!(w.write(&['"' as u8]));
-    for b in bs.iter().cloned() {
-        if b == '"' as u8 {
-            try_io!(w.write_all(&['"' as u8, '"' as u8]));
-        } else if b == '\t' as u8 {
-            try_io!(w.write_all(&['\\' as u8, 't' as u8]));
-        } else if b == '\n' as u8 {
-            try_io!(w.write_all(&['\\' as u8, 'n' as u8]));
-        } else {
-            try_io!(w.write(&[b]));
-        }
-    }
-    try_io!(w.write(&['"' as u8]));
-    Ok(())
-}
-
-pub fn write_tsv(bs: &[u8], mut w: impl io::Write) -> Result<()> {
-    macro_rules! try_io {
-        ($e:expr) => {
-            match $e {
-                Ok(o) => o,
-                Err(e) => return err!("write_tsv failed: {}", e),
-            }
-        };
-    }
-    let matches = NEEDS_ESCAPE_TSV.matches(bs);
-    if !matches.matched_any() {
-        try_io!(w.write_all(bs));
-        return Ok(());
-    }
-    for b in bs.iter().cloned() {
-        if b == '\t' as u8 {
-            try_io!(w.write_all(&['\\' as u8, 't' as u8]));
-        } else if b == '\n' as u8 {
-            try_io!(w.write_all(&['\\' as u8, 'n' as u8]));
-        } else {
-            try_io!(w.write_all(&[b]));
-        }
-    }
-    Ok(())
 }
 
 pub fn escape_csv<'a>(s: &Str<'a>) -> Str<'a> {
