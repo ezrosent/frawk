@@ -52,9 +52,13 @@ pub enum Pattern<'a, 'b, I> {
 }
 
 pub struct Prog<'a, 'b, I> {
+    // FS
     pub field_sep: Option<&'b str>,
     pub prelude_vardecs: Vec<(I, &'a Expr<'a, 'b, I>)>,
+    // OFS
     pub output_sep: Option<&'b str>,
+    // ORS
+    pub output_record_sep: Option<&'b str>,
     pub decs: Vec<FunDec<'a, 'b, I>>,
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
     pub end: Option<&'a Stmt<'a, 'b, I>>,
@@ -78,6 +82,12 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         if let Some(sep) = self.output_sep {
             res.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("OFS".into())),
+                arena.alloc_v(StrLit(sep)),
+            )))));
+        }
+        if let Some(sep) = self.output_record_sep {
+            res.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
+                arena.alloc_v(Var("ORS".into())),
                 arena.alloc_v(StrLit(sep)),
             )))));
         }

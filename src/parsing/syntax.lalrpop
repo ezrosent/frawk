@@ -22,6 +22,7 @@ pub Prog: Prog<'a,'a,&'a str> = {
         Prog {
             field_sep: None,
             output_sep: None,
+            output_record_sep: None,
             prelude_vardecs: Default::default(),
             decs: fs,
             begin,

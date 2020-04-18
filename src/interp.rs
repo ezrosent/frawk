@@ -427,13 +427,33 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         )?;
                         *self.get_mut(dst) = res;
                     }
+                    JoinCSV(dst, start, end) => {
+                        let nf = self.line.nf(&self.vars.fs, &mut self.regexes)?;
+                        *index_mut(&mut self.strs, dst) = {
+                            let start = *index(&self.ints, start);
+                            let end = *index(&self.ints, end);
+                            self.line.join_cols(start, end, &",".into(), nf, |s| {
+                                runtime::csv::escape_csv(&s)
+                            })?
+                        };
+                    }
+                    JoinTSV(dst, start, end) => {
+                        let nf = self.line.nf(&self.vars.fs, &mut self.regexes)?;
+                        *index_mut(&mut self.strs, dst) = {
+                            let start = *index(&self.ints, start);
+                            let end = *index(&self.ints, end);
+                            self.line.join_cols(start, end, &"\t".into(), nf, |s| {
+                                runtime::csv::escape_tsv(&s)
+                            })?
+                        };
+                    }
                     JoinColumns(dst, start, end, sep) => {
                         let nf = self.line.nf(&self.vars.fs, &mut self.regexes)?;
                         *index_mut(&mut self.strs, dst) = {
                             let sep = index(&self.strs, sep);
                             let start = *index(&self.ints, start);
                             let end = *index(&self.ints, end);
-                            self.line.join_cols(start, end, sep, nf)?
+                            self.line.join_cols(start, end, sep, nf, |s| s)?
                         };
                     }
                     SplitInt(flds, to_split, arr, pat) => {

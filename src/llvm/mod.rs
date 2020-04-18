@@ -1366,6 +1366,20 @@ impl<'a> View<'a> {
                 let resv = self.call("get_col", &mut [self.runtime_val(), sv]);
                 self.bind_reg(dst, resv);
             }
+            JoinCSV(dst, start, end) => {
+                let rt = self.runtime_val();
+                let start = self.get_local(start.reflect())?;
+                let end = self.get_local(end.reflect())?;
+                let resv = self.call("join_csv", &mut [rt, start, end]);
+                self.bind_reg(dst, resv);
+            }
+            JoinTSV(dst, start, end) => {
+                let rt = self.runtime_val();
+                let start = self.get_local(start.reflect())?;
+                let end = self.get_local(end.reflect())?;
+                let resv = self.call("join_tsv", &mut [rt, start, end]);
+                self.bind_reg(dst, resv);
+            }
             JoinColumns(dst, start, end, sep) => {
                 let rt = self.runtime_val();
                 let start = self.get_local(start.reflect())?;

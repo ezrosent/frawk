@@ -134,6 +134,7 @@ struct RawPrelude {
     var_decs: Vec<String>,
     field_sep: Option<String>,
     output_sep: Option<&'static str>,
+    output_record_sep: Option<&'static str>,
     escaper: Escaper,
 }
 
@@ -141,6 +142,7 @@ struct Prelude<'a> {
     var_decs: Vec<(&'a str, &'a ast::Expr<'a, 'a, &'a str>)>,
     field_sep: Option<&'a str>,
     output_sep: Option<&'a str>,
+    output_record_sep: Option<&'a str>,
     escaper: Escaper,
 }
 
@@ -193,6 +195,7 @@ fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
         var_decs: get_vars(raw.var_decs.iter().map(|s| s.as_str()), a),
         output_sep: raw.output_sep,
         escaper: raw.escaper,
+        output_record_sep: raw.output_record_sep,
     }
 }
 
@@ -210,6 +213,7 @@ fn get_context<'a>(
             program.field_sep = prelude.field_sep;
             program.prelude_vardecs = prelude.var_decs;
             program.output_sep = prelude.output_sep;
+            program.output_record_sep = prelude.output_record_sep;
             a.alloc_v(program)
         }
         Err(e) => {
@@ -324,20 +328,22 @@ fn main() {
             fail!("must specify program at command line, or in a file via -f");
         }
     };
-    let (escaper, output_sep) = match opts.output_format.as_ref().map(String::as_str) {
-        Some("csv") => (Escaper::CSV, Some(",")),
-        Some("tsv") => (Escaper::TSV, Some("\t")),
-        Some(s) => fail!(
-            "invalid output format {:?}; expected csv or tsv (or the empty string)",
-            s
-        ),
-        None => (Escaper::Identity, None),
-    };
+    let (escaper, output_sep, output_record_sep) =
+        match opts.output_format.as_ref().map(String::as_str) {
+            Some("csv") => (Escaper::CSV, Some(","), Some("\r\n")),
+            Some("tsv") => (Escaper::TSV, Some("\t"), Some("\n")),
+            Some(s) => fail!(
+                "invalid output format {:?}; expected csv or tsv (or the empty string)",
+                s
+            ),
+            None => (Escaper::Identity, None, None),
+        };
     let raw = RawPrelude {
         field_sep: opts.field_sep.clone(),
         var_decs: opts.var.clone(),
         output_sep,
         escaper,
+        output_record_sep,
     };
     if opts.opt_level > 3 {
         fail!("opt levels can only be negative, or in the range [0, 3]");

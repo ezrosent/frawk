@@ -914,122 +914,7 @@ where
                 let (next, ix_v) = self.convert_val(ix, next)?;
                 return Ok((next, PrimExpr::Index(arr_v, ix_v)));
             }
-            Call(fname, args) => {
-                let bi = match fname {
-                    Either::Left(fname) if fname.is_sprintf() => {
-                        return self.do_sprintf(args, current_open);
-                    }
-                    Either::Left(fname) => {
-                        if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
-                            Either::Right(bi)
-                        } else {
-                            Either::Left(fname.clone())
-                        }
-                    }
-                    Either::Right(bi) => Either::Right(*bi),
-                };
-                let mut prim_args = SmallVec::with_capacity(args.len());
-                let mut open = current_open;
-                for a in args.iter() {
-                    let (next, v) = self.convert_val(a, open)?;
-                    open = next;
-                    prim_args.push(v);
-                }
-                match bi {
-                    Either::Left(fname) => {
-                        return if let Some(i) = self.func_table.get(&Some(fname.clone())) {
-                            Ok((open, PrimExpr::CallUDF(*i, prim_args)))
-                        } else {
-                            err!("Call to unknown function \"{}\"", fname)
-                        };
-                    }
-                    Either::Right(bi) => {
-                        if matches!(bi, builtins::Function::Split | builtins::Function::JoinCols)
-                            && args.len() == 2
-                        {
-                            if prim_args.len() == 2 {
-                                let fs = self.fresh_local();
-                                self.add_stmt(
-                                    current_open,
-                                    PrimStmt::AsgnVar(
-                                        fs.clone(),
-                                        PrimExpr::LoadBuiltin(builtins::Variable::OFS),
-                                    ),
-                                )?;
-                                prim_args.push(PrimVal::Var(fs));
-                            }
-                        }
-                        if bi == builtins::Function::Substr && args.len() == 2 {
-                            // We clamp indexes anyways, we'll just put a big number in as the
-                            // rightmost index.
-                            prim_args.push(PrimVal::ILit(i64::max_value()));
-                        }
-                        if let builtins::Function::Sub | builtins::Function::GSub = bi {
-                            // TODO: this should get broken out into its own function
-                            let assignee = match args.len() {
-                                3 => &args[2],
-                                2 => {
-                                    // If a third argument isn't provided, we assume you mean $0.
-                                    let e = &Expr::Unop(ast::Unop::Column, &Expr::ILit(0));
-                                    let (next, v) = self.convert_val(e, open)?;
-                                    open = next;
-                                    prim_args.push(v);
-                                    e
-                                }
-                                n => {
-                                    return err!(
-                                        "{} takes either 2 or 3 arguments, we got {}",
-                                        bi,
-                                        n
-                                    );
-                                }
-                            };
-                            // Easy case! How delighful
-                            if let Expr::Var(_) = assignee {
-                                return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
-                            }
-                            // We got something like sub(x, y, m[z]);
-                            // We allocate fresh variables for the initial value of the assignee
-                            // and the result of the call to (g)sub.
-                            //
-                            // We do the computation, then we assign the substituted string to the
-                            // asignee expression, yielding the saved result.
-                            let to_set = self.fresh_local();
-                            let res = self.fresh_local();
-                            let last_arg =
-                                mem::replace(&mut prim_args[2], PrimVal::Var(to_set.clone()));
-                            self.add_stmt(
-                                open,
-                                PrimStmt::AsgnVar(to_set.clone(), PrimExpr::Val(last_arg)),
-                            )?;
-                            prim_args[2] = PrimVal::Var(to_set.clone());
-                            self.add_stmt(
-                                open,
-                                PrimStmt::AsgnVar(
-                                    res.clone(),
-                                    PrimExpr::CallBuiltin(bi, prim_args),
-                                ),
-                            )?;
-                            let to_set_var = PrimExpr::Val(PrimVal::Var(to_set.clone()));
-                            let (next, _) = match assignee {
-                                Expr::Unop(_, _) => self.do_assign(assignee, |_| to_set_var, open),
-                                Expr::Index(arr, ix) => self.do_assign_index(
-                                    arr,
-                                    ix,
-                                    |_, _, _, open| Ok((open, to_set_var.clone())),
-                                    open,
-                                ),
-                                _ => err!(
-                                    "invalid operand for substitution {:?} (must be assignable)",
-                                    assignee
-                                ),
-                            }?;
-                            return Ok((next, PrimExpr::Val(PrimVal::Var(res))));
-                        }
-                        return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
-                    }
-                }
-            }
+            Call(fname, args) => return self.call(current_open, fname, args),
             Assign(Index(arr, ix), to) => {
                 return self.do_assign_index(
                     arr,
@@ -1427,6 +1312,155 @@ where
             self.add_stmt(current_open, PrimStmt::AsgnVar(f, exp))?;
             PrimVal::Var(f)
         })
+    }
+
+    fn call<'c>(
+        &mut self,
+        current_open: NodeIx,
+        fname: &Either<I, builtins::Function>,
+        args: &Vec<&'c Expr<'c, 'b, I>>,
+    ) -> Result<(NodeIx, PrimExpr<'b>)> {
+        // Handle call expressions. This is pretty complicated because AWK has several rules that
+        // "fill in missing arguments".
+        let bi = match fname {
+            Either::Left(fname) if fname.is_sprintf() => {
+                // sprintf handled even more specially, because it is the one truly var-arg
+                // function that occurs in expression position.
+                return self.do_sprintf(args, current_open);
+            }
+            Either::Left(fname) => {
+                if let Ok(bi) = builtins::Function::try_from(fname.clone()) {
+                    // Okay, there's a builtin in here.
+                    Either::Right(bi)
+                } else {
+                    // We'll keep this as a raw identifier. Below, we'll check if it's a UDF, or if
+                    // the function does not exist.
+                    Either::Left(fname.clone())
+                }
+            }
+            // Various parts of the AST are parsed directly into the builtin variant, we propagate
+            // that usage here.
+            Either::Right(bi) => Either::Right(*bi),
+        };
+        let mut prim_args = SmallVec::with_capacity(args.len());
+        let mut open = current_open;
+        for a in args.iter() {
+            let (next, v) = self.convert_val(a, open)?;
+            open = next;
+            prim_args.push(v);
+        }
+        match bi {
+            Either::Left(fname) => {
+                return if let Some(i) = self.func_table.get(&Some(fname.clone())) {
+                    Ok((open, PrimExpr::CallUDF(*i, prim_args)))
+                } else {
+                    err!("Call to unknown function \"{}\"", fname)
+                };
+            }
+            // Now to "fill in the extras."
+            Either::Right(mut bi) => {
+                // split(string, array) => split(string, array, FS)
+                if bi == builtins::Function::Split && args.len() == 2 {
+                    let fs = self.fresh_local();
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::AsgnVar(
+                            fs.clone(),
+                            PrimExpr::LoadBuiltin(builtins::Variable::FS),
+                        ),
+                    )?;
+                    prim_args.push(PrimVal::Var(fs));
+                }
+
+                // join_fields(start, end) => join_{c,t}sv (if in csv/tsv output mode)
+                // join_fields(start, end) => join_fields(start, end, OFS) (otherwise)
+                if bi == builtins::Function::JoinCols && args.len() == 2 {
+                    match self.ctx.esc {
+                        Escaper::CSV => bi = builtins::Function::JoinCSV,
+                        Escaper::TSV => bi = builtins::Function::JoinTSV,
+                        Escaper::Identity => {
+                            let fs = self.fresh_local();
+                            self.add_stmt(
+                                current_open,
+                                PrimStmt::AsgnVar(
+                                    fs.clone(),
+                                    PrimExpr::LoadBuiltin(builtins::Variable::OFS),
+                                ),
+                            )?;
+                            prim_args.push(PrimVal::Var(fs));
+                        }
+                    }
+                }
+
+                // substr(s, a) => substr(s, a, INT_MAX); as we always clamp the second value to
+                // the length of s.
+                if bi == builtins::Function::Substr && args.len() == 2 {
+                    // We clamp indexes anyways, we'll just put a big number in as the
+                    // rightmost index.
+                    prim_args.push(PrimVal::ILit(i64::max_value()));
+                }
+                // sub/gsub are the most complicated cases. Why? Because they take their last
+                // argument as an out-param. Not only is the 3rd argument "implicitly $0", but we
+                // assign into $0 if that happens.
+                //
+                // Even when the third argument is provided, we still have to insert an assignment
+                // expression in the appropriate locations.
+                if let builtins::Function::Sub | builtins::Function::GSub = bi {
+                    let assignee = match args.len() {
+                        3 => &args[2],
+                        2 => {
+                            // If a third argument isn't provided, we assume you mean $0.
+                            let e = &Expr::Unop(ast::Unop::Column, &Expr::ILit(0));
+                            let (next, v) = self.convert_val(e, open)?;
+                            open = next;
+                            prim_args.push(v);
+                            e
+                        }
+                        n => {
+                            return err!("{} takes either 2 or 3 arguments, we got {}", bi, n);
+                        }
+                    };
+                    // Easy case! How delighful
+                    if let Expr::Var(_) = assignee {
+                        return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
+                    }
+                    // We got something like sub(x, y, m[z]);
+                    // We allocate fresh variables for the initial value of the assignee
+                    // and the result of the call to (g)sub.
+                    //
+                    // We do the computation, then we assign the substituted string to the
+                    // asignee expression, yielding the saved result.
+                    let to_set = self.fresh_local();
+                    let res = self.fresh_local();
+                    let last_arg = mem::replace(&mut prim_args[2], PrimVal::Var(to_set.clone()));
+                    self.add_stmt(
+                        open,
+                        PrimStmt::AsgnVar(to_set.clone(), PrimExpr::Val(last_arg)),
+                    )?;
+                    prim_args[2] = PrimVal::Var(to_set.clone());
+                    self.add_stmt(
+                        open,
+                        PrimStmt::AsgnVar(res.clone(), PrimExpr::CallBuiltin(bi, prim_args)),
+                    )?;
+                    let to_set_var = PrimExpr::Val(PrimVal::Var(to_set.clone()));
+                    let (next, _) = match assignee {
+                        Expr::Unop(_, _) => self.do_assign(assignee, |_| to_set_var, open),
+                        Expr::Index(arr, ix) => self.do_assign_index(
+                            arr,
+                            ix,
+                            |_, _, _, open| Ok((open, to_set_var.clone())),
+                            open,
+                        ),
+                        _ => err!(
+                            "invalid operand for substitution {:?} (must be assignable)",
+                            assignee
+                        ),
+                    }?;
+                    return Ok((next, PrimExpr::Val(PrimVal::Var(res))));
+                }
+                return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
+            }
+        }
     }
 
     fn escape(&mut self, v: PrimVal<'b>, current_open: NodeIx) -> Result<PrimVal<'b>> {

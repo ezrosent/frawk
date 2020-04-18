@@ -244,6 +244,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         escape_tsv(str_ref_ty) -> str_ty;
         substr(str_ref_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] get_col(rt_ty, int_ty) -> str_ty;
+        [ReadOnly] join_csv(rt_ty, int_ty, int_ty) -> str_ty;
+        [ReadOnly] join_tsv(rt_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] join_cols(rt_ty, int_ty, int_ty, str_ref_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
@@ -514,6 +516,34 @@ pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> u128 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> u128 {
+    let sep: Str<'static> = ",".into();
+    let runtime = &mut *(runtime as *mut Runtime);
+    let res = try_abort!(
+        for_either!(&mut runtime.input_data, |(line, _)| {
+            let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
+            line.join_cols(start, end, &sep, nf, |s| runtime::csv::escape_csv(&s))
+        }),
+        "join_csv:"
+    );
+    mem::transmute::<Str, u128>(res)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> u128 {
+    let sep: Str<'static> = "\t".into();
+    let runtime = &mut *(runtime as *mut Runtime);
+    let res = try_abort!(
+        for_either!(&mut runtime.input_data, |(line, _)| {
+            let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
+            line.join_cols(start, end, &sep, nf, |s| runtime::csv::escape_tsv(&s))
+        }),
+        "join_tsv:"
+    );
+    mem::transmute::<Str, u128>(res)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn join_cols(
     runtime: *mut c_void,
     start: Int,
@@ -524,7 +554,7 @@ pub unsafe extern "C" fn join_cols(
     let res = try_abort!(
         for_either!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
-            line.join_cols(start, end, &*(sep as *mut Str), nf)
+            line.join_cols(start, end, &*(sep as *mut Str), nf, |s| s)
         }),
         "join_cols:"
     );

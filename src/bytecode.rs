@@ -151,6 +151,16 @@ pub(crate) enum Instr<'a> {
     // Columns
     SetColumn(Reg<Int> /* dst column */, Reg<Str<'a>>),
     GetColumn(Reg<Str<'a>>, Reg<Int>),
+    JoinCSV(
+        Reg<Str<'a>>, /* dst */
+        Reg<Int>,     /* start col */
+        Reg<Int>,     /* end col */
+    ),
+    JoinTSV(
+        Reg<Str<'a>>, /* dst */
+        Reg<Int>,     /* start col */
+        Reg<Int>,     /* end col */
+    ),
     JoinColumns(
         Reg<Str<'a>>, /* dst */
         Reg<Int>,     /* start col */
@@ -624,6 +634,11 @@ impl<'a> Instr<'a> {
             GetColumn(dst, src) => {
                 dst.accum(&mut f);
                 src.accum(&mut f)
+            }
+            JoinCSV(dst, start, end) | JoinTSV(dst, start, end) => {
+                dst.accum(&mut f);
+                start.accum(&mut f);
+                end.accum(&mut f);
             }
             JoinColumns(dst, start, end, sep) => {
                 dst.accum(&mut f);

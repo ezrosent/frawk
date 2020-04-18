@@ -323,12 +323,9 @@ impl<'a> Str<'a> {
         });
     }
 
-    pub fn join<'b>(&self, mut ss: impl Iterator<Item = &'b Str<'a>>) -> Str<'a>
-    where
-        'a: 'b,
-    {
+    pub fn join(&self, mut ss: impl Iterator<Item = Str<'a>>) -> Str<'a> {
         let mut res = if let Some(s) = ss.next() {
-            s.clone()
+            s
         } else {
             return Default::default();
         };

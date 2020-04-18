@@ -25,7 +25,16 @@ pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
 pub(crate) trait Line<'a>: Default {
-    fn join_cols(&mut self, start: Int, end: Int, sep: &Str<'a>, nf: usize) -> Result<Str<'a>>;
+    fn join_cols<F>(
+        &mut self,
+        start: Int,
+        end: Int,
+        sep: &Str<'a>,
+        nf: usize,
+        trans: F,
+    ) -> Result<Str<'a>>
+    where
+        F: FnMut(Str<'static>) -> Str<'static>;
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
     fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
     fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()>;
@@ -160,11 +169,20 @@ impl<T> LazyVec<T> {
     }
 }
 
-impl<'a> LazyVec<Str<'a>> {
-    pub(crate) fn join(&self, sep: &Str<'a>, start: usize, end: usize) -> Str<'a> {
+impl LazyVec<Str<'static>> {
+    pub(crate) fn join_by<F>(
+        &self,
+        sep: &Str<'static>,
+        start: usize,
+        end: usize,
+        mut by: F,
+    ) -> Str<'static>
+    where
+        F: FnMut(Str<'static>) -> Str<'static>,
+    {
         // assumes zero-indexing, doesn't do len-checks.
         match self {
-            Either::Left(v) => sep.join(v[start..end].iter()),
+            Either::Left(v) => sep.join(v[start..end].iter().cloned().map(by)),
             Either::Right(m) => {
                 let r = m.0.borrow();
                 let mut v: Vec<_> = r.keys().cloned().collect();
@@ -172,19 +190,21 @@ impl<'a> LazyVec<Str<'a>> {
                 sep.join(
                     v.into_iter()
                         .filter(|ix| *ix >= start as Int && *ix < end as Int)
-                        .map(|i| &r[&i]),
+                        .map(|i| by(r[&i].clone())),
                 )
             }
         }
     }
+}
+impl<'a> LazyVec<Str<'a>> {
     pub(crate) fn join_all(&self, sep: &Str<'a>) -> Str<'a> {
         match self {
-            Either::Left(v) => sep.join(v.iter()),
+            Either::Left(v) => sep.join(v.iter().cloned()),
             Either::Right(m) => {
                 let r = m.0.borrow();
                 let mut v: Vec<_> = r.keys().cloned().collect();
                 v.sort();
-                sep.join(v.into_iter().map(|i| &r[&i]))
+                sep.join(v.into_iter().map(|i| r[&i].clone()))
             }
         }
     }

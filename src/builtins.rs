@@ -33,6 +33,8 @@ pub enum Function {
     EscapeCSV,
     EscapeTSV,
     JoinCols,
+    JoinCSV,
+    JoinTSV,
     Substr,
 }
 
@@ -140,7 +142,11 @@ static_map!(
     ["log10", Function::FloatFunc(FloatFunc::Log10)],
     ["sqrt", Function::FloatFunc(FloatFunc::Sqrt)],
     ["atan2", Function::FloatFunc(FloatFunc::Atan2)],
-    ["join_fields", Function::JoinCols]
+    ["join_fields", Function::JoinCols],
+    ["join_csv", Function::JoinCSV],
+    ["join_tsv", Function::JoinTSV],
+    ["escape_csv", Function::EscapeCSV],
+    ["escape_tsv", Function::EscapeTSV]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -285,6 +291,7 @@ impl Function {
                 }
             }
             JoinCols => (smallvec![Int, Int, Str], Str),
+            JoinCSV | JoinTSV => (smallvec![Int, Int], Str),
         })
     }
 
@@ -297,7 +304,7 @@ impl Function {
                 1
             }
             Match | Setcol | Binop(_) => 2,
-            Delete | Contains => 2,
+            JoinCSV | JoinTSV | Delete | Contains => 2,
             JoinCols | Substr | Sub | GSub | Print | Split => 3,
         })
     }
@@ -332,8 +339,8 @@ impl Function {
             Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
             | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match
             | Sub | GSub => Ok(Scalar(BaseTy::Int).abs()),
-            JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column) | Binop(Concat) | Nextline
-            | NextlineStdin => Ok(Scalar(BaseTy::Str).abs()),
+            JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column)
+            | Binop(Concat) | Nextline | NextlineStdin => Ok(Scalar(BaseTy::Str).abs()),
             NextFile | ReadLineStdinFused | Close => Ok(None),
         }
     }

@@ -44,13 +44,22 @@ impl Line {
 }
 
 impl<'a> super::Line<'a> for Line {
-    fn join_cols(&mut self, start: Int, end: Int, sep: &Str<'a>, nf: usize) -> Result<Str<'a>> {
+    fn join_cols<F>(
+        &mut self,
+        start: Int,
+        end: Int,
+        sep: &Str<'a>,
+        nf: usize,
+        trans: F,
+    ) -> Result<Str<'a>>
+    where
+        F: FnMut(Str<'static>) -> Str<'static>,
+    {
         debug_assert_eq!(self.fields.len(), nf);
         let (start, end) = super::normalize_join_indexes(start, end, nf)?;
+        let sep = sep.clone().unmoor();
         Ok(sep
-            .clone()
-            .unmoor()
-            .join(self.fields[start..end].iter())
+            .join(self.fields[start..end].iter().cloned().map(trans))
             .upcast())
     }
     fn nf(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<usize> {

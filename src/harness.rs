@@ -489,6 +489,19 @@ it has one more line"#
         @input "1\t2\t3\n1\\t23\t4\t5\\n\\t6\n"
     );
 
+    test_program!(
+        tsv_join,
+        r#"{ print join_tsv(2, 5);}"#,
+        "2,b\t3,c\t4,d\t5,e\n",
+        @input "1,a 2,b 3,c 4,d 5,e"
+    );
+    test_program!(
+        csv_join,
+        r#"{ print join_csv(2, 5);}"#,
+        concat!(r#""2,b","3,c","4,d","5,e""#, "\n"),
+        @input "1,a 2,b 3,c 4,d 5,e"
+    );
+
     test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
     test_program!(
         factorial,
