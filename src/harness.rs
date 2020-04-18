@@ -396,6 +396,19 @@ mod tests {
         assert_eq!(FieldSet::all(), used_fields(p2).unwrap());
     }
 
+    #[test]
+    fn used_fields_with_joins() {
+        let p1 = r#"{ print $0; x=1; if (z) { x=3 } else { x=4 }; print join_fields(x, 8); }"#;
+        let mut s1 = FieldSet::singleton(0);
+        s1.set(3);
+        s1.set(4);
+        s1.set(5);
+        s1.set(6);
+        s1.set(7);
+        s1.set(8);
+        assert_eq!(s1, used_fields(p1).unwrap());
+    }
+
     test_program!(
         basic_csv_render,
         r#"BEGIN { print "hi", "there"; print "comma,\"in field","and a\ttab"; }"#,

@@ -627,9 +627,11 @@ impl<'a> Typer<'a> {
                             ufa.add_dep(/*from_reg=*/ *src, /*to_reg=*/ *dst);
                         }
                         Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
-                        Either::Left(LL::JoinCSV(..))
-                        | Either::Left(LL::JoinTSV(..))
-                        | Either::Left(LL::JoinColumns(..)) => ufa.poison(),
+                        Either::Left(LL::JoinCSV(_, start, end))
+                        | Either::Left(LL::JoinTSV(_, start, end))
+                        | Either::Left(LL::JoinColumns(_, start, end, _)) => {
+                            ufa.add_join(*start, *end);
+                        }
                         Either::Right(HighLevel::Phi(dst, Ty::Int, preds)) => {
                             for (_, pred_reg) in preds.iter() {
                                 use bytecode::Reg;

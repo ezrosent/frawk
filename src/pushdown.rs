@@ -53,14 +53,10 @@
 //! we would have to continually update the analysis code as we added or removed instructions from
 //! the bytecode.
 //!
-//! Instead, we do this implicitly by running the algorithm twice: the first time as is, the second
-//! time by replacing any empty nodes with no incoming edges with full sets. The reasoning here is
-//! that we will only produce nodes without incoming edges if we have a constant, or if they were
-//! the result of some "black box" instruction like StrToInt that we do not want to analyze. In the
-//! former case, there will always be at least one field present in the given node; that means any
-//! remaining nodes should be treated as potentially representing any arbitrary field number. Once
-//! we "flip" these empty nodes to full sets, we re-run the algorithm and read the result out of
-//! the GetCol registers.
+//! Instead, we do this implicitly by detecting nodes with no incoming edges that have empty field
+//! sets. These nodes are replaced with full sets during iteration; the algorithm treats these
+//! jumps like standard updates for now, though they could probably be shortcircuited in some way.
+
 use std::fmt;
 
 use crate::bytecode::Reg;
@@ -89,8 +85,6 @@ impl Default for FieldSet {
 // this library will be field-splitting routines, which will often be passing in counters or vector
 // lengths. We may as well handle the (however unlikely to be exercised) overflow logic here rather
 // than up the stack, in more complicated code, in multiple locations.
-//
-// TODO: this could probably be 64, not that it matters a great deal.
 const MAX_INDEX: usize = 63;
 
 impl FieldSet {
@@ -112,6 +106,35 @@ impl FieldSet {
     }
     pub fn union(&mut self, other: &FieldSet) {
         self.0 = self.0 | other.0;
+    }
+    fn min_bit(&self) -> u32 {
+        self.0.trailing_zeros()
+    }
+    fn max_bit(&self) -> u32 {
+        64 - self.0.leading_zeros()
+    }
+    pub fn fill(&mut self, rhs: &FieldSet) {
+        if rhs == &FieldSet::all() {
+            *self = FieldSet::all();
+            return;
+        }
+
+        let left = self.min_bit();
+        let right = rhs.max_bit();
+        if left >= right {
+            return;
+        }
+        let rest = if right == 64 {
+            !0
+        } else {
+            1u64.wrapping_shl(right).wrapping_sub(1)
+        };
+        let mask = if left == 64 {
+            !0
+        } else {
+            1u64.wrapping_shl(left).wrapping_sub(1)
+        };
+        self.0 |= rest ^ mask;
     }
     pub fn get(&self, index: usize) -> bool {
         (index > MAX_INDEX) || (1u64 << (index as u32)) & self.0 != 0
@@ -135,18 +158,54 @@ impl fmt::Debug for FieldSet {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fieldset_of_range(elts: impl Iterator<Item = usize>) -> FieldSet {
+        let mut fs = FieldSet::empty();
+        for e in elts {
+            fs.set(e);
+        }
+        fs
+    }
+    fn fieldset_of_slice(elts: &[usize]) -> FieldSet {
+        fieldset_of_range(elts.iter().cloned())
+    }
+    #[test]
+    fn fill_test() {
+        let mut fs1 = FieldSet::singleton(2);
+        let fs2 = FieldSet::singleton(7);
+        fs1.fill(&fs2);
+        assert_eq!(fs1, fieldset_of_slice(&[2, 3, 4, 5, 6, 7]));
+
+        let mut fs3 = fieldset_of_slice(&[3, 5, 7, 15]);
+        let fs4 = fieldset_of_slice(&[6, 13, 23]);
+        fs3.fill(&fs4);
+        assert_eq!(fs3, fieldset_of_range(3usize..=23));
+
+        let mut fs5 = FieldSet::singleton(1);
+        let fs6 = FieldSet::singleton(63);
+        fs5.fill(&fs6);
+        assert_eq!(fs5, fieldset_of_range(1usize..=63));
+
+        let mut fs7 = FieldSet::all();
+        fs7.fill(&fs2);
+        assert_eq!(fs7, FieldSet::all());
+        let mut fs8 = FieldSet::singleton(3);
+        fs8.fill(&fs7);
+        assert_eq!(fs8, FieldSet::all());
+    }
+}
+
 #[derive(Default)]
 pub struct UsedFieldAnalysis {
     assign_graph: Graph<FieldSet, ()>,
     regs: HashMap<Reg<Int>, NodeIx>,
     relevant: SmallVec<[NodeIx; 2]>,
-    poisoned: bool,
+    joins: Vec<(NodeIx /*lhs*/, NodeIx /*rhs*/)>,
 }
 
 impl UsedFieldAnalysis {
-    pub fn poison(&mut self) {
-        self.poisoned = true;
-    }
     /// Get the node corresponding to a given regiter, or allocate a fresh one with an empty set.
     fn get_node(&mut self, reg: Reg<Int>) -> NodeIx {
         use hashbrown::hash_map::Entry;
@@ -181,6 +240,12 @@ impl UsedFieldAnalysis {
         self.assign_graph.add_edge(from_node, to_node, ());
     }
 
+    pub fn add_join(&mut self, start_reg: Reg<Int>, end_reg: Reg<Int>) {
+        let start_node = self.get_node(start_reg);
+        let end_node = self.get_node(end_reg);
+        self.joins.push((start_node, end_node));
+    }
+
     /// Mark a given register as a "column" node: one that will be part of the used field set
     /// returned from [UsedFieldAnalysis::solve].
     pub fn add_col(&mut self, col_reg: Reg<Int>) {
@@ -190,64 +255,44 @@ impl UsedFieldAnalysis {
 
     /// Return the set of all fields mentioned by column nodes.
     pub fn solve(mut self) -> FieldSet {
-        // Someone has said "don't bother analyzing this".
-        if self.poisoned {
-            return FieldSet::all();
-        }
         self.solve_internal();
         let mut res = FieldSet::empty();
         for i in self.relevant.iter().cloned() {
             res.union(self.assign_graph.node_weight(i).unwrap());
         }
+        for (start, end) in self.joins.iter().cloned() {
+            let mut start_set = self.assign_graph.node_weight(start).unwrap().clone();
+            let end_set = self.assign_graph.node_weight(end).unwrap();
+            start_set.fill(end_set);
+            res.union(&start_set)
+        }
         res
     }
+
     fn solve_internal(&mut self) {
         // The core solving portion of the analysis. Start with a full worklist.
         let mut wl = WorkList::default();
         wl.extend((0..self.assign_graph.node_count()).map(|x| NodeIx::new(x)));
 
-        // We will do the core iteration twice: once with empties once with empty sets flipped to
-        // full.
-        //
-        // TODO We could probably just do a single pass and detect empty nodes initially.
-        let mut last = false;
-        loop {
-            while let Some(n) = wl.pop() {
-                let start = self.assign_graph.node_weight(n).unwrap().clone();
-                let mut new = start.clone();
-                for n in self.assign_graph.neighbors_directed(n, Direction::Incoming) {
-                    new.union(self.assign_graph.node_weight(n).unwrap());
-                }
-                if start == new {
-                    continue;
-                }
-                *self.assign_graph.node_weight_mut(n).unwrap() = new;
-                for n in self.assign_graph.neighbors_directed(n, Direction::Outgoing) {
-                    wl.insert(n);
-                }
+        // Iterate to convergence, being careful to detect "abstract" nodes that we have to replace
+        // with full sets.
+        while let Some(n) = wl.pop() {
+            let start = self.assign_graph.node_weight(n).unwrap().clone();
+            let mut new = start.clone();
+            let mut incoming_count = 0;
+            for n in self.assign_graph.neighbors_directed(n, Direction::Incoming) {
+                new.union(self.assign_graph.node_weight(n).unwrap());
+                incoming_count += 1;
             }
-            if last {
-                break;
+            if incoming_count == 0 && start == FieldSet::empty() {
+                new = FieldSet::all();
             }
-            last = true;
-
-            // Flip "black box" nodes to full. The module comment talks about these nodes as though
-            // they are just the "root nodes" with no incoming edges. Here we take any empty nodes.
-            // The two approaches would appear to be equivalent.
-            for n in self.assign_graph.node_indices() {
-                let redo = {
-                    let w = self.assign_graph.node_weight_mut(n).unwrap();
-                    let redo = w.is_empty();
-                    if redo {
-                        *w = FieldSet::all();
-                    }
-                    redo
-                };
-                if redo {
-                    for n in self.assign_graph.neighbors_directed(n, Direction::Outgoing) {
-                        wl.insert(n);
-                    }
-                }
+            if start == new {
+                continue;
+            }
+            *self.assign_graph.node_weight_mut(n).unwrap() = new;
+            for n in self.assign_graph.neighbors_directed(n, Direction::Outgoing) {
+                wl.insert(n);
             }
         }
     }
