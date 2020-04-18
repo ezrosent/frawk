@@ -113,6 +113,8 @@ impl FieldSet {
     fn max_bit(&self) -> u32 {
         64 - self.0.leading_zeros()
     }
+    // Fill is used for `join` constructions, it fills all bits (inclusive) from the minimum bit in
+    // self to the maximum bit in rhs.
     pub fn fill(&mut self, rhs: &FieldSet) {
         if rhs == &FieldSet::all() {
             *self = FieldSet::all();

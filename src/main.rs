@@ -26,6 +26,7 @@ pub mod types;
 extern crate clap;
 extern crate elsa;
 extern crate hashbrown;
+#[cfg(feature = "use_jemalloc")]
 extern crate jemallocator;
 extern crate lalrpop_util;
 extern crate lazy_static;
@@ -52,7 +53,7 @@ use runtime::{
 use std::fs::File;
 use std::io::{self, BufReader, Write};
 
-// TODO: put jemalloc behind a feature flag
+#[cfg(feature = "use_jemalloc")]
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 

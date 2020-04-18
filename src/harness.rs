@@ -1,6 +1,5 @@
-//! This module includes some utility functions for running AWK programs from Rust code.
-//!
-//! TODO: make this test-only and rename it.
+//! Some utility functions for running AWK programs from Rust code. It is primarily used to test
+//! "everything but main" end to end; there's a test suite at the end.
 use crate::{
     arena::Arena,
     ast,
