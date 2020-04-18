@@ -32,6 +32,7 @@ pub enum Function {
     GSub,
     EscapeCSV,
     EscapeTSV,
+    JoinCols,
     Substr,
 }
 
@@ -131,7 +132,6 @@ static_map!(
     ["sub", Function::Sub],
     ["gsub", Function::GSub],
     ["substr", Function::Substr],
-    // TODO finish these
     ["cos", Function::FloatFunc(FloatFunc::Cos)],
     ["sin", Function::FloatFunc(FloatFunc::Sin)],
     ["atan", Function::FloatFunc(FloatFunc::Atan)],
@@ -139,7 +139,8 @@ static_map!(
     ["log2", Function::FloatFunc(FloatFunc::Log2)],
     ["log10", Function::FloatFunc(FloatFunc::Log10)],
     ["sqrt", Function::FloatFunc(FloatFunc::Sqrt)],
-    ["atan2", Function::FloatFunc(FloatFunc::Atan2)]
+    ["atan2", Function::FloatFunc(FloatFunc::Atan2)],
+    ["join_fields", Function::JoinCols]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -283,6 +284,7 @@ impl Function {
                     return err!("invalid input spec for split: {:?}", &incoming[..]);
                 }
             }
+            JoinCols => (smallvec![Int, Int, Str], Str),
         })
     }
 
@@ -296,7 +298,7 @@ impl Function {
             }
             Match | Setcol | Binop(_) => 2,
             Delete | Contains => 2,
-            Substr | Sub | GSub | Print | Split => 3,
+            JoinCols | Substr | Sub | GSub | Print | Split => 3,
         })
     }
 
@@ -330,7 +332,7 @@ impl Function {
             Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
             | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match
             | Sub | GSub => Ok(Scalar(BaseTy::Int).abs()),
-            EscapeCSV | EscapeTSV | Substr | Unop(Column) | Binop(Concat) | Nextline
+            JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column) | Binop(Concat) | Nextline
             | NextlineStdin => Ok(Scalar(BaseTy::Str).abs()),
             NextFile | ReadLineStdinFused | Close => Ok(None),
         }

@@ -537,6 +537,13 @@ print w,z;
     );
 
     test_program!(
+        join_fields,
+        r#"BEGIN{OFS="!";} { print join_fields(1, 3); print join_fields(2, 200, "~"); }"#,
+        "1!2!3\n2~3~4~5~6\n",
+        @input "1 2 3 4 5 6"
+    );
+
+    test_program!(
         map_ops_simple,
         r#"BEGIN {
         for (i=0; i<10; ++i) m[i]=2*i;

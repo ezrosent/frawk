@@ -25,9 +25,25 @@ pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 
 pub(crate) trait Line<'a>: Default {
+    fn join_cols(&mut self, start: Int, end: Int, sep: &Str<'a>, nf: usize) -> Result<Str<'a>>;
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
     fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
     fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()>;
+}
+
+fn normalize_join_indexes(start: Int, end: Int, nf: usize) -> Result<(usize, usize)> {
+    if start <= 0 || end <= 0 {
+        return err!("smallest joinable column is 1, got {}", start);
+    }
+    let mut start = start as usize - 1;
+    let mut end = end as usize;
+    if end > nf {
+        end = nf;
+    }
+    if end < start {
+        start = end;
+    }
+    Ok((start, end))
 }
 
 pub(crate) trait LineReader {
@@ -145,10 +161,31 @@ impl<T> LazyVec<T> {
 }
 
 impl<'a> LazyVec<Str<'a>> {
-    pub(crate) fn join(&self, sep: &Str<'a>) -> Str<'a> {
+    pub(crate) fn join(&self, sep: &Str<'a>, start: usize, end: usize) -> Str<'a> {
+        // assumes zero-indexing, doesn't do len-checks.
+        match self {
+            Either::Left(v) => sep.join(v[start..end].iter()),
+            Either::Right(m) => {
+                let r = m.0.borrow();
+                let mut v: Vec<_> = r.keys().cloned().collect();
+                v.sort();
+                sep.join(
+                    v.into_iter()
+                        .filter(|ix| *ix >= start as Int && *ix < end as Int)
+                        .map(|i| &r[&i]),
+                )
+            }
+        }
+    }
+    pub(crate) fn join_all(&self, sep: &Str<'a>) -> Str<'a> {
         match self {
             Either::Left(v) => sep.join(v.iter()),
-            Either::Right(m) => sep.join(m.0.borrow().values()),
+            Either::Right(m) => {
+                let r = m.0.borrow();
+                let mut v: Vec<_> = r.keys().cloned().collect();
+                v.sort();
+                sep.join(v.into_iter().map(|i| &r[&i]))
+            }
         }
     }
 }
@@ -414,7 +451,7 @@ impl FileWrite {
     }
 }
 
-pub const CHUNK_SIZE: usize = 16 << 10;
+pub const CHUNK_SIZE: usize = 8 << 10;
 
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read>>> {
     files: Registry<RegexSplitter<File>>,

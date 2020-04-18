@@ -151,6 +151,12 @@ pub(crate) enum Instr<'a> {
     // Columns
     SetColumn(Reg<Int> /* dst column */, Reg<Str<'a>>),
     GetColumn(Reg<Str<'a>>, Reg<Int>),
+    JoinColumns(
+        Reg<Str<'a>>, /* dst */
+        Reg<Int>,     /* start col */
+        Reg<Int>,     /* end col */
+        Reg<Str<'a>>, /* sep */
+    ),
 
     // File reading.
     ReadErr(Reg<Int>, Reg<Str<'a>>),
@@ -618,6 +624,12 @@ impl<'a> Instr<'a> {
             GetColumn(dst, src) => {
                 dst.accum(&mut f);
                 src.accum(&mut f)
+            }
+            JoinColumns(dst, start, end, sep) => {
+                dst.accum(&mut f);
+                start.accum(&mut f);
+                end.accum(&mut f);
+                sep.accum(&mut f);
             }
             SplitInt(flds, to_split, arr, pat) => {
                 flds.accum(&mut f);

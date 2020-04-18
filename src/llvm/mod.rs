@@ -1366,6 +1366,14 @@ impl<'a> View<'a> {
                 let resv = self.call("get_col", &mut [self.runtime_val(), sv]);
                 self.bind_reg(dst, resv);
             }
+            JoinColumns(dst, start, end, sep) => {
+                let rt = self.runtime_val();
+                let start = self.get_local(start.reflect())?;
+                let end = self.get_local(end.reflect())?;
+                let sep = self.get_local(sep.reflect())?;
+                let resv = self.call("join_cols", &mut [rt, start, end, sep]);
+                self.bind_reg(dst, resv);
+            }
             SplitInt(flds, to_split, arr, pat) => {
                 let rt = self.runtime_val();
                 let tsv = self.get_local(to_split.reflect())?;

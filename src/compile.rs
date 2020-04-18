@@ -627,6 +627,7 @@ impl<'a> Typer<'a> {
                             ufa.add_dep(/*from_reg=*/ *src, /*to_reg=*/ *dst);
                         }
                         Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
+                        Either::Left(LL::JoinColumns(_dst, _sep, _start, _end)) => ufa.poison(),
                         Either::Right(HighLevel::Phi(dst, Ty::Int, preds)) => {
                             for (_, pred_reg) in preds.iter() {
                                 use bytecode::Reg;
@@ -1204,6 +1205,12 @@ impl<'a, 'b> View<'a, 'b> {
                     self.pushl(LL::StoreConstStr(res_reg.into(), "".into()));
                 }
             }
+            JoinCols => self.pushl(LL::JoinColumns(
+                res_reg.into(),
+                conv_regs[0].into(),
+                conv_regs[1].into(),
+                conv_regs[2].into(),
+            )),
         };
         self.convert(dst_reg, dst_ty, res_reg, res_ty)
     }

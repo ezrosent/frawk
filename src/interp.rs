@@ -427,6 +427,15 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         )?;
                         *self.get_mut(dst) = res;
                     }
+                    JoinColumns(dst, start, end, sep) => {
+                        let nf = self.line.nf(&self.vars.fs, &mut self.regexes)?;
+                        *index_mut(&mut self.strs, dst) = {
+                            let sep = index(&self.strs, sep);
+                            let start = *index(&self.ints, start);
+                            let end = *index(&self.ints, end);
+                            self.line.join_cols(start, end, sep, nf)?
+                        };
+                    }
                     SplitInt(flds, to_split, arr, pat) => {
                         // Index manually here to defeat the borrow checker.
                         let to_split = index(&self.strs, to_split);

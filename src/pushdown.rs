@@ -140,9 +140,13 @@ pub struct UsedFieldAnalysis {
     assign_graph: Graph<FieldSet, ()>,
     regs: HashMap<Reg<Int>, NodeIx>,
     relevant: SmallVec<[NodeIx; 2]>,
+    poisoned: bool,
 }
 
 impl UsedFieldAnalysis {
+    pub fn poison(&mut self) {
+        self.poisoned = true;
+    }
     /// Get the node corresponding to a given regiter, or allocate a fresh one with an empty set.
     fn get_node(&mut self, reg: Reg<Int>) -> NodeIx {
         use hashbrown::hash_map::Entry;
@@ -186,6 +190,10 @@ impl UsedFieldAnalysis {
 
     /// Return the set of all fields mentioned by column nodes.
     pub fn solve(mut self) -> FieldSet {
+        // Someone has said "don't bother analyzing this".
+        if self.poisoned {
+            return FieldSet::all();
+        }
         self.solve_internal();
         let mut res = FieldSet::empty();
         for i in self.relevant.iter().cloned() {

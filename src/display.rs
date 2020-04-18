@@ -142,6 +142,7 @@ impl Display for Function {
             GSub => write!(f, "gsub"),
             EscapeCSV => write!(f, "escape_csv"),
             EscapeTSV => write!(f, "escape_tsv"),
+            JoinCols => write!(f, "join_fields"),
             Substr => write!(f, "substr"),
         }
     }

@@ -60,6 +60,12 @@ impl RegexLine {
 }
 
 impl<'a> Line<'a> for RegexLine {
+    fn join_cols(&mut self, start: Int, end: Int, sep: &Str<'a>, nf: usize) -> Result<Str<'a>> {
+        // Should have split before calling this function.
+        debug_assert!(self.fields.len() > 0);
+        let (start, end) = super::normalize_join_indexes(start, end, nf)?;
+        Ok(self.fields.join(&sep.clone().unmoor(), start, end).upcast())
+    }
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize> {
         self.split_if_needed(pat, rc)?;
         Ok(self.fields.len())
@@ -89,7 +95,7 @@ impl<'a> Line<'a> for RegexLine {
                 }
                 self.fields = new_vec;
             }
-            let res = self.fields.join(&ofs.clone().unmoor());
+            let res = self.fields.join_all(&ofs.clone().unmoor());
             self.line = res.clone();
             self.diverged = false;
             res

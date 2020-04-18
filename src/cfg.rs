@@ -915,7 +915,6 @@ where
                 return Ok((next, PrimExpr::Index(arr_v, ix_v)));
             }
             Call(fname, args) => {
-                // TODO: desugaring for 2-arg sub/gsub
                 let bi = match fname {
                     Either::Left(fname) if fname.is_sprintf() => {
                         return self.do_sprintf(args, current_open);
@@ -945,7 +944,9 @@ where
                         };
                     }
                     Either::Right(bi) => {
-                        if bi == builtins::Function::Split && args.len() == 2 {
+                        if matches!(bi, builtins::Function::Split | builtins::Function::JoinCols)
+                            && args.len() == 2
+                        {
                             if prim_args.len() == 2 {
                                 let fs = self.fresh_local();
                                 self.add_stmt(

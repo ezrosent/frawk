@@ -13,7 +13,10 @@ use regex::{bytes, Regex};
 
 use crate::common::Result;
 use crate::pushdown::FieldSet;
-use crate::runtime::str_impl::{Buf, Str};
+use crate::runtime::{
+    str_impl::{Buf, Str},
+    Int,
+};
 
 #[derive(Default, Debug)]
 pub struct Offsets {
@@ -41,6 +44,15 @@ impl Line {
 }
 
 impl<'a> super::Line<'a> for Line {
+    fn join_cols(&mut self, start: Int, end: Int, sep: &Str<'a>, nf: usize) -> Result<Str<'a>> {
+        debug_assert_eq!(self.fields.len(), nf);
+        let (start, end) = super::normalize_join_indexes(start, end, nf)?;
+        Ok(sep
+            .clone()
+            .unmoor()
+            .join(self.fields[start..end].iter())
+            .upcast())
+    }
     fn nf(&mut self, _pat: &Str, _rc: &mut super::RegexCache) -> Result<usize> {
         Ok(self.fields.len())
     }
