@@ -323,6 +323,20 @@ fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     Ok(())
 }
 
+fn alloc_local<'a>(dst_reg: NumTy, dst_ty: Ty) -> Option<LL<'a>> {
+    use Ty::*;
+    eprintln!("alloc_local: {:?}, {:?}", dst_reg, dst_ty);
+    match dst_ty {
+        MapIntInt => Some(LL::AllocMapIntInt(dst_reg.into())),
+        MapIntFloat => Some(LL::AllocMapIntFloat(dst_reg.into())),
+        MapIntStr => Some(LL::AllocMapIntStr(dst_reg.into())),
+        MapStrInt => Some(LL::AllocMapStrInt(dst_reg.into())),
+        MapStrFloat => Some(LL::AllocMapStrFloat(dst_reg.into())),
+        MapStrStr => Some(LL::AllocMapStrStr(dst_reg.into())),
+        _ => None,
+    }
+}
+
 fn mov<'a>(dst_reg: u32, src_reg: u32, ty: Ty) -> Result<Option<LL<'a>>> {
     use Ty::*;
     if dst_reg == UNUSED || src_reg == UNUSED {
@@ -412,6 +426,22 @@ impl<'a> Typer<'a> {
                     .zip(self.func_info[i].arg_tys.iter().cloned()),
             );
             args.reverse();
+
+            // Some local variables (maps, at time of writing) must be explicitly reallocated to
+            // handle the case where no value is passed as an argument. We do this before popping
+            // variables to ensure arguments are propagated if they are passed.
+            //
+            // This system currently is not shared with the LLVM backend, as both strings and maps
+            // have to be allocated there. It is possible that the two codepaths could be merged at
+            // some point.
+            for instr in frame
+                .locals
+                .values()
+                .cloned()
+                .flat_map(|(reg, ty)| alloc_local(reg, ty).into_iter())
+            {
+                instrs.push(instr);
+            }
             for (a_reg, a_ty) in args.drain(..) {
                 pop_var(instrs, a_reg, a_ty)?;
             }

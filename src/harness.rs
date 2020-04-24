@@ -409,6 +409,19 @@ mod tests {
     }
 
     test_program!(
+        map_default_args,
+        r#"
+       function ap(n,  m) {
+       m[n] = n + 1;
+       for (k in m) {
+        print k, m[k]
+       }
+       }
+       BEGIN{ ap(1); ap(2); ap(3); }"#,
+        "1 2\n2 3\n3 4\n"
+    );
+
+    test_program!(
         basic_csv_render,
         r#"BEGIN { print "hi", "there"; print "comma,\"in field","and a\ttab"; }"#,
 r#"hi,there

@@ -1626,6 +1626,10 @@ impl<'a> View<'a> {
             | PopStrInt(_) | PopStrFloat(_) | PopStrStr(_) => {
                 return err!("unexpected explicit push/pop in llvm")
             }
+            AllocMapIntInt(_) | AllocMapIntFloat(_) | AllocMapIntStr(_) | AllocMapStrInt(_)
+            | AllocMapStrFloat(_) | AllocMapStrStr(_) => {
+                return err!("unexpected AllocMap (allocs are handled differently in LLVM)")
+            }
             Ret | Halt | Jmp(_) | JmpIf(_, _) | Call(_) => {
                 return err!("unexpected bytecode-level control flow")
             }

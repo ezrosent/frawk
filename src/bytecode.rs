@@ -90,6 +90,13 @@ pub(crate) enum Instr<'a> {
         Reg<runtime::StrMap<'a, Str<'a>>>,
         Reg<runtime::StrMap<'a, Str<'a>>>,
     ),
+
+    AllocMapIntInt(Reg<runtime::IntMap<Int>>),
+    AllocMapIntFloat(Reg<runtime::IntMap<Float>>),
+    AllocMapIntStr(Reg<runtime::IntMap<Str<'a>>>),
+    AllocMapStrInt(Reg<runtime::StrMap<'a, Int>>),
+    AllocMapStrFloat(Reg<runtime::StrMap<'a, Float>>),
+    AllocMapStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
     // Note, for now we do not support iterator moves. Iterators own their own copy of an array,
     // and there is no reason we should be emitting movs for them.
 
@@ -900,6 +907,12 @@ impl<'a> Instr<'a> {
                 dst.accum(&mut f);
                 src.accum(&mut f)
             }
+            AllocMapIntInt(dst) => dst.accum(f),
+            AllocMapIntFloat(dst) => dst.accum(f),
+            AllocMapIntStr(dst) => dst.accum(f),
+            AllocMapStrInt(dst) => dst.accum(f),
+            AllocMapStrFloat(dst) => dst.accum(f),
+            AllocMapStrStr(dst) => dst.accum(f),
             ReadErr(dst, file) => {
                 dst.accum(&mut f);
                 file.accum(&mut f)

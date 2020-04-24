@@ -865,6 +865,30 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let dst = *dst;
                         *self.get_mut(dst) = src_contents;
                     }
+                    AllocMapIntInt(dst) => {
+                        let dst = *dst;
+                        *self.get_mut(dst) = Default::default();
+                    }
+                    AllocMapIntFloat(dst) => {
+                        let dst = *dst;
+                        *self.get_mut(dst) = Default::default();
+                    }
+                    AllocMapIntStr(dst) => {
+                        let dst = *dst;
+                        *self.get_mut(dst) = Default::default();
+                    }
+                    AllocMapStrInt(dst) => {
+                        let dst = *dst;
+                        *self.get_mut(dst) = Default::default();
+                    }
+                    AllocMapStrFloat(dst) => {
+                        let dst = *dst;
+                        *self.get_mut(dst) = Default::default();
+                    }
+                    AllocMapStrStr(dst) => {
+                        let dst = *dst;
+                        *self.get_mut(dst) = Default::default();
+                    }
                     // TODO add error logging for these errors perhaps?
                     ReadErr(dst, file) => {
                         let dst = *dst;

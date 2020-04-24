@@ -44,7 +44,7 @@ impl<'a, V, E> DomInfo<'a, V, E> {
     pub fn new(g: &'a Graph<V, E>, entry: NodeIx) -> Self {
         let mut res = DomInfo {
             cfg: g,
-            entry: entry,
+            entry,
             info: vec![Default::default(); g.node_count()],
             dfs: Default::default(),
             best: vec![NODEINFO_UNINIT; g.node_count()],
@@ -82,7 +82,7 @@ impl<'a, V, E> DomInfo<'a, V, E> {
         let seen_so_far = self.seen();
         *self.at_mut(cur_node) = NodeInfo {
             dfsnum: seen_so_far,
-            parent: parent,
+            parent,
             idom: parent, // provisional
             sdom: NODEINFO_UNINIT,
             ancestor: NODEINFO_UNINIT,
