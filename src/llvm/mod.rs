@@ -222,6 +222,10 @@ impl<'a, 'b> Generator<'a, 'b> {
         LLVMPassManagerBuilderDispose(builder);
 
         for f in self.decls.iter() {
+            if f.val.is_null() {
+                // unused functions are given null values.
+                continue;
+            }
             LLVMRunFunctionPassManager(fpm, f.val);
         }
         for fv in self.printfs.values() {
@@ -245,6 +249,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         // JIT-specific initialization.
         LLVM_InitializeNativeTarget();
         LLVM_InitializeNativeAsmPrinter();
+        LLVM_InitializeNativeAsmParser();
         LLVMLinkInMCJIT();
         let mut maybe_engine = MaybeUninit::<LLVMExecutionEngineRef>::uninit();
         let mut err: *mut c_char = ptr::null_mut();
@@ -372,6 +377,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             .zip(global_refs.iter())
             .enumerate()
         {
+            let is_called = self.types.frames[i].is_called;
             let mut globals = HashMap::new();
             let name = CString::new(format!("_frawk_udf_{}", i)).unwrap();
             // First, we add the listed function parameters.
@@ -391,12 +397,17 @@ impl<'a, 'b> Generator<'a, 'b> {
                 arg_tys.len() as u32,
                 /*IsVarArg=*/ 0,
             );
-            let val = LLVMAddFunction(self.module, name.as_ptr(), ty);
             let builder = LLVMCreateBuilderInContext(self.ctx);
-            // We make these private, as we generate a separate main that calls into them. This
-            // way, function bodies that get inlined into main do not have to show up in generated
-            // code.
-            LLVMSetLinkage(val, llvm_sys::LLVMLinkage::LLVMLinkerPrivateLinkage);
+            let val = if is_called {
+                let val = LLVMAddFunction(self.module, name.as_ptr(), ty);
+                // We make these private, as we generate a separate main that calls into them. This
+                // way, function bodies that get inlined into main do not have to show up in
+                // generated code.
+                LLVMSetLinkage(val, llvm_sys::LLVMLinkage::LLVMLinkerPrivateLinkage);
+                val
+            } else {
+                ptr::null_mut()
+            };
             let id = self.funcs.len();
             self.decls.push(FuncInfo {
                 val,
@@ -490,6 +501,9 @@ impl<'a, 'b> Generator<'a, 'b> {
     unsafe fn gen_function(&mut self, func_id: usize) -> Result<()> {
         use compile::HighLevel::*;
         let frame = &self.types.frames[func_id];
+        if !frame.is_called {
+            return Ok(());
+        }
         let builder = self.funcs[func_id].builder;
         let entry_bb =
             LLVMAppendBasicBlockInContext(self.ctx, self.funcs[func_id].val, c_str!("entry"));

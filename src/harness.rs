@@ -411,14 +411,15 @@ mod tests {
     test_program!(
         map_default_args,
         r#"
+        function unused() { return 72; }
        function ap(n,  m) {
        m[n] = n + 1;
        for (k in m) {
         print k, m[k]
        }
        }
-       BEGIN{ ap(1); ap(2); ap(3); }"#,
-        "1 2\n2 3\n3 4\n"
+       BEGIN{ ap(0, m); ap(1); ap(2); ap(3); }"#,
+        "0 1\n1 2\n2 3\n3 4\n"
     );
 
     test_program!(

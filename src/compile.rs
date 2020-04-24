@@ -272,6 +272,7 @@ pub(crate) struct Frame<'a> {
     pub locals: HashMap<Ident, (u32, Ty)>,
     pub arg_regs: SmallVec<NumTy>,
     pub cfg: CFG<'a>,
+    pub is_called: bool,
 }
 
 struct View<'a, 'b> {
@@ -325,7 +326,6 @@ fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
 
 fn alloc_local<'a>(dst_reg: NumTy, dst_ty: Ty) -> Option<LL<'a>> {
     use Ty::*;
-    eprintln!("alloc_local: {:?}, {:?}", dst_reg, dst_ty);
     match dst_ty {
         MapIntInt => Some(LL::AllocMapIntInt(dst_reg.into())),
         MapIntFloat => Some(LL::AllocMapIntFloat(dst_reg.into())),
@@ -412,6 +412,9 @@ impl<'a> Typer<'a> {
         let mut args: Vec<(NumTy, Ty)> = Vec::new();
         let mut locals: Vec<(NumTy, Ty)> = Vec::new();
         for (i, frame) in self.frames.iter().enumerate() {
+            if !frame.is_called {
+                continue;
+            }
             let instrs = &mut res[i];
             bb_map.clear();
             bb_map.reserve(frame.cfg.node_count());
@@ -640,6 +643,7 @@ impl<'a> Typer<'a> {
             .process_function(&pc.funcs[src_func])?;
         }
         gen.compute_used_fields();
+        gen.mark_used_frames();
         Ok(gen)
     }
 
@@ -677,6 +681,14 @@ impl<'a> Typer<'a> {
             }
         }
         self.used_fields = ufa.solve();
+    }
+
+    fn mark_used_frames(&mut self) {
+        use petgraph::visit::Dfs;
+        let mut dfs = Dfs::new(&self.callgraph, NodeIx::new(self.main_offset));
+        while let Some(ix) = dfs.next(&self.callgraph) {
+            self.frames[ix.index()].is_called = true;
+        }
     }
 
     pub(crate) fn get_global_refs(&mut self) -> Vec<HashSet<(NumTy, Ty)>> {
