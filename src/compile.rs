@@ -1176,6 +1176,7 @@ impl<'a, 'b> View<'a, 'b> {
                 conv_regs[1].into(),
                 conv_regs[2].into(),
             )),
+            ToInt => self.convert(res_reg, Ty::Int, conv_regs[0], conv_tys[0])?,
             Split => {
                 if res_reg == UNUSED {
                     res_reg = self.regs.stats.reg_of_ty(res_ty);

@@ -146,6 +146,7 @@ impl Display for Function {
             JoinTSV => write!(f, "join_tsv"),
             JoinCols => write!(f, "join_fields"),
             Substr => write!(f, "substr"),
+            ToInt => write!(f, "int"),
         }
     }
 }

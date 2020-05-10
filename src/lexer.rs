@@ -1,7 +1,7 @@
 //! A custom lexer for AWK for use with LALRPOP.
 //!
 //! This lexer is fairly rudamentary. It ought not be too slow, but it also has not been optimized
-//! very aggressively. Various portions of the AWK language are not yet supported.
+//! very aggressively. Various edge cases still do not work.
 use regex::Regex;
 use unicode_xid::UnicodeXID;
 
@@ -136,7 +136,9 @@ static_map!(
     ["\n", Tok::Newline],
     ["\r\n", Tok::Newline],
     [",", Tok::Comma],
-    ["in", Tok::In],
+    // XXX: hack "in" must have whitespace after it.
+    ["in ", Tok::In],
+    ["in\t", Tok::In],
     ["!", Tok::Not],
     ["&&", Tok::AND],
     ["||", Tok::OR],

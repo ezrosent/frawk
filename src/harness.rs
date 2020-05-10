@@ -946,6 +946,17 @@ this as well"#
     );
 
     test_program!(
+        int_conversions,
+        r#"BEGIN {
+        x="123.456"
+        y=int(x) + 2
+        z=int(x+2.6)
+        print y, z;
+    }"#,
+        "125 126\n"
+    );
+
+    test_program!(
         iter_across_functions,
         r#"
         function update(h, k, v) {

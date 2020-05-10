@@ -36,6 +36,7 @@ pub enum Function {
     JoinCSV,
     JoinTSV,
     Substr,
+    ToInt,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -134,6 +135,7 @@ static_map!(
     ["sub", Function::Sub],
     ["gsub", Function::GSub],
     ["substr", Function::Substr],
+    ["int", Function::ToInt],
     ["cos", Function::FloatFunc(FloatFunc::Cos)],
     ["sin", Function::FloatFunc(FloatFunc::Sin)],
     ["atan", Function::FloatFunc(FloatFunc::Atan)],
@@ -267,6 +269,18 @@ impl Function {
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
                 _ => return err!("invalid input spec fo Delete: {:?}", &incoming[..]),
             },
+            ToInt => {
+                let inc = incoming[0];
+                match inc {
+                    Null | Int | Float | Str => (smallvec![inc], Int),
+                    _ => {
+                        return err!(
+                            "can only convert scalar values to integers, got input with type: {:?}",
+                            inc
+                        )
+                    }
+                }
+            }
             Print => (smallvec![Str, Str, Int], Int),
             PrintStdout => (smallvec![Str], Int),
             Nextline => (smallvec![Str], Str),
@@ -300,9 +314,8 @@ impl Function {
         Some(match self {
             FloatFunc(ff) => ff.arity(),
             ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
-            EscapeCSV | EscapeTSV | Close | Length | ReadErr | Nextline | PrintStdout | Unop(_) => {
-                1
-            }
+            ToInt | EscapeCSV | EscapeTSV | Close | Length | ReadErr | Nextline | PrintStdout
+            | Unop(_) => 1,
             Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
             JoinCols | Substr | Sub | GSub | Print | Split => 3,
@@ -338,7 +351,7 @@ impl Function {
             Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
             Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
             | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match
-            | Sub | GSub => Ok(Scalar(BaseTy::Int).abs()),
+            | Sub | GSub | ToInt => Ok(Scalar(BaseTy::Int).abs()),
             JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column)
             | Binop(Concat) | Nextline | NextlineStdin => Ok(Scalar(BaseTy::Str).abs()),
             NextFile | ReadLineStdinFused | Close => Ok(None),
