@@ -1,4 +1,4 @@
-#frawk
+# frawk
 
 frawk is a small programming language for writing short programs processing
 textual data. To a first approximation, it is an implementation of the
@@ -16,13 +16,13 @@ For more information about how frawk works, check out these documents:
 
 frawk is dual-licensed under MIT or Apache 2.0.
 
-##Installation
+## Installation
 
 You will need an installation of LLVM 9.0 on your machine. See [this
 site](https://apt.llvm.org/) helpful on Linux, and `brew install llvm@9` or
 similar to work on Mac OS.
 
-##Bugs and Feature Requests
+## Bugs and Feature Requests
 
 frawk has bugs. If you notice a bug in frawk, filing a bug with an explanation
 of how to reproduce the error would be very helpful. There are no guarantees on
