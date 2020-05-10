@@ -1,5 +1,5 @@
 /// Fast float parser based on github.com/lemire/fast_double_parser, but adopted to support AWK
-/// semantics (no failures, just 0s and stopping early).
+/// semantics (no failures, just 0s and stopping early). Mistakes are surely my own.
 use std::intrinsics::unlikely;
 use std::mem;
 mod slow_path;
@@ -12,11 +12,11 @@ pub fn strtoi(s: &str) -> i64 {
     if bs.len() == 0 {
         return 0;
     }
-    let neg = bs[0] == '-' as u8;
-    let off = if neg || bs[0] == '+' as u8 { 1 } else { 0 };
+    let neg = bs[0] == b'-';
+    let off = if neg || bs[0] == b'+' { 1 } else { 0 };
     let mut i = 0i64;
     for b in bs[off..].iter().cloned().take_while(|b| is_integer(*b)) {
-        let digit = (b - '0' as u8) as i64;
+        let digit = (b - b'0') as i64;
         i = if let Some(i) = i.checked_mul(10).and_then(|i| i.checked_add(digit)) {
             i
         } else {
@@ -190,9 +190,7 @@ pub fn strtod(s: &str) -> f64 {
             // We may overflow. The only way this doesn't happen is if we have a lot of
             // 0.0000000... action going on, (which floats are pretty good at representing).
             loop {
-                if start_digits.len() > 0
-                    && (start_digits[0] == '0' as u8 || start_digits[0] == '.' as u8)
-                {
+                if start_digits.len() > 0 && (start_digits[0] == b'0' || start_digits[0] == b'.') {
                     start_digits = &start_digits[1..];
                     digits = digits.saturating_sub(1);
                     continue;
@@ -224,8 +222,8 @@ pub fn strtod(s: &str) -> f64 {
         }
     }
     unsafe {
-        let negative = cur!() == '-' as u8;
-        if negative || cur!() == '+' as u8 {
+        let negative = cur!() == b'-';
+        if negative || cur!() == b'+' {
             advance_or!(0.0);
         }
         if !is_integer(cur!()) {
@@ -240,7 +238,7 @@ pub fn strtod(s: &str) -> f64 {
             if !is_integer(cur!()) {
                 break;
             }
-            let digit = cur!() - '0' as u8;
+            let digit = cur!() - b'0';
             // This may overflow, but we will check for that later.
             i = i.wrapping_mul(10).wrapping_add(digit as u64);
             advance_or!(return_int_handle_overflow(
@@ -252,7 +250,7 @@ pub fn strtod(s: &str) -> f64 {
             ));
         }
         let mut exponent = 0i64;
-        if cur!() == '.' as u8 {
+        if cur!() == b'.' {
             advance_or!(return_int_handle_overflow(
                 i,
                 negative,
@@ -264,7 +262,7 @@ pub fn strtod(s: &str) -> f64 {
                 if !is_integer(cur!()) {
                     break;
                 }
-                let digit = cur!() - '0' as u8;
+                let digit = cur!() - b'0';
                 i = i.wrapping_mul(10).wrapping_add(digit as u64);
                 exponent -= 1;
                 advance_or!(break);
@@ -273,14 +271,14 @@ pub fn strtod(s: &str) -> f64 {
         let digit_count = start_digits.len() - cur.len() - 1;
         let mut exp_number = 0i64;
 
-        if cur!() == 'e' as u8 || cur!() == 'E' as u8 {
+        if cur!() == b'e' || cur!() == b'E' {
             loop {
                 advance_or!(break);
                 let mut neg_exp = false;
-                if cur!() == '-' as u8 {
+                if cur!() == b'-' {
                     neg_exp = true;
                     advance_or!(break);
-                } else if cur!() == '+' as u8 {
+                } else if cur!() == b'+' {
                     advance_or!(break);
                 }
                 loop {
@@ -288,7 +286,7 @@ pub fn strtod(s: &str) -> f64 {
                         break;
                     }
 
-                    let digit = cur!() - '0' as u8;
+                    let digit = cur!() - b'0';
                     exp_number = exp_number.wrapping_mul(10).wrapping_add(digit as i64);
                     if exp_number > 0x100000000 {
                         // Yikes! That's a big exponent. Let's just defer to the slow path.
@@ -314,7 +312,7 @@ pub fn strtod(s: &str) -> f64 {
 }
 
 fn is_integer(c: u8) -> bool {
-    (c >= '0' as u8) && (c <= '9' as u8)
+    matches!(c, b'0'..=b'9')
 }
 
 #[cfg(test)]

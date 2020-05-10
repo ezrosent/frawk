@@ -110,7 +110,7 @@ impl Default for FormatSpec {
             leading_zeros: false,
             lnum: 0,
             rnum: usize::max_value(),
-            spec: 'z' as u8, /* invalid */
+            spec: b'z', /* invalid */
         }
     }
 }
@@ -183,10 +183,10 @@ fn process_spec(mut w: impl Write, fspec: &mut FormatSpec, arg: &FormatArg) -> R
             let mut buf = StackWriter::default();
             // %g means "pick the shorter of standard and scientific notation". We do the obvious
             // thing of computing both and writing out the smaller one.
-            fspec.spec = 'f' as u8;
+            fspec.spec = b'f';
             process_spec(&mut buf, fspec, arg)?;
             let l1 = buf.len();
-            fspec.spec = 'e' as u8;
+            fspec.spec = b'e';
             process_spec(&mut buf, fspec, arg)?;
             let l2 = buf.len() - l1;
             if l1 < l2 {
@@ -294,7 +294,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> R
                     }
                     match (ch, stage) {
                         ('%', Begin) => {
-                            fs.spec = '%' as u8;
+                            fs.spec = b'%';
                             process_spec(&mut w, &mut fs, next_arg())?;
                             state = Raw(ix + 1);
                             continue 'outer;

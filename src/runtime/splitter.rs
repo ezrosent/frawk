@@ -742,9 +742,9 @@ mod tests {
         for _ in 0..n {
             let s = between.sample(&mut rng);
             if s < line_pct {
-                res.push('\n' as u8)
+                res.push(b'\n')
             } else if s < space_pct {
-                res.push(' ' as u8)
+                res.push(b' ')
             } else {
                 res.push(ascii.sample(&mut rng))
             }

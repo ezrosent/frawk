@@ -1217,7 +1217,7 @@ And this is the second part"#
     fn bench_substr_boxed(b: &mut Bencher) {
         // Write 4KiB of As
         let mut dbuf = DynamicBuf::new(4096);
-        let bs: Vec<u8> = (0..4096).map(|_| 'A' as u8).collect();
+        let bs: Vec<u8> = (0..4096).map(|_| b'A').collect();
         dbuf.write(&bs[..]).unwrap();
         let s = unsafe { dbuf.into_str() };
         let mut i = 0;

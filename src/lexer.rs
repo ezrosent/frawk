@@ -196,13 +196,13 @@ pub(crate) fn parse_string_literal<'a, 'outer>(
                 'b' => buf.push(0x08), // BS
                 'f' => buf.push(0x0C), // FF
                 'v' => buf.push(0x0B), // VT
-                '\\' => buf.push('\\' as u8),
-                'n' => buf.push('\n' as u8),
-                'r' => buf.push('\r' as u8),
-                't' => buf.push('\t' as u8),
-                '"' => buf.push('"' as u8),
+                '\\' => buf.push(b'\\'),
+                'n' => buf.push(b'\n'),
+                'r' => buf.push(b'\r'),
+                't' => buf.push(b'\t'),
+                '"' => buf.push(b'"'),
                 c => {
-                    buf.push('\\' as u8);
+                    buf.push(b'\\');
                     push_char(buf, c);
                 }
             };
@@ -232,9 +232,9 @@ pub(crate) fn parse_regex_literal<'a, 'outer>(
     for c in lit.chars() {
         if is_escape {
             match c {
-                '/' => buf.push('/' as u8),
+                '/' => buf.push(b'/'),
                 c => {
-                    buf.push('\\' as u8);
+                    buf.push(b'\\');
                     push_char(buf, c);
                 }
             };
@@ -435,7 +435,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     } else if is_id_start(c) {
                         self.cur += c.len_utf8();
                         let (s, new_start) = self.ident(ix);
-                        if self.text.as_bytes()[new_start] == ('(' as u8) {
+                        if self.text.as_bytes()[new_start] == b'(' {
                             self.cur = new_start + 1;
                             (ix, Tok::CallStart(s), self.cur)
                         } else {

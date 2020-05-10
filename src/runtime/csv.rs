@@ -169,10 +169,6 @@ impl<'a> Stepper<'a> {
     }
 
     pub unsafe fn step(&mut self) -> usize {
-        const QUOTE: u8 = '"' as u8;
-        const NL: u8 = '\n' as u8;
-        const CR: u8 = '\r' as u8;
-        const BS: u8 = '\\' as u8;
         let sep = self.ifmt.sep();
         let line_start = self.prev_ix;
         let bs = &self.buf.as_bytes()[0..self.buf_len];
@@ -210,8 +206,8 @@ impl<'a> Stepper<'a> {
                             let ix = *self.off.fields.get_unchecked(cur) as usize;
                             cur += 1;
                             match *bs.get_unchecked(ix) {
-                                CR | QUOTE | BS => {}
-                                NL => {
+                                b'\r' | b'"' | b'\\' => {}
+                                b'\n' => {
                                     self.prev_ix = ix + 1;
                                     self.promote_null();
                                     self.st = State::Done;
@@ -229,23 +225,23 @@ impl<'a> Stepper<'a> {
                     // Common case: Loop through records until the end of the line.
                     let ix = get_next!();
                     match *bs.get_unchecked(ix) {
-                        CR => {
+                        b'\r' => {
                             self.push_past(ix);
                             continue;
                         }
-                        NL => {
+                        b'\n' => {
                             self.push_past(ix);
                             self.promote();
                             self.st = State::Done;
                             return self.get(line_start, ix, cur);
                         }
-                        QUOTE => {
+                        b'"' => {
                             self.push_past(ix);
                             self.st = State::Quote;
                             continue 'outer;
                         }
                         // Only happens in TSV mode
-                        BS => {
+                        b'\\' => {
                             self.push_past(ix);
                             self.st = State::BS;
                             continue 'outer;
@@ -262,7 +258,7 @@ impl<'a> Stepper<'a> {
                     // Parse a quoted field; this will only happen in CSV mode.
                     let ix = get_next!();
                     match *bs.get_unchecked(ix) {
-                        QUOTE => {
+                        b'"' => {
                             // We have found a quote, time to figure out if the next character is a
                             // quote, or if it is the end of the quoted portion of the field.
                             //
@@ -273,7 +269,7 @@ impl<'a> Stepper<'a> {
                             self.st = State::QuoteInQuote;
                             continue;
                         }
-                        BS => {
+                        b'\\' => {
                             // A similar lookahead case: handling escaped sequences.
                             self.push_past(ix);
                             self.st = State::BS;
@@ -291,7 +287,7 @@ impl<'a> Stepper<'a> {
                         debug_assert_eq!(self.off.fields.len(), cur);
                         return self.get(line_start, bs.len(), cur);
                     }
-                    if *bs.get_unchecked(self.prev_ix) == QUOTE {
+                    if *bs.get_unchecked(self.prev_ix) == b'"' {
                         self.append("\"".into());
                         self.st = State::Quote;
                         // burn the next entry. It should be a quote. Using get_next here is a
@@ -300,7 +296,7 @@ impl<'a> Stepper<'a> {
                         // should appear in the offsets vector, and we know that there is more
                         // space in `bs`.
                         let _q = get_next!();
-                        debug_assert_eq!(bs[_q], QUOTE);
+                        debug_assert_eq!(bs[_q], b'"');
                         self.prev_ix += 1;
                     } else {
                         self.st = State::Init;
@@ -311,12 +307,10 @@ impl<'a> Stepper<'a> {
                         debug_assert_eq!(self.off.fields.len(), cur);
                         return self.get(line_start, bs.len(), cur);
                     }
-                    const N: u8 = 'n' as u8;
-                    const T: u8 = 't' as u8;
                     match *bs.get_unchecked(self.prev_ix) {
-                        N => self.append("\n".into()),
-                        T => self.append("\t".into()),
-                        BS => self.append("\\".into()),
+                        b'n' => self.append("\n".into()),
+                        b't' => self.append("\t".into()),
+                        b'\\' => self.append("\\".into()),
                         x => {
                             let buf = &[x];
                             let s: Str<'static> = Str::concat(
