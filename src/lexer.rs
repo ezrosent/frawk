@@ -84,6 +84,7 @@ pub enum Tok<'a> {
     CallStart(&'a str),
 
     ILit(&'a str),
+    HexLit(&'a str),
     FLit(&'a str),
 }
 
@@ -280,12 +281,16 @@ impl<'a> Tokenizer<'a> {
 
     fn num(&self) -> Option<(Tok<'a>, usize)> {
         lazy_static! {
+            static ref HEX_PATTERN: Regex = Regex::new(r"^[+-]?0[xX][0-9A-Fa-f]+").unwrap();
             static ref INT_PATTERN: Regex = Regex::new(r"^[+-]?\d+").unwrap();
             // Adapted from https://www.regular-expressions.info/floatingpoint.html
             static ref FLOAT_PATTERN: Regex = Regex::new(r"^[-+]?\d*\.\d+([eE][-+]?\d+)?").unwrap();
         };
         let text = &self.text[self.cur..];
-        if let Some(f) = FLOAT_PATTERN.captures(text).and_then(|c| c.get(0)) {
+        if let Some(i) = HEX_PATTERN.captures(text).and_then(|c| c.get(0)) {
+            let is = i.as_str();
+            return Some((Tok::HexLit(is), is.len()));
+        } else if let Some(f) = FLOAT_PATTERN.captures(text).and_then(|c| c.get(0)) {
             let fs = f.as_str();
             Some((Tok::FLit(fs), fs.len()))
         } else if let Some(i) = INT_PATTERN.captures(text).and_then(|c| c.get(0)) {

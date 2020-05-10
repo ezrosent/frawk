@@ -951,9 +951,9 @@ this as well"#
         x="123.456"
         y=int(x) + 2
         z=int(x+2.6)
-        print y, z;
+        print y, z, 0XFea6, -0x63abc, hex("0xFFww"), hex("DEADBEEF");
     }"#,
-        "125 126\n"
+        "125 126 65190 -408252 255 3735928559\n"
     );
 
     test_program!(

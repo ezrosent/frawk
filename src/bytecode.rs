@@ -68,6 +68,7 @@ pub(crate) enum Instr<'a> {
     IntToStr(Reg<Str<'a>>, Reg<Int>),
     FloatToStr(Reg<Str<'a>>, Reg<Float>),
     StrToInt(Reg<Int>, Reg<Str<'a>>),
+    HexStrToInt(Reg<Int>, Reg<Str<'a>>),
     FloatToInt(Reg<Int>, Reg<Float>),
     IntToFloat(Reg<Float>, Reg<Int>),
     StrToFloat(Reg<Float>, Reg<Str<'a>>),
@@ -438,7 +439,7 @@ impl<'a> Instr<'a> {
                 sr.accum(&mut f);
                 fr.accum(&mut f);
             }
-            StrToInt(ir, sr) => {
+            StrToInt(ir, sr) | HexStrToInt(ir, sr) => {
                 ir.accum(&mut f);
                 sr.accum(&mut f);
             }

@@ -153,6 +153,11 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let ir = *ir;
                         *self.get_mut(ir) = i;
                     }
+                    HexStrToInt(ir, sr) => {
+                        let i = self.get(*sr).with_str(runtime::hextoi);
+                        let ir = *ir;
+                        *self.get_mut(ir) = i;
+                    }
                     StrToFloat(fr, sr) => {
                         let f = runtime::convert::<_, Float>(self.get(*sr));
                         let fr = *fr;

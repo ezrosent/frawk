@@ -20,7 +20,7 @@ use splitter::RegexSplitter;
 
 // TODO: remove the pub use for Variables here.
 pub(crate) use crate::builtins::Variables;
-pub(crate) use float_parse::{strtod, strtoi};
+pub(crate) use float_parse::{hextoi, strtod, strtoi};
 pub(crate) use printf::FormatArg;
 pub use str_impl::Str;
 

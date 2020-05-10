@@ -233,6 +233,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         [ReadOnly] int_to_str(int_ty) -> str_ty;
         [ReadOnly] float_to_str(float_ty) -> str_ty;
         [ReadOnly] str_to_int(str_ref_ty) -> int_ty;
+        [ReadOnly] hex_str_to_int(str_ref_ty) -> int_ty;
         [ReadOnly] str_to_float(str_ref_ty) -> float_ty;
         [ReadOnly] str_len(str_ref_ty) -> int_ty;
         concat(str_ref_ty, str_ref_ty) -> str_ty;
@@ -711,10 +712,20 @@ pub unsafe extern "C" fn float_to_str(f: Float) -> u128 {
     mem::transmute::<Str, u128>(runtime::convert::<Float, Str>(f))
 }
 
+// TODO: these next few mem::forgets don't seem necessary.
+
 #[no_mangle]
 pub unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let res = runtime::convert::<&Str, Int>(&s);
+    mem::forget(s);
+    res
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
+    let s = &*(s as *mut Str);
+    let res = s.with_str(runtime::hextoi);
     mem::forget(s);
     res
 }

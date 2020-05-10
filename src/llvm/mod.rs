@@ -1110,6 +1110,11 @@ impl<'a> View<'a> {
                 let res = self.call("str_to_int", &mut [str_ref]);
                 self.bind_reg(ir, res);
             }
+            HexStrToInt(ir, sr) => {
+                let str_ref = self.get_local(sr.reflect())?;
+                let res = self.call("hex_str_to_int", &mut [str_ref]);
+                self.bind_reg(ir, res);
+            }
             StrToFloat(fr, sr) => {
                 let str_ref = self.get_local(sr.reflect())?;
                 let res = self.call("str_to_float", &mut [str_ref]);

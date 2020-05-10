@@ -147,6 +147,7 @@ impl Display for Function {
             JoinCols => write!(f, "join_fields"),
             Substr => write!(f, "substr"),
             ToInt => write!(f, "int"),
+            HexToInt => write!(f, "hex"),
         }
     }
 }

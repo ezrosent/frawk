@@ -1,12 +1,14 @@
-/// Fast float parser based on github.com/lemire/fast_double_parser, but adopted to support AWK
-/// semantics (no failures, just 0s and stopping early). Mistakes are surely my own.
+//! Fast float parser based on github.com/lemire/fast_double_parser, but adopted to support AWK
+//! semantics (no failures, just 0s and stopping early). Mistakes are surely my own.
+//!
+//! TODO: rename to num_parse
 use std::intrinsics::unlikely;
 use std::mem;
 mod slow_path;
 
-// The simdjson repo has more optimizations to add for int parsing, but this is a big win over libc
-// for the time being, if only because we do not have to copy `s` into a NUL-terminated
-// representation.
+/// The simdjson repo has more optimizations to add for int parsing, but this is a big win over libc
+/// for the time being, if only because we do not have to copy `s` into a NUL-terminated
+/// representation.
 pub fn strtoi(s: &str) -> i64 {
     let bs = s.as_bytes();
     if bs.len() == 0 {
@@ -31,8 +33,48 @@ pub fn strtoi(s: &str) -> i64 {
     }
 }
 
+/// Simple hexadecimal integer parser, similar in spirit to the strtoi implementation here.
+pub fn hextoi(s: &str) -> i64 {
+    let mut bs = s.as_bytes();
+    let mut neg = false;
+    if bs.len() == 0 {
+        return 0;
+    }
+    if bs[0] == b'-' {
+        neg = true;
+        bs = &bs[1..]
+    }
+    if bs.len() >= 2 && &bs[0..2] == &[b'0', b'x'] || &bs[0..2] == &[b'0', b'X'] {
+        bs = &bs[2..]
+    }
+    let mut i = 0i64;
+    for b in bs.iter().cloned() {
+        let digit = match b {
+            b'A'..=b'F' => (b - b'A') as i64 + 10,
+            b'a'..=b'f' => (b - b'a') as i64 + 10,
+            b'0'..=b'9' => (b - b'0') as i64,
+            _ => break,
+        };
+        i = if let Some(i) = i.checked_mul(16).and_then(|i| i.checked_add(digit)) {
+            i
+        } else {
+            // overflow
+            return 0;
+        }
+    }
+    if neg {
+        -i
+    } else {
+        i
+    }
+}
+
 // And now, for floats
 
+// This algorithm can be thought of as having two parts, "parsing" and "projection". The parsing
+// step yields an `Explicit` value, with the mantissa an exponent expressed explicitly (the sign is
+// handled at the end). Once the two numbers have been parsed, the value must be translated to
+// a double-precision floating point value according to the IEEE rounding rules.
 #[derive(Copy, Clone)]
 struct Explicit {
     mantissa: u64,

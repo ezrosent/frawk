@@ -1177,6 +1177,7 @@ impl<'a, 'b> View<'a, 'b> {
                 conv_regs[2].into(),
             )),
             ToInt => self.convert(res_reg, Ty::Int, conv_regs[0], conv_tys[0])?,
+            HexToInt => self.pushl(LL::HexStrToInt(res_reg.into(), conv_regs[0].into())),
             Split => {
                 if res_reg == UNUSED {
                     res_reg = self.regs.stats.reg_of_ty(res_ty);

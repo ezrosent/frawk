@@ -6,7 +6,7 @@ use crate::{
   ast::{Pattern, Expr, Stmt, Binop, Unop, Prog, FunDec},
   builtins::Function,
   common::Either,
-  runtime::{strtoi,strtod},
+  runtime::{strtoi,strtod,hextoi},
   lexer::{self, Tok},
 };
 
@@ -317,6 +317,7 @@ BaseTerm: &'a Expr<'a,'a, &'a str> = {
   Index,
   StrLit,
   "INT" => arena.alloc_v(Expr::ILit(strtoi(<>))),
+  "HEX" => arena.alloc_v(Expr::ILit(hextoi(<>))),
   "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>))),
   "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
   <i:"CALLSTART"> <args:Args?> ")" =>
@@ -329,6 +330,7 @@ extern {
   type Error = lexer::Error;
   enum Tok<'a> {
       "INT" => Tok::ILit(<&'a str>),
+      "HEX" => Tok::HexLit(<&'a str>),
       "FLOAT" => Tok::FLit(<&'a str>),
       "IDENT" => Tok::Ident(<&'a str>),
       "STRLIT" => Tok::StrLit(<&'a str>),
