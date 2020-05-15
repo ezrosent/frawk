@@ -2,9 +2,9 @@
 
 _This document assumes some basic familiarity with awk. I've found that [Awk in
 20 minutes](https://ferd.ca/awk-in-20-minutes.html) is a solid introduction,
-while the [grymoire entry](https://www.grymoire.com/Unix/Awk.html)
-provides more detail. As is common practice, I have been inconsistent in this
-document as well as in comments in how to capitalize "AWK."_
+while the [grymoire entry](https://www.grymoire.com/Unix/Awk.html) provides more
+detail. As is common practice, I have been inconsistent in this repo in how I
+capitalize "AWK."_
 
 My copy of the [AWK book](https://en.wikipedia.org/wiki/The_AWK_Programming_Language)
 begins with a simple message:
@@ -162,6 +162,11 @@ used that as a primary reference, along with some reading on alternatives to the
 Lengauer-Tarjan algorithm for SSA construction that had been published after the
 Tiger Book.
 
+You can view a textual representation of the untyped CFG by passing the
+`--dump-cfg` flag to frawk. Bytecode and LLVM can be viewed with the
+`--dump-bytecode` and `--dump-llvm` options. The latter will be optimized;
+passing `-O0` will roughly show the LLVM constructed by frawk.
+
 To avoid long compile times and complicated builds, the LLVM code makes function
 calls into the same runtime that is used to interpret bytecode instructions. The
 alternative would be to use LLVM IR generated from rust and then smuggle it into
@@ -226,6 +231,8 @@ surprised to discover there were bugs in frawk's parser.
 * Some basic awk commands are missing (e.g. `exit`), because I have not gotten
   to them yet. Many of the extensions in gawk (e.g. bitwise operators,
   coprocessors, multidimensional arrays) are also not implemented.
+* While it has never been tried, I sincerely doubt that frawk will run at all
+  well --- or at all --- on a 32-bit platform.
 
 ### What is new
 
@@ -248,7 +255,7 @@ if you find that the following are a serious hindrance:
 
 * *Regex Syntax* frawk currently uses rust's
   [regex](https://docs.rs/regex/1.3.7/regex/) syntax. This is similar, but not
-  identical to awk's regex syntax. I've considered implementing my own regex
+  identical, to awk's regex syntax. I've considered implementing my own regex
   engine, or compiling awk regexes to rust regexes; it just isn't something I've
   gotten around to doing.
 * *String comparisons* Comparing one string to another string always uses
@@ -268,10 +275,10 @@ if you find that the following are a serious hindrance:
   in awk and will print `[0]` in frawk. This is the main pattern in which
   frawk's approach to types can "leak" into actual programs.
 * *UTF-8* frawk validates all input data as UTF-8. This makes it incomparable to
-  some awk implementations in terms of what input it accepts, where NUL
-  characters are disallowed, but otherwise arbitrary byte sequences can be
-  provided as input. I did this early-on because it fit my use-cases and allowed
-  for UTF-8 in regex patterns, but I now think this functionality should have
-  been optional. However, refactoring the code to support arbitrary byte-streams
-  would be a lot of work, as the implementation uses Rust strings all over the
-  place.
+  some awk implementations in terms of what input it accepts. For example in
+  mawk, NUL characters are disallowed, but otherwise arbitrary byte sequences
+  can be provided as input. I did this early-on because it fit my use-cases and
+  allowed for UTF-8 in regex patterns, but I now think this functionality should
+  have been optional. However, refactoring the code to support arbitrary
+  byte-streams would be a lot of work, as the implementation uses Rust strings
+  throughout.
