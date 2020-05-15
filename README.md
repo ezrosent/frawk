@@ -7,20 +7,17 @@ produce equivalent output when passed to frawk. You might be interested in frawk
 if you want your scripts to handle escaped CSV/TSV like standard AWK fields, or
 if you want your scripts to execute faster.
 
-For more information about how frawk works, check out these documents:
-* TODO: frawk I: overview
-* TODO: frawk II: type inference
-* TODO: frawk III: bytecode and JIT compilation
-* TODO: frawk IV: other optimizations
-* TODO: frawk features and differences from AWK
+For more information about how frawk works, check out [this
+post](https://github.com/ezrosent/frawk/blob/master/info/overview.md).
 
 frawk is dual-licensed under MIT or Apache 2.0.
 
 ## Installation
 
-You will need an installation of LLVM 9.0 on your machine. See [this
-site](https://apt.llvm.org/) helpful on Linux, and `brew install llvm@9` or
-similar to work on Mac OS.
+In addition to [installing Rust](https://rustup.rs/), you will need an
+installation of LLVM 9.0 on your machine. See [this site](https://apt.llvm.org/)
+helpful on Linux, and `brew install llvm@9` or similar to work on Mac OS. Other
+versions of LLVM may work as well.
 
 ## Bugs and Feature Requests
 

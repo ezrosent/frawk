@@ -3,7 +3,8 @@
 _This document assumes some basic familiarity with awk. I've found that [Awk in
 20 minutes](https://ferd.ca/awk-in-20-minutes.html) is a solid introduction,
 while the [grymoire entry](https://www.grymoire.com/Unix/Awk.html)
-provides more detail._
+provides more detail. As is common practice, I have been inconsistent in this
+document as well as in comments in how to capitalize "AWK."_
 
 My copy of the [AWK book](https://en.wikipedia.org/wiki/The_AWK_Programming_Language)
 begins with a simple message:
@@ -86,18 +87,19 @@ frawk is often a good deal faster than utilities like
 [gawk](https://www.gnu.org/software/gawk/) and
 [mawk](https://invisible-island.net/mawk/) when parsing large data files, or
 performing a particularly computation-intensive task. The main reasons for
-higher performance are:
+frawk's higher performance are:
 
-1. frawk infers types for its variables, so it decides what's a number and
-   what's a string before it runs the program. This can speed up arithmetic in
-   tight loops, which shows up on occasion. It does this while maintaining just
-   about all of awk's semantics: the only type errors frawk gives you are type
-   errors in awk, as well.
+1. frawk infers types for its variables, so it decides which variables are
+   numbers and which are strings before it runs the program. This can speed up
+   arithmetic in tight loops, and it also eliminates branching when it comes to
+   performing coercions between strings and numbers. frawk achieves this while
+   maintaining just about all of awk's semantics: the only type errors frawk
+   gives you are type errors in awk, as well.
 1. the fact that frawk produces a typed representation allows it to generate
    fairly simple LLVM IR and then JIT that IR to machine code at runtime. This
    avoids the overhead of an interpreter at the cost of a few milliseconds of
-   time at startup. frawk provides a bytecode interpreter for smaller scripts
-   and for help in testing.
+   time at startup. frawk provides a bytecode interpreter (enabled via the `-b`
+   flag) for smaller scripts and for help in testing.
 1. frawk uses some fairly recent techniques for [efficiently validating
    UTF-8](https://github.com/lemire/fastvalidate-utf-8), [parsing
    CSV](https://github.com/geofflangdale/simdcsv), and [parsing floating point
@@ -185,13 +187,10 @@ their values stop changing. Primary examples of this in frawk are:
   variables](https://github.com/ezrosent/frawk/blob/0cf6bd7554ba14193f32337ea54bd1a8f1401f1f/src/compile.rs#L694)
   are referenced by a function, and the functions that it calls.
 
-I would consider myself a novice in these areas, so if you know of any good
-examples of the state of the art in this area, let me know.
-
 ## Differences from AWK
 
 frawk's structure and language are borrowed almost wholesale from AWK; using
-frawk feels very similar to using awk, nawk, or gawk. frawk also supports many
+frawk feels very similar to using mawk, nawk, or gawk. frawk also supports many
 of the more difficult awk features to implement, like printf, and user-defined
 functions. While many common idioms from AWK are supported in frawk, some
 features are missing while still others provide subtly incompatible semantics.
@@ -259,12 +258,20 @@ if you find that the following are a serious hindrance:
   strings that are "equal" can hash to different values in an array. It also
   means that it's pretty hard to explicitly opt into lexicographic comparison.
   On the other hand, opting into numeric comparison is fairly easy: just add one
-  of the operands to 0. On the other hand, frawk coerces all operands to
+  of the operands to 0. To preserve some idioms, frawk coerces all operands to
   numbers if one of their operands is a number; this preserves the common
   use-case of (e.g.) filtering a numeric column by a numeric constant. I've
-  found these semantics to be more predictable (and also a bit more
-  straightforward to implement).
+  found these semantics to be more predictable, and also more straightforward to
+  implement.
 * *Null values and join points* Null values in frawk may occasionally be coerced
   to integers. For example `if (0) { x = 5 }; printf "[%s]", x;` will print `[]`
   in awk and will print `[0]` in frawk. This is the main pattern in which
   frawk's approach to types can "leak" into actual programs.
+* *UTF-8* frawk validates all input data as UTF-8. This makes it incomparable to
+  some awk implementations in terms of what input it accepts, where NUL
+  characters are disallowed, but otherwise arbitrary byte sequences can be
+  provided as input. I did this early-on because it fit my use-cases and allowed
+  for UTF-8 in regex patterns, but I now think this functionality should have
+  been optional. However, refactoring the code to support arbitrary byte-streams
+  would be a lot of work, as the implementation uses Rust strings all over the
+  place.
