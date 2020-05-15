@@ -21,13 +21,10 @@ be able to write awk programs under more circumstances. This does not mean that
 I intend for frawk to be a version of awk with higher-level features; I
 appreciate that awk rarely escapes the lab of one-liners and have no desire to
 write large programs in an awk-like language.
-<!-- Awk was partially intended as a language in which new systems could be
-prototyped before being translated into Pascal, C, or
-[C++](https://www.cs.princeton.edu/~bwk/btl.mirror/awkc++.pdf). -->
 
 frawk addresses two primary shortcomings I have found in awk.
 
-1. Lack of support for structured CSV or TSV input data.
+1. Lack of support for structured CSV input data.
 2. Lackluster performance.
 
 We can take each of these in turn, and then move on to how awk is implemented.
@@ -35,6 +32,12 @@ Before getting too far into the weeds, I want to clarify that my main goal in
 starting this project was to learn something new: I wanted to write a small
 compiler, I wanted to learn about LLVM, and I wanted to do some basic static
 analysis. On that score frawk has been an unalloyed success.
+
+**Disclaimer** frawk is still incomplete. I have found that it is sufficient for
+my day-to-day scripting needs, but some features from awk are not implemented
+and the implementation is likely far less stable than the ones you have come to
+know and love. With those caveats aside, here is why I think frawk is
+interesting.
 
 ## Slightly Structured Data
 
@@ -69,24 +72,27 @@ In this case, the second field of the third line will be the text "America and
 the Remaking of the Global Order", which will be silently coerced to the number
 0, thereby contributing nothing to the total and undercounting the sum by 3.
 
-In other words, the standard awk syntax of referencing columns by `$1,$n` etc.
-may not work if the input is an escaped CSV file. In practice, I've found that I
-can't trust awk to work on a large CSV file where I cannot manually verify that
-no fields contain embedded `,`s. frawk with the `-i csv` option will properly
-parse and escape CSV data. Awk is a sufficiently expressive language that one
-could parse the CSV manually, but doing so is both difficult and inefficient.
+In other words, the standard awk syntax of referencing columns by `$1`,`$n`,
+etc.  may not work if the input is an escaped CSV file. In practice, I've found
+that I can't trust awk to work on a large CSV file where I cannot manually
+verify that no fields contain embedded `,`s. frawk with the `-i csv` option will
+properly parse and escape CSV data. Awk is a sufficiently expressive language
+that one could parse the CSV manually, but doing so is both difficult and
+inefficient.
 
 ## Efficiency, and Purpose-Built Tools
 
 frawk is often a good deal faster than utilities like
 [gawk](https://www.gnu.org/software/gawk/) and
-[mawk](https://invisible-island.net/mawk/) when
-parsing large data files. The main reasons for higher performance are:
+[mawk](https://invisible-island.net/mawk/) when parsing large data files, or
+performing a particularly computation-intensive task. The main reasons for
+higher performance are:
 
-1. frawk infers types for its variables, making numbers numbers and strings
-   strings. This can speed up arithmetic in tight loops, which shows up on
-   occasion. It does this while maintaining just about all of awk's semantics:
-   the only type errors frawk gives you are type errors in awk, as well.
+1. frawk infers types for its variables, so it decides what's a number and
+   what's a string before it runs the program. This can speed up arithmetic in
+   tight loops, which shows up on occasion. It does this while maintaining just
+   about all of awk's semantics: the only type errors frawk gives you are type
+   errors in awk, as well.
 1. the fact that frawk produces a typed representation allows it to generate
    fairly simple LLVM IR and then JIT that IR to machine code at runtime. This
    avoids the overhead of an interpreter at the cost of a few milliseconds of
@@ -120,50 +126,145 @@ than the bundled `csv2tsv` tool can convert the data to TSV. I think that is a
 pretty good trade-off if you think you may have to do a higher-level operation
 that these tools do not support.
 
-TODO: link to benchmarking doc
-
-Lastly, I built frawk as an excuse to learn things: about compilers, about LLVM
-about static analysis, about optimization. On this score at the very least, it
-is a success.
-
 ## frawk's structure
 
-* lexing, parsing, AST.
-* AST lowered into an untyped CFG which is converted to SSA form
-* The untyped SSA has types inferred for values as well as functions (link to
-  type inference doc).
-* With the types inferred, we generate insert coercions and typed high-level
-  bytecode which is either translated into a register machine and interpreted or
-  is translated to LLVM-IR and JIT compiled.
-* Many heavyweight pieces of frawk functionality (regular expressions, strings)
-  are delegated to the runtime module. Both the interpreter and LLVM backends
-  make calls into the runtime module.
+frawk is structured like a standard compiler:
+
+1. The [lexer](https://github.com/ezrosent/frawk/blob/master/src/lexer.rs)
+   tokenizes the frawk source code.
+1. The parser produces an abstract syntax tree
+   ([AST](https://github.com/ezrosent/frawk/blob/master/src/ast.rs)) from the
+   stream of tokens.
+1. The AST is converted to an untyped control-flow-graph
+   ([CFG](https://github.com/ezrosent/frawk/blob/master/src/cfg.rs)). We perform
+   [SSA](https://en.wikipedia.org/wiki/Static_single_assignment_form)
+   [conversion](https://github.com/ezrosent/frawk/blob/master/src/dom.rs) on
+   this CFG.
+1. With the CFG in SSA form, an [inference
+   algorithm](https://github.com/ezrosent/frawk/blob/master/src/types.rs)
+   assigns types to all variables in the program.
+1. Given the untyped CFG and the results of the inference algorithm, we can
+   produce a typed CFG with explicit bytecode instructions. (happens
+   [here](https://github.com/ezrosent/frawk/blob/master/src/compile.rs))
+1. From there, the code is lowered into one of (a) [bytecode
+   instructions](https://github.com/ezrosent/frawk/blob/master/src/bytecode.rs)
+   that can be
+   [interpreted](https://github.com/ezrosent/frawk/blob/master/src/interp.rs)
+   directly or (b)
+   [LLVM-IR](https://github.com/ezrosent/frawk/blob/master/src/llvm/mod.rs) that
+   is JIT-compiled and then run.
+
+Most of this is fairly conventional. The first few steps can be found (for
+example) in the [Tiger Book](https://www.cs.princeton.edu/~appel/modern/ml/). I
+used that as a primary reference, along with some reading on alternatives to the
+Lengauer-Tarjan algorithm for SSA construction that had been published after the
+Tiger Book.
+
+To avoid long compile times and complicated builds, the LLVM code makes function
+calls into the same runtime that is used to interpret bytecode instructions. The
+alternative would be to use LLVM IR generated from rust and then smuggle it into
+the JIT-compiled binary somehow.
+
+### Static Analysis
+
+I read through the delightful [_Static Program
+Analysis_](https://cs.au.dk/~amoeller/spa/) book while building frawk. Among
+other things, it showed me that many properties about a program can be
+approximated as the solution of (potentially recursive!) equations defined on a
+suitable partial order, so long as the functions defining those equations are
+[monotone](https://en.wikipedia.org/wiki/Monotonic_function#Monotonicity_in_order_theory).
+Furthermore, one can solve these equations by running them through simple
+[propagator-style](https://www.youtube.com/watch?v=s2dknG7KryQ) networks until
+their values stop changing. Primary examples of this in frawk are:
+
+* [Inferring types](https://github.com/ezrosent/frawk/blob/master/src/types.rs)
+  for frawk variables.
+* [Inferring which columns do not have to be
+  parsed.](https://github.com/ezrosent/frawk/blob/master/src/pushdown.rs)
+* Determining [which global
+  variables](https://github.com/ezrosent/frawk/blob/0cf6bd7554ba14193f32337ea54bd1a8f1401f1f/src/compile.rs#L694)
+  are referenced by a function, and the functions that it calls.
+
+I would consider myself a novice in these areas, so if you know of any good
+examples of the state of the art in this area, let me know.
 
 ## Differences from AWK
 
 frawk's structure and language are borrowed almost wholesale from AWK; using
-frawk feels very similar to using awk, nawk or gawk. While many common idioms
-from AWK are supported in frawk, some features are missing while still others
-provide subtly incompatible semantics. Please file a feature request if a
-particular piece of behavior that you rely on is missing; nothing in frawk's
-implementation precludes features from the standard AWK language, though some
-might be troublesome to implement.
+frawk feels very similar to using awk, nawk, or gawk. frawk also supports many
+of the more difficult awk features to implement, like printf, and user-defined
+functions. While many common idioms from AWK are supported in frawk, some
+features are missing while still others provide subtly incompatible semantics.
+Please file a feature request if a particular piece of behavior that you rely on
+is missing; nothing in frawk's implementation precludes features from the
+standard AWK language, though some might be troublesome to implement.
+
+This list of differences is not exhaustive. In particular, I would not be at all
+surprised to discover there were bugs in frawk's parser.
 
 ### What is missing
 
-* Pipes/System
-* CONVFMT, SUBSEP
-* `next`,  or `nextfile` inside a function.
+* frawk does not currently support piping output to separate commands, or the
+  `system` function. From what I understand, functions like this (where an
+  arbitrary string is passed wholesale to a shell) are considered anti-patterns,
+  and have been deprecated [in some
+  languages](https://www.python.org/dev/peps/pep-0324/#id14). I'd be open to
+  alternative interfaces: e.g. only opening pipes to a set of strings known at
+  compile time, or passing arguments and commands separately, if anyone was
+  interested.
+* By default, frawk uses the [ryu](https://github.com/dtolnay/ryu) crate to
+  print floating point numbers, rather than the `CONVFMT` variable. Explicitly
+  changing the precision of floating point output requires an appropriate
+  invocation of `printf` or `sprintf`.
+* frawk does not support the `m[k, v]` syntactic sugar for `m[k SUBSEP v]`. This
+  is because I wanted to hold open the possibility of having true tuples as keys
+  for maps in frawk.
+* `next`,  or `nextfile` are supported in frawk, but they can only be invoked
+  from the main loop. I haven't come across any awk scripts that use either of
+  these commands from within a function, and it's a major simplification to just
+  disallow this case. Again, let me know if this is an important use-case for
+  you.
+* Some basic awk commands are missing (e.g. `exit`), because I have not gotten
+  to them yet. Many of the extensions in gawk (e.g. bitwise operators,
+  coprocessors, multidimensional arrays) are also not implemented.
 
 ### What is new
 
-* proper csv/tsv handling
-* `join_fields`
-* `int`, `hex` functions
-
+* fawk supports the `-i csv` and `-i tsv` command-line options, which split all
+  inputs (regardless of the value of `FS` and `RS`) according to the CSV and TSV
+  formats, assigning `$0` to the raw line and `$N$` to the Nth field in the
+  current row, fully escaped. There are also equivalent functionality for output
+  CSV-escaped lines (enabled via `-o csv` and `-o tsv`).
+* frawk has a builtin `join_fields` function that produces a string of a
+  particular range of input columns.
+* frawk provides `int`, `hex` functions for converting a scalar value to an
+  integer, and parsing a hexadecimal string to an integer. It also supports
+  hexadecimal numeric literals.
 
 ### What is different
 
-* regular expression syntax
-* string comparisons
-* assignments to integers/strings across join points
+None of these differences are fundamental to frawk's approach; they _can_ be
+dispensed with, if at some cost. Let me know if you find more discrepancies, or
+if you find that the following are a serious hindrance:
+
+* *Regex Syntax* frawk currently uses rust's
+  [regex](https://docs.rs/regex/1.3.7/regex/) syntax. This is similar, but not
+  identical to awk's regex syntax. I've considered implementing my own regex
+  engine, or compiling awk regexes to rust regexes; it just isn't something I've
+  gotten around to doing.
+* *String comparisons* Comparing one string to another string always uses
+  lexicographic ordering.  When comparing two strings, awk first tests if both
+  strings are numbers and then compares them numerically if they are. I find
+  these semantics fairly counter-intuitive: for one thing, it means that two
+  strings that are "equal" can hash to different values in an array. It also
+  means that it's pretty hard to explicitly opt into lexicographic comparison.
+  On the other hand, opting into numeric comparison is fairly easy: just add one
+  of the operands to 0. On the other hand, frawk coerces all operands to
+  numbers if one of their operands is a number; this preserves the common
+  use-case of (e.g.) filtering a numeric column by a numeric constant. I've
+  found these semantics to be more predictable (and also a bit more
+  straightforward to implement).
+* *Null values and join points* Null values in frawk may occasionally be coerced
+  to integers. For example `if (0) { x = 5 }; printf "[%s]", x;` will print `[]`
+  in awk and will print `[0]` in frawk. This is the main pattern in which
+  frawk's approach to types can "leak" into actual programs.
