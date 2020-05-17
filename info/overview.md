@@ -238,8 +238,8 @@ surprised to discover there were bugs in frawk's parser.
 
 * fawk supports the `-i csv` and `-i tsv` command-line options, which split all
   inputs (regardless of the value of `FS` and `RS`) according to the CSV and TSV
-  formats, assigning `$0` to the raw line and `$N$` to the Nth field in the
-  current row, fully escaped. There are also equivalent functionality for output
+  formats, assigning `$0` to the raw line and `$N` to the Nth field in the
+  current row, fully escaped. There is also equivalent functionality for output
   CSV-escaped lines (enabled via `-o csv` and `-o tsv`).
 * frawk has a builtin `join_fields` function that produces a string of a
   particular range of input columns.
