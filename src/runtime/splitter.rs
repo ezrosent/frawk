@@ -230,14 +230,14 @@ impl<R: Read> RegexSplitter<R> {
         }
         self.reader.state = ReaderState::OK;
         loop {
-            // Why this map invocation? Match objects hold a reference to the substring, which
-            // makes it harder for us to call mutable methods like advance in the body, so just get
-            // the start and end pointers.
             let s = unsafe {
                 str::from_utf8_unchecked(
                     &self.reader.buf.as_bytes()[self.reader.start..self.reader.end],
                 )
             };
+            // Why this map invocation? Match objects hold a reference to the substring, which
+            // makes it harder for us to call mutable methods like advance in the body, so just get
+            // the start and end pointers.
             let start_offset = self.reader.start;
             match pat.find(s).map(|m| (m.start(), m.end())) {
                 Some((start, end)) => {
@@ -266,6 +266,218 @@ impl<R: Read> RegexSplitter<R> {
                     }
                 }
             }
+        }
+    }
+}
+
+pub trait SplitterImpl {
+    const IS_REPEATED: bool;
+    const TRIM_LEADING_EMPTY: bool;
+    fn is_field_sep(&self, b: u8) -> bool;
+    fn is_record_sep(&self, b: u8) -> bool;
+}
+pub struct WhiteSpace;
+impl SplitterImpl for WhiteSpace {
+    const IS_REPEATED: bool = true;
+    const TRIM_LEADING_EMPTY: bool = true;
+    fn is_field_sep(&self, b: u8) -> bool {
+        matches!(b, b' ' | b'\x09'..=b'\x0d')
+    }
+    fn is_record_sep(&self, b: u8) -> bool {
+        b == b'\n'
+    }
+}
+
+pub struct SimpleSplitter {
+    record_sep: u8,
+    field_sep: u8,
+}
+
+impl SimpleSplitter {
+    pub fn new(record_sep: u8, field_sep: u8) -> Option<SimpleSplitter> {
+        if record_sep == field_sep {
+            return None;
+        }
+        Some(SimpleSplitter {
+            record_sep,
+            field_sep,
+        })
+    }
+}
+
+impl SplitterImpl for SimpleSplitter {
+    const IS_REPEATED: bool = false;
+    const TRIM_LEADING_EMPTY: bool = false;
+    fn is_field_sep(&self, b: u8) -> bool {
+        b == self.field_sep
+    }
+    fn is_record_sep(&self, b: u8) -> bool {
+        b == self.record_sep
+    }
+}
+
+// Used for "simple" patterns. Instead of looking up and splitting by a full regex, we eagerly
+// split by a simple predicate and populate lines accordingly.
+pub struct DefaultSplitter<R, S> {
+    reader: Reader<R>,
+    name: Str<'static>,
+    used_fields: FieldSet,
+    // As in RegexSplitter, used to trigger updating FILENAME on the first read.
+    start: bool,
+    splitter: S,
+}
+
+impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
+    type Line = RegexLine;
+    fn filename(&self) -> Str<'static> {
+        self.name.clone()
+    }
+    fn read_state(&self) -> i64 {
+        self.reader.read_state()
+    }
+    fn next_file(&mut self) -> bool {
+        self.reader.force_eof();
+        false
+    }
+    fn set_used_fields(&mut self, used_fields: &FieldSet) {
+        self.used_fields = used_fields.clone();
+    }
+    fn read_line_reuse<'a, 'b: 'a>(
+        &'b mut self,
+        _pat: &Str,
+        _rc: &mut RegexCache,
+        old: &'a mut RegexLine,
+    ) -> Result</* file changed */ bool> {
+        let line = self.read_line_inner(&mut old.fields);
+        old.line = line;
+        old.diverged = false;
+        let start = self.start;
+        if start {
+            old.used_fields = self.used_fields.clone();
+        } else if old.used_fields != self.used_fields {
+            // Doing this every time relies on the used field set being small, and easy to compare.
+            // If we wanted to make it arbitrary-sized, we could switch this to being a length
+            // comparison, as we'll never remove used fields dynamically.
+            self.used_fields = old.used_fields.clone();
+        }
+        self.start = false;
+        Ok(start)
+    }
+    fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, RegexLine)> {
+        let mut line = RegexLine::default();
+        let changed = self.read_line_reuse(_pat, _rc, &mut line)?;
+        Ok((changed, line))
+    }
+}
+
+impl<R: Read, S: SplitterImpl> DefaultSplitter<R, S> {
+    pub fn new(splitter: S, r: R, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
+        DefaultSplitter {
+            reader: Reader::new(r, chunk_size),
+            name: name.into(),
+            used_fields: FieldSet::all(),
+            start: true,
+            splitter,
+        }
+    }
+    fn read_line_inner(&mut self, fields: &mut LazyVec<Str<'static>>) -> Str<'static> {
+        fields.clear();
+        let mut prefix: Str<'static> = Default::default();
+        // current field we are parsing (0-indexed)
+        let mut current_field = 0;
+        let mut current_field_start = self.reader.start;
+        let mut was_field = false;
+        if self.reader.is_eof() {
+            return prefix;
+        }
+        macro_rules! handle_err {
+            ($e:expr) => {
+                if let Ok(e) = $e {
+                    e
+                } else {
+                    fields.clear();
+                    self.reader.state = ReaderState::ERROR;
+                    return Str::default();
+                }
+            };
+        }
+        self.reader.state = ReaderState::OK;
+        loop {
+            // TODO: handle lines crossing chunk boundaries (re: prefix, and re: first field)
+            let bytes = &self.reader.buf.as_bytes()[self.reader.start..self.reader.end];
+            for (i, b) in bytes
+                .iter()
+                .enumerate()
+                .map(|(ix, b)| (ix + self.reader.start, *b))
+            {
+                let was_field_cur = was_field;
+                let is_field_sep = self.splitter.is_field_sep(b);
+                let is_record_sep = self.splitter.is_record_sep(b);
+                if S::IS_REPEATED {
+                    was_field = is_field_sep;
+                }
+                // We might get weird semantics if the predicates overlap. The general method in
+                // RegexSplitter does two separate passes, but we are doing one.
+                debug_assert!(!(is_field_sep && is_record_sep));
+                if is_field_sep {
+                    if S::IS_REPEATED && was_field_cur {
+                        continue;
+                    }
+                    // Alright, we just ended a field.
+                    if S::TRIM_LEADING_EMPTY && current_field_start == i {
+                        // An empty leading field, do nothing
+                    } else {
+                        let field = if self.used_fields.get(current_field + 1) {
+                            let mut res =
+                                unsafe { self.reader.buf.slice_to_str(current_field_start, i) };
+                            if current_field == 0 {
+                                res = Str::concat(prefix.clone(), res);
+                            }
+                            res
+                        } else {
+                            Str::default()
+                        };
+                        fields.insert(current_field, field);
+                        current_field += 1;
+                    }
+                    if !S::IS_REPEATED {
+                        current_field_start = i + 1;
+                    }
+                } else if S::IS_REPEATED && was_field_cur {
+                    // A run of field separators has ended
+                    current_field_start = i;
+                }
+                if is_record_sep {
+                    // Alright. Found the end of a line. Finish off the last field, then append all
+                    // this to prefix and get out of here.
+                    if S::TRIM_LEADING_EMPTY && current_field == 0 && current_field_start == i {
+                        // Just tidying up one edge-case here.
+                        // e.g. echo "     " | awk '{ print NF; }' => '0'
+                    } else {
+                        let last_field = if self.used_fields.get(current_field + 1) {
+                            unsafe { self.reader.buf.slice_to_str(current_field_start, i) }
+                        } else {
+                            Str::default()
+                        };
+                        fields.insert(current_field, last_field);
+                    }
+                    let line = if self.used_fields.get(0) {
+                        Str::concat(prefix, unsafe {
+                            self.reader.buf.slice_to_str(self.reader.start, i)
+                        })
+                    } else {
+                        Str::default()
+                    };
+                    handle_err!(self.reader.advance(i - self.reader.start));
+                    return line;
+                }
+            }
+            prefix = Str::concat(prefix, unsafe {
+                self.reader
+                    .buf
+                    .slice_to_str(self.reader.start, self.reader.end)
+            });
+            handle_err!(self.reader.advance(self.reader.end - self.reader.start));
         }
     }
 }
@@ -405,14 +617,14 @@ struct Reader<R> {
     inner: R,
     // The "stray bytes" that will be prepended to the next buffer.
     prefix: SmallVec<[u8; 8]>,
-    // TODO we probably want this to be a Buf, not a Str, but Buf's API gives out bytes not
-    // strings.
     buf: Buf,
     start: usize,
     end: usize,
     chunk_size: usize,
     state: ReaderState,
     last_len: usize,
+    // TODO: add a cache here
+    // TODO: get padding as an argument
 }
 
 fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {

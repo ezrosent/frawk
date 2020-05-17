@@ -76,7 +76,7 @@ pub(crate) trait LineReader {
     }
     fn read_state(&self) -> i64;
     fn next_file(&mut self) -> bool;
-    fn set_used_fields(&mut self, _used_fields: &crate::pushdown::FieldSet) {}
+    fn set_used_fields(&mut self, _used_fields: &crate::pushdown::FieldSet);
 }
 
 pub struct ChainedReader<R>(Vec<R>);
