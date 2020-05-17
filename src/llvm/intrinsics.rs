@@ -7,7 +7,7 @@ use crate::pushdown::FieldSet;
 use crate::runtime::{
     self,
     printf::{printf, FormatArg},
-    splitter::{CSVReader, RegexSplitter},
+    splitter::{CSVReader, DefaultSplitter, RegexSplitter, SimpleSplitter, WhiteSpace},
     ChainedReader, FileRead, FileWrite, Float, Int, IntMap, Line, LineReader, RegexCache, Str,
     StrMap, Variables,
 };
@@ -60,11 +60,24 @@ macro_rules! exit {
     }};
 }
 
+macro_rules! with_input {
+    ($inp:expr, |$p:pat| $body:expr) => {
+        match $inp {
+            InputData::V1($p) => $body,
+            InputData::V2($p) => $body,
+            InputData::V3($p) => $body,
+            InputData::V4($p) => $body,
+        }
+    };
+}
+
 type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
-type InputData = Either<
-    InputTuple<ChainedReader<RegexSplitter<Box<dyn io::Read>>>>,
-    InputTuple<ChainedReader<CSVReader<Box<dyn io::Read>>>>,
->;
+enum InputData {
+    V1(InputTuple<ChainedReader<CSVReader<Box<dyn io::Read>>>>),
+    V2(InputTuple<ChainedReader<DefaultSplitter<Box<dyn io::Read>, WhiteSpace>>>),
+    V3(InputTuple<ChainedReader<DefaultSplitter<Box<dyn io::Read>, SimpleSplitter>>>),
+    V4(InputTuple<ChainedReader<RegexSplitter<Box<dyn io::Read>>>>),
+}
 
 pub(crate) trait IntoRuntime {
     fn into_runtime<'a>(
@@ -74,35 +87,32 @@ pub(crate) trait IntoRuntime {
     ) -> Runtime<'a>;
 }
 
-impl IntoRuntime for ChainedReader<CSVReader<Box<dyn io::Read>>> {
-    fn into_runtime<'a>(
-        self,
-        stdout: impl io::Write + 'static,
-        used_fields: &FieldSet,
-    ) -> Runtime<'a> {
-        Runtime {
-            vars: Default::default(),
-            input_data: Either::Right((Default::default(), FileRead::new(self, used_fields))),
-            regexes: Default::default(),
-            write_files: FileWrite::new(stdout),
+macro_rules! impl_into_runtime {
+    ($ty:ty, $var:tt) => {
+        impl IntoRuntime for ChainedReader<$ty> {
+            fn into_runtime<'a>(
+                self,
+                stdout: impl io::Write + 'static,
+                used_fields: &FieldSet,
+            ) -> Runtime<'a> {
+                Runtime {
+                    vars: Default::default(),
+                    input_data: InputData::$var((
+                        Default::default(),
+                        FileRead::new(self, used_fields),
+                    )),
+                    regexes: Default::default(),
+                    write_files: FileWrite::new(stdout),
+                }
+            }
         }
-    }
+    };
 }
 
-impl IntoRuntime for ChainedReader<RegexSplitter<Box<dyn io::Read>>> {
-    fn into_runtime<'a>(
-        self,
-        stdout: impl io::Write + 'static,
-        used_fields: &FieldSet,
-    ) -> Runtime<'a> {
-        Runtime {
-            vars: Default::default(),
-            input_data: Either::Left((Default::default(), FileRead::new(self, used_fields))),
-            regexes: Default::default(),
-            write_files: FileWrite::new(stdout),
-        }
-    }
-}
+impl_into_runtime!(CSVReader<Box<dyn io::Read>>, V1);
+impl_into_runtime!(DefaultSplitter<Box<dyn io::Read>, WhiteSpace>, V2);
+impl_into_runtime!(DefaultSplitter<Box<dyn io::Read>, SimpleSplitter>, V3);
+impl_into_runtime!(RegexSplitter<Box<dyn io::Read>>, V4);
 
 pub(crate) struct Runtime<'a> {
     vars: Variables<'a>,
@@ -114,7 +124,7 @@ pub(crate) struct Runtime<'a> {
 impl<'a> Runtime<'a> {
     fn reset_file_vars(&mut self) {
         self.vars.fnr = 0;
-        self.vars.filename = for_either!(&mut self.input_data, |(_, read_files)| {
+        self.vars.filename = with_input!(&mut self.input_data, |(_, read_files)| {
             read_files.stdin_filename().upcast()
         });
     }
@@ -358,7 +368,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
-        for_either!(&mut runtime.input_data, |(_, read_files)| {
+        with_input!(&mut runtime.input_data, |(_, read_files)| {
             read_files.read_err(&*(file as *mut Str))
         }),
         "unexpected error when reading error status of file:"
@@ -369,7 +379,7 @@ pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> In
 #[no_mangle]
 pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
-    for_either!(&mut runtime.input_data, |(_, read_files)| read_files
+    with_input!(&mut runtime.input_data, |(_, read_files)| read_files
         .read_err_stdin())
 }
 
@@ -377,7 +387,7 @@ pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
 pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let changed = try_abort!(
-        for_either!(&mut runtime.input_data, |(line, read_files)| {
+        with_input!(&mut runtime.input_data, |(line, read_files)| {
             runtime
                 .regexes
                 .get_line_stdin_reuse(&runtime.vars.rs, read_files, line)
@@ -392,7 +402,7 @@ pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn next_file(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
-    for_either!(&mut runtime.input_data, |(_, read_files)| read_files
+    with_input!(&mut runtime.input_data, |(_, read_files)| read_files
         .next_file());
 }
 
@@ -400,7 +410,7 @@ pub unsafe extern "C" fn next_file(runtime: *mut c_void) {
 pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let (changed, res) = try_abort!(
-        for_either!(&mut runtime.input_data, |(_, read_files)| {
+        with_input!(&mut runtime.input_data, |(_, read_files)| {
             runtime.regexes.get_line_stdin(&runtime.vars.rs, read_files)
         }),
         "unexpected error when reading line from stdin:"
@@ -415,7 +425,7 @@ pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
 pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let file = &*(file as *mut Str);
-    let res = for_either!(&mut runtime.input_data, |(_, read_files)| {
+    let res = with_input!(&mut runtime.input_data, |(_, read_files)| {
         runtime.regexes.get_line(file, &runtime.vars.rs, read_files)
     });
     match res {
@@ -501,7 +511,7 @@ pub unsafe extern "C" fn split_int(
 #[no_mangle]
 pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
-    let col_str = for_either!(&mut runtime.input_data, |(line, _)| {
+    let col_str = with_input!(&mut runtime.input_data, |(line, _)| {
         line.get_col(
             col,
             &runtime.vars.fs,
@@ -521,7 +531,7 @@ pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) ->
     let sep: Str<'static> = ",".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
-        for_either!(&mut runtime.input_data, |(line, _)| {
+        with_input!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
             line.join_cols(start, end, &sep, nf, |s| runtime::csv::escape_csv(&s))
         }),
@@ -535,7 +545,7 @@ pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) ->
     let sep: Str<'static> = "\t".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
-        for_either!(&mut runtime.input_data, |(line, _)| {
+        with_input!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
             line.join_cols(start, end, &sep, nf, |s| runtime::csv::escape_tsv(&s))
         }),
@@ -553,7 +563,7 @@ pub unsafe extern "C" fn join_cols(
 ) -> u128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
-        for_either!(&mut runtime.input_data, |(line, _)| {
+        with_input!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
             line.join_cols(start, end, &*(sep as *mut Str), nf, |s| s)
         }),
@@ -566,7 +576,7 @@ pub unsafe extern "C" fn join_cols(
 pub unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let s = &*(s as *mut Str);
-    if let Err(e) = for_either!(&mut runtime.input_data, |(line, _)| line.set_col(
+    if let Err(e) = with_input!(&mut runtime.input_data, |(line, _)| line.set_col(
         col,
         s,
         &runtime.vars.ofs,
@@ -765,7 +775,7 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         if let Variable::NF = var {
-            runtime.vars.nf = match for_either!(&mut runtime.input_data, |(line, _)| line
+            runtime.vars.nf = match with_input!(&mut runtime.input_data, |(line, _)| line
                 .nf(&runtime.vars.fs, &mut runtime.regexes))
             {
                 Ok(nf) => nf as Int,
@@ -927,7 +937,7 @@ pub unsafe extern "C" fn printf_impl_stdout(
 pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut u128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
-    for_either!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
+    with_input!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
     rt.write_files.close(file);
 }
 

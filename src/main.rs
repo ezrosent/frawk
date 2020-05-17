@@ -47,7 +47,7 @@ use cfg::Escaper;
 use llvm::IntoRuntime;
 use runtime::{
     csv::InputFormat,
-    splitter::{CSVReader, RegexSplitter},
+    splitter::{CSVReader, DefaultSplitter, RegexSplitter},
     ChainedReader, LineReader, CHUNK_SIZE,
 };
 use std::fs::File;
@@ -234,14 +234,11 @@ fn get_context<'a>(
     }
 }
 
-fn run_interp(
-    prog: &str,
+fn run_interp_with_context<'a>(
+    mut ctx: cfg::ProgramContext<'a, &'a str>,
     stdin: impl LineReader,
     stdout: impl io::Write + 'static,
-    raw: &RawPrelude,
 ) {
-    let a = Arena::default();
-    let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
     let mut interp = match compile::bytecode(&mut ctx, stdin, stdout) {
         Ok(ctx) => ctx,
         Err(e) => fail!("bytecode compilation failure: {}", e),
@@ -251,15 +248,12 @@ fn run_interp(
     }
 }
 
-fn run_llvm(
-    prog: &str,
+fn run_llvm_with_context<'a>(
+    mut ctx: cfg::ProgramContext<'a, &'a str>,
     stdin: impl IntoRuntime,
     stdout: impl io::Write + 'static,
     cfg: llvm::Config,
-    raw: &RawPrelude,
 ) {
-    let a = Arena::default();
-    let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
     if let Err(e) = compile::run_llvm(&mut ctx, stdin, stdout, cfg) {
         fail!("error compiling llvm: {}", e)
     }
@@ -380,16 +374,52 @@ fn main() {
     if skip_output {
         return;
     }
+
+    // This horrid macro is here because all of the different ways of reading input are different
+    // types, making functions hard to write. Still, there must be something to be done to clean
+    // this up here.
     macro_rules! with_inp {
-        ($inp:ident, $body:expr) => {
+        ($analysis:expr, $inp:ident, $body:expr) => {
             if opts.input_files.len() == 0 {
                 let _reader: Box<dyn io::Read> = Box::new(io::stdin());
-                match ifmt {
-                    Some(ifmt) => {
+                match (ifmt, $analysis) {
+                    (Some(ifmt), _) => {
                         let $inp = chained(CSVReader::new(_reader, ifmt, "-"));
                         $body
                     }
-                    None => {
+                    (
+                        None,
+                        cfg::SepAssign::Potential {
+                            field_sep,
+                            record_sep,
+                        },
+                    ) => {
+                        let field_sep = field_sep.unwrap_or(" ");
+                        let record_sep = record_sep.unwrap_or("\n");
+                        if field_sep.len() == 1 && record_sep.len() == 1 {
+                            if field_sep == " " && record_sep == "\n" {
+                                let $inp = chained(DefaultSplitter::new(
+                                    runtime::splitter::WhiteSpace,
+                                    _reader,
+                                    CHUNK_SIZE,
+                                    "-",
+                                ));
+                                $body
+                            } else {
+                                let split = runtime::splitter::SimpleSplitter::new(
+                                    record_sep.as_bytes()[0],
+                                    field_sep.as_bytes()[0],
+                                );
+                                let $inp =
+                                    chained(DefaultSplitter::new(split, _reader, CHUNK_SIZE, "-"));
+                                $body
+                            }
+                        } else {
+                            let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
+                            $body
+                        }
+                    }
+                    (None, cfg::SepAssign::Unsure) => {
                         let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
                         $body
                     }
@@ -402,15 +432,65 @@ fn main() {
                 let $inp = ChainedReader::new(iter);
                 $body
             } else {
-                let iter = opts.input_files.iter().cloned().map(|file| {
-                    let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
-                    RegexSplitter::new(reader, CHUNK_SIZE, file)
-                });
-                let $inp = ChainedReader::new(iter);
-                $body
+                match $analysis {
+                    cfg::SepAssign::Potential {
+                        field_sep,
+                        record_sep,
+                    } => {
+                        let field_sep = field_sep.unwrap_or(" ");
+                        let record_sep = record_sep.unwrap_or("\n");
+                        if field_sep.len() == 1 && record_sep.len() == 1 {
+                            if field_sep == " " && record_sep == "\n" {
+                                let iter = opts.input_files.iter().cloned().map(|file| {
+                                    let reader: Box<dyn io::Read> =
+                                        Box::new(open_file_read(file.as_str()));
+                                    DefaultSplitter::new(
+                                        runtime::splitter::WhiteSpace,
+                                        reader,
+                                        CHUNK_SIZE,
+                                        file,
+                                    )
+                                });
+                                let $inp = ChainedReader::new(iter);
+                                $body
+                            } else {
+                                let split = runtime::splitter::SimpleSplitter::new(
+                                    record_sep.as_bytes()[0],
+                                    field_sep.as_bytes()[0],
+                                );
+                                let iter = opts.input_files.iter().cloned().map(move |file| {
+                                    let reader: Box<dyn io::Read> =
+                                        Box::new(open_file_read(file.as_str()));
+                                    DefaultSplitter::new(split, reader, CHUNK_SIZE, file)
+                                });
+                                let $inp = ChainedReader::new(iter);
+                                $body
+                            }
+                        } else {
+                            let iter = opts.input_files.iter().cloned().map(|file| {
+                                let reader: Box<dyn io::Read> =
+                                    Box::new(open_file_read(file.as_str()));
+                                RegexSplitter::new(reader, CHUNK_SIZE, file)
+                            });
+                            let $inp = ChainedReader::new(iter);
+                            $body
+                        }
+                    }
+                    cfg::SepAssign::Unsure => {
+                        let iter = opts.input_files.iter().cloned().map(|file| {
+                            let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
+                            RegexSplitter::new(reader, CHUNK_SIZE, file)
+                        });
+                        let $inp = ChainedReader::new(iter);
+                        $body
+                    }
+                }
             }
         };
     }
+    let a = Arena::default();
+    let ctx = get_context(program_string.as_str(), &a, get_prelude(&a, &raw));
+    let analysis_result = ctx.analyze_sep_assignments();
     macro_rules! with_io {
         (|$inp:ident, $out:ident| $body:expr) => {
             match opts.out_file {
@@ -420,11 +500,11 @@ fn main() {
                         File::create(oup.as_str())
                             .unwrap_or_else(|e| fail!("failed to open {}: {}", oup.as_str(), e)),
                     );
-                    with_inp!($inp, $body);
+                    with_inp!(analysis_result, $inp, $body);
                 }
                 None => {
                     let $out = std::io::stdout();
-                    with_inp!($inp, $body);
+                    with_inp!(analysis_result, $inp, $body);
                 }
             }
         };
@@ -435,16 +515,15 @@ fn main() {
     }
 
     if opts.opt_level < 0 {
-        with_io!(|inp, oup| run_interp(program_string.as_str(), inp, oup, &raw,));
+        with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup))
     } else {
-        with_io!(|inp, oup| run_llvm(
-            program_string.as_str(),
+        with_io!(|inp, oup| run_llvm_with_context(
+            ctx,
             inp,
             oup,
             llvm::Config {
                 opt_level: opts.opt_level as usize
             },
-            &raw,
         ));
     }
 }

@@ -208,25 +208,26 @@ impl<R: Read> RegexSplitter<R> {
 
     pub fn read_line_regex(&mut self, pat: &Regex) -> Str<'static> {
         // We keep this as a separate method because it helps in writing tests.
-        let res = self.read_line_inner(pat);
-        self.reader.last_len = res.len();
+        let (res, consumed) = self.read_line_inner(pat);
+        self.reader.last_len = consumed;
         res
     }
 
-    fn read_line_inner(&mut self, pat: &Regex) -> Str<'static> {
+    fn read_line_inner(&mut self, pat: &Regex) -> (Str<'static>, usize) {
+        let mut consumed = 0;
         macro_rules! handle_err {
             ($e:expr) => {
                 if let Ok(e) = $e {
                     e
                 } else {
                     self.reader.state = ReaderState::ERROR;
-                    return Str::default();
+                    return (Str::default(), consumed);
                 }
             };
         }
         let mut prefix: Str<'static> = Default::default();
         if self.reader.is_eof() {
-            return prefix;
+            return (prefix, consumed);
         }
         self.reader.state = ReaderState::OK;
         loop {
@@ -250,19 +251,21 @@ impl<R: Read> RegexSplitter<R> {
                     // NOTE if we get a read error here, then we will stop one line early.
                     // That seems okay, but we could find out that it actually isn't, in which case
                     // we would want some more complicated error handling here.
+                    consumed += end;
                     handle_err!(self.reader.advance(end));
-                    return Str::concat(prefix, res);
+                    return (Str::concat(prefix, res), consumed);
                 }
                 None => {
                     // Valid offsets guaranteed by read_buf
                     let cur: Str =
                         unsafe { self.reader.buf.slice_to_str(start_offset, self.reader.end) };
                     let remaining = self.reader.remaining();
+                    consumed += remaining;
                     handle_err!(self.reader.advance(remaining));
                     prefix = Str::concat(prefix, cur);
                     if self.reader.is_eof() {
                         // All done! Just return the rest of the buffer.
-                        return prefix;
+                        return (prefix, consumed);
                     }
                 }
             }
@@ -276,6 +279,7 @@ pub trait SplitterImpl {
     fn is_field_sep(&self, b: u8) -> bool;
     fn is_record_sep(&self, b: u8) -> bool;
 }
+#[derive(Copy, Clone)]
 pub struct WhiteSpace;
 impl SplitterImpl for WhiteSpace {
     const IS_REPEATED: bool = true;
@@ -288,20 +292,18 @@ impl SplitterImpl for WhiteSpace {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct SimpleSplitter {
     record_sep: u8,
     field_sep: u8,
 }
 
 impl SimpleSplitter {
-    pub fn new(record_sep: u8, field_sep: u8) -> Option<SimpleSplitter> {
-        if record_sep == field_sep {
-            return None;
-        }
-        Some(SimpleSplitter {
+    pub fn new(record_sep: u8, field_sep: u8) -> SimpleSplitter {
+        SimpleSplitter {
             record_sep,
             field_sep,
-        })
+        }
     }
 }
 
@@ -348,7 +350,7 @@ impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
         _rc: &mut RegexCache,
         old: &'a mut RegexLine,
     ) -> Result</* file changed */ bool> {
-        let line = self.read_line_inner(&mut old.fields);
+        let (line, consumed) = self.read_line_inner(&mut old.fields);
         old.line = line;
         old.diverged = false;
         let start = self.start;
@@ -360,6 +362,7 @@ impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
             // comparison, as we'll never remove used fields dynamically.
             self.used_fields = old.used_fields.clone();
         }
+        self.reader.last_len = consumed;
         self.start = false;
         Ok(start)
     }
@@ -380,15 +383,16 @@ impl<R: Read, S: SplitterImpl> DefaultSplitter<R, S> {
             splitter,
         }
     }
-    fn read_line_inner(&mut self, fields: &mut LazyVec<Str<'static>>) -> Str<'static> {
+    fn read_line_inner(&mut self, fields: &mut LazyVec<Str<'static>>) -> (Str<'static>, usize) {
         fields.clear();
-        let mut prefix: Str<'static> = Default::default();
+        let mut consumed = 0;
+        let mut line_prefix: Str<'static> = Default::default();
+        let mut last_field_prefix: Str<'static> = Default::default();
         // current field we are parsing (0-indexed)
         let mut current_field = 0;
-        let mut current_field_start = self.reader.start;
         let mut was_field = false;
         if self.reader.is_eof() {
-            return prefix;
+            return (line_prefix, consumed);
         }
         macro_rules! handle_err {
             ($e:expr) => {
@@ -397,13 +401,13 @@ impl<R: Read, S: SplitterImpl> DefaultSplitter<R, S> {
                 } else {
                     fields.clear();
                     self.reader.state = ReaderState::ERROR;
-                    return Str::default();
+                    return (Str::default(), 0);
                 }
             };
         }
         self.reader.state = ReaderState::OK;
         loop {
-            // TODO: handle lines crossing chunk boundaries (re: prefix, and re: first field)
+            let mut current_field_start = self.reader.start;
             let bytes = &self.reader.buf.as_bytes()[self.reader.start..self.reader.end];
             for (i, b) in bytes
                 .iter()
@@ -416,9 +420,42 @@ impl<R: Read, S: SplitterImpl> DefaultSplitter<R, S> {
                 if S::IS_REPEATED {
                     was_field = is_field_sep;
                 }
-                // We might get weird semantics if the predicates overlap. The general method in
-                // RegexSplitter does two separate passes, but we are doing one.
-                debug_assert!(!(is_field_sep && is_record_sep));
+                if is_record_sep {
+                    // Alright. Found the end of a line. Finish off the last field, then append all
+                    // this to prefix and get out of here.
+                    if S::TRIM_LEADING_EMPTY
+                        && ((current_field == 0 && current_field_start == i) || was_field_cur)
+                    {
+                        // Just tidying up some edge cases here:
+                        // e.g. echo ""         | awk '{ print NF; }' => '0'
+                        // e.g. echo "     "    | awk '{ print NF; }' => '0'
+                        // e.g. echo " 1 2    " | awk '{ print NF; }' => '2'
+                    } else {
+                        let last_field = if self.used_fields.get(current_field + 1) {
+                            let mut res =
+                                unsafe { self.reader.buf.slice_to_str(current_field_start, i) };
+                            if current_field_start == 0 {
+                                res = Str::concat(last_field_prefix, res);
+                            }
+                            res
+                        } else {
+                            Str::default()
+                        };
+                        fields.insert(current_field, last_field);
+                    }
+                    let line = if self.used_fields.get(0) {
+                        Str::concat(line_prefix, unsafe {
+                            self.reader.buf.slice_to_str(self.reader.start, i)
+                        })
+                    } else {
+                        Str::default()
+                    };
+                    let diff = i - self.reader.start + 1;
+                    consumed += diff;
+                    handle_err!(self.reader.advance(diff));
+                    return (line, consumed);
+                }
+                // We prioritize the record_separator over the field_separators.
                 if is_field_sep {
                     if S::IS_REPEATED && was_field_cur {
                         continue;
@@ -430,8 +467,9 @@ impl<R: Read, S: SplitterImpl> DefaultSplitter<R, S> {
                         let field = if self.used_fields.get(current_field + 1) {
                             let mut res =
                                 unsafe { self.reader.buf.slice_to_str(current_field_start, i) };
-                            if current_field == 0 {
-                                res = Str::concat(prefix.clone(), res);
+                            if current_field_start == 0 {
+                                res = Str::concat(last_field_prefix, res);
+                                last_field_prefix = Str::default();
                             }
                             res
                         } else {
@@ -447,37 +485,33 @@ impl<R: Read, S: SplitterImpl> DefaultSplitter<R, S> {
                     // A run of field separators has ended
                     current_field_start = i;
                 }
-                if is_record_sep {
-                    // Alright. Found the end of a line. Finish off the last field, then append all
-                    // this to prefix and get out of here.
-                    if S::TRIM_LEADING_EMPTY && current_field == 0 && current_field_start == i {
-                        // Just tidying up one edge-case here.
-                        // e.g. echo "     " | awk '{ print NF; }' => '0'
-                    } else {
-                        let last_field = if self.used_fields.get(current_field + 1) {
-                            unsafe { self.reader.buf.slice_to_str(current_field_start, i) }
-                        } else {
-                            Str::default()
-                        };
-                        fields.insert(current_field, last_field);
-                    }
-                    let line = if self.used_fields.get(0) {
-                        Str::concat(prefix, unsafe {
-                            self.reader.buf.slice_to_str(self.reader.start, i)
-                        })
-                    } else {
-                        Str::default()
-                    };
-                    handle_err!(self.reader.advance(i - self.reader.start));
-                    return line;
-                }
             }
-            prefix = Str::concat(prefix, unsafe {
-                self.reader
-                    .buf
-                    .slice_to_str(self.reader.start, self.reader.end)
-            });
-            handle_err!(self.reader.advance(self.reader.end - self.reader.start));
+            if self.used_fields.get(0) {
+                let rest = unsafe {
+                    self.reader
+                        .buf
+                        .slice_to_str(self.reader.start, self.reader.end)
+                };
+                line_prefix = Str::concat(line_prefix, rest);
+            }
+            let use_next_field = self.used_fields.get(current_field + 1);
+            if use_next_field {
+                let rest = unsafe {
+                    self.reader
+                        .buf
+                        .slice_to_str(current_field_start, self.reader.end)
+                };
+                last_field_prefix = Str::concat(last_field_prefix, rest);
+            }
+            let remaining = self.reader.remaining();
+            consumed += remaining;
+            handle_err!(self.reader.advance(remaining));
+            if self.reader.is_eof() {
+                if use_next_field {
+                    fields.insert(current_field, last_field_prefix);
+                }
+                return (line_prefix, consumed);
+            }
         }
     }
 }
@@ -521,8 +555,7 @@ impl<R: Read> LineReader for CSVReader<R> {
         Ok(start)
     }
     fn read_state(&self) -> i64 {
-        let res = self.inner.read_state();
-        res
+        self.inner.read_state()
     }
     fn next_file(&mut self) -> bool {
         self.inner.force_eof();
@@ -681,6 +714,10 @@ impl<R: Read> Reader<R> {
         match self.state {
             ReaderState::OK => self.state as i64,
             ReaderState::ERROR | ReaderState::EOF => {
+                // NB: last_len should really be "bytes consumed"; i.e. it should be the length
+                // of the line including any trimmed characters, and the record separator. I.e.
+                // "empty lines" that are actually in the input should result in a nonzero value
+                // here.
                 if self.last_len == 0 {
                     self.state as i64
                 } else {

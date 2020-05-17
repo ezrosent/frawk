@@ -266,6 +266,15 @@ impl<'a> ProgramContext<'a, &'a str> {
     }
 }
 
+#[derive(Debug)]
+pub enum SepAssign<'a> {
+    Potential {
+        field_sep: Option<&'a str>,
+        record_sep: Option<&'a str>,
+    },
+    Unsure,
+}
+
 impl<'a, I> ProgramContext<'a, I>
 where
     builtins::Variable: TryFrom<I>,
@@ -284,6 +293,74 @@ where
     }
     pub(crate) fn local_globals_ref(&self) -> &HashSet<NumTy> {
         &self.shared.local_globals
+    }
+
+    // We want to optimize scripts that never override FS after the start of the program. We do
+    // this by collecting any builtin variable assignments (as well as getline and UDF calls)
+    // across all functions and providing a guess of what the FS and RS variables will be for the
+    // entire program, when it is safe to assume that no getline call could observe a different
+    // value.
+    //
+    // TODO This is all a bit crude, but we might have to build up full def-use chains to do
+    // something more principled. It's worth looking at a more robust approach if there are scripts
+    // that we would prefer triggered this optimizations but did not.
+    pub fn analyze_sep_assignments(&self) -> SepAssign<'a> {
+        let mut field_sep = None;
+        let mut record_sep = None;
+        let mut has_getline = false;
+        for (i, f) in self.funcs.iter().enumerate() {
+            if i == self.main_offset {
+                for (bi, sep) in [
+                    (builtins::Variable::FS, &mut field_sep),
+                    (builtins::Variable::RS, &mut record_sep),
+                ]
+                .iter_mut()
+                {
+                    if let Some(v) = f.vars.get(&Some(*bi)) {
+                        let num_assigns = v.len();
+                        if num_assigns == 0 {
+                            continue;
+                        }
+                        if num_assigns > 1 {
+                            return SepAssign::Unsure;
+                        }
+                        let (bb, v) = v[0];
+                        if bb != 0 {
+                            return SepAssign::Unsure;
+                        }
+                        // FS/RS assigned to a non-string-literal value.
+                        if v.is_none() {
+                            return SepAssign::Unsure;
+                        }
+                        **sep = v;
+                    }
+                }
+                if let Some(_) = f.vars.get(&None).and_then(|v| {
+                    if v.len() > 0 && v.iter().filter(|(bb, _)| *bb == 0).next().is_some() {
+                        Some(())
+                    } else {
+                        None
+                    }
+                }) {
+                    has_getline = true;
+                }
+            } else {
+                for bi in [builtins::Variable::FS, builtins::Variable::RS].iter() {
+                    if f.vars.get(&Some(*bi)).is_some() {
+                        return SepAssign::Unsure;
+                    }
+                }
+            }
+        }
+        // We called getline() _and_ assigned to FS/RS in the begin block; let's bail out just to
+        // be safe.
+        if has_getline && (field_sep.is_some() || record_sep.is_some()) {
+            return SepAssign::Unsure;
+        }
+        SepAssign::Potential {
+            field_sep,
+            record_sep,
+        }
     }
 
     // for debugging: get a mapping from the raw identifiers to the synthetic ones.
@@ -359,6 +436,7 @@ where
                 exit,
                 loop_ctx: Default::default(),
                 toplevel_header: None,
+                vars: Default::default(),
                 dt: Default::default(),
                 df: Default::default(),
             };
@@ -382,6 +460,7 @@ where
             exit,
             loop_ctx: Default::default(),
             toplevel_header: None,
+            vars: Default::default(),
             dt: Default::default(),
             df: Default::default(),
         };
@@ -483,6 +562,10 @@ pub(crate) struct Function<'a, I> {
     //
     // NB: We only support doing this from main.
     toplevel_header: Option<NodeIx>,
+
+    // Variable assignments, used to extract fast paths for splitting.
+    // None indicates a call to `getline`.
+    vars: HashMap<Option<builtins::Variable>, Vec<(usize, Option<&'a str>)>>,
 
     // Dominance information about `cfg`.
     dt: dom::Tree,
@@ -943,8 +1026,12 @@ where
                 )
             }
             Assign(x, to) => {
+                let lit = match to {
+                    StrLit(s) => Some(*s),
+                    _ => None,
+                };
                 let (next, to) = self.convert_expr(to, current_open)?;
-                return self.do_assign(x, |_| to, next);
+                return self.do_assign_hint(x, |_| to, lit, next);
             }
             AssignOp(x, op, to) => {
                 let (next, to_v) = self.convert_val(to, current_open)?;
@@ -1000,6 +1087,13 @@ where
                 );
             }
             Getline { from, into } => {
+                // If we had a `getline` call before assigning to `FS` or `RS` in the BEGIN block,
+                // we want to disable any optimizations around field splitting.
+                self.f
+                    .vars
+                    .entry(None)
+                    .or_insert_with(Vec::new)
+                    .push((current_open.index(), None));
                 // Another use of non-structural recursion for desugaring. Here we desugar:
                 //   getline var < file
                 // to
@@ -1078,11 +1172,22 @@ where
         }
         Ok((current_open, PrimExpr::Sprintf(fmt, res)))
     }
-
     fn do_assign<'c>(
         &mut self,
         v: &'c Expr<'c, 'b, I>,
         to: impl FnOnce(&PrimVal<'b>) -> PrimExpr<'b>,
+        current_open: NodeIx,
+    ) -> Result<(NodeIx, PrimExpr<'b>)> {
+        self.do_assign_hint(v, to, None, current_open)
+    }
+
+    // The `hint` in this case is `str_lit` which is used to infer potential "fast paths" for field
+    // splitting.
+    fn do_assign_hint<'c>(
+        &mut self,
+        v: &'c Expr<'c, 'b, I>,
+        to: impl FnOnce(&PrimVal<'b>) -> PrimExpr<'b>,
+        str_lit: Option<&'b str>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
         use ast::Expr::*;
@@ -1090,6 +1195,16 @@ where
             Var(i) => Ok((
                 current_open,
                 if let Ok(b) = builtins::Variable::try_from(i.clone()) {
+                    // We collect some data on which builtins are assigned to, and if they are
+                    // assigned to a string literal. This is used for triggering some fast paths
+                    // for field splitting; it is not as precise as the method for inferring used
+                    // fields (which consumes the typed IR), but that analysis is also a bit harder
+                    // to do soundly in this case.
+                    self.f
+                        .vars
+                        .entry(Some(b))
+                        .or_insert_with(Vec::new)
+                        .push((current_open.index(), str_lit));
                     let res = PrimExpr::LoadBuiltin(b);
                     let res_v = self.to_val(res.clone(), current_open)?;
                     self.add_stmt(current_open, PrimStmt::SetBuiltin(b, to(&res_v)))?;
@@ -1352,6 +1467,15 @@ where
         match bi {
             Either::Left(fname) => {
                 return if let Some(i) = self.func_table.get(&Some(fname.clone())) {
+                    // For field separator optimizations, any UDF calls in the BEGIN block of main
+                    // causes fallback to the generic regex-based splitter.
+                    //
+                    // TODO: this is pretty crude. It would be better to handle more cases here.
+                    self.f
+                        .vars
+                        .entry(None)
+                        .or_insert_with(Vec::new)
+                        .push((current_open.index(), None));
                     Ok((open, PrimExpr::CallUDF(*i, prim_args)))
                 } else {
                     err!("Call to unknown function \"{}\"", fname)

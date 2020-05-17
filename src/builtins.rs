@@ -1,4 +1,4 @@
-//! This module contains definitions and metadata for builtin functions.
+//! This module contains definitions and metadata for builtin functions and builtin variables.
 use crate::ast;
 use crate::common::{NodeIx, Result};
 use crate::compile;
@@ -362,7 +362,7 @@ impl Function {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Variable {
     ARGC = 0,
     ARGV = 1,

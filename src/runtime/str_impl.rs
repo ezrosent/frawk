@@ -303,6 +303,9 @@ impl<'a> Str<'a> {
                 // Awk will trim whitespace off the beginning of a line and not create an empty
                 // field in $1, but this doesn't happen for other patterns: leading ','s when FS=,
                 // do create empty fields, for example.
+                //
+                // TODO: this isn't quite right, it also removes the final field if it would be
+                // empty. We are probably better off special-casing the " " FS value.
                 if m.start() == 0 && s.chars().next().unwrap().is_whitespace() {
                     prev = m.end();
                     continue;
@@ -1005,7 +1008,7 @@ impl Buf {
     pub unsafe fn slice_to_str<'a>(&self, from: usize, to: usize) -> Str<'a> {
         debug_assert!(from <= self.len());
         debug_assert!(to <= self.len());
-        debug_assert!(from <= to);
+        debug_assert!(from <= to, "invalid slice [{}, {})", from, to);
         let len = to.saturating_sub(from);
         if len == 0 {
             Str::default()
