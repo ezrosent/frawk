@@ -169,15 +169,15 @@ fn csv_supported() -> bool {
 fn get_vars<'a, 'b>(
     vars: impl Iterator<Item = &'b str>,
     a: &'a Arena,
+    buf: &mut Vec<u8>,
 ) -> Vec<(&'a str, &'a ast::Expr<'a, 'a, &'a str>)> {
-    let mut buf = Vec::new();
     let mut stmts = Vec::new();
     for (i, var) in vars.enumerate() {
         buf.clear();
         let var = a.alloc_str(var);
         let lexer = lexer::Tokenizer::new(var);
         let parser = parsing::syntax::VarDefParser::new();
-        match parser.parse(a, &mut buf, lexer) {
+        match parser.parse(a, buf, lexer) {
             Ok(stmt) => stmts.push(stmt),
             Err(e) => fail!(
                 "failed to parse var at index {}:\n{}\nerror:{:?}",
@@ -191,12 +191,23 @@ fn get_vars<'a, 'b>(
 }
 
 fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
+    let mut buf = Vec::new();
+    let output_sep = raw
+        .output_sep
+        .map(|s| lexer::parse_string_literal(s, a, &mut buf));
+    let output_record_sep = raw
+        .output_record_sep
+        .map(|s| lexer::parse_string_literal(s, a, &mut buf));
+    let field_sep = raw
+        .field_sep
+        .as_ref()
+        .map(|s| lexer::parse_string_literal(s.as_str(), a, &mut buf));
     Prelude {
-        field_sep: raw.field_sep.as_ref().map(|s| a.alloc_str(s.as_str())),
-        var_decs: get_vars(raw.var_decs.iter().map(|s| s.as_str()), a),
-        output_sep: raw.output_sep,
+        field_sep,
+        var_decs: get_vars(raw.var_decs.iter().map(|s| s.as_str()), a, &mut buf),
         escaper: raw.escaper,
-        output_record_sep: raw.output_record_sep,
+        output_sep,
+        output_record_sep,
     }
 }
 
