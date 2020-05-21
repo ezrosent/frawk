@@ -7,7 +7,9 @@ use crate::pushdown::FieldSet;
 use crate::runtime::{
     self,
     printf::{printf, FormatArg},
-    splitter::{CSVReader, DefaultSplitter, RegexSplitter, SimpleSplitter, WhiteSpace},
+    splitter::{
+        batch::CSVReader, regex::RegexSplitter, DefaultSplitter, SimpleSplitter, WhiteSpace,
+    },
     ChainedReader, FileRead, FileWrite, Float, Int, IntMap, Line, LineReader, RegexCache, Str,
     StrMap, Variables,
 };
@@ -533,7 +535,7 @@ pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) ->
     let res = try_abort!(
         with_input!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
-            line.join_cols(start, end, &sep, nf, |s| runtime::csv::escape_csv(&s))
+            line.join_cols(start, end, &sep, nf, |s| runtime::escape_csv(&s))
         }),
         "join_csv:"
     );
@@ -547,7 +549,7 @@ pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) ->
     let res = try_abort!(
         with_input!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
-            line.join_cols(start, end, &sep, nf, |s| runtime::csv::escape_tsv(&s))
+            line.join_cols(start, end, &sep, nf, |s| runtime::escape_tsv(&s))
         }),
         "join_tsv:"
     );
@@ -667,12 +669,12 @@ pub unsafe extern "C" fn subst_all(
 
 #[no_mangle]
 pub unsafe extern "C" fn escape_csv(s: *mut u128) -> u128 {
-    mem::transmute::<Str, u128>(runtime::csv::escape_csv(&*(s as *mut Str)))
+    mem::transmute::<Str, u128>(runtime::escape_csv(&*(s as *mut Str)))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn escape_tsv(s: *mut u128) -> u128 {
-    mem::transmute::<Str, u128>(runtime::csv::escape_tsv(&*(s as *mut Str)))
+    mem::transmute::<Str, u128>(runtime::escape_tsv(&*(s as *mut Str)))
 }
 
 #[no_mangle]

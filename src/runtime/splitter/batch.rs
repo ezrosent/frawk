@@ -1,10 +1,13 @@
-/// CSV/TSV parsing geofflangdale/simdcsv.
-///
-/// As that repo name implies, it uses SIMD instructions to accelerate CSV and TSV parsing. It does
-/// this by performing a fast pass over the input that produces a list of "relevant indices" into
-/// the underlying input buffer, these play the same role as "control characters" in the SimdJSON
-/// paper (by the same authors). The higher-level state machine parser then operates on these
-/// control characters rather than on a byte-by-byte basis.
+//! Batched splitting of input.
+//!
+//! CSV/TSV parsing is adapted from geofflangdale/simdcsv.
+//!
+//! As that repo name implies, it uses SIMD instructions to accelerate CSV and TSV parsing. It does
+//! this by performing a fast pass over the input that produces a list of "relevant indices" into
+//! the underlying input buffer, these play the same role as "control characters" in the SimdJSON
+//! paper (by the same authors). The higher-level state machine parser then operates on these
+//! control characters rather than on a byte-by-byte basis.
+use std::io::Read;
 use std::mem;
 use std::str;
 
@@ -15,8 +18,136 @@ use crate::common::Result;
 use crate::pushdown::FieldSet;
 use crate::runtime::{
     str_impl::{Buf, Str},
-    Int,
+    Int, RegexCache, CHUNK_SIZE,
 };
+
+use super::{normalize_join_indexes, LineReader, Reader};
+
+pub struct CSVReader<R> {
+    inner: Reader<R>,
+    name: Str<'static>,
+    cur_offsets: Offsets,
+    prev_ix: usize,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+    // Used to trigger updating FILENAME on the first read.
+    start: bool,
+    ifmt: InputFormat,
+    field_set: FieldSet,
+
+    // This is a function pointer because we query the preferred instruction set at construction
+    // time.
+    find_indexes: unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64),
+}
+
+impl<R: Read> LineReader for CSVReader<R> {
+    type Line = Line;
+    fn filename(&self) -> Str<'static> {
+        self.name.clone()
+    }
+    fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, Line)> {
+        let mut line = Line::default();
+        let changed = self.read_line_reuse(_pat, _rc, &mut line)?;
+        Ok((changed, line))
+    }
+    fn read_line_reuse<'a, 'b: 'a>(
+        &'b mut self,
+        _pat: &Str,
+        _rc: &mut RegexCache,
+        old: &'a mut Line,
+    ) -> Result<bool> {
+        let start = self.start;
+        self.start = false;
+        self.read_line_inner(old)?;
+        Ok(start)
+    }
+    fn read_state(&self) -> i64 {
+        self.inner.read_state()
+    }
+    fn next_file(&mut self) -> bool {
+        self.inner.force_eof();
+        false
+    }
+    fn set_used_fields(&mut self, field_set: &FieldSet) {
+        self.field_set = field_set.clone();
+    }
+}
+
+// TODO rename as it handles CSV and TSV
+impl<R: Read> CSVReader<R> {
+    // TODO give this the same signature as RegexSplitter (passing in chunk size, or just making
+    // two constructors)
+    pub fn new(r: R, ifmt: InputFormat, name: impl Into<Str<'static>>) -> Self {
+        CSVReader {
+            start: true,
+            inner: Reader::new(r, CHUNK_SIZE),
+            name: name.into(),
+            cur_offsets: Default::default(),
+            prev_ix: 0,
+            prev_iter_inside_quote: 0,
+            prev_iter_cr_end: 0,
+            find_indexes: get_find_indexes(ifmt),
+            field_set: FieldSet::all(),
+            ifmt,
+        }
+    }
+    fn refresh_buf(&mut self) -> Result<bool> {
+        // exhausted. Fetch a new `cur`.
+        self.inner.advance(self.inner.remaining())?;
+        if self.inner.is_eof() {
+            return Ok(true);
+        }
+        let (next_iq, next_cre) = unsafe {
+            (self.find_indexes)(
+                &self.inner.buf.as_bytes()[self.inner.start..self.inner.end],
+                &mut self.cur_offsets,
+                self.prev_iter_inside_quote,
+                self.prev_iter_cr_end,
+            )
+        };
+        self.prev_iter_inside_quote = next_iq;
+        self.prev_iter_cr_end = next_cre;
+        Ok(false)
+    }
+    fn stepper<'a, 'b: 'a>(&'b mut self, st: State, line: &'a mut Line) -> Stepper<'a> {
+        Stepper {
+            buf: &self.inner.buf,
+            buf_len: self.inner.end,
+            off: &mut self.cur_offsets,
+            prev_ix: self.prev_ix,
+            ifmt: self.ifmt,
+            field_set: self.field_set.clone(),
+            line,
+            st,
+        }
+    }
+    pub fn read_line_inner<'a, 'b: 'a>(&'b mut self, mut line: &'a mut Line) -> Result<()> {
+        line.clear();
+        let mut st = State::Init;
+        let mut prev_ix = self.prev_ix;
+        loop {
+            self.prev_ix = prev_ix;
+            // TODO: should this be ==? We get failures in that case, but is that a bug?
+            if self.prev_ix >= self.inner.remaining() {
+                if self.refresh_buf()? {
+                    // Out of space.
+                    line.promote();
+                    self.inner.last_len = line.len();
+                    return Ok(());
+                }
+                self.prev_ix = 0;
+            }
+            let mut stepper = self.stepper(st, &mut line);
+            prev_ix = unsafe { stepper.step() };
+            if let State::Done = stepper.st {
+                self.prev_ix = prev_ix;
+                self.inner.last_len = line.len();
+                return Ok(());
+            }
+            st = stepper.st;
+        }
+    }
+}
 
 #[derive(Default, Debug)]
 pub struct Offsets {
@@ -56,7 +187,7 @@ impl<'a> super::Line<'a> for Line {
         F: FnMut(Str<'static>) -> Str<'static>,
     {
         debug_assert_eq!(self.fields.len(), nf);
-        let (start, end) = super::normalize_join_indexes(start, end, nf)?;
+        let (start, end) = normalize_join_indexes(start, end, nf)?;
         let sep = sep.clone().unmoor();
         Ok(sep
             .join(self.fields[start..end].iter().cloned().map(trans))
@@ -533,7 +664,7 @@ mod generic {
                     ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
                 }
         write_offsets!(0, 1, 2, 3, 4, 5, 6, 7);
-        // Similarlty for bits 8->16
+        // Similarly for bits 8->16
         if count > 8 {
             write_offsets!(8, 9, 10, 11, 12, 13, 14, 15);
         }
@@ -648,6 +779,11 @@ mod generic {
         const BUFFER_SIZE: usize = 4;
         macro_rules! iterate {
             ($buf:expr) => {{
+                // XXX Padding is only going to be 32 bytes ... what happens when you prefetch an
+                // invalid address? It may slow things down, not to mention we may be giving the
+                // compiler the wrong idea.
+                //
+                // Either increase padding, or decrease the prefetch interval.
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 // find commas not inside quotes
                 let inp = V::fill_input($buf);

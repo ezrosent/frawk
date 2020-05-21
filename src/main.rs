@@ -46,8 +46,11 @@ use arena::Arena;
 use cfg::Escaper;
 use llvm::IntoRuntime;
 use runtime::{
-    csv::InputFormat,
-    splitter::{CSVReader, DefaultSplitter, RegexSplitter},
+    splitter::{
+        batch::{CSVReader, InputFormat},
+        regex::RegexSplitter,
+        DefaultSplitter,
+    },
     ChainedReader, LineReader, CHUNK_SIZE,
 };
 use std::fs::File;

@@ -11,8 +11,10 @@ use crate::{
     pushdown::FieldSet,
     runtime::{
         self,
-        csv::InputFormat,
-        splitter::{CSVReader, RegexSplitter},
+        splitter::{
+            batch::{CSVReader, InputFormat},
+            regex::RegexSplitter,
+        },
         ChainedReader,
     },
     types::{self, get_types},
@@ -42,10 +44,13 @@ impl FakeStdout {
 
 const FILE_BREAK: &'static str = "<<<FILE BREAK>>>";
 
-fn simulate_stdin_csv(
-    ifmt: InputFormat,
+fn simulate_stdin<LR: runtime::LineReader>(
     inp: impl Into<String>,
-) -> impl llvm::IntoRuntime + runtime::LineReader {
+    mut f: impl FnMut(Box<dyn io::Read>, String) -> LR,
+) -> ChainedReader<LR>
+where
+    ChainedReader<LR>: llvm::IntoRuntime,
+{
     let stdin: String = inp.into();
     let inputs: Vec<_> = stdin
         .split(FILE_BREAK)
@@ -53,24 +58,82 @@ fn simulate_stdin_csv(
         .enumerate()
         .map(|(i, x)| {
             let reader: Box<dyn io::Read> = Box::new(std::io::Cursor::new(x));
-            CSVReader::new(reader, ifmt, format!("fake_stdin_{}", i))
+            f(reader, format!("fake_stdin_{}", i))
         })
         .collect();
     ChainedReader::new(inputs.into_iter())
 }
 
+fn simulate_stdin_csv(
+    ifmt: InputFormat,
+    inp: impl Into<String>,
+) -> impl llvm::IntoRuntime + runtime::LineReader {
+    simulate_stdin(inp, |reader, name| CSVReader::new(reader, ifmt, name))
+}
+
 fn simulate_stdin_regex(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtime::LineReader {
-    let stdin: String = inp.into();
-    let inputs: Vec<_> = stdin
-        .split(FILE_BREAK)
-        .map(String::from)
-        .enumerate()
-        .map(|(i, x)| {
-            let reader: Box<dyn io::Read> = Box::new(std::io::Cursor::new(x));
-            RegexSplitter::new(reader, runtime::CHUNK_SIZE, format!("fake_stdin_{}", i))
-        })
-        .collect();
-    ChainedReader::new(inputs.into_iter())
+    simulate_stdin(inp, |reader, name| {
+        RegexSplitter::new(reader, runtime::CHUNK_SIZE, name)
+    })
+}
+
+fn simulate_stdin_whitespace(
+    inp: impl Into<String>,
+) -> impl llvm::IntoRuntime + runtime::LineReader {
+    simulate_stdin(inp, |reader, name| {
+        use runtime::splitter::{DefaultSplitter, WhiteSpace};
+        DefaultSplitter::new(WhiteSpace, reader, runtime::CHUNK_SIZE, name)
+    })
+}
+
+fn simulate_stdin_singlechar(
+    field_sep: u8,
+    record_sep: u8,
+    inp: impl Into<String>,
+) -> impl llvm::IntoRuntime + runtime::LineReader {
+    simulate_stdin(inp, |reader, name| {
+        use runtime::splitter::{DefaultSplitter, SimpleSplitter};
+        DefaultSplitter::new(
+            SimpleSplitter::new(record_sep, field_sep),
+            reader,
+            runtime::CHUNK_SIZE,
+            name,
+        )
+    })
+}
+
+macro_rules! with_reader {
+    ($report:expr, $inp:expr, |$id:ident| $body:expr) => {
+        match $report {
+            cfg::SepAssign::Unsure => {
+                let $id = simulate_stdin_regex($inp);
+                $body
+            }
+            cfg::SepAssign::Potential {
+                field_sep,
+                record_sep,
+            } => {
+                let field_sep = field_sep.unwrap_or(" ");
+                let record_sep = record_sep.unwrap_or("\n");
+                if field_sep.len() == 1 && record_sep.len() == 1 {
+                    if field_sep == " " && record_sep == "\n" {
+                        let $id = simulate_stdin_whitespace($inp);
+                        $body
+                    } else {
+                        let $id = simulate_stdin_singlechar(
+                            field_sep.as_bytes()[0],
+                            record_sep.as_bytes()[0],
+                            $inp,
+                        );
+                        $body
+                    }
+                } else {
+                    let $id = simulate_stdin_regex($inp);
+                    $body
+                }
+            }
+        }
+    };
 }
 
 const _PRINT_DEBUG_INFO: bool = false;
@@ -110,6 +173,9 @@ pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
     compile::compile_llvm(&mut ctx, LLVM_CONFIG)
 }
 
+// The run_llvm path implements a subset of the logic in main that specializes the input readers
+// for whitespace, or single-byte-separator splitter implementations. The bytecode path does not,
+// because we want to ensure that the logic works when using the more general regex-based splitter.
 pub(crate) fn run_llvm(
     prog: &str,
     stdin: impl Into<String>,
@@ -119,6 +185,7 @@ pub(crate) fn run_llvm(
     let a = Arena::default();
     let stmt = parse_program(prog, &a, esc)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+    let sep_analysis = ctx.analyze_sep_assignments();
     if _PRINT_DEBUG_INFO {
         let mut buf = Vec::<u8>::new();
         ctx.dbg_print(&mut buf).unwrap();
@@ -133,12 +200,9 @@ pub(crate) fn run_llvm(
             LLVM_CONFIG,
         )?;
     } else {
-        compile::run_llvm(
-            &mut ctx,
-            simulate_stdin_regex(stdin),
-            stdout.clone(),
-            LLVM_CONFIG,
-        )?;
+        with_reader!(sep_analysis, stdin, |reader| {
+            compile::run_llvm(&mut ctx, reader, stdout.clone(), LLVM_CONFIG)?;
+        });
     }
     let v = match Rc::try_unwrap(stdout.0) {
         Ok(v) => v.into_inner(),

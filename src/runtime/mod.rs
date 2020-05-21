@@ -8,7 +8,6 @@ use std::io::{self, BufWriter, Write};
 use std::iter::FromIterator;
 use std::rc::Rc;
 
-pub mod csv;
 pub mod float_parse;
 pub mod printf;
 pub mod splitter;
@@ -16,139 +15,17 @@ pub mod str_impl;
 pub mod utf8;
 
 use crate::pushdown::FieldSet;
-use splitter::RegexSplitter;
+use splitter::regex::RegexSplitter;
 
 // TODO: remove the pub use for Variables here.
 pub(crate) use crate::builtins::Variables;
 pub(crate) use float_parse::{hextoi, strtod, strtoi};
 pub(crate) use printf::FormatArg;
+pub use splitter::{
+    batch::{escape_csv, escape_tsv},
+    ChainedReader, Line, LineReader,
+};
 pub use str_impl::Str;
-
-pub(crate) trait Line<'a>: Default {
-    fn join_cols<F>(
-        &mut self,
-        start: Int,
-        end: Int,
-        sep: &Str<'a>,
-        nf: usize,
-        trans: F,
-    ) -> Result<Str<'a>>
-    where
-        F: FnMut(Str<'static>) -> Str<'static>;
-    fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
-    fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
-    fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()>;
-}
-
-fn normalize_join_indexes(start: Int, end: Int, nf: usize) -> Result<(usize, usize)> {
-    if start <= 0 || end <= 0 {
-        return err!("smallest joinable column is 1, got {}", start);
-    }
-    let mut start = start as usize - 1;
-    let mut end = end as usize;
-    if end > nf {
-        end = nf;
-    }
-    if end < start {
-        start = end;
-    }
-    Ok((start, end))
-}
-
-pub(crate) trait LineReader {
-    type Line: for<'a> Line<'a>;
-    fn filename(&self) -> Str<'static>;
-    // TODO we should probably have the default impl the other way around.
-    fn read_line(
-        &mut self,
-        pat: &Str,
-        rc: &mut RegexCache,
-    ) -> Result<(/*file changed*/ bool, Self::Line)>;
-    fn read_line_reuse<'a, 'b: 'a>(
-        &'b mut self,
-        pat: &Str,
-        rc: &mut RegexCache,
-        old: &'a mut Self::Line,
-    ) -> Result</* file changed */ bool> {
-        let (changed, mut new) = self.read_line(pat, rc)?;
-        std::mem::swap(old, &mut new);
-        Ok(changed)
-    }
-    fn read_state(&self) -> i64;
-    fn next_file(&mut self) -> bool;
-    fn set_used_fields(&mut self, _used_fields: &crate::pushdown::FieldSet);
-}
-
-pub struct ChainedReader<R>(Vec<R>);
-
-impl<R> ChainedReader<R> {
-    pub fn new(rs: impl Iterator<Item = R>) -> ChainedReader<R> {
-        let mut v: Vec<_> = rs.collect();
-        v.reverse();
-        ChainedReader(v)
-    }
-}
-
-impl<R: LineReader> LineReader for ChainedReader<R>
-where
-    R::Line: Default,
-{
-    type Line = R::Line;
-    fn filename(&self) -> Str<'static> {
-        self.0
-            .last()
-            .map(LineReader::filename)
-            .unwrap_or_else(Str::default)
-    }
-    fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<(bool, R::Line)> {
-        let mut line = R::Line::default();
-        let changed = self.read_line_reuse(pat, rc, &mut line)?;
-        Ok((changed, line))
-    }
-    fn read_line_reuse<'a, 'b: 'a>(
-        &'b mut self,
-        pat: &Str,
-        rc: &mut RegexCache,
-        old: &'a mut Self::Line,
-    ) -> Result<bool> {
-        let cur = match self.0.last_mut() {
-            Some(cur) => cur,
-            None => {
-                *old = Default::default();
-                return Ok(false);
-            }
-        };
-        let changed = cur.read_line_reuse(pat, rc, old)?;
-        if cur.read_state() == 0 /* EOF */ && self.next_file() {
-            self.read_line_reuse(pat, rc, old)?;
-            Ok(true)
-        } else {
-            Ok(changed)
-        }
-    }
-    fn read_state(&self) -> i64 {
-        match self.0.last() {
-            Some(cur) => cur.read_state(),
-            None => 0, /* EOF */
-        }
-    }
-    fn next_file(&mut self) -> bool {
-        match self.0.last_mut() {
-            Some(e) => {
-                if !e.next_file() {
-                    self.0.pop();
-                }
-                true
-            }
-            None => false,
-        }
-    }
-    fn set_used_fields(&mut self, used_fields: &FieldSet) {
-        for i in self.0.iter_mut() {
-            i.set_used_fields(used_fields);
-        }
-    }
-}
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.

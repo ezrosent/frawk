@@ -8,7 +8,7 @@ use crate::runtime::{self, Float, Int, Line, LineReader, Str};
 
 use std::cmp;
 
-type ClassicReader = runtime::splitter::RegexSplitter<Box<dyn std::io::Read>>;
+type ClassicReader = runtime::splitter::regex::RegexSplitter<Box<dyn std::io::Read>>;
 
 #[derive(Default)]
 pub(crate) struct Storage<T> {
@@ -309,13 +309,13 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     EscapeCSV(res, s) => {
                         *index_mut(&mut self.strs, res) = {
                             let s = index(&self.strs, s);
-                            runtime::csv::escape_csv(s)
+                            runtime::escape_csv(s)
                         };
                     }
                     EscapeTSV(res, s) => {
                         *index_mut(&mut self.strs, res) = {
                             let s = index(&self.strs, s);
-                            runtime::csv::escape_tsv(s)
+                            runtime::escape_tsv(s)
                         };
                     }
                     Substr(res, base, l, r) => {
@@ -438,7 +438,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             let start = *index(&self.ints, start);
                             let end = *index(&self.ints, end);
                             self.line.join_cols(start, end, &",".into(), nf, |s| {
-                                runtime::csv::escape_csv(&s)
+                                runtime::escape_csv(&s)
                             })?
                         };
                     }
@@ -448,7 +448,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             let start = *index(&self.ints, start);
                             let end = *index(&self.ints, end);
                             self.line.join_cols(start, end, &"\t".into(), nf, |s| {
-                                runtime::csv::escape_tsv(&s)
+                                runtime::escape_tsv(&s)
                             })?
                         };
                     }
