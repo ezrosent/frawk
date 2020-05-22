@@ -41,6 +41,22 @@ impl<T> LazyVec<T> {
             Either::Right(_) => Either::Left(Default::default()),
         }
     }
+    pub fn from_vec(v: Vec<T>) -> Self {
+        Either::Left(v)
+    }
+    pub fn get_cleared_vec(&mut self) -> Vec<T> {
+        match self {
+            Either::Left(v) => {
+                let mut res = std::mem::replace(v, Vec::new());
+                res.clear();
+                res
+            }
+            Either::Right(_) => {
+                *self = Either::Left(Vec::new());
+                Vec::new()
+            }
+        }
+    }
     pub(crate) fn len(&self) -> usize {
         for_either!(self, |x| x.len())
     }

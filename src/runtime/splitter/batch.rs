@@ -18,7 +18,7 @@ use crate::common::Result;
 use crate::pushdown::FieldSet;
 use crate::runtime::{
     str_impl::{Buf, Str},
-    Int, RegexCache, CHUNK_SIZE,
+    Int, LazyVec, RegexCache, CHUNK_SIZE,
 };
 
 use super::{normalize_join_indexes, DefaultLine, LineReader, Reader};
@@ -1108,13 +1108,16 @@ impl<R: Read> LineReader for ByteReader<R> {
     ) -> Result<bool> {
         let start = self.start;
         self.start = false;
+        old.diverged = false;
         // We use the same protocol as DefaultSplitter, RegexSplitter. See comments for more info.
         if start {
             old.used_fields = self.used_fields.clone();
         } else if old.used_fields != self.used_fields {
             self.used_fields = old.used_fields.clone()
         }
-        self.read_line_inner(old)?;
+        let mut old_fields = old.fields.get_cleared_vec();
+        self.read_line_inner(&mut old.line, &mut old_fields)?;
+        old.fields = LazyVec::from_vec(old_fields);
         Ok(start)
     }
     fn read_state(&self) -> i64 {
@@ -1131,6 +1134,14 @@ impl<R: Read> LineReader for ByteReader<R> {
 pub fn bytereader_supported() -> bool {
     get_find_indexes_bytes().is_some()
 }
+
+// TODO: revert the "marking" method; it seems to be slightly slower on linux (though benchmark mac
+// too)
+// TODO: have new not return an option, but document that bytereader_supported() should be called
+// ahead of time
+// TODO: have split_whitespace function, revise DefaultSplitter to make it simpler. See if we can
+// test it like we did bytereader.
+// TODO: write up benchmarks
 
 impl<R: Read> ByteReader<R> {
     pub fn new(
@@ -1170,18 +1181,20 @@ impl<R: Read> ByteReader<R> {
         Ok(false)
     }
 
-    fn read_line_inner<'a, 'b: 'a>(&'b mut self, mut line: &'a mut DefaultLine) -> Result<()> {
-        line.fields.clear();
-        line.diverged = false;
+    fn read_line_inner<'a, 'b: 'a>(
+        &'b mut self,
+        line: &'a mut Str<'static>,
+        fields: &'a mut Vec<Str<'static>>,
+    ) -> Result<()> {
         let mut prev_field_prefix: Str<'static> = "".into();
         let mut prev_line_prefix: Str<'static> = "".into();
         let mut consumed = 0;
         loop {
             if self.progress >= self.inner.end {
                 if self.refresh_buf()? {
-                    line.fields.insert(line.fields.len(), prev_field_prefix);
-                    line.line = Str::concat(
-                        std::mem::replace(&mut line.line, Default::default()),
+                    fields.push(prev_field_prefix);
+                    *line = Str::concat(
+                        std::mem::replace(line, Default::default()),
                         prev_line_prefix,
                     );
                     break;
@@ -1194,6 +1207,7 @@ impl<R: Read> ByteReader<R> {
                 prev_ix: self.progress,
                 used_fields: self.used_fields.clone(),
                 line,
+                fields,
                 prev_field_prefix,
                 prev_line_prefix,
             };
@@ -1216,7 +1230,8 @@ struct ByteStepper<'a> {
     pub buf_len: usize,
     pub prev_ix: usize,
     pub off: &'a mut Offsets,
-    pub line: &'a mut DefaultLine,
+    pub line: &'a mut Str<'static>,
+    pub fields: &'a mut Vec<Str<'static>>,
     pub prev_field_prefix: Str<'static>,
     pub prev_line_prefix: Str<'static>,
     pub used_fields: FieldSet,
@@ -1225,7 +1240,7 @@ struct ByteStepper<'a> {
 impl<'a> ByteStepper<'a> {
     // Unsafe because Offsets must contain valid byte indexes.
     unsafe fn consume_line(&mut self) -> (/* line done */ bool, /*bytes consumed*/ usize) {
-        let mut current_field = self.line.fields.len();
+        let mut current_field = self.fields.len();
         let mut start = true;
         const HIGH_BIT: u64 = 1u64 << 63;
         const INDEX_MASK: u64 = !HIGH_BIT;
@@ -1253,7 +1268,7 @@ impl<'a> ByteStepper<'a> {
             self.off.start += 1;
             if is_field_sep {
                 let fld = get_field!(index);
-                self.line.fields.insert(current_field, fld);
+                self.fields.push(fld);
                 current_field += 1;
                 self.prev_ix = index + 1;
                 start = false;
@@ -1267,8 +1282,8 @@ impl<'a> ByteStepper<'a> {
                     Str::default()
                 };
                 let fld = get_field!(index);
-                self.line.fields.insert(current_field, fld);
-                self.line.line = line;
+                self.fields.push(fld);
+                *self.line = line;
                 self.prev_ix = index + 1;
                 return (true, self.prev_ix - line_start);
             }
