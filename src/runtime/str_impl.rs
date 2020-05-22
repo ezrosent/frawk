@@ -249,13 +249,16 @@ impl<'a> StrRep<'a> {
 
 impl<'a> Drop for StrRep<'a> {
     fn drop(&mut self) {
+        // Drop shows up on a lot of profiles. It doesn't appear as though drop is particularly
+        // slow (efforts to do drops in batches, keeping the batch in thread-local storage, were
+        // slightly slower), just that in short scripts there are just a lot of strings.
         let tag = self.get_tag();
         unsafe {
             match tag {
+                StrTag::Inline | StrTag::Literal => {}
                 StrTag::Shared => self.drop_as::<Shared>(),
                 StrTag::Boxed => self.drop_as::<Boxed>(),
                 StrTag::Concat => self.drop_as::<Concat>(),
-                StrTag::Inline | StrTag::Literal => {}
             }
         };
     }
