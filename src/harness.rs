@@ -12,7 +12,7 @@ use crate::{
     runtime::{
         self,
         splitter::{
-            batch::{CSVReader, InputFormat},
+            batch::{bytereader_supported, ByteReader, CSVReader, InputFormat},
             regex::RegexSplitter,
         },
         ChainedReader,
@@ -91,14 +91,9 @@ fn simulate_stdin_singlechar(
     record_sep: u8,
     inp: impl Into<String>,
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
+    // TODO fix this (by checking if it's supported, or returning a Box<dyn IntoRuntime>
     simulate_stdin(inp, |reader, name| {
-        use runtime::splitter::{DefaultSplitter, SimpleSplitter};
-        DefaultSplitter::new(
-            SimpleSplitter::new(record_sep, field_sep),
-            reader,
-            runtime::CHUNK_SIZE,
-            name,
-        )
+        ByteReader::new(reader, field_sep, record_sep, runtime::CHUNK_SIZE, name).unwrap()
     })
 }
 
@@ -119,12 +114,15 @@ macro_rules! with_reader {
                     if field_sep == " " && record_sep == "\n" {
                         let $id = simulate_stdin_whitespace($inp);
                         $body
-                    } else {
+                    } else if bytereader_supported() {
                         let $id = simulate_stdin_singlechar(
                             field_sep.as_bytes()[0],
                             record_sep.as_bytes()[0],
                             $inp,
                         );
+                        $body
+                    } else {
+                        let $id = simulate_stdin_regex($inp);
                         $body
                     }
                 } else {

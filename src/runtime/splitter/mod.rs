@@ -78,6 +78,119 @@ fn normalize_join_indexes(start: Int, end: Int, nf: usize) -> Result<(usize, usi
     }
     Ok((start, end))
 }
+
+// Default implementation of Line; it supports assignment into fields as well as lazy splitting.
+pub struct DefaultLine {
+    line: Str<'static>,
+    used_fields: FieldSet,
+    fields: LazyVec<Str<'static>>,
+    // Has someone assigned into `fields` without us regenerating `line`?
+    // AWK lets you do
+    //  $1 = "turnip"
+    //  $2 = "rutabaga"
+    //  print $0; # "turnip rutabaga ..."
+    //
+    // After that first line, we set diverged to true, so we know to regenerate $0 when $0 is asked
+    // for. This speeds up cases where multiple fields are assigned in a row.
+    diverged: bool,
+}
+impl Default for DefaultLine {
+    fn default() -> DefaultLine {
+        DefaultLine {
+            line: Str::default(),
+            used_fields: FieldSet::all(),
+            fields: LazyVec::new(),
+            diverged: false,
+        }
+    }
+}
+
+impl DefaultLine {
+    fn split_if_needed(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<()> {
+        if self.fields.len() == 0 {
+            rc.split_regex(pat, &self.line, &self.used_fields, &mut self.fields)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Line<'a> for DefaultLine {
+    fn join_cols<F>(
+        &mut self,
+        start: Int,
+        end: Int,
+        sep: &Str<'a>,
+        nf: usize,
+        trans: F,
+    ) -> Result<Str<'a>>
+    where
+        F: FnMut(Str<'static>) -> Str<'static>,
+    {
+        // Should have split before calling this function.
+        debug_assert!(self.fields.len() > 0);
+        let (start, end) = normalize_join_indexes(start, end, nf)?;
+        Ok(self
+            .fields
+            .join_by(&sep.clone().unmoor(), start, end, trans)
+            .upcast())
+    }
+    fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize> {
+        self.split_if_needed(pat, rc)?;
+        Ok(self.fields.len())
+    }
+    fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>> {
+        if col < 0 {
+            return err!("attempt to access field {}; field must be nonnegative", col);
+        }
+        let res = if col == 0 && !self.diverged {
+            self.line.clone()
+        } else if col == 0 && self.diverged {
+            if self.used_fields != FieldSet::all() {
+                // We projected out fields, but now we have set one of the interior fields and need
+                // to print out $0. That means we have to split $0 in its entirety and then copy
+                // over the fields that were already set.
+                //
+                // This is strictly more work than just reading all of the fields in the first
+                // place; so once we hit this condition we overwrite the used fields with all() so
+                // this doesn't happen again for a while.
+                let old_set = std::mem::replace(&mut self.used_fields, FieldSet::all());
+                let mut new_vec = LazyVec::new();
+                rc.split_regex(pat, &self.line, &self.used_fields, &mut new_vec)?;
+                for i in 0..new_vec.len() {
+                    if old_set.get(i + 1) {
+                        new_vec.insert(i, self.fields.get(i).unwrap_or_else(Str::default));
+                    }
+                }
+                self.fields = new_vec;
+            }
+            let res = self.fields.join_all(&ofs.clone().unmoor());
+            self.line = res.clone();
+            self.diverged = false;
+            res
+        } else {
+            self.split_if_needed(pat, rc)?;
+            self.fields
+                .get((col - 1) as usize)
+                .unwrap_or_else(Str::default)
+        };
+        Ok(res.upcast())
+    }
+    fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()> {
+        if col == 0 {
+            self.line = s.clone().unmoor();
+            self.fields.clear();
+            return Ok(());
+        }
+        if col < 0 {
+            return err!("attempt to access field {}; field must be nonnegative", col);
+        }
+        self.split_if_needed(pat, rc)?;
+        self.fields.insert(col as usize - 1, s.clone().unmoor());
+        self.diverged = true;
+        Ok(())
+    }
+}
+
 pub struct ChainedReader<R>(Vec<R>);
 
 impl<R> ChainedReader<R> {
@@ -206,7 +319,7 @@ pub struct DefaultSplitter<R, S> {
 }
 
 impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
-    type Line = regex::Line;
+    type Line = DefaultLine;
     fn filename(&self) -> Str<'static> {
         self.name.clone()
     }
@@ -224,7 +337,7 @@ impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
         &'b mut self,
         _pat: &Str,
         _rc: &mut RegexCache,
-        old: &'a mut regex::Line,
+        old: &'a mut DefaultLine,
     ) -> Result</* file changed */ bool> {
         let (line, consumed) = self.read_line_inner(&mut old.fields);
         old.line = line;
@@ -242,8 +355,8 @@ impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
         self.start = false;
         Ok(start)
     }
-    fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, regex::Line)> {
-        let mut line = regex::Line::default();
+    fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, DefaultLine)> {
+        let mut line = DefaultLine::default();
         let changed = self.read_line_reuse(_pat, _rc, &mut line)?;
         Ok((changed, line))
     }

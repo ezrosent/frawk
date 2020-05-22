@@ -47,7 +47,7 @@ use cfg::Escaper;
 use llvm::IntoRuntime;
 use runtime::{
     splitter::{
-        batch::{CSVReader, InputFormat},
+        batch::{ByteReader, CSVReader, InputFormat},
         regex::RegexSplitter,
         DefaultSplitter,
     },
@@ -419,13 +419,18 @@ fn main() {
                                     "-",
                                 ));
                                 $body
+                            } else if let Some(br) = ByteReader::new(
+                                _reader,
+                                field_sep.as_bytes()[0],
+                                record_sep.as_bytes()[0],
+                                CHUNK_SIZE,
+                                "-",
+                            ) {
+                                let $inp = chained(br);
+                                $body
                             } else {
-                                let split = runtime::splitter::SimpleSplitter::new(
-                                    record_sep.as_bytes()[0],
-                                    field_sep.as_bytes()[0],
-                                );
-                                let $inp =
-                                    chained(DefaultSplitter::new(split, _reader, CHUNK_SIZE, "-"));
+                                let _reader: Box<dyn io::Read> = Box::new(io::stdin());
+                                let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
                                 $body
                             }
                         } else {
@@ -454,6 +459,7 @@ fn main() {
                         let field_sep = field_sep.unwrap_or(" ");
                         let record_sep = record_sep.unwrap_or("\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
+                            let br_valid = runtime::splitter::batch::bytereader_supported();
                             if field_sep == " " && record_sep == "\n" {
                                 let iter = opts.input_files.iter().cloned().map(|file| {
                                     let reader: Box<dyn io::Read> =
@@ -467,15 +473,26 @@ fn main() {
                                 });
                                 let $inp = ChainedReader::new(iter);
                                 $body
-                            } else {
-                                let split = runtime::splitter::SimpleSplitter::new(
-                                    record_sep.as_bytes()[0],
-                                    field_sep.as_bytes()[0],
-                                );
+                            } else if br_valid {
                                 let iter = opts.input_files.iter().cloned().map(move |file| {
                                     let reader: Box<dyn io::Read> =
                                         Box::new(open_file_read(file.as_str()));
-                                    DefaultSplitter::new(split, reader, CHUNK_SIZE, file)
+                                    ByteReader::new(
+                                        reader,
+                                        field_sep.as_bytes()[0],
+                                        record_sep.as_bytes()[0],
+                                        CHUNK_SIZE,
+                                        file,
+                                    )
+                                    .unwrap()
+                                });
+                                let $inp = ChainedReader::new(iter);
+                                $body
+                            } else {
+                                let iter = opts.input_files.iter().cloned().map(|file| {
+                                    let reader: Box<dyn io::Read> =
+                                        Box::new(open_file_read(file.as_str()));
+                                    RegexSplitter::new(reader, CHUNK_SIZE, file)
                                 });
                                 let $inp = ChainedReader::new(iter);
                                 $body

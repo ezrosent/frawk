@@ -4,124 +4,12 @@ use std::str;
 
 use crate::common::Result;
 use crate::pushdown::FieldSet;
-use crate::runtime::{Int, LazyVec, RegexCache, Str};
+use crate::runtime::{LazyVec, Str};
 use regex::Regex;
 
-use super::{LineReader, Reader, ReaderState};
+use super::{DefaultLine, LineReader, Reader, ReaderState};
 
-// TODO: move this up to the parent, no more public fields.
-pub struct Line {
-    pub line: Str<'static>,
-    pub used_fields: FieldSet,
-    pub(crate) fields: LazyVec<Str<'static>>,
-    // Has someone assigned into `fields` without us regenerating `line`?
-    // AWK lets you do
-    //  $1 = "turnip"
-    //  $2 = "rutabaga"
-    //  print $0; # "turnip rutabaga ..."
-    //
-    // After that first line, we set diverged to true, so we know to regenerate $0 when $0 is asked
-    // for. This speeds up cases where multiple fields are assigned in a row.
-    pub diverged: bool,
-}
-
-impl Default for Line {
-    fn default() -> Line {
-        Line {
-            line: Str::default(),
-            used_fields: FieldSet::all(),
-            fields: LazyVec::new(),
-            diverged: false,
-        }
-    }
-}
-
-impl Line {
-    fn split_if_needed(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<()> {
-        if self.fields.len() == 0 {
-            rc.split_regex(pat, &self.line, &self.used_fields, &mut self.fields)?;
-        }
-        Ok(())
-    }
-}
-
-impl<'a> super::Line<'a> for Line {
-    fn join_cols<F>(
-        &mut self,
-        start: Int,
-        end: Int,
-        sep: &Str<'a>,
-        nf: usize,
-        trans: F,
-    ) -> Result<Str<'a>>
-    where
-        F: FnMut(Str<'static>) -> Str<'static>,
-    {
-        // Should have split before calling this function.
-        debug_assert!(self.fields.len() > 0);
-        let (start, end) = super::normalize_join_indexes(start, end, nf)?;
-        Ok(self
-            .fields
-            .join_by(&sep.clone().unmoor(), start, end, trans)
-            .upcast())
-    }
-    fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize> {
-        self.split_if_needed(pat, rc)?;
-        Ok(self.fields.len())
-    }
-    fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>> {
-        if col < 0 {
-            return err!("attempt to access field {}; field must be nonnegative", col);
-        }
-        let res = if col == 0 && !self.diverged {
-            self.line.clone()
-        } else if col == 0 && self.diverged {
-            if self.used_fields != FieldSet::all() {
-                // We projected out fields, but now we have set one of the interior fields and need
-                // to print out $0. That means we have to split $0 in its entirety and then copy
-                // over the fields that were already set.
-                //
-                // This is strictly more work than just reading all of the fields in the first
-                // place; so once we hit this condition we overwrite the used fields with all() so
-                // this doesn't happen again for a while.
-                let old_set = std::mem::replace(&mut self.used_fields, FieldSet::all());
-                let mut new_vec = LazyVec::new();
-                rc.split_regex(pat, &self.line, &self.used_fields, &mut new_vec)?;
-                for i in 0..new_vec.len() {
-                    if old_set.get(i + 1) {
-                        new_vec.insert(i, self.fields.get(i).unwrap_or_else(Str::default));
-                    }
-                }
-                self.fields = new_vec;
-            }
-            let res = self.fields.join_all(&ofs.clone().unmoor());
-            self.line = res.clone();
-            self.diverged = false;
-            res
-        } else {
-            self.split_if_needed(pat, rc)?;
-            self.fields
-                .get((col - 1) as usize)
-                .unwrap_or_else(Str::default)
-        };
-        Ok(res.upcast())
-    }
-    fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()> {
-        if col == 0 {
-            self.line = s.clone().unmoor();
-            self.fields.clear();
-            return Ok(());
-        }
-        if col < 0 {
-            return err!("attempt to access field {}; field must be nonnegative", col);
-        }
-        self.split_if_needed(pat, rc)?;
-        self.fields.insert(col as usize - 1, s.clone().unmoor());
-        self.diverged = true;
-        Ok(())
-    }
-}
-
+// TODO: this can probably just be "Splitter"
 pub struct RegexSplitter<R> {
     reader: Reader<R>,
     name: Str<'static>,
@@ -131,7 +19,7 @@ pub struct RegexSplitter<R> {
 }
 
 impl<R: Read> LineReader for RegexSplitter<R> {
-    type Line = Line;
+    type Line = DefaultLine;
     fn filename(&self) -> Str<'static> {
         self.name.clone()
     }
@@ -161,7 +49,7 @@ impl<R: Read> LineReader for RegexSplitter<R> {
     fn read_line(&mut self, pat: &Str, rc: &mut super::RegexCache) -> Result<(bool, Self::Line)> {
         let start = self.start;
         self.start = false;
-        let line = rc.with_regex(pat, |re| Line {
+        let line = rc.with_regex(pat, |re| DefaultLine {
             line: self.read_line_regex(re),
             fields: LazyVec::new(),
             used_fields: self.used_fields.clone(),

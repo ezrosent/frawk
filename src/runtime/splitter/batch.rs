@@ -21,7 +21,7 @@ use crate::runtime::{
     Int, RegexCache, CHUNK_SIZE,
 };
 
-use super::{normalize_join_indexes, LineReader, Reader};
+use super::{normalize_join_indexes, DefaultLine, LineReader, Reader};
 
 pub struct CSVReader<R> {
     inner: Reader<R>,
@@ -499,7 +499,29 @@ pub fn get_find_indexes(
             InputFormat::TSV => generic::find_indexes_tsv::<sse2::Impl>,
         }
     } else {
+        // TODO write a simple fallback implementation of Vector for non-x86
         panic!("CSV requires at least SSE2 support");
+    }
+}
+
+pub fn get_find_indexes_bytes() -> Option<unsafe fn(&[u8], &mut Offsets, u8, u8)> {
+    #[cfg(target_arch = "x86_64")]
+    const IS_X64: bool = true;
+    #[cfg(not(target_arch = "x86_64"))]
+    const IS_X64: bool = false;
+    #[cfg(feature = "allow_avx2")]
+    const ALLOW_AVX2: bool = true;
+    #[cfg(not(feature = "allow_avx2"))]
+    const ALLOW_AVX2: bool = false;
+    assert!(IS_X64, "CSV is only supported on x86_64 machines");
+
+    if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
+        Some(generic::find_indexes_byte::<avx2::Impl>)
+    } else if is_x86_feature_detected!("sse2") {
+        Some(generic::find_indexes_byte::<sse2::Impl>)
+    } else {
+        // TODO writing a fallback implementation of this function would be pretty easy.
+        None
     }
 }
 
@@ -581,10 +603,8 @@ mod escape_tests {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 mod generic {
     use super::Offsets;
-    use std::arch::x86_64::*;
     const MAX_INPUT_SIZE: usize = 64;
 
     pub trait Vector {
@@ -598,12 +618,19 @@ mod generic {
 
         // Compute a mask of which bits in input match (bytewise) `m`.
         unsafe fn cmp_mask_against_input(inp: Self::Input, m: u8) -> u64;
+
+        unsafe fn find_quote_mask(
+            inp: Self::Input,
+            prev_iter_inside_quote: &mut u64,
+        ) -> (/*inside quotes*/ u64, /*quote locations*/ u64);
     }
 
-    unsafe fn find_quote_mask<V: Vector>(
+    #[cfg(target_arch = "x86_64")]
+    pub unsafe fn default_x86_find_quote_mask<V: Vector>(
         inp: V::Input,
         prev_iter_inside_quote: &mut u64,
     ) -> (/*inside quotes*/ u64, /*quote locations*/ u64) {
+        use std::arch::x86_64::*;
         // This is about finding a mask that has 1s for all characters inside a quoted pair, plus
         // the starting quote, but not the ending one. For example:
         // [unquoted text "quoted text"]
@@ -682,6 +709,59 @@ mod generic {
         *start_offset = next_start;
     }
 
+    #[inline(always)]
+    unsafe fn flatten_bits_marked(
+        base_p: *mut u64,
+        start_offset: &mut u64,
+        start_ix: u64,
+        mut bits: u64,
+        to_mark: u64,
+    ) {
+        // A variant of flatten_bits that marks the top bit of the index based on the contents of
+        // `to_mark`.
+        if bits == 0 {
+            return;
+        }
+        let count = bits.count_ones();
+        let next_start = (*start_offset) + count as u64;
+        macro_rules! write_offset_inner {
+            ($ix:expr) => {
+                let tz = bits.trailing_zeros();
+                let mask = if to_mark & 1u64.wrapping_shl(tz) == 0 {
+                    0u64
+                } else {
+                    1u64.wrapping_shl(63)
+                };
+                *base_p.offset(*start_offset as isize + $ix) = (start_ix + tz as u64) | mask;
+                bits = bits & bits.wrapping_sub(1);
+            };
+        }
+        macro_rules! write_offsets {
+                    ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
+                }
+        write_offsets!(0, 1, 2, 3, 4, 5, 6, 7);
+        // Similarly for bits 8->16
+        if count > 8 {
+            write_offsets!(8, 9, 10, 11, 12, 13, 14, 15);
+        }
+        // Just do a loop for the last 48 bits.
+        if count > 16 {
+            *start_offset += 16;
+            loop {
+                write_offsets!(0);
+                if bits == 0 {
+                    break;
+                }
+                *start_offset += 1;
+            }
+        }
+        *start_offset = next_start;
+    }
+
+    // The find_indexes functions are progressively simple takes on "do a vectorized comparison
+    // against a byte sequence, write the indexes of matching indexes into Offsets." The first is
+    // very close to the simd-csv variant; simpler formats do a bit less.
+
     pub unsafe fn find_indexes_csv<V: Vector>(
         buf: &[u8],
         offsets: &mut Offsets,
@@ -707,8 +787,7 @@ mod generic {
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 // find commas not inside quotes
                 let inp = V::fill_input($buf);
-                let (quote_mask, quote_locs) =
-                    find_quote_mask::<V>(inp, &mut prev_iter_inside_quote);
+                let (quote_mask, quote_locs) = V::find_quote_mask(inp, &mut prev_iter_inside_quote);
                 let sep = V::cmp_mask_against_input(inp, ',' as u8);
                 let esc = V::cmp_mask_against_input(inp, '\\' as u8);
 
@@ -759,7 +838,7 @@ mod generic {
     pub unsafe fn find_indexes_tsv<V: Vector>(
         buf: &[u8],
         offsets: &mut Offsets,
-        // These two are ignored for CSV
+        // These two are ignored for TSV
         _prev_iter_inside_quote: u64,
         _prev_iter_cr_end: u64,
     ) -> (u64, u64) {
@@ -779,8 +858,8 @@ mod generic {
         const BUFFER_SIZE: usize = 4;
         macro_rules! iterate {
             ($buf:expr) => {{
-                // XXX Padding is only going to be 32 bytes ... what happens when you prefetch an
-                // invalid address? It may slow things down, not to mention we may be giving the
+                // TODO/XXX Padding is only going to be 32 bytes ... what happens when you prefetch
+                // an invalid address? It may slow things down, not to mention we may be giving the
                 // compiler the wrong idea.
                 //
                 // Either increase padding, or decrease the prefetch interval.
@@ -827,11 +906,90 @@ mod generic {
         offsets.fields.set_len(base as usize);
         (0, 0)
     }
+
+    pub unsafe fn find_indexes_byte<V: Vector>(
+        buf: &[u8],
+        offsets: &mut Offsets,
+        field_sep: u8,
+        record_sep: u8,
+    ) {
+        offsets.fields.clear();
+        offsets.start = 0;
+        // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
+        // reuse this across different chunks.
+        offsets.fields.reserve(buf.len());
+        let buf_ptr = buf.as_ptr();
+        let len = buf.len();
+        let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
+        let mut ix = 0;
+        let base_ptr: *mut u64 = offsets.fields.get_unchecked_mut(0);
+        let mut base = 0;
+
+        // For ... reasons (better pipelining? better cache behavior?) we decode in blocks.
+        const BUFFER_SIZE: usize = 4;
+        macro_rules! iterate {
+            ($buf:expr) => {{
+                // TODO/XXX Padding is only going to be 32 bytes ... what happens when you prefetch
+                // an invalid address? It may slow things down, not to mention we may be giving the
+                // compiler the wrong idea.
+                //
+                // Either increase padding, or decrease the prefetch interval.
+                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
+                // find commas not inside quotes
+                let inp = V::fill_input($buf);
+                let fs = V::cmp_mask_against_input(inp, field_sep);
+                let rs = V::cmp_mask_against_input(inp, record_sep);
+                (rs, (fs | rs))
+            }};
+        }
+        if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
+            let mut all_fields = [0u64; BUFFER_SIZE];
+            let mut record_seps = [0u64; BUFFER_SIZE];
+            while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
+                for b in 0..BUFFER_SIZE {
+                    let (record_sep, all) =
+                        iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
+                    record_seps[b] = record_sep;
+                    all_fields[b] = all;
+                }
+                for b in 0..BUFFER_SIZE {
+                    let internal_ix = V::INPUT_SIZE * b + ix;
+                    flatten_bits_marked(
+                        base_ptr,
+                        &mut base,
+                        internal_ix as u64,
+                        all_fields[b],
+                        record_seps[b],
+                    );
+                }
+                ix += V::INPUT_SIZE * BUFFER_SIZE;
+            }
+        }
+        // Do an unbuffered version for the remaining data
+        while ix < len_minus_64 {
+            let (record_sep, all) = iterate!(buf_ptr.offset(ix as isize));
+            flatten_bits_marked(base_ptr, &mut base, ix as u64, all, record_sep);
+            ix += V::INPUT_SIZE;
+        }
+        // For any text that remains, just copy the results to the stack with some padding and do one more iteration.
+        let remaining = len - ix;
+        if remaining > 0 {
+            let mut rest = [0u8; MAX_INPUT_SIZE];
+            std::ptr::copy_nonoverlapping(
+                buf_ptr.offset(ix as isize),
+                rest.as_mut_ptr(),
+                remaining,
+            );
+            let (record_sep, all) = iterate!(rest.as_mut_ptr());
+            flatten_bits_marked(base_ptr, &mut base, ix as u64, all, record_sep);
+        }
+        offsets.fields.set_len(base as usize);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 mod sse2 {
-    use super::generic::Vector;
+    use super::generic::{default_x86_find_quote_mask, Vector};
     // This is in a large part based on geofflangdale/simdcsv, which is an adaptation of some of
     // the techniques from the simdjson paper (by that paper's authors, it appears) to CSV parsing.
     use std::arch::x86_64::*;
@@ -864,12 +1022,19 @@ mod sse2 {
             let res_1 = _mm_movemask_epi8(cmp_res_1) as u64;
             res_0 | (res_1 << Self::VEC_BYTES)
         }
+
+        unsafe fn find_quote_mask(
+            inp: Self::Input,
+            prev_iter_inside_quote: &mut u64,
+        ) -> (/*inside quotes*/ u64, /*quote locations*/ u64) {
+            default_x86_find_quote_mask::<Self>(inp, prev_iter_inside_quote)
+        }
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 mod avx2 {
-    use super::generic::Vector;
+    use super::generic::{default_x86_find_quote_mask, Vector};
     // This is in a large part based on geofflangdale/simdcsv, which is an adaptation of some of
     // the techniques from the simdjson paper (by that paper's authors, it appears) to CSV parsing.
     use std::arch::x86_64::*;
@@ -902,12 +1067,224 @@ mod avx2 {
             let res_1 = _mm256_movemask_epi8(cmp_res_1) as u64;
             res_0 | (res_1 << Self::VEC_BYTES)
         }
+        unsafe fn find_quote_mask(
+            inp: Self::Input,
+            prev_iter_inside_quote: &mut u64,
+        ) -> (/*inside quotes*/ u64, /*quote locations*/ u64) {
+            default_x86_find_quote_mask::<Self>(inp, prev_iter_inside_quote)
+        }
+    }
+}
+
+pub struct ByteReader<R> {
+    inner: Reader<R>,
+    name: Str<'static>,
+    cur_offsets: Offsets,
+    used_fields: FieldSet,
+    // Progress in the current buffer.
+    progress: usize,
+    field_sep: u8,
+    record_sep: u8,
+    start: bool,
+
+    get_offsets: unsafe fn(&[u8], &mut Offsets, u8, u8),
+}
+
+impl<R: Read> LineReader for ByteReader<R> {
+    type Line = DefaultLine;
+    fn filename(&self) -> Str<'static> {
+        self.name.clone()
+    }
+    fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, DefaultLine)> {
+        let mut line = DefaultLine::default();
+        let changed = self.read_line_reuse(_pat, _rc, &mut line)?;
+        Ok((changed, line))
+    }
+    fn read_line_reuse<'a, 'b: 'a>(
+        &'b mut self,
+        _pat: &Str,
+        _rc: &mut RegexCache,
+        old: &'a mut DefaultLine,
+    ) -> Result<bool> {
+        let start = self.start;
+        self.start = false;
+        // We use the same protocol as DefaultSplitter, RegexSplitter. See comments for more info.
+        if start {
+            old.used_fields = self.used_fields.clone();
+        } else if old.used_fields != self.used_fields {
+            self.used_fields = old.used_fields.clone()
+        }
+        self.read_line_inner(old)?;
+        Ok(start)
+    }
+    fn read_state(&self) -> i64 {
+        self.inner.read_state()
+    }
+    fn next_file(&mut self) -> bool {
+        self.inner.force_eof();
+        false
+    }
+    fn set_used_fields(&mut self, field_set: &FieldSet) {
+        self.used_fields = field_set.clone();
+    }
+}
+pub fn bytereader_supported() -> bool {
+    get_find_indexes_bytes().is_some()
+}
+
+impl<R: Read> ByteReader<R> {
+    pub fn new(
+        r: R,
+        field_sep: u8,
+        record_sep: u8,
+        chunk_size: usize,
+        name: impl Into<Str<'static>>,
+    ) -> Option<Self> {
+        Some(ByteReader {
+            inner: Reader::new(r, chunk_size),
+            name: name.into(),
+            cur_offsets: Default::default(),
+            progress: 0,
+            field_sep,
+            record_sep,
+            used_fields: FieldSet::all(),
+            start: true,
+            get_offsets: get_find_indexes_bytes()?,
+        })
+    }
+
+    fn refresh_buf(&mut self) -> Result<bool> {
+        self.inner.advance(self.inner.remaining())?;
+        if self.inner.is_eof() {
+            return Ok(true);
+        }
+        unsafe {
+            (self.get_offsets)(
+                &self.inner.buf.as_bytes()[self.inner.start..self.inner.end],
+                &mut self.cur_offsets,
+                self.field_sep,
+                self.record_sep,
+            )
+        };
+        self.progress = 0;
+        Ok(false)
+    }
+
+    fn read_line_inner<'a, 'b: 'a>(&'b mut self, mut line: &'a mut DefaultLine) -> Result<()> {
+        line.fields.clear();
+        line.diverged = false;
+        let mut prev_field_prefix: Str<'static> = "".into();
+        let mut prev_line_prefix: Str<'static> = "".into();
+        let mut consumed = 0;
+        loop {
+            if self.progress >= self.inner.end {
+                if self.refresh_buf()? {
+                    line.fields.insert(line.fields.len(), prev_field_prefix);
+                    line.line = Str::concat(
+                        std::mem::replace(&mut line.line, Default::default()),
+                        prev_line_prefix,
+                    );
+                    break;
+                }
+            }
+            let mut stepper = ByteStepper {
+                buf: &self.inner.buf,
+                buf_len: self.inner.end,
+                off: &mut self.cur_offsets,
+                prev_ix: self.progress,
+                used_fields: self.used_fields.clone(),
+                line,
+                prev_field_prefix,
+                prev_line_prefix,
+            };
+            let (done, consumed_in_step) = unsafe { stepper.consume_line() };
+            consumed += consumed_in_step;
+            self.progress = stepper.prev_ix;
+            if done {
+                break;
+            }
+            prev_field_prefix = stepper.prev_field_prefix;
+            prev_line_prefix = stepper.prev_line_prefix;
+        }
+        self.inner.last_len = consumed;
+        Ok(())
+    }
+}
+
+struct ByteStepper<'a> {
+    pub buf: &'a Buf,
+    pub buf_len: usize,
+    pub prev_ix: usize,
+    pub off: &'a mut Offsets,
+    pub line: &'a mut DefaultLine,
+    pub prev_field_prefix: Str<'static>,
+    pub prev_line_prefix: Str<'static>,
+    pub used_fields: FieldSet,
+}
+
+impl<'a> ByteStepper<'a> {
+    // Unsafe because Offsets must contain valid byte indexes.
+    unsafe fn consume_line(&mut self) -> (/* line done */ bool, /*bytes consumed*/ usize) {
+        let mut current_field = self.line.fields.len();
+        let mut start = true;
+        const HIGH_BIT: u64 = 1u64 << 63;
+        const INDEX_MASK: u64 = !HIGH_BIT;
+        let line_start = self.prev_ix;
+        macro_rules! get_field {
+            ($index:expr) => {
+                if self.used_fields.get(current_field + 1) {
+                    let mut res = self.buf.slice_to_str(self.prev_ix, $index);
+                    if start {
+                        res = Str::concat(
+                            mem::replace(&mut self.prev_field_prefix, Str::default()),
+                            res,
+                        )
+                    }
+                    res
+                } else {
+                    Str::default()
+                }
+            };
+        }
+        while self.off.start < self.off.fields.len() {
+            let raw_offset = *self.off.fields.get_unchecked(self.off.start);
+            let index = (raw_offset & INDEX_MASK) as usize;
+            let is_field_sep = raw_offset < HIGH_BIT;
+            self.off.start += 1;
+            if is_field_sep {
+                let fld = get_field!(index);
+                self.line.fields.insert(current_field, fld);
+                current_field += 1;
+                self.prev_ix = index + 1;
+                start = false;
+            } else {
+                let line = if self.used_fields.get(0) {
+                    Str::concat(
+                        mem::replace(&mut self.prev_line_prefix, Str::default()),
+                        self.buf.slice_to_str(line_start, index),
+                    )
+                } else {
+                    Str::default()
+                };
+                let fld = get_field!(index);
+                self.line.fields.insert(current_field, fld);
+                self.line.line = line;
+                self.prev_ix = index + 1;
+                return (true, self.prev_ix - line_start);
+            }
+            self.prev_ix = index + 1;
+        }
+        self.prev_field_prefix = self.buf.slice_to_str(self.prev_ix, self.buf_len);
+        self.prev_line_prefix = self.buf.slice_to_str(line_start, self.buf_len);
+        self.prev_ix = self.buf_len;
+        (false, self.buf_len - line_start)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::LazyVec;
     fn smoke_test<V: generic::Vector>() {
         let text: &'static str = r#"This,is,"a line with a quoted, comma",and
 unquoted,commas,"as well, including some long ones", and there we have it."#;
@@ -941,5 +1318,71 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
     #[test]
     fn sse2_smoke_test() {
         smoke_test::<sse2::Impl>();
+    }
+    fn read_to_vec<T: Clone + Default>(lv: &LazyVec<T>) -> Vec<T> {
+        let mut res = Vec::with_capacity(lv.len());
+        for i in 0..lv.len() {
+            res.push(lv.get(i).unwrap_or_else(Default::default))
+        }
+        res
+    }
+    fn disp_vec(v: &Vec<Str>) -> String {
+        format!(
+            "{:?}",
+            v.iter().map(|s| format!("{}", s)).collect::<Vec<String>>()
+        )
+    }
+
+    fn bytes_split(fs: u8, rs: u8, corpus: &str) {
+        let mut _cache = RegexCache::default();
+        let _pat = Str::default();
+        let expected: Vec<Vec<Str<'static>>> = corpus
+            .split(rs as char)
+            .map(|line| {
+                line.split(fs as char)
+                    .map(|x| Str::from(x).unmoor())
+                    .collect()
+            })
+            .collect();
+        let reader = std::io::Cursor::new(corpus);
+        let mut reader = ByteReader::new(reader, fs, rs, 1024, "fake-stdin").unwrap();
+        let mut got = Vec::with_capacity(corpus.len());
+        loop {
+            let (_, line) = reader
+                .read_line(&_pat, &mut _cache)
+                .expect("failed to read line");
+            if reader.read_state() != 1 {
+                break;
+            }
+            got.push(read_to_vec(&line.fields));
+        }
+        if got != expected {
+            eprintln!(
+                "test failed! got vector of length {}, expected {} lines",
+                got.len(),
+                expected.len()
+            );
+            for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+                eprintln!("===============");
+                if g == e {
+                    eprintln!("line {} matches", i);
+                } else {
+                    eprintln!("line {} has a mismatch", i);
+                    eprintln!("got:  {}", disp_vec(g));
+                    eprintln!("want: {}", disp_vec(e));
+                }
+            }
+            panic!("test failed. See debug output");
+        }
+    }
+
+    #[test]
+    fn bytes_splitter() {
+        bytes_split(b' ', b'\n', crate::test_string_constants::VIRGIL);
+        bytes_split(
+            b' ',
+            b'\n',
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2,
+        );
     }
 }

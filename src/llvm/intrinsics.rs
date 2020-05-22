@@ -8,7 +8,9 @@ use crate::runtime::{
     self,
     printf::{printf, FormatArg},
     splitter::{
-        batch::CSVReader, regex::RegexSplitter, DefaultSplitter, SimpleSplitter, WhiteSpace,
+        batch::{ByteReader, CSVReader},
+        regex::RegexSplitter,
+        DefaultSplitter, WhiteSpace,
     },
     ChainedReader, FileRead, FileWrite, Float, Int, IntMap, Line, LineReader, RegexCache, Str,
     StrMap, Variables,
@@ -77,7 +79,7 @@ type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
 enum InputData {
     V1(InputTuple<ChainedReader<CSVReader<Box<dyn io::Read>>>>),
     V2(InputTuple<ChainedReader<DefaultSplitter<Box<dyn io::Read>, WhiteSpace>>>),
-    V3(InputTuple<ChainedReader<DefaultSplitter<Box<dyn io::Read>, SimpleSplitter>>>),
+    V3(InputTuple<ChainedReader<ByteReader<Box<dyn io::Read>>>>),
     V4(InputTuple<ChainedReader<RegexSplitter<Box<dyn io::Read>>>>),
 }
 
@@ -113,7 +115,7 @@ macro_rules! impl_into_runtime {
 
 impl_into_runtime!(CSVReader<Box<dyn io::Read>>, V1);
 impl_into_runtime!(DefaultSplitter<Box<dyn io::Read>, WhiteSpace>, V2);
-impl_into_runtime!(DefaultSplitter<Box<dyn io::Read>, SimpleSplitter>, V3);
+impl_into_runtime!(ByteReader<Box<dyn io::Read>>, V3);
 impl_into_runtime!(RegexSplitter<Box<dyn io::Read>>, V4);
 
 pub(crate) struct Runtime<'a> {
