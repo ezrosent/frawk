@@ -209,6 +209,41 @@ impl RegexCache {
     ) -> Result</*file changed */ bool> {
         reg.stdin.read_line_reuse(pat, self, old_line)
     }
+    fn split_internal<'a>(
+        &mut self,
+        pat: &Str,
+        s: &Str<'a>,
+        used_fields: &FieldSet,
+        mut push: impl FnMut(Str<'a>),
+    ) -> Result<()> {
+        if pat == &Str::from(" ") {
+            self.with_regex(&Str::from(r#"[ \t]+"#), |re| {
+                s.split(
+                    re,
+                    |s, is_empty| {
+                        if !is_empty {
+                            push(s);
+                            1
+                        } else {
+                            0
+                        }
+                    },
+                    used_fields,
+                )
+            })
+        } else {
+            self.with_regex(pat, |re| {
+                s.split(
+                    re,
+                    |s, _| {
+                        push(s);
+                        1
+                    },
+                    used_fields,
+                )
+            })
+        }
+    }
     pub(crate) fn split_regex<'a>(
         &mut self,
         pat: &Str,
@@ -216,7 +251,7 @@ impl RegexCache {
         used_fields: &FieldSet,
         v: &mut LazyVec<Str<'a>>,
     ) -> Result<()> {
-        self.with_regex(pat, |re| s.split(re, |s| v.push(s), used_fields))
+        self.split_internal(pat, s, used_fields, |s| v.push(s))
     }
 
     pub(crate) fn split_regex_intmap<'a>(
@@ -226,15 +261,9 @@ impl RegexCache {
         m: &IntMap<Str<'a>>,
     ) -> Result<()> {
         let mut i = 0i64;
-        self.with_regex(pat, |re| {
-            s.split(
-                re,
-                |s| {
-                    i += 1;
-                    m.insert(i, s);
-                },
-                &FieldSet::all(),
-            )
+        self.split_internal(pat, s, &FieldSet::all(), |s| {
+            i += 1;
+            m.insert(i, s);
         })
     }
 
@@ -245,17 +274,10 @@ impl RegexCache {
         m: &StrMap<'a, Str<'a>>,
     ) -> Result<()> {
         let mut i = 0i64;
-        self.with_regex(pat, |re| {
-            s.split(
-                re,
-                |s| {
-                    i += 1;
-                    m.insert(convert::<i64, Str<'_>>(i), s);
-                },
-                &FieldSet::all(),
-            )
-        })?;
-        Ok(())
+        self.split_internal(pat, s, &FieldSet::all(), |s| {
+            i += 1;
+            m.insert(convert::<i64, Str<'_>>(i), s);
+        })
     }
 
     pub(crate) fn regex_match_loc(

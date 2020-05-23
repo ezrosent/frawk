@@ -81,8 +81,8 @@ fn simulate_stdin_whitespace(
     inp: impl Into<String>,
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
     simulate_stdin(inp, |reader, name| {
-        use runtime::splitter::{DefaultSplitter, WhiteSpace};
-        DefaultSplitter::new(WhiteSpace, reader, runtime::CHUNK_SIZE, name)
+        use runtime::splitter::DefaultSplitter;
+        DefaultSplitter::new(reader, runtime::CHUNK_SIZE, name)
     })
 }
 
@@ -93,7 +93,7 @@ fn simulate_stdin_singlechar(
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
     // TODO fix this (by checking if it's supported, or returning a Box<dyn IntoRuntime>
     simulate_stdin(inp, |reader, name| {
-        ByteReader::new(reader, field_sep, record_sep, runtime::CHUNK_SIZE, name).unwrap()
+        ByteReader::new(reader, field_sep, record_sep, runtime::CHUNK_SIZE, name)
     })
 }
 

@@ -4,12 +4,11 @@
 //! In addition to this API, it also handles reading in chunks, with appropriate handling of UTF8
 //! characters that cross chunk boundaries, or multi-chunk "lines".
 
-// TODO: converge with csv.rs; not a ton to improve on
 // TODO: add padding to the linereader trait
-// TODO: make the DefaultSplitter whitespace-only
-// TODO: support regular whitespace semantics when splitting by a regex.pub mod batch;
 pub mod batch;
 pub mod regex;
+
+use std::mem;
 
 use super::str_impl::{Buf, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
@@ -262,63 +261,20 @@ where
     }
 }
 
-pub trait SplitterImpl {
-    const IS_REPEATED: bool;
-    const TRIM_LEADING_EMPTY: bool;
-    fn is_field_sep(&self, b: u8) -> bool;
-    fn is_record_sep(&self, b: u8) -> bool;
-}
-#[derive(Copy, Clone)]
-pub struct WhiteSpace;
-impl SplitterImpl for WhiteSpace {
-    const IS_REPEATED: bool = true;
-    const TRIM_LEADING_EMPTY: bool = true;
-    fn is_field_sep(&self, b: u8) -> bool {
-        matches!(b, b' ' | b'\x09'..=b'\x0d')
-    }
-    fn is_record_sep(&self, b: u8) -> bool {
-        b == b'\n'
-    }
+fn is_ascii_whitespace(b: u8) -> bool {
+    matches!(b, b' ' | b'\x09'..=b'\x0d')
 }
 
-#[derive(Copy, Clone)]
-pub struct SimpleSplitter {
-    record_sep: u8,
-    field_sep: u8,
-}
-
-impl SimpleSplitter {
-    pub fn new(record_sep: u8, field_sep: u8) -> SimpleSplitter {
-        SimpleSplitter {
-            record_sep,
-            field_sep,
-        }
-    }
-}
-
-impl SplitterImpl for SimpleSplitter {
-    const IS_REPEATED: bool = false;
-    const TRIM_LEADING_EMPTY: bool = false;
-    fn is_field_sep(&self, b: u8) -> bool {
-        b == self.field_sep
-    }
-    fn is_record_sep(&self, b: u8) -> bool {
-        b == self.record_sep
-    }
-}
-
-// Used for "simple" patterns. Instead of looking up and splitting by a full regex, we eagerly
-// split by a simple predicate and populate lines accordingly.
-pub struct DefaultSplitter<R, S> {
+/// Split input by whitespace, using Awk semantics.
+pub struct DefaultSplitter<R> {
     reader: Reader<R>,
     name: Str<'static>,
     used_fields: FieldSet,
     // As in RegexSplitter, used to trigger updating FILENAME on the first read.
     start: bool,
-    splitter: S,
 }
 
-impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
+impl<R: Read> LineReader for DefaultSplitter<R> {
     type Line = DefaultLine;
     fn filename(&self) -> Str<'static> {
         self.name.clone()
@@ -339,7 +295,9 @@ impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
         _rc: &mut RegexCache,
         old: &'a mut DefaultLine,
     ) -> Result</* file changed */ bool> {
-        let (line, consumed) = self.read_line_inner(&mut old.fields);
+        let mut old_fields = old.fields.get_cleared_vec();
+        let (line, consumed) = self.read_line_inner(&mut old_fields);
+        old.fields = LazyVec::from_vec(old_fields);
         old.line = line;
         old.diverged = false;
         let start = self.start;
@@ -362,24 +320,24 @@ impl<R: Read, S: SplitterImpl> LineReader for DefaultSplitter<R, S> {
     }
 }
 
-impl<R: Read, S: SplitterImpl> DefaultSplitter<R, S> {
-    pub fn new(splitter: S, r: R, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
+impl<R: Read> DefaultSplitter<R> {
+    pub fn new(r: R, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
         DefaultSplitter {
             reader: Reader::new(r, chunk_size),
             name: name.into(),
             used_fields: FieldSet::all(),
             start: true,
-            splitter,
         }
     }
-    fn read_line_inner(&mut self, fields: &mut LazyVec<Str<'static>>) -> (Str<'static>, usize) {
-        fields.clear();
+    fn read_line_inner(&mut self, fields: &mut Vec<Str<'static>>) -> (Str<'static>, usize) {
+        // How many bytes has this call to read consumed?
         let mut consumed = 0;
+        // We must handle lines and fields that cross buffer refresh boundaries. These fields
+        // contain prefixes of those values that we can prepend when we complete the field or line.
         let mut line_prefix: Str<'static> = Default::default();
         let mut last_field_prefix: Str<'static> = Default::default();
-        // current field we are parsing (0-indexed)
-        let mut current_field = 0;
-        let mut was_field = false;
+        // Should we prepend last_field_prefix to the next field we find?
+        let mut has_field_prefix = false;
         if self.reader.is_eof() {
             return (line_prefix, consumed);
         }
@@ -396,108 +354,103 @@ impl<R: Read, S: SplitterImpl> DefaultSplitter<R, S> {
         }
         self.reader.state = ReaderState::OK;
         loop {
-            let mut current_field_start = self.reader.start;
             let bytes = &self.reader.buf.as_bytes()[self.reader.start..self.reader.end];
-            for (i, b) in bytes
-                .iter()
-                .enumerate()
-                .map(|(ix, b)| (ix + self.reader.start, *b))
-            {
-                let was_field_cur = was_field;
-                let is_field_sep = self.splitter.is_field_sep(b);
-                let is_record_sep = self.splitter.is_record_sep(b);
-                if S::IS_REPEATED {
-                    was_field = is_field_sep;
-                }
-                if is_record_sep {
-                    // Alright. Found the end of a line. Finish off the last field, then append all
-                    // this to prefix and get out of here.
-                    if S::TRIM_LEADING_EMPTY
-                        && ((current_field == 0 && current_field_start == i) || was_field_cur)
-                    {
-                        // Just tidying up some edge cases here:
-                        // e.g. echo ""         | awk '{ print NF; }' => '0'
-                        // e.g. echo "     "    | awk '{ print NF; }' => '0'
-                        // e.g. echo " 1 2    " | awk '{ print NF; }' => '2'
+            let mut cur = 0;
+            let mut cur_index = self.reader.start;
+            let mut current_field_start = self.reader.start;
+
+            // Grab the current field out of the buffer, if it is used.
+            macro_rules! get_field {
+                () => {
+                    if self.used_fields.get(fields.len() + 1) {
+                        let mut res =
+                            unsafe { self.reader.buf.slice_to_str(current_field_start, cur_index) };
+                        if has_field_prefix {
+                            res = Str::concat(
+                                mem::replace(&mut last_field_prefix, Str::default()),
+                                res,
+                            );
+                        }
+                        res
                     } else {
-                        let last_field = if self.used_fields.get(current_field + 1) {
-                            let mut res =
-                                unsafe { self.reader.buf.slice_to_str(current_field_start, i) };
-                            if current_field_start == 0 {
-                                res = Str::concat(last_field_prefix, res);
-                            }
-                            res
-                        } else {
-                            Str::default()
-                        };
-                        fields.insert(current_field, last_field);
-                    }
+                        Str::default()
+                    };
+                };
+            }
+
+            // Loop over the remaining bytes in the current buffer.
+            'inner: while cur < bytes.len() {
+                let mut cur_b = unsafe { *bytes.get_unchecked(cur) };
+                if cur_b == b'\n' {
+                    // Complete the line: get the line and the last field and add them to the
+                    // output, keeping in mind that empty fields are omitted using the Awk
+                    // whitespace splitting discipline.
                     let line = if self.used_fields.get(0) {
-                        Str::concat(line_prefix, unsafe {
-                            self.reader.buf.slice_to_str(self.reader.start, i)
+                        Str::concat(mem::replace(&mut line_prefix, Str::default()), unsafe {
+                            self.reader.buf.slice_to_str(self.reader.start, cur_index)
                         })
                     } else {
                         Str::default()
                     };
-                    let diff = i - self.reader.start + 1;
-                    consumed += diff;
-                    handle_err!(self.reader.advance(diff));
+                    if has_field_prefix || current_field_start != cur_index {
+                        let last_field = get_field!();
+                        fields.push(last_field);
+                    }
+                    let progress = cur + 1;
+                    consumed += progress;
+                    handle_err!(self.reader.advance(progress));
                     return (line, consumed);
                 }
-                // We prioritize the record_separator over the field_separators.
-                if is_field_sep {
-                    if S::IS_REPEATED && was_field_cur {
-                        continue;
+                // We've found some whitespace. This might be the end of a field.
+                if is_ascii_whitespace(cur_b) {
+                    if has_field_prefix || cur_index != current_field_start {
+                        // not an empty field
+                        let last_field = get_field!();
+                        fields.push(last_field);
                     }
-                    // Alright, we just ended a field.
-                    if S::TRIM_LEADING_EMPTY && current_field_start == i {
-                        // An empty leading field, do nothing
-                    } else {
-                        let field = if self.used_fields.get(current_field + 1) {
-                            let mut res =
-                                unsafe { self.reader.buf.slice_to_str(current_field_start, i) };
-                            if current_field_start == 0 {
-                                res = Str::concat(last_field_prefix, res);
-                                last_field_prefix = Str::default();
-                            }
-                            res
-                        } else {
-                            Str::default()
-                        };
-                        fields.insert(current_field, field);
-                        current_field += 1;
+                    // Skip any adjacent whitespace.
+                    current_field_start = cur_index;
+                    while is_ascii_whitespace(cur_b) {
+                        cur += 1;
+                        cur_index += 1;
+                        current_field_start += 1;
+                        if cur == bytes.len() {
+                            break 'inner;
+                        }
+                        cur_b = unsafe { *bytes.get_unchecked(cur) };
                     }
-                    if !S::IS_REPEATED {
-                        current_field_start = i + 1;
-                    }
-                } else if S::IS_REPEATED && was_field_cur {
-                    // A run of field separators has ended
-                    current_field_start = i;
+                } else {
+                    // Continue the current field.
+                    cur += 1;
+                    cur_index += 1;
                 }
             }
+
+            // Out of space in the current buffer. Populate last_field_prefix and line_prefix if we
+            // need them.
+            if current_field_start != cur_index {
+                // We still need to make sure we are skipping empty fields.
+                if self.used_fields.get(fields.len() + 1) {
+                    last_field_prefix = Str::concat(last_field_prefix, unsafe {
+                        self.reader.buf.slice_to_str(current_field_start, cur_index)
+                    });
+                }
+                has_field_prefix = true;
+            }
             if self.used_fields.get(0) {
-                let rest = unsafe {
-                    self.reader
-                        .buf
-                        .slice_to_str(self.reader.start, self.reader.end)
-                };
-                line_prefix = Str::concat(line_prefix, rest);
+                line_prefix = Str::concat(line_prefix, unsafe {
+                    self.reader.buf.slice_to_str(self.reader.start, cur_index)
+                });
             }
-            let use_next_field = self.used_fields.get(current_field + 1);
-            if use_next_field {
-                let rest = unsafe {
-                    self.reader
-                        .buf
-                        .slice_to_str(current_field_start, self.reader.end)
-                };
-                last_field_prefix = Str::concat(last_field_prefix, rest);
-            }
+
+            // Grab a new buffer.
             let remaining = self.reader.remaining();
             consumed += remaining;
             handle_err!(self.reader.advance(remaining));
             if self.reader.is_eof() {
-                if use_next_field {
-                    fields.insert(current_field, last_field_prefix);
+                // If there aren't any new buffers, return the last field and lines.
+                if has_field_prefix {
+                    fields.push(last_field_prefix);
                 }
                 return (line_prefix, consumed);
             }
@@ -670,5 +623,72 @@ impl<R: Read> Reader<R> {
             self.state = ReaderState::EOF;
         }
         Ok((data.into_buf(), ulen))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn read_to_vec<T: Clone + Default>(lv: &LazyVec<T>) -> Vec<T> {
+        let mut res = Vec::with_capacity(lv.len());
+        for i in 0..lv.len() {
+            res.push(lv.get(i).unwrap_or_else(Default::default))
+        }
+        res
+    }
+    fn disp_vec(v: &Vec<Str>) -> String {
+        format!(
+            "{:?}",
+            v.iter().map(|s| format!("{}", s)).collect::<Vec<String>>()
+        )
+    }
+    fn whitespace_split(corpus: &str) {
+        let mut _cache = RegexCache::default();
+        let _pat = Str::default();
+        let expected: Vec<Vec<Str<'static>>> = corpus
+            .split('\n')
+            .map(|line| {
+                line.split(|c: char| c.is_ascii_whitespace())
+                    // trim of leading and trailing whitespace.
+                    .filter(|x| *x != "")
+                    .map(|x| Str::from(x).unmoor())
+                    .collect()
+            })
+            .collect();
+        let reader = std::io::Cursor::new(corpus);
+        let mut reader = DefaultSplitter::new(reader, 1024, "fake-stdin");
+        let mut got = Vec::with_capacity(corpus.len());
+        loop {
+            let (_, line) = reader
+                .read_line(&_pat, &mut _cache)
+                .expect("failed to read line");
+            if reader.read_state() != 1 {
+                break;
+            }
+            got.push(read_to_vec(&line.fields));
+        }
+        if got != expected {
+            eprintln!(
+                "test failed! got vector of length {}, expected {} lines",
+                got.len(),
+                expected.len()
+            );
+            for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+                if g != e {
+                    eprintln!("===============");
+                    eprintln!("line {} has a mismatch", i);
+                    eprintln!("got:  {}", disp_vec(g));
+                    eprintln!("want: {}", disp_vec(e));
+                }
+            }
+            panic!("test failed. See debug output");
+        }
+    }
+
+    #[test]
+    fn whitespace_splitter() {
+        whitespace_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+        whitespace_split(crate::test_string_constants::VIRGIL);
+        whitespace_split("   leading whitespace   ");
     }
 }

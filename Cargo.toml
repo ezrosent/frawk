@@ -32,7 +32,7 @@ allow_avx2 = []
 
 [profile.release]
 lto = "fat"
-debug = false
+# debug = true
 # codegen-units=1
 
 [build-dependencies]

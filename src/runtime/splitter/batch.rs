@@ -1,5 +1,8 @@
 //! Batched splitting of input.
 //!
+//! Under some circumstances, we can scan the entire input for field and record separators in
+//! batches.
+//!
 //! CSV/TSV parsing is adapted from geofflangdale/simdcsv.
 //!
 //! As that repo name implies, it uses SIMD instructions to accelerate CSV and TSV parsing. It does
@@ -7,6 +10,9 @@
 //! the underlying input buffer, these play the same role as "control characters" in the SimdJSON
 //! paper (by the same authors). The higher-level state machine parser then operates on these
 //! control characters rather than on a byte-by-byte basis.
+//!
+//! Single-byte splitting is a simpler algorithm adapting the CSV/TSV parsing methods, but ignoring
+//! escaping issues.
 use std::io::Read;
 use std::mem;
 use std::str;
@@ -709,55 +715,6 @@ mod generic {
         *start_offset = next_start;
     }
 
-    #[inline(always)]
-    unsafe fn flatten_bits_marked(
-        base_p: *mut u64,
-        start_offset: &mut u64,
-        start_ix: u64,
-        mut bits: u64,
-        to_mark: u64,
-    ) {
-        // A variant of flatten_bits that marks the top bit of the index based on the contents of
-        // `to_mark`.
-        if bits == 0 {
-            return;
-        }
-        let count = bits.count_ones();
-        let next_start = (*start_offset) + count as u64;
-        macro_rules! write_offset_inner {
-            ($ix:expr) => {
-                let tz = bits.trailing_zeros();
-                let mask = if to_mark & 1u64.wrapping_shl(tz) == 0 {
-                    0u64
-                } else {
-                    1u64.wrapping_shl(63)
-                };
-                *base_p.offset(*start_offset as isize + $ix) = (start_ix + tz as u64) | mask;
-                bits = bits & bits.wrapping_sub(1);
-            };
-        }
-        macro_rules! write_offsets {
-                    ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
-                }
-        write_offsets!(0, 1, 2, 3, 4, 5, 6, 7);
-        // Similarly for bits 8->16
-        if count > 8 {
-            write_offsets!(8, 9, 10, 11, 12, 13, 14, 15);
-        }
-        // Just do a loop for the last 48 bits.
-        if count > 16 {
-            *start_offset += 16;
-            loop {
-                write_offsets!(0);
-                if bits == 0 {
-                    break;
-                }
-                *start_offset += 1;
-            }
-        }
-        *start_offset = next_start;
-    }
-
     // The find_indexes functions are progressively simple takes on "do a vectorized comparison
     // against a byte sequence, write the indexes of matching indexes into Offsets." The first is
     // very close to the simd-csv variant; simpler formats do a bit less.
@@ -819,7 +776,8 @@ mod generic {
             flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
             ix += V::INPUT_SIZE;
         }
-        // For any text that remains, just copy the results to the stack with some padding and do one more iteration.
+        // For any text that remains, just copy the results to the stack with some padding and do
+        // one more iteration.
         let remaining = len - ix;
         if remaining > 0 {
             let mut rest = [0u8; MAX_INPUT_SIZE];
@@ -835,12 +793,10 @@ mod generic {
         (prev_iter_inside_quote, prev_iter_cr_end)
     }
 
-    pub unsafe fn find_indexes_tsv<V: Vector>(
+    pub unsafe fn find_indexes_unquoted<V: Vector, F: Fn(*const u8) -> u64>(
         buf: &[u8],
         offsets: &mut Offsets,
-        // These two are ignored for TSV
-        _prev_iter_inside_quote: u64,
-        _prev_iter_cr_end: u64,
+        f: F,
     ) -> (u64, u64) {
         offsets.fields.clear();
         offsets.start = 0;
@@ -865,11 +821,7 @@ mod generic {
                 // Either increase padding, or decrease the prefetch interval.
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 // find commas not inside quotes
-                let inp = V::fill_input($buf);
-                let sep = V::cmp_mask_against_input(inp, '\t' as u8);
-                let esc = V::cmp_mask_against_input(inp, '\\' as u8);
-                let lf = V::cmp_mask_against_input(inp, '\n' as u8);
-                (sep | esc | lf)
+                f($buf)
             }};
         }
         if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
@@ -907,83 +859,35 @@ mod generic {
         (0, 0)
     }
 
+    pub unsafe fn find_indexes_tsv<V: Vector>(
+        buf: &[u8],
+        offsets: &mut Offsets,
+        // These two are ignored for TSV
+        _prev_iter_inside_quote: u64,
+        _prev_iter_cr_end: u64,
+    ) -> (u64, u64) {
+        find_indexes_unquoted::<V, _>(buf, offsets, |ptr| {
+            let inp = V::fill_input(ptr);
+            let sep = V::cmp_mask_against_input(inp, '\t' as u8);
+            let esc = V::cmp_mask_against_input(inp, '\\' as u8);
+            let lf = V::cmp_mask_against_input(inp, '\n' as u8);
+            sep | esc | lf
+        });
+        (0, 0)
+    }
+
     pub unsafe fn find_indexes_byte<V: Vector>(
         buf: &[u8],
         offsets: &mut Offsets,
         field_sep: u8,
         record_sep: u8,
     ) {
-        offsets.fields.clear();
-        offsets.start = 0;
-        // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
-        // reuse this across different chunks.
-        offsets.fields.reserve(buf.len());
-        let buf_ptr = buf.as_ptr();
-        let len = buf.len();
-        let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
-        let mut ix = 0;
-        let base_ptr: *mut u64 = offsets.fields.get_unchecked_mut(0);
-        let mut base = 0;
-
-        // For ... reasons (better pipelining? better cache behavior?) we decode in blocks.
-        const BUFFER_SIZE: usize = 4;
-        macro_rules! iterate {
-            ($buf:expr) => {{
-                // TODO/XXX Padding is only going to be 32 bytes ... what happens when you prefetch
-                // an invalid address? It may slow things down, not to mention we may be giving the
-                // compiler the wrong idea.
-                //
-                // Either increase padding, or decrease the prefetch interval.
-                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
-                // find commas not inside quotes
-                let inp = V::fill_input($buf);
-                let fs = V::cmp_mask_against_input(inp, field_sep);
-                let rs = V::cmp_mask_against_input(inp, record_sep);
-                (rs, (fs | rs))
-            }};
-        }
-        if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
-            let mut all_fields = [0u64; BUFFER_SIZE];
-            let mut record_seps = [0u64; BUFFER_SIZE];
-            while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
-                for b in 0..BUFFER_SIZE {
-                    let (record_sep, all) =
-                        iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
-                    record_seps[b] = record_sep;
-                    all_fields[b] = all;
-                }
-                for b in 0..BUFFER_SIZE {
-                    let internal_ix = V::INPUT_SIZE * b + ix;
-                    flatten_bits_marked(
-                        base_ptr,
-                        &mut base,
-                        internal_ix as u64,
-                        all_fields[b],
-                        record_seps[b],
-                    );
-                }
-                ix += V::INPUT_SIZE * BUFFER_SIZE;
-            }
-        }
-        // Do an unbuffered version for the remaining data
-        while ix < len_minus_64 {
-            let (record_sep, all) = iterate!(buf_ptr.offset(ix as isize));
-            flatten_bits_marked(base_ptr, &mut base, ix as u64, all, record_sep);
-            ix += V::INPUT_SIZE;
-        }
-        // For any text that remains, just copy the results to the stack with some padding and do one more iteration.
-        let remaining = len - ix;
-        if remaining > 0 {
-            let mut rest = [0u8; MAX_INPUT_SIZE];
-            std::ptr::copy_nonoverlapping(
-                buf_ptr.offset(ix as isize),
-                rest.as_mut_ptr(),
-                remaining,
-            );
-            let (record_sep, all) = iterate!(rest.as_mut_ptr());
-            flatten_bits_marked(base_ptr, &mut base, ix as u64, all, record_sep);
-        }
-        offsets.fields.set_len(base as usize);
+        find_indexes_unquoted::<V, _>(buf, offsets, |ptr| {
+            let inp = V::fill_input(ptr);
+            let fs = V::cmp_mask_against_input(inp, field_sep);
+            let rs = V::cmp_mask_against_input(inp, record_sep);
+            fs | rs
+        });
     }
 }
 
@@ -1135,23 +1039,17 @@ pub fn bytereader_supported() -> bool {
     get_find_indexes_bytes().is_some()
 }
 
-// TODO: revert the "marking" method; it seems to be slightly slower on linux (though benchmark mac
-// too)
-// TODO: have new not return an option, but document that bytereader_supported() should be called
-// ahead of time
-// TODO: have split_whitespace function, revise DefaultSplitter to make it simpler. See if we can
-// test it like we did bytereader.
-// TODO: write up benchmarks
-
 impl<R: Read> ByteReader<R> {
+    // This will panic if the current architecture does not support SIMD, etc. bytereader_supported
+    // does this check.
     pub fn new(
         r: R,
         field_sep: u8,
         record_sep: u8,
         chunk_size: usize,
         name: impl Into<Str<'static>>,
-    ) -> Option<Self> {
-        Some(ByteReader {
+    ) -> Self {
+        ByteReader {
             inner: Reader::new(r, chunk_size),
             name: name.into(),
             cur_offsets: Default::default(),
@@ -1160,8 +1058,9 @@ impl<R: Read> ByteReader<R> {
             record_sep,
             used_fields: FieldSet::all(),
             start: true,
-            get_offsets: get_find_indexes_bytes()?,
-        })
+            get_offsets: get_find_indexes_bytes()
+                .expect("bytereader must be supported on the current platform"),
+        }
     }
 
     fn refresh_buf(&mut self) -> Result<bool> {
@@ -1186,8 +1085,8 @@ impl<R: Read> ByteReader<R> {
         line: &'a mut Str<'static>,
         fields: &'a mut Vec<Str<'static>>,
     ) -> Result<()> {
-        let mut prev_field_prefix: Str<'static> = "".into();
-        let mut prev_line_prefix: Str<'static> = "".into();
+        let mut prev_field_prefix = Str::default();
+        let mut prev_line_prefix = Str::default();
         let mut consumed = 0;
         loop {
             if self.progress >= self.inner.end {
@@ -1210,6 +1109,7 @@ impl<R: Read> ByteReader<R> {
                 fields,
                 prev_field_prefix,
                 prev_line_prefix,
+                field_sep: self.field_sep,
             };
             let (done, consumed_in_step) = unsafe { stepper.consume_line() };
             consumed += consumed_in_step;
@@ -1226,15 +1126,16 @@ impl<R: Read> ByteReader<R> {
 }
 
 struct ByteStepper<'a> {
-    pub buf: &'a Buf,
-    pub buf_len: usize,
-    pub prev_ix: usize,
-    pub off: &'a mut Offsets,
-    pub line: &'a mut Str<'static>,
-    pub fields: &'a mut Vec<Str<'static>>,
-    pub prev_field_prefix: Str<'static>,
-    pub prev_line_prefix: Str<'static>,
-    pub used_fields: FieldSet,
+    buf: &'a Buf,
+    buf_len: usize,
+    prev_ix: usize,
+    off: &'a mut Offsets,
+    line: &'a mut Str<'static>,
+    fields: &'a mut Vec<Str<'static>>,
+    prev_field_prefix: Str<'static>,
+    prev_line_prefix: Str<'static>,
+    used_fields: FieldSet,
+    field_sep: u8,
 }
 
 impl<'a> ByteStepper<'a> {
@@ -1242,8 +1143,6 @@ impl<'a> ByteStepper<'a> {
     unsafe fn consume_line(&mut self) -> (/* line done */ bool, /*bytes consumed*/ usize) {
         let mut current_field = self.fields.len();
         let mut start = true;
-        const HIGH_BIT: u64 = 1u64 << 63;
-        const INDEX_MASK: u64 = !HIGH_BIT;
         let line_start = self.prev_ix;
         macro_rules! get_field {
             ($index:expr) => {
@@ -1261,10 +1160,10 @@ impl<'a> ByteStepper<'a> {
                 }
             };
         }
+        let bytes = &self.buf.as_bytes()[0..self.buf_len];
         while self.off.start < self.off.fields.len() {
-            let raw_offset = *self.off.fields.get_unchecked(self.off.start);
-            let index = (raw_offset & INDEX_MASK) as usize;
-            let is_field_sep = raw_offset < HIGH_BIT;
+            let index = *self.off.fields.get_unchecked(self.off.start) as usize;
+            let is_field_sep = *bytes.get_unchecked(index) == self.field_sep;
             self.off.start += 1;
             if is_field_sep {
                 let fld = get_field!(index);
@@ -1360,7 +1259,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             })
             .collect();
         let reader = std::io::Cursor::new(corpus);
-        let mut reader = ByteReader::new(reader, fs, rs, 1024, "fake-stdin").unwrap();
+        let mut reader = ByteReader::new(reader, fs, rs, 1024, "fake-stdin");
         let mut got = Vec::with_capacity(corpus.len());
         loop {
             let (_, line) = reader
@@ -1393,6 +1292,9 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
 
     #[test]
     fn bytes_splitter() {
+        if !bytereader_supported() {
+            return;
+        }
         bytes_split(b' ', b'\n', crate::test_string_constants::VIRGIL);
         bytes_split(
             b' ',

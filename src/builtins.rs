@@ -409,7 +409,7 @@ impl<'a> Default for Variables<'a> {
         Variables {
             argc: 0,
             argv: Default::default(),
-            fs: "[ \t]+".into(),
+            fs: " ".into(),
             ofs: " ".into(),
             ors: "\n".into(),
             rs: "\n".into(),

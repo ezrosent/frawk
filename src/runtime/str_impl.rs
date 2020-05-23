@@ -272,7 +272,7 @@ impl<'a> Drop for StrRep<'a> {
 pub struct Str<'a>(UnsafeCell<StrRep<'a>>);
 
 impl<'a> Str<'a> {
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         unsafe { mem::transmute::<&Str, &Inline>(self) == &Inline::default() }
     }
     unsafe fn rep(&self) -> &StrRep<'a> {
@@ -295,36 +295,36 @@ impl<'a> Str<'a> {
         unsafe { mem::transmute::<Str<'a>, u128>(self) }
     }
 
-    pub fn split(&self, pat: &Regex, mut push: impl FnMut(Str<'a>), used_fields: &FieldSet) {
+    pub fn split(
+        &self,
+        pat: &Regex,
+        // We want to accommodate functions that skip based on empty fields, like Awk whitespace
+        // splitting. As a result, we pass down the field, and whether or not it was empty (emptiness
+        // checks for the string itself are insufficient if used_fields projects some fields away),
+        // the pattern returns the number of fields added to the output.
+        mut push: impl FnMut(Str<'a>, bool /*is_empty*/) -> usize,
+        used_fields: &FieldSet,
+    ) {
+        if self.is_empty() {
+            return;
+        }
         self.with_str(|s| {
-            if s.len() == 0 {
-                return;
-            }
             let mut prev = 0;
             let mut cur_field = 1;
             for m in pat.find_iter(s) {
-                // Awk will trim whitespace off the beginning of a line and not create an empty
-                // field in $1, but this doesn't happen for other patterns: leading ','s when FS=,
-                // do create empty fields, for example.
-                //
-                // TODO: this isn't quite right, it also removes the final field if it would be
-                // empty. We are probably better off special-casing the " " FS value.
-                if m.start() == 0 && s.chars().next().unwrap().is_whitespace() {
-                    prev = m.end();
-                    continue;
-                }
-                if used_fields.get(cur_field) {
-                    push(self.slice(prev, m.start()));
+                let is_empty = prev == m.start();
+                cur_field += if used_fields.get(cur_field) {
+                    push(self.slice(prev, m.start()), is_empty)
                 } else {
-                    push(Str::default())
-                }
-                cur_field += 1;
+                    push(Str::default(), is_empty)
+                };
                 prev = m.end();
             }
+            let is_empty = prev == s.len();
             if used_fields.get(cur_field) {
-                push(self.slice(prev, s.len()));
+                push(self.slice(prev, s.len()), is_empty);
             } else {
-                push(Str::default())
+                push(Str::default(), is_empty);
             }
         });
     }
@@ -1102,7 +1102,14 @@ mod tests {
             .skip_while(|x| x.len() == 0)
             .collect::<Vec<_>>();
         let mut got = Vec::new();
-        s.split(&pat, |sub| got.push(sub), &FieldSet::all());
+        s.split(
+            &pat,
+            |sub, _is_empty| {
+                got.push(sub);
+                1
+            },
+            &FieldSet::all(),
+        );
         let total_got = got.len();
         let total = want.len();
         for (g, w) in got.iter().cloned().zip(want.iter().cloned()) {

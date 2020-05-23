@@ -47,7 +47,7 @@ use cfg::Escaper;
 use llvm::IntoRuntime;
 use runtime::{
     splitter::{
-        batch::{ByteReader, CSVReader, InputFormat},
+        batch::{bytereader_supported, ByteReader, CSVReader, InputFormat},
         regex::RegexSplitter,
         DefaultSplitter,
     },
@@ -412,20 +412,16 @@ fn main() {
                         let record_sep = record_sep.unwrap_or("\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
                             if field_sep == " " && record_sep == "\n" {
-                                let $inp = chained(DefaultSplitter::new(
-                                    runtime::splitter::WhiteSpace,
+                                let $inp = chained(DefaultSplitter::new(_reader, CHUNK_SIZE, "-"));
+                                $body
+                            } else if bytereader_supported() {
+                                let br = ByteReader::new(
                                     _reader,
+                                    field_sep.as_bytes()[0],
+                                    record_sep.as_bytes()[0],
                                     CHUNK_SIZE,
                                     "-",
-                                ));
-                                $body
-                            } else if let Some(br) = ByteReader::new(
-                                _reader,
-                                field_sep.as_bytes()[0],
-                                record_sep.as_bytes()[0],
-                                CHUNK_SIZE,
-                                "-",
-                            ) {
+                                );
                                 let $inp = chained(br);
                                 $body
                             } else {
@@ -459,17 +455,12 @@ fn main() {
                         let field_sep = field_sep.unwrap_or(" ");
                         let record_sep = record_sep.unwrap_or("\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
-                            let br_valid = runtime::splitter::batch::bytereader_supported();
+                            let br_valid = bytereader_supported();
                             if field_sep == " " && record_sep == "\n" {
                                 let iter = opts.input_files.iter().cloned().map(|file| {
                                     let reader: Box<dyn io::Read> =
                                         Box::new(open_file_read(file.as_str()));
-                                    DefaultSplitter::new(
-                                        runtime::splitter::WhiteSpace,
-                                        reader,
-                                        CHUNK_SIZE,
-                                        file,
-                                    )
+                                    DefaultSplitter::new(reader, CHUNK_SIZE, file)
                                 });
                                 let $inp = ChainedReader::new(iter);
                                 $body
@@ -484,7 +475,6 @@ fn main() {
                                         CHUNK_SIZE,
                                         file,
                                     )
-                                    .unwrap()
                                 });
                                 let $inp = ChainedReader::new(iter);
                                 $body
