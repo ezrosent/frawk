@@ -185,7 +185,8 @@ Furthermore, one can solve these equations by running them through simple
 their values stop changing. Primary examples of this in frawk are:
 
 * [Inferring types](https://github.com/ezrosent/frawk/blob/master/src/types.rs)
-  for frawk variables.
+  for frawk variables. For more on type inference, see
+  [this doc](https://github.com/ezrosent/frawk/blob/master/info/types.md).
 * [Inferring which columns do not have to be
   parsed.](https://github.com/ezrosent/frawk/blob/master/src/pushdown.rs)
 * Determining [which global
