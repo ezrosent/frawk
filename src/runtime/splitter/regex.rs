@@ -73,7 +73,7 @@ impl<R: Read> LineReader for RegexSplitter<R> {
 impl<R: Read> RegexSplitter<R> {
     pub fn new(r: R, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
         RegexSplitter {
-            reader: Reader::new(r, chunk_size),
+            reader: Reader::new(r, chunk_size, /*padding=*/ 0),
             name: name.into(),
             used_fields: FieldSet::all(),
             start: true,

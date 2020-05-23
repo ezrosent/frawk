@@ -86,7 +86,7 @@ impl<R: Read> CSVReader<R> {
     pub fn new(r: R, ifmt: InputFormat, name: impl Into<Str<'static>>) -> Self {
         CSVReader {
             start: true,
-            inner: Reader::new(r, CHUNK_SIZE),
+            inner: Reader::new(r, CHUNK_SIZE, /*padding=*/ 128),
             name: name.into(),
             cur_offsets: Default::default(),
             prev_ix: 0,
@@ -819,8 +819,8 @@ mod generic {
                 // compiler the wrong idea.
                 //
                 // Either increase padding, or decrease the prefetch interval.
-                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 // find commas not inside quotes
+                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 f($buf)
             }};
         }
@@ -1050,7 +1050,7 @@ impl<R: Read> ByteReader<R> {
         name: impl Into<Str<'static>>,
     ) -> Self {
         ByteReader {
-            inner: Reader::new(r, chunk_size),
+            inner: Reader::new(r, chunk_size, /*padding=*/ 128),
             name: name.into(),
             cur_offsets: Default::default(),
             progress: 0,

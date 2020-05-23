@@ -265,6 +265,10 @@ fn is_ascii_whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\x09'..=b'\x0d')
 }
 
+fn is_ascii_whitespace_not_nl(b: u8) -> bool {
+    matches!(b, b' ' | b'\x09' | b'\x0b'..=b'\x0d')
+}
+
 /// Split input by whitespace, using Awk semantics.
 pub struct DefaultSplitter<R> {
     reader: Reader<R>,
@@ -323,7 +327,7 @@ impl<R: Read> LineReader for DefaultSplitter<R> {
 impl<R: Read> DefaultSplitter<R> {
     pub fn new(r: R, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
         DefaultSplitter {
-            reader: Reader::new(r, chunk_size),
+            reader: Reader::new(r, chunk_size, /*padding=*/ 0),
             name: name.into(),
             used_fields: FieldSet::all(),
             start: true,
@@ -410,7 +414,7 @@ impl<R: Read> DefaultSplitter<R> {
                     }
                     // Skip any adjacent whitespace.
                     current_field_start = cur_index;
-                    while is_ascii_whitespace(cur_b) {
+                    while is_ascii_whitespace_not_nl(cur_b) {
                         cur += 1;
                         cur_index += 1;
                         current_field_start += 1;
@@ -468,7 +472,6 @@ pub(crate) enum ReaderState {
     OK = 1,
 }
 
-// NB basic tests for reader are contained in regex, and other submodules.
 struct Reader<R> {
     inner: R,
     // The "stray bytes" that will be prepended to the next buffer.
@@ -477,10 +480,11 @@ struct Reader<R> {
     start: usize,
     end: usize,
     chunk_size: usize,
+    // Padding is used for the splitters in the [batch] module, which may read some bytes past the
+    // end of the buffer.
+    padding: usize,
     state: ReaderState,
     last_len: usize,
-    // TODO: add a cache here
-    // TODO: get padding as an argument
 }
 
 fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
@@ -507,7 +511,7 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
 }
 
 impl<R: Read> Reader<R> {
-    pub(crate) fn new(r: R, chunk_size: usize) -> Self {
+    pub(crate) fn new(r: R, chunk_size: usize, padding: usize) -> Self {
         let res = Reader {
             inner: r,
             prefix: Default::default(),
@@ -515,6 +519,7 @@ impl<R: Read> Reader<R> {
             start: 0,
             end: 0,
             chunk_size,
+            padding,
             state: ReaderState::OK,
             last_len: 0,
         };
@@ -570,12 +575,9 @@ impl<R: Read> Reader<R> {
     }
 
     fn get_next_buf(&mut self) -> Result<(Buf, usize)> {
-        // For CSV
-        // TODO disable for regex-based splitting.
-        const PADDING: usize = 32;
         let mut done = false;
         // NB: UniqueBuf fills the allocation with zeros.
-        let mut data = UniqueBuf::new(self.chunk_size + PADDING);
+        let mut data = UniqueBuf::new(self.chunk_size + self.padding);
         let mut bytes = &mut data.as_mut_bytes()[..self.chunk_size];
         for (i, b) in self.prefix.iter().cloned().enumerate() {
             bytes[i] = b;
@@ -689,6 +691,6 @@ mod tests {
     fn whitespace_splitter() {
         whitespace_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
         whitespace_split(crate::test_string_constants::VIRGIL);
-        whitespace_split("   leading whitespace   ");
+        whitespace_split("   leading whitespace   \n and some    more");
     }
 }
