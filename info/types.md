@@ -130,7 +130,7 @@ addition.
 In my experience, [type
 infererence](https://papl.cs.brown.edu/2017/Type_Inference.html) usually refers to
 unification-based algorithms for
-[Hindley-Milner](https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system)-esque
+[Damas-Hindley-Milner](https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system)-esque
 systems. I recommend the links in this paragraph for a more careful exposition,
 but for a hint about how these algorithms work, consider this program:
 
@@ -195,7 +195,7 @@ short, so this hasn't been much a of problem.
 
 _This distinction between bidirectional and unidirectional constraints, where
 the former is more efficient to implement while the latter is more precise,
-shows up elsewhere in static analysis. For example consider the difference
+shows up elsewhere in static analysis. For example, see the difference
 between Andersen's and Steensgaard's points-to analyses, detailed in [this
 book](https://cs.au.dk/~amoeller/spa/)._
 
