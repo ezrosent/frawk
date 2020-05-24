@@ -330,3 +330,26 @@ does not support numeric filters, so it was omitted from this benchmark.
 | tsv-utils | TSV | 2.4s |
 | frawk | TSV | 6.6s |
 | frawk | CSV | 7.0s |
+
+## Group By Key
+_Print the mean of field 2 grouped by the value in field 6 for TREE_GRM_ESTN_
+
+The tsv-utils command was `tsv-summarize -H  --group-by 6 --mean 2`. The Awk
+script, with the usual settings for gawk, mawk, and frawk, reads:
+```
+NR > 1 { N[$6]++; SUM[$6]+=$2; }
+END {
+    OFS="\t"
+    for (k in N) {
+        print k, ((SUM[k])/N[k]);
+    }
+}
+```
+
+| Program | Format | Running Time |
+| -- | -- | -- |
+| mawk | TSV | 43.8s |
+| gawk | TSV | 29.1s |
+| tsv-utils | TSV| 4.9s |
+| frawk | TSV | 16.8s |
+| frawk | CSV | 19.4s |
