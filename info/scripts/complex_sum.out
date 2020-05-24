@@ -1,0 +1,95 @@
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m29.647s
+user	0m28.469s
+sys	0m1.164s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m51.919s
+user	2m50.321s
+sys	0m1.562s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m20.144s
+user	0m18.941s
+sys	0m1.196s
++ set +x
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m29.511s
+user	0m28.333s
+sys	0m1.161s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m48.558s
+user	2m47.044s
+sys	0m1.481s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m19.442s
+user	0m18.304s
+sys	0m1.135s
++ set +x
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m28.188s
+user	0m27.098s
+sys	0m1.088s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m47.640s
+user	2m46.215s
+sys	0m1.445s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m20.675s
+user	0m19.422s
+sys	0m1.237s
++ set +x
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m29.692s
+user	0m28.495s
+sys	0m1.177s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	3m11.670s
+user	3m10.088s
+sys	0m1.508s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m19.990s
+user	0m18.794s
+sys	0m1.189s
++ set +x
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m28.163s
+user	0m27.063s
+sys	0m1.097s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m52.672s
+user	2m51.067s
+sys	0m1.519s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m20.284s
+user	0m19.038s
+sys	0m1.235s
++ set +x

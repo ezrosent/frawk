@@ -1,0 +1,280 @@
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.02202e+21 2.22295e+12 7.33769e+14 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m14.163s
+user	1m12.589s
+sys	0m1.560s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9022023868854687498240 2222953010690 733769247290487 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m35.809s
+user	1m34.345s
+sys	0m1.456s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m16.869s
+user	0m15.854s
+sys	0m1.012s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.csv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m20.138s
+user	0m18.992s
+sys	0m1.143s
++ xsv stats -s5,6 ./TREE_GRM_ESTN.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m34.435s
+user	0m33.346s
+sys	0m1.086s
++ xsv stats -s5,6 '-d\t' ./TREE_GRM_ESTN.tsv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m32.969s
+user	0m31.992s
+sys	0m0.974s
++ ./bin/tsv-summarize -H --sum 5 --mean 5 --min 5 --max 5 --stdev 5 --mean 5 ./TREE_GRM_ESTN.tsv
+TRE_CN_sum	TRE_CN_mean	TRE_CN_min	TRE_CN_max	TRE_CN_stdev	TRE_CN_mean
+9.02202386885e+21	2.48282826053e+14	2222953010690	733769247290487	1.80596230748e+14	2.48282826053e+14
+
+real	0m10.949s
+user	0m10.296s
+sys	0m0.653s
++ set +x
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.02202e+21 2.22295e+12 7.33769e+14 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m13.751s
+user	1m12.218s
+sys	0m1.527s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9022023868854687498240 2222953010690 733769247290487 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m34.813s
+user	1m33.370s
+sys	0m1.437s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m16.900s
+user	0m15.874s
+sys	0m1.021s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.csv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m20.163s
+user	0m19.018s
+sys	0m1.141s
++ xsv stats -s5,6 ./TREE_GRM_ESTN.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m34.810s
+user	0m33.719s
+sys	0m1.087s
++ xsv stats -s5,6 '-d\t' ./TREE_GRM_ESTN.tsv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m32.886s
+user	0m31.915s
+sys	0m0.969s
++ ./bin/tsv-summarize -H --sum 5 --mean 5 --min 5 --max 5 --stdev 5 --mean 5 ./TREE_GRM_ESTN.tsv
+TRE_CN_sum	TRE_CN_mean	TRE_CN_min	TRE_CN_max	TRE_CN_stdev	TRE_CN_mean
+9.02202386885e+21	2.48282826053e+14	2222953010690	733769247290487	1.80596230748e+14	2.48282826053e+14
+
+real	0m10.956s
+user	0m10.307s
+sys	0m0.648s
++ set +x
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.02202e+21 2.22295e+12 7.33769e+14 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m13.478s
+user	1m11.938s
+sys	0m1.530s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9022023868854687498240 2222953010690 733769247290487 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m35.204s
+user	1m33.724s
+sys	0m1.470s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m16.858s
+user	0m15.838s
+sys	0m1.016s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.csv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m20.124s
+user	0m18.979s
+sys	0m1.141s
++ xsv stats -s5,6 ./TREE_GRM_ESTN.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m35.061s
+user	0m33.974s
+sys	0m1.083s
++ xsv stats -s5,6 '-d\t' ./TREE_GRM_ESTN.tsv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m33.011s
+user	0m32.029s
+sys	0m0.978s
++ ./bin/tsv-summarize -H --sum 5 --mean 5 --min 5 --max 5 --stdev 5 --mean 5 ./TREE_GRM_ESTN.tsv
+TRE_CN_sum	TRE_CN_mean	TRE_CN_min	TRE_CN_max	TRE_CN_stdev	TRE_CN_mean
+9.02202386885e+21	2.48282826053e+14	2222953010690	733769247290487	1.80596230748e+14	2.48282826053e+14
+
+real	0m10.933s
+user	0m10.284s
+sys	0m0.649s
++ set +x
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.02202e+21 2.22295e+12 7.33769e+14 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m14.812s
+user	1m13.271s
+sys	0m1.533s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9022023868854687498240 2222953010690 733769247290487 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m34.786s
+user	1m33.353s
+sys	0m1.426s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m16.891s
+user	0m15.868s
+sys	0m1.018s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.csv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m20.195s
+user	0m19.062s
+sys	0m1.128s
++ xsv stats -s5,6 ./TREE_GRM_ESTN.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m34.398s
+user	0m33.320s
+sys	0m1.075s
++ xsv stats -s5,6 '-d\t' ./TREE_GRM_ESTN.tsv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m32.659s
+user	0m31.687s
+sys	0m0.969s
++ ./bin/tsv-summarize -H --sum 5 --mean 5 --min 5 --max 5 --stdev 5 --mean 5 ./TREE_GRM_ESTN.tsv
+TRE_CN_sum	TRE_CN_mean	TRE_CN_min	TRE_CN_max	TRE_CN_stdev	TRE_CN_mean
+9.02202386885e+21	2.48282826053e+14	2222953010690	733769247290487	1.80596230748e+14	2.48282826053e+14
+
+real	0m10.905s
+user	0m10.260s
+sys	0m0.644s
++ set +x
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.02202e+21 2.22295e+12 7.33769e+14 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m13.862s
+user	1m12.337s
+sys	0m1.520s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9022023868854687498240 2222953010690 733769247290487 13 15 2.48283e+14 1.80596e+14
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	1m34.902s
+user	1m33.448s
+sys	0m1.447s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.tsv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m17.039s
+user	0m16.003s
+sys	0m1.035s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.c0jk5D67 ./TREE_GRM_ESTN.csv
+field sum min max min_length max_length mean stddev
+TRE_CN 9.022023868854687e21 2222953010690.0 733769247290487.0 13 15 248282826052518.47 180596230748189.72
+LAND_BASIS NA FORESTLAND TIMBERLAND 10 10 NA NA
+
+real	0m20.493s
+user	0m19.297s
+sys	0m1.199s
++ xsv stats -s5,6 ./TREE_GRM_ESTN.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m34.635s
+user	0m33.557s
+sys	0m1.079s
++ xsv stats -s5,6 '-d\t' ./TREE_GRM_ESTN.tsv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+TRE_CN,Integer,1566016807328529198,2222953010690,733769247290487,13,15,248282826052421.97,180596228263218.22
+LAND_BASIS,Unicode,,FORESTLAND,TIMBERLAND,10,10,,
+
+real	0m33.308s
+user	0m32.323s
+sys	0m0.982s
++ ./bin/tsv-summarize -H --sum 5 --mean 5 --min 5 --max 5 --stdev 5 --mean 5 ./TREE_GRM_ESTN.tsv
+TRE_CN_sum	TRE_CN_mean	TRE_CN_min	TRE_CN_max	TRE_CN_stdev	TRE_CN_mean
+9.02202386885e+21	2.48282826053e+14	2222953010690	733769247290487	1.80596230748e+14	2.48282826053e+14
+
+real	0m10.970s
+user	0m10.310s
+sys	0m0.658s
++ set +x

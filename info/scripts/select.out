@@ -1,0 +1,230 @@
++ mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m8.755s
+user	0m7.659s
+sys	0m1.085s
++ mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m8.710s
+user	0m7.655s
+sys	0m1.052s
++ gawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m24.872s
+user	0m23.978s
+sys	0m0.917s
++ gawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m24.849s
+user	0m23.956s
+sys	0m0.901s
++ frawk -icsv --out-file=/dev/null 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m3.850s
+user	0m3.167s
+sys	0m0.681s
++ frawk -itsv --out-file=/dev/null 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m3.619s
+user	0m2.957s
+sys	0m0.660s
++ xsv select 1,8,19 ./all_train.csv
+
+real	0m5.501s
+user	0m4.840s
+sys	0m0.659s
++ xsv select '-d\t' 1,8,19 ./all_train.tsv
+
+real	0m5.529s
+user	0m4.881s
+sys	0m0.647s
++ ./bin/tsv-select -f 1,8,19 ./all_train.tsv
+
+real	0m1.956s
+user	0m1.522s
+sys	0m0.435s
++ set +x
++ mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m8.672s
+user	0m7.616s
+sys	0m1.055s
++ mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m8.664s
+user	0m7.618s
+sys	0m1.044s
++ gawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m24.975s
+user	0m24.053s
+sys	0m0.918s
++ gawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m25.042s
+user	0m24.132s
+sys	0m0.906s
++ frawk -icsv --out-file=/dev/null 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m3.910s
+user	0m3.217s
+sys	0m0.687s
++ frawk -itsv --out-file=/dev/null 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m3.758s
+user	0m3.050s
+sys	0m0.702s
++ xsv select 1,8,19 ./all_train.csv
+
+real	0m5.633s
+user	0m4.947s
+sys	0m0.681s
++ xsv select '-d\t' 1,8,19 ./all_train.tsv
+
+real	0m5.606s
+user	0m4.934s
+sys	0m0.667s
++ ./bin/tsv-select -f 1,8,19 ./all_train.tsv
+
+real	0m1.994s
+user	0m1.547s
+sys	0m0.447s
++ set +x
++ mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m8.948s
+user	0m7.829s
+sys	0m1.111s
++ mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m8.663s
+user	0m7.615s
+sys	0m1.046s
++ gawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m24.532s
+user	0m23.618s
+sys	0m0.908s
++ gawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m24.284s
+user	0m23.406s
+sys	0m0.876s
++ frawk -icsv --out-file=/dev/null 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m3.920s
+user	0m3.249s
+sys	0m0.670s
++ frawk -itsv --out-file=/dev/null 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m3.609s
+user	0m2.951s
+sys	0m0.656s
++ xsv select 1,8,19 ./all_train.csv
+
+real	0m5.372s
+user	0m4.729s
+sys	0m0.642s
++ xsv select '-d\t' 1,8,19 ./all_train.tsv
+
+real	0m5.361s
+user	0m4.732s
+sys	0m0.628s
++ ./bin/tsv-select -f 1,8,19 ./all_train.tsv
+
+real	0m1.912s
+user	0m1.500s
+sys	0m0.413s
++ set +x
++ mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m8.482s
+user	0m7.448s
+sys	0m1.033s
++ mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m8.470s
+user	0m7.450s
+sys	0m1.018s
++ gawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m24.280s
+user	0m23.388s
+sys	0m0.889s
++ gawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m24.216s
+user	0m23.340s
+sys	0m0.874s
++ frawk -icsv --out-file=/dev/null 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m3.779s
+user	0m3.114s
+sys	0m0.663s
++ frawk -itsv --out-file=/dev/null 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m3.563s
+user	0m2.903s
+sys	0m0.659s
++ xsv select 1,8,19 ./all_train.csv
+
+real	0m5.341s
+user	0m4.701s
+sys	0m0.639s
++ xsv select '-d\t' 1,8,19 ./all_train.tsv
+
+real	0m5.320s
+user	0m4.693s
+sys	0m0.625s
++ ./bin/tsv-select -f 1,8,19 ./all_train.tsv
+
+real	0m2.089s
+user	0m1.636s
+sys	0m0.452s
++ set +x
++ mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m8.477s
+user	0m7.450s
+sys	0m1.026s
++ mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m8.416s
+user	0m7.400s
+sys	0m1.014s
++ gawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m24.075s
+user	0m23.193s
+sys	0m0.879s
++ gawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m24.532s
+user	0m23.632s
+sys	0m0.892s
++ frawk -icsv --out-file=/dev/null 'BEGIN { OFS="," } { print $1,$8,$19 }' ./all_train.csv
+
+real	0m3.841s
+user	0m3.168s
+sys	0m0.671s
++ frawk -itsv --out-file=/dev/null 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ./all_train.tsv
+
+real	0m3.589s
+user	0m2.927s
+sys	0m0.660s
++ xsv select 1,8,19 ./all_train.csv
+
+real	0m5.530s
+user	0m4.861s
+sys	0m0.665s
++ xsv select '-d\t' 1,8,19 ./all_train.tsv
+
+real	0m5.516s
+user	0m4.863s
+sys	0m0.649s
++ ./bin/tsv-select -f 1,8,19 ./all_train.tsv
+
+real	0m1.919s
+user	0m1.489s
+sys	0m0.430s
++ set +x

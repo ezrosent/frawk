@@ -244,7 +244,7 @@ surprised to discover there were bugs in frawk's parser.
   CSV-escaped lines (enabled via `-o csv` and `-o tsv`).
 * frawk has a builtin `join_fields` function that produces a string of a
   particular range of input columns.
-* frawk provides `int`, `hex` functions for converting a scalar value to an
+* frawk provides `int`, and `hex` functions for converting a scalar value to an
   integer, and parsing a hexadecimal string to an integer. It also supports
   hexadecimal numeric literals.
 
