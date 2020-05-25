@@ -1,10 +1,11 @@
-use crate::bytecode::{Get, Instr, Label, Pop, Reg};
-
 use crate::builtins::Variable;
+use crate::bytecode::{Get, Instr, Label, Pop, Reg};
 use crate::common::{NumTy, Result};
 use crate::compile::{self, Ty};
 use crate::pushdown::FieldSet;
 use crate::runtime::{self, Float, Int, Line, LineReader, Str};
+
+use rand::{self, rngs::StdRng, Rng, SeedableRng};
 
 use std::cmp;
 
@@ -29,6 +30,9 @@ pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     regexes: runtime::RegexCache,
     write_files: runtime::FileWrite,
     read_files: runtime::FileRead<LR>,
+
+    current_seed: u64,
+    rng: StdRng,
 
     // TODO: should these be smallvec<[T; 32]>? We never add registers, so could we allocate one
     // contiguous region ahead of time?
@@ -66,6 +70,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         used_fields: &FieldSet,
     ) -> Self {
         use compile::Ty::*;
+        let seed: u64 = rand::thread_rng().gen();
         Interp {
             main_func,
             instrs,
@@ -74,6 +79,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             ints: default_of(regs(Int)),
             strs: default_of(regs(Str)),
             vars: Default::default(),
+            current_seed: seed,
+            rng: rand::rngs::StdRng::seed_from_u64(seed),
 
             line: Default::default(),
             regexes: Default::default(),
@@ -258,6 +265,24 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let fy = *index(&self.floats, y);
                         let dst = *dst;
                         *self.get_mut(dst) = ff.eval2(fx, fy);
+                    }
+                    Rand(dst) => {
+                        let res: f64 = self.rng.gen_range(0.0, 1.0);
+                        *index_mut(&mut self.floats, dst) = res;
+                    }
+                    Srand(res, seed) => {
+                        let seed: u64 = *index(&self.ints, seed) as u64;
+                        self.rng = StdRng::seed_from_u64(seed);
+                        let old_seed = self.current_seed;
+                        self.current_seed = seed;
+                        *index_mut(&mut self.ints, res) = old_seed as Int;
+                    }
+                    ReseedRng(res) => {
+                        let seed: u64 = rand::thread_rng().gen();
+                        let old_seed = self.current_seed;
+                        self.rng = StdRng::seed_from_u64(seed);
+                        self.current_seed = seed;
+                        *index_mut(&mut self.ints, res) = old_seed as Int;
                     }
                     Concat(res, l, r) => {
                         let res = *res;

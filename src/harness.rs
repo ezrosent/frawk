@@ -485,6 +485,19 @@ mod tests {
     );
 
     test_program!(
+        rand_basics,
+        r#" BEGIN {
+        srand(1234);
+        seed1 = srand(1234);
+        x1 = rand(); y1 = rand(); z1 = rand();
+        seed2 = srand(1234);
+        x2 = rand(); y2 = rand(); z2 = rand();
+        print (seed1 == seed2), (x1 == x2), (y1 == y2), (z1 == z2);
+        }"#,
+        "1 1 1 1\n"
+    );
+
+    test_program!(
         basic_csv_render,
         r#"BEGIN { print "hi", "there"; print "comma,\"in field","and a\ttab"; }"#,
 r#"hi,there

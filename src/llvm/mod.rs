@@ -1227,6 +1227,19 @@ impl<'a> View<'a> {
                 let resv = self.call(fname, &mut [opx, opy]);
                 self.bind_reg(dst, resv);
             }
+            Rand(res) => {
+                let resv = self.call("rand_float", &mut [self.runtime_val()]);
+                self.bind_reg(res, resv);
+            }
+            Srand(res, seed) => {
+                let seedv = self.get_local(seed.reflect())?;
+                let resv = self.call("seed_rng", &mut [self.runtime_val(), seedv]);
+                self.bind_reg(res, resv);
+            }
+            ReseedRng(res) => {
+                let resv = self.call("reseed_rng", &mut [self.runtime_val()]);
+                self.bind_reg(res, resv);
+            }
             Concat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;

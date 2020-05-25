@@ -148,6 +148,9 @@ impl Display for Function {
             Substr => write!(f, "substr"),
             ToInt => write!(f, "int"),
             HexToInt => write!(f, "hex"),
+            Rand => write!(f, "rand"),
+            Srand => write!(f, "srand"),
+            ReseedRng => write!(f, "srand_reseed"),
         }
     }
 }

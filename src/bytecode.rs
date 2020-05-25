@@ -117,6 +117,9 @@ pub(crate) enum Instr<'a> {
     NegFloat(Reg<Float>, Reg<Float>),
     Float1(FloatFunc, Reg<Float>, Reg<Float>),
     Float2(FloatFunc, Reg<Float>, Reg<Float>, Reg<Float>),
+    Rand(Reg<Float>),
+    Srand(/* previous seed */ Reg<Int>, /* new seed */ Reg<Int>),
+    ReseedRng(/* previous seed */ Reg<Int>),
 
     // String processing
     Concat(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Str<'a>>),
@@ -525,6 +528,12 @@ impl<'a> Instr<'a> {
                 x.accum(&mut f);
                 y.accum(&mut f);
             }
+            Rand(res) => res.accum(&mut f),
+            Srand(res, seed) => {
+                res.accum(&mut f);
+                seed.accum(&mut f)
+            }
+            ReseedRng(res) => res.accum(&mut f),
             Concat(res, l, r) => {
                 res.accum(&mut f);
                 l.accum(&mut f);

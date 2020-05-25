@@ -1523,6 +1523,12 @@ where
                     // rightmost index.
                     prim_args.push(PrimVal::ILit(i64::max_value()));
                 }
+
+                // srand() => the special "reseed rng" function
+                if bi == builtins::Function::Srand && args.len() == 0 {
+                    bi = builtins::Function::ReseedRng;
+                }
+
                 // sub/gsub are the most complicated cases. Why? Because they take their last
                 // argument as an out-param. Not only is the 3rd argument "implicitly $0", but we
                 // assign into $0 if that happens.

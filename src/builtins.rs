@@ -38,6 +38,9 @@ pub enum Function {
     Substr,
     ToInt,
     HexToInt,
+    Rand,
+    Srand,
+    ReseedRng,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -150,7 +153,9 @@ static_map!(
     ["join_csv", Function::JoinCSV],
     ["join_tsv", Function::JoinTSV],
     ["escape_csv", Function::EscapeCSV],
-    ["escape_tsv", Function::EscapeTSV]
+    ["escape_tsv", Function::EscapeTSV],
+    ["rand", Function::Rand],
+    ["srand", Function::Srand]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -271,7 +276,10 @@ impl Function {
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
                 _ => return err!("invalid input spec fo Delete: {:?}", &incoming[..]),
             },
+            Srand => (smallvec![Int], Int),
             HexToInt => (smallvec![Str], Int),
+            ReseedRng => (smallvec![], Int),
+            Rand => (smallvec![], Float),
             ToInt => {
                 let inc = incoming[0];
                 match inc {
@@ -316,9 +324,9 @@ impl Function {
         use Function::*;
         Some(match self {
             FloatFunc(ff) => ff.arity(),
-            ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
-            HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length | ReadErr | Nextline
-            | PrintStdout | Unop(_) => 1,
+            Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
+            Srand | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length | ReadErr
+            | Nextline | PrintStdout | Unop(_) => 1,
             Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
             JoinCols | Substr | Sub | GSub | Print | Split => 3,
@@ -350,11 +358,11 @@ impl Function {
                     (_, _) => Ok(Scalar(Int).abs()),
                 }
             }
-            Binop(Div) => Ok(Scalar(BaseTy::Float).abs()),
+            Rand | Binop(Div) => Ok(Scalar(BaseTy::Float).abs()),
             Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
-            Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE) | Binop(GTE)
-            | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains | Delete | Match
-            | Sub | GSub | ToInt | HexToInt => Ok(Scalar(BaseTy::Int).abs()),
+            Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE)
+            | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains
+            | Delete | Match | Sub | GSub | ToInt | HexToInt => Ok(Scalar(BaseTy::Int).abs()),
             JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column)
             | Binop(Concat) | Nextline | NextlineStdin => Ok(Scalar(BaseTy::Str).abs()),
             NextFile | ReadLineStdinFused | Close => Ok(None),

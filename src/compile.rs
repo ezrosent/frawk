@@ -1104,6 +1104,17 @@ impl<'a, 'b> View<'a, 'b> {
             }
         };
 
+        // This match has grown into a bit of a cludge. It maps a (now typed) invocation of a
+        // builtin function at the cfg-level to a bytecode instruction. Most of it is pretty
+        // mechanical. One subtlety to watch out for is the role of res_reg. reg_reg may be unused,
+        // and we are careful not to leak any unused registers into the final bytecode. How to we
+        // handle an unsed result register? It depends:
+        //
+        // 1. If the instruction has no side-effects, we just discard the instruction.
+        // 2. If the instruction has side-effects, then we allocate a fresh register and use it.
+        //    There are more sophisticated ways to handle this (i.e. reusing "placeholder
+        //    registers" within a function), but for now we are keeping things simple.
+
         match bf {
             Unop(Column) => self.pushl(LL::GetColumn(res_reg.into(), conv_regs[0].into())),
             Unop(Not) => self.pushl(if conv_tys[0] == Ty::Str {
@@ -1156,28 +1167,72 @@ impl<'a, 'b> View<'a, 'b> {
             ReadLineStdinFused => self.pushl(LL::NextLineStdinFused()),
             NextFile => self.pushl(LL::NextFile()),
             Setcol => self.pushl(LL::SetColumn(conv_regs[0].into(), conv_regs[1].into())),
-            Sub => self.pushl(LL::Sub(
-                res_reg.into(),
-                conv_regs[0].into(),
-                conv_regs[1].into(),
-                conv_regs[2].into(),
-            )),
-            GSub => self.pushl(LL::GSub(
-                res_reg.into(),
-                conv_regs[0].into(),
-                conv_regs[1].into(),
-                conv_regs[2].into(),
-            )),
-            EscapeCSV => self.pushl(LL::EscapeCSV(res_reg.into(), conv_regs[0].into())),
-            EscapeTSV => self.pushl(LL::EscapeTSV(res_reg.into(), conv_regs[0].into())),
-            Substr => self.pushl(LL::Substr(
-                res_reg.into(),
-                conv_regs[0].into(),
-                conv_regs[1].into(),
-                conv_regs[2].into(),
-            )),
+            Sub => {
+                if res_reg == UNUSED {
+                    res_reg = self.regs.stats.reg_of_ty(res_ty);
+                }
+                self.pushl(LL::Sub(
+                    res_reg.into(),
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                    conv_regs[2].into(),
+                ))
+            }
+            GSub => {
+                if res_reg == UNUSED {
+                    res_reg = self.regs.stats.reg_of_ty(res_ty);
+                }
+                self.pushl(LL::GSub(
+                    res_reg.into(),
+                    conv_regs[0].into(),
+                    conv_regs[1].into(),
+                    conv_regs[2].into(),
+                ))
+            }
+            EscapeCSV => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::EscapeCSV(res_reg.into(), conv_regs[0].into()))
+                }
+            }
+            EscapeTSV => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::EscapeTSV(res_reg.into(), conv_regs[0].into()))
+                }
+            }
+            Substr => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::Substr(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                        conv_regs[2].into(),
+                    ))
+                }
+            }
             ToInt => self.convert(res_reg, Ty::Int, conv_regs[0], conv_tys[0])?,
-            HexToInt => self.pushl(LL::HexStrToInt(res_reg.into(), conv_regs[0].into())),
+            HexToInt => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::HexStrToInt(res_reg.into(), conv_regs[0].into()))
+                }
+            }
+            Rand => {
+                if res_reg == UNUSED {
+                    res_reg = self.regs.stats.reg_of_ty(res_ty);
+                }
+                self.pushl(LL::Rand(res_reg.into()))
+            }
+            Srand => {
+                if res_reg == UNUSED {
+                    res_reg = self.regs.stats.reg_of_ty(res_ty);
+                }
+                self.pushl(LL::Srand(res_reg.into(), conv_regs[0].into()))
+            }
+            ReseedRng => {
+                if res_reg == UNUSED {
+                    res_reg = self.regs.stats.reg_of_ty(res_ty);
+                }
+                self.pushl(LL::ReseedRng(res_reg.into()))
+            }
             Split => {
                 if res_reg == UNUSED {
                     res_reg = self.regs.stats.reg_of_ty(res_ty);
@@ -1200,17 +1255,21 @@ impl<'a, 'b> View<'a, 'b> {
                     return err!("invalid input types to split: {:?}", &conv_tys[..]);
                 })
             }
-            Length => self.pushl(match conv_tys[0] {
-                Ty::Null => LL::StoreConstInt(res_reg.into(), 0),
-                Ty::MapIntInt => LL::LenIntInt(res_reg.into(), conv_regs[0].into()),
-                Ty::MapIntStr => LL::LenIntStr(res_reg.into(), conv_regs[0].into()),
-                Ty::MapIntFloat => LL::LenIntFloat(res_reg.into(), conv_regs[0].into()),
-                Ty::MapStrInt => LL::LenStrInt(res_reg.into(), conv_regs[0].into()),
-                Ty::MapStrStr => LL::LenStrStr(res_reg.into(), conv_regs[0].into()),
-                Ty::MapStrFloat => LL::LenStrFloat(res_reg.into(), conv_regs[0].into()),
-                Ty::Str => LL::LenStr(res_reg.into(), conv_regs[0].into()),
-                _ => return err!("invalid input type for length: {:?}", &conv_tys[..]),
-            }),
+            Length => {
+                if res_reg != UNUSED {
+                    self.pushl(match conv_tys[0] {
+                        Ty::Null => LL::StoreConstInt(res_reg.into(), 0),
+                        Ty::MapIntInt => LL::LenIntInt(res_reg.into(), conv_regs[0].into()),
+                        Ty::MapIntStr => LL::LenIntStr(res_reg.into(), conv_regs[0].into()),
+                        Ty::MapIntFloat => LL::LenIntFloat(res_reg.into(), conv_regs[0].into()),
+                        Ty::MapStrInt => LL::LenStrInt(res_reg.into(), conv_regs[0].into()),
+                        Ty::MapStrStr => LL::LenStrStr(res_reg.into(), conv_regs[0].into()),
+                        Ty::MapStrFloat => LL::LenStrFloat(res_reg.into(), conv_regs[0].into()),
+                        Ty::Str => LL::LenStr(res_reg.into(), conv_regs[0].into()),
+                        _ => return err!("invalid input type for length: {:?}", &conv_tys[..]),
+                    })
+                }
+            }
             Print => {
                 // XXX this imports a specific assumption on how the PrimStmt is generated, we may
                 // want to make the bool parameter to Print dynamic.
@@ -1253,22 +1312,34 @@ impl<'a, 'b> View<'a, 'b> {
                     self.pushl(LL::StoreConstStr(res_reg.into(), "".into()));
                 }
             }
-            JoinCSV => self.pushl(LL::JoinCSV(
-                res_reg.into(),
-                conv_regs[0].into(),
-                conv_regs[1].into(),
-            )),
-            JoinTSV => self.pushl(LL::JoinTSV(
-                res_reg.into(),
-                conv_regs[0].into(),
-                conv_regs[1].into(),
-            )),
-            JoinCols => self.pushl(LL::JoinColumns(
-                res_reg.into(),
-                conv_regs[0].into(),
-                conv_regs[1].into(),
-                conv_regs[2].into(),
-            )),
+            JoinCSV => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::JoinCSV(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                    ))
+                }
+            }
+            JoinTSV => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::JoinTSV(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                    ))
+                }
+            }
+            JoinCols => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::JoinColumns(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                        conv_regs[2].into(),
+                    ))
+                }
+            }
         };
         self.convert(dst_reg, dst_ty, res_reg, res_ty)
     }

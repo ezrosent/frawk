@@ -21,6 +21,7 @@ use llvm_sys::{
     self,
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
 };
+use rand::{self, rngs::StdRng, Rng, SeedableRng};
 use smallvec;
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
@@ -99,6 +100,7 @@ macro_rules! impl_into_runtime {
                 stdout: impl io::Write + 'static,
                 used_fields: &FieldSet,
             ) -> Runtime<'a> {
+                let seed: u64 = rand::thread_rng().gen();
                 Runtime {
                     vars: Default::default(),
                     input_data: InputData::$var((
@@ -107,6 +109,8 @@ macro_rules! impl_into_runtime {
                     )),
                     regexes: Default::default(),
                     write_files: FileWrite::new(stdout),
+                    rng: StdRng::seed_from_u64(seed),
+                    current_seed: seed,
                 }
             }
         }
@@ -123,6 +127,8 @@ pub(crate) struct Runtime<'a> {
     input_data: InputData,
     regexes: RegexCache,
     write_files: FileWrite,
+    rng: StdRng,
+    current_seed: u64,
 }
 
 impl<'a> Runtime<'a> {
@@ -265,6 +271,9 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
         split_str(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
+        rand_float(rt_ty) -> float_ty;
+        seed_rng(rt_ty, int_ty) -> int_ty;
+        reseed_rng(rt_ty) -> int_ty;
 
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
@@ -366,6 +375,32 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         drop_strstr(map_ty);
     };
     table
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rand_float(runtime: *mut c_void) -> f64 {
+    let runtime = &mut *(runtime as *mut Runtime);
+    runtime.rng.gen_range(0.0, 1.0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn seed_rng(runtime: *mut c_void, seed: Int) -> Int {
+    let runtime = &mut *(runtime as *mut Runtime);
+    let seed_u64 = seed as u64;
+    runtime.rng = StdRng::seed_from_u64(seed_u64);
+    let res = runtime.current_seed;
+    runtime.current_seed = seed_u64;
+    res as Int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
+    let runtime = &mut *(runtime as *mut Runtime);
+    let seed: u64 = rand::thread_rng().gen();
+    let old_seed = runtime.current_seed;
+    runtime.rng = StdRng::seed_from_u64(seed);
+    runtime.current_seed = seed;
+    old_seed as Int
 }
 
 #[no_mangle]

@@ -65,36 +65,39 @@ struct Opts {
     #[clap(
         short = "f",
         long = "f",
-        help = "a file containing a valid frawk program"
+        about = "a file containing a valid frawk program"
     )]
     program_file: Option<String>,
     #[clap(
         short = "O",
         long = "opt-level",
         default_value = "3",
-        help = "the optimization level for the program. Levels 0 through 3 are passed \
+        about = "the optimization level for the program. Levels 0 through 3 are passed \
 to LLVM. To force bytecode interpretation pass level -1. The bytecode interpreter is \
 good for debugging, and it will execute much faster for small scripts."
     )]
     opt_level: i32,
     #[clap(long = "out-file")]
     out_file: Option<String>,
-    #[clap(long = "dump-llvm", help = "dump llvm-ir for input program")]
+    #[clap(long = "dump-llvm", about = "dump llvm-ir for input program")]
     dump_llvm: bool,
-    #[clap(long = "dump-bytecode", help = "dump typed bytecode for input program")]
+    #[clap(
+        long = "dump-bytecode",
+        about = "dump typed bytecode for input program"
+    )]
     dump_bytecode: bool,
-    #[clap(long = "dump-cfg", help = "dump untyped SSA form for input program")]
+    #[clap(long = "dump-cfg", about = "dump untyped SSA form for input program")]
     dump_cfg: bool,
     #[clap(
         default_value = "32768",
         long = "out-buffer-size",
-        help = "output to --out-file is buffered; this flag determines buffer size"
+        about = "output to --out-file is buffered; this flag determines buffer size"
     )]
     out_file_bufsize: usize,
     #[clap(
         long = "input-format",
         short = "i",
-        help = "Legal values are csv, tsv. Input is split according to the rules of (csv|tsv). \
+        about = "Legal values are csv, tsv. Input is split according to the rules of (csv|tsv). \
 $0 contains the unescaped line, assigning to any columns including $0 does \
 nothing."
     )]
@@ -103,24 +106,24 @@ nothing."
         long = "var",
         short = "v",
         multiple = true,
-        help = "Has the form <identifier> = <expr>"
+        about = "Has the form <identifier> = <expr>"
     )]
     var: Vec<String>,
     #[clap(
         short = "F",
-        help = "Field separator for frawk program. This is interpreted as a regular expression"
+        about = "Field separator for frawk program. This is interpreted as a regular expression"
     )]
     field_sep: Option<String>,
     #[clap(
         short = "b",
         long = "bytecode",
-        help = "Execute the program with the bytecode interpreter."
+        about = "Execute the program with the bytecode interpreter."
     )]
     bytecode: bool,
     #[clap(
         short = "o",
         long = "output-format",
-        help = "Legal values are csv, tsv. If set, records output via print \
+        about = "Legal values are csv, tsv. If set, records output via print \
 are escaped accoring to the rules of the corresponding format"
     )]
     output_format: Option<String>,
