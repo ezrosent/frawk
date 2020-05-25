@@ -17,11 +17,11 @@ begins with a simple message:
 
 I find this diagnosis to be true today: I spend a good deal of time doing menial
 text gardening. For all its foibles as a language, I've found Awk to be a very
-valuable tool when such a "short program" is readily apparent. I wrote frawk to
-be able to write Awk programs under more circumstances. This does not mean that
-I intend for frawk to be a version of Awk with higher-level features; I
-appreciate that Awk rarely escapes the lab of one-liners and have no desire to
-write large programs in an Awk-like language.
+valuable tool when such a "short program" is desirable. I wrote frawk to be able
+to write Awk programs under more circumstances. This does not mean that I intend
+for frawk to be a version of Awk with higher-level features; I appreciate that
+Awk rarely escapes the lab of one-liners and have no desire to write large
+programs in an Awk-like language.
 
 frawk addresses two primary shortcomings I have found in Awk.
 
@@ -41,6 +41,9 @@ know and love. With those caveats aside, here is why I think frawk is
 interesting.
 
 ## Slightly Structured Data
+
+frawk with the `-i csv` option will properly parse and escape CSV data. This
+section explains why this is valuable.
 
 Awk processes data line by line, splitting by a "record separator" which is
 (essentially) a regular expression. That means it's easy enough to write the
@@ -85,8 +88,8 @@ inefficient.
 
 frawk is often a good deal faster than utilities like
 [gawk](https://www.gnu.org/software/gawk/) and
-[mawk](https://invisible-island.net/mawk/) when parsing large data files, or
-performing a particularly computation-intensive task. The main reasons for
+[mawk](https://invisible-island.net/mawk/) when parsing large data files or
+performing particularly computation-intensive tasks. The main reasons for
 frawk's higher performance are:
 
 1. frawk infers types for its variables, so it decides which variables are
@@ -125,16 +128,16 @@ I've found that even for short programs, frawk performs comparably to xsv on
 CSV data, and within a factor of 2 or 3 on TSV data when compared with
 tsv-utils.  frawk can perform tsv-utils-like queries on CSV data in
 substantially less time than the bundled `csv2tsv` tool can convert the data to
-TSV. I think that is a pretty good trade-off if you think you may have to do a
-higher-level operation that these tools do not support. See the
+TSV. I think that is a pretty good trade-off if you want to perform higher-level
+operation that these other tools do not support. See the
 [benchmarks](https://github.com/ezrosent/frawk/blob/master/info/performance.md)
 doc for hard numbers on this.
 
 ## frawk's structure
 
-frawk is structured like a conventional compiler and interpreter. It starts
-with parsing, converts a program into a few intermediate representations and
-eventually generates code. It also executes that code.
+frawk is structured like a conventional compiler and interpreter. Given frawk
+source code, it parses it, converts it into a few intermediate representations,
+generates lower level code, and executes it.
 
 1. The [lexer](https://github.com/ezrosent/frawk/blob/master/src/lexer.rs)
    tokenizes the frawk source code.
@@ -254,9 +257,9 @@ surprised to discover there were bugs in frawk's parser.
   CSV-escaped lines (enabled via `-o csv` and `-o tsv`).
 * frawk has a builtin `join_fields` function that produces a string of a
   particular range of input columns.
-* frawk provides `int`, and `hex` functions for converting a scalar value to an
-  integer, and parsing a hexadecimal string to an integer. It also supports
-  hexadecimal numeric literals.
+* frawk provides an `int` function for converting a scalar value to an integer,
+  and a `hex` function for converting a hexidecimal string to an integer. It
+  also supports hexadecimal numeric literals.
 
 ### What is different
 
