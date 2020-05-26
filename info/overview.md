@@ -98,7 +98,7 @@ frawk's higher performance are:
    performing coercions between strings and numbers. frawk achieves this while
    maintaining just about all of Awk's semantics: the only type errors frawk
    gives you are type errors in Awk, as well.
-1. the fact that frawk produces a typed representation allows it to generate
+1. The fact that frawk produces a typed representation allows it to generate
    fairly simple LLVM IR and then JIT that IR to machine code at runtime. This
    avoids the overhead of an interpreter at the cost of a few milliseconds of
    time at startup. frawk provides a bytecode interpreter (enabled via the `-b`
@@ -128,15 +128,15 @@ I've found that even for short programs, frawk performs comparably to xsv on
 CSV data, and within a factor of 2 or 3 on TSV data when compared with
 tsv-utils.  frawk can perform tsv-utils-like queries on CSV data in
 substantially less time than the bundled `csv2tsv` tool can convert the data to
-TSV. I think that is a pretty good trade-off if you want to perform higher-level
-operation that these other tools do not support. See the
+TSV. I think that is a pretty good trade-off if you want to perform a
+higher-level operation that these other tools do not support. See the
 [benchmarks](https://github.com/ezrosent/frawk/blob/master/info/performance.md)
 doc for hard numbers on this.
 
 ## frawk's structure
 
-frawk is structured like a conventional compiler and interpreter. Given frawk
-source code, it parses it, converts it into a few intermediate representations,
+frawk is structured like a conventional compiler and interpreter. Given source
+code, frawk parses it, converts it into a few intermediate representations,
 generates lower level code, and executes it.
 
 1. The [lexer](https://github.com/ezrosent/frawk/blob/master/src/lexer.rs)

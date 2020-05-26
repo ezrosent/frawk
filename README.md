@@ -24,8 +24,12 @@ frawk is dual-licensed under MIT or Apache 2.0.
 In addition to [installing Rust](https://rustup.rs/), you will need an
 installation of LLVM 9.0 on your machine. See [this site](https://apt.llvm.org/)
 for installation on Linux; `brew install llvm@9` or similar seem to work on Mac
-OS. Other versions of LLVM may work as well. While there are no _deliberate_
-unix-isms in frawk, I have not tested it on Windows.
+OS. Other versions of LLVM may work as well.  With those prerequesites, cloning
+this repository and a `cargo build --release` or `cargo install --path <frawk
+repo path>` will produce a binary that you can add to your `PATH` if you so
+choose.
+
+While there are no _deliberate_ unix-isms in frawk, I have not tested it on Windows.
 
 ## Bugs and Feature Requests
 
