@@ -1160,9 +1160,17 @@ impl<'a, 'b> View<'a, 'b> {
                 [MapStrStr, ContainsStrStr],
                 [MapStrFloat, ContainsStrFloat]
             ),
-            ReadErr => self.pushl(LL::ReadErr(res_reg.into(), conv_regs[0].into())),
+            ReadErr => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::ReadErr(res_reg.into(), conv_regs[0].into()))
+                }
+            }
             Nextline => self.pushl(LL::NextLine(res_reg.into(), conv_regs[0].into())),
-            ReadErrStdin => self.pushl(LL::ReadErrStdin(res_reg.into())),
+            ReadErrStdin => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::ReadErrStdin(res_reg.into()))
+                }
+            }
             NextlineStdin => self.pushl(LL::NextLineStdin(res_reg.into())),
             ReadLineStdinFused => self.pushl(LL::NextLineStdinFused()),
             NextFile => self.pushl(LL::NextFile()),

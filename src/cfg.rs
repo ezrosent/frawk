@@ -1105,6 +1105,11 @@ where
                 //  getline => getline $0
                 use builtins::Function::{Nextline, NextlineStdin, ReadErr, ReadErrStdin};
                 match (from, into) {
+                    // an unadorned `getline` is uses the "fused" stdin construct, which in turn
+                    // enables some optimizations.
+                    (None /* stdin */, None /* $0 */) => {
+                        return self.convert_expr(&ast::Expr::ReadStdin, current_open)
+                    }
                     (from, None /* $0 */) => {
                         return self.convert_expr(
                             &ast::Expr::Getline {

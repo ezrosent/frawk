@@ -596,11 +596,19 @@ it has one more line"#
         "2,b\t3,c\t4,d\t5,e\n",
         @input "1,a 2,b 3,c 4,d 5,e"
     );
+
     test_program!(
         csv_join,
         r#"{ print join_csv(2, 5);}"#,
         concat!(r#""2,b","3,c","4,d","5,e""#, "\n"),
         @input "1,a 2,b 3,c 4,d 5,e"
+    );
+
+    test_program!(
+        raw_getline,
+        r#"{ print "even", $0; getline; print "odd", $0; }"#,
+        "even 0\nodd 1\neven 2\nodd 3\n",
+        @input "0\n1\n2\n3\n"
     );
 
     test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
