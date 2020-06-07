@@ -1,5 +1,5 @@
 mod attr;
-mod builtin_functions;
+pub(crate) mod builtin_functions;
 mod intrinsics;
 
 pub(crate) use intrinsics::IntoRuntime;
@@ -1234,15 +1234,19 @@ impl<'a> View<'a> {
             }
             Float1(ff, dst, src) => {
                 let op = self.get_local(src.reflect())?;
-                let fname = ff.intrinsic_name();
-                let resv = self.call(fname, &mut [op]);
+                let resv = match ff.intrinsic_name() {
+                    Either::Left(fname) => self.call(fname, &mut [op]),
+                    Either::Right(builtin) => self.call_builtin(builtin, &mut [op]),
+                };
                 self.bind_reg(dst, resv);
             }
             Float2(ff, dst, x, y) => {
                 let opx = self.get_local(x.reflect())?;
                 let opy = self.get_local(y.reflect())?;
-                let fname = ff.intrinsic_name();
-                let resv = self.call(fname, &mut [opx, opy]);
+                let resv = match ff.intrinsic_name() {
+                    Either::Left(fname) => self.call(fname, &mut [opx, opy]),
+                    Either::Right(builtin) => self.call_builtin(builtin, &mut [opx, opy]),
+                };
                 self.bind_reg(dst, resv);
             }
             Rand(res) => {

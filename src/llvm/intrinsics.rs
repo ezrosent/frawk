@@ -288,20 +288,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         next_line_stdin_fused(rt_ty);
         next_file(rt_ty);
 
-        // TODO some of the kaleidoscope tutorials suggest that if we name these things the same as
-        // their libm names, that llvm will "do the right thing" with them and actually optimize
-        // them accordingly. That those names are special is underscored by the fact that we get a
-        // stack overflow when naming them `cos`, `sin`, etc. and calling them. It's probably worth
-        // investigating how brittle this mechanism is, and if it's worth building a separate
-        // intrinsic calling path that names these functions appropriately. (Alternatively, is
-        // there a way we can teach llvm that _frawk_cos means the cosine function?).
-        [ReadOnly, ArgmemOnly] _frawk_cos(float_ty) -> float_ty;
-        [ReadOnly, ArgmemOnly] _frawk_sin(float_ty) -> float_ty;
         [ReadOnly, ArgmemOnly] _frawk_atan(float_ty) -> float_ty;
-        [ReadOnly, ArgmemOnly] _frawk_log(float_ty) -> float_ty;
-        [ReadOnly, ArgmemOnly] _frawk_log2(float_ty) -> float_ty;
-        [ReadOnly, ArgmemOnly] _frawk_log10(float_ty) -> float_ty;
-        [ReadOnly, ArgmemOnly] _frawk_sqrt(float_ty) -> float_ty;
         [ReadOnly, ArgmemOnly] _frawk_atan2(float_ty, float_ty) -> float_ty;
 
         load_var_str(rt_ty, int_ty) -> str_ty;
@@ -981,45 +968,9 @@ pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut u128) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn _frawk_cos(f: Float) -> Float {
-    // TODO: make these macos-only
-    std::ptr::read_volatile(&false);
-    f.cos()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn _frawk_sin(f: Float) -> Float {
-    std::ptr::read_volatile(&false);
-    f.sin()
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn _frawk_atan(f: Float) -> Float {
     std::ptr::read_volatile(&false);
     f.atan()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn _frawk_log(f: Float) -> Float {
-    std::ptr::read_volatile(&false);
-    f.ln()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn _frawk_log2(f: Float) -> Float {
-    std::ptr::read_volatile(&false);
-    f.log2()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn _frawk_log10(f: Float) -> Float {
-    std::ptr::read_volatile(&false);
-    f.log10()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn _frawk_sqrt(f: Float) -> Float {
-    f.sqrt()
 }
 
 #[no_mangle]

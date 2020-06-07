@@ -751,8 +751,9 @@ for (k in m) {
         print sqrt(4);
         print log10("100");
         print log2("32");
+        print exp(1);
         }"#,
-        "2.0\n2.0\n5.0\n"
+        "2.0\n2.0\n5.0\n2.718281828459045\n"
     );
 
     test_program!(

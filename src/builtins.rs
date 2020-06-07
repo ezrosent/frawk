@@ -1,7 +1,8 @@
 //! This module contains definitions and metadata for builtin functions and builtin variables.
 use crate::ast;
-use crate::common::{NodeIx, Result};
+use crate::common::{Either, NodeIx, Result};
 use crate::compile;
+use crate::llvm;
 use crate::runtime::{Int, IntMap, Str};
 use crate::types::{self, SmallVec};
 use smallvec::smallvec;
@@ -56,6 +57,8 @@ pub enum FloatFunc {
     // Log base 10
     Log10,
     Sqrt,
+    // e^
+    Exp,
 }
 
 impl FloatFunc {
@@ -69,6 +72,7 @@ impl FloatFunc {
             Log2 => op.log2(),
             Log10 => op.log10(),
             Sqrt => op.sqrt(),
+            Exp => op.exp(),
             Atan2 => unreachable!(),
         }
     }
@@ -76,7 +80,7 @@ impl FloatFunc {
         use FloatFunc::*;
         match self {
             Atan2 => x.atan2(y),
-            Sqrt | Cos | Sin | Atan | Log | Log2 | Log10 => unreachable!(),
+            Sqrt | Cos | Sin | Atan | Log | Log2 | Log10 | Exp => unreachable!(),
         }
     }
 
@@ -91,29 +95,32 @@ impl FloatFunc {
             Log10 => "log10",
             Sqrt => "sqrt",
             Atan2 => "atan2",
+            Exp => "exp",
         }
     }
 
-    pub fn intrinsic_name(&self) -> &'static str {
+    pub fn intrinsic_name(&self) -> Either<&'static str, llvm::builtin_functions::Function> {
         use FloatFunc::*;
+        type LLVMFunc = llvm::builtin_functions::Function;
         // NB these must match the corresponding function name in llvm/intrinsics. New functions
         // added here must also be stubbed out there with semantics matching the `eval` methods.
         match self {
-            Cos => "_frawk_cos",
-            Sin => "_frawk_sin",
-            Atan => "_frawk_atan",
-            Log => "_frawk_log",
-            Log2 => "_frawk_log2",
-            Log10 => "_frawk_log10",
-            Sqrt => "_frawk_sqrt",
-            Atan2 => "_frawk_atan2",
+            Cos => Either::Right(LLVMFunc::Cos),
+            Sin => Either::Right(LLVMFunc::Sin),
+            Log => Either::Right(LLVMFunc::Log),
+            Log2 => Either::Right(LLVMFunc::Log2),
+            Log10 => Either::Right(LLVMFunc::Log10),
+            Sqrt => Either::Right(LLVMFunc::Sqrt),
+            Exp => Either::Right(LLVMFunc::Exp),
+            Atan => Either::Left("_frawk_atan"),
+            Atan2 => Either::Left("_frawk_atan2"),
         }
     }
 
     pub fn arity(&self) -> usize {
         use FloatFunc::*;
         match self {
-            Sqrt | Cos | Sin | Atan | Log | Log2 | Log10 => 1,
+            Sqrt | Cos | Sin | Atan | Log | Log2 | Log10 | Exp => 1,
             Atan2 => 2,
         }
     }
@@ -141,6 +148,7 @@ static_map!(
     ["substr", Function::Substr],
     ["int", Function::ToInt],
     ["hex", Function::HexToInt],
+    ["exp", Function::FloatFunc(FloatFunc::Exp)],
     ["cos", Function::FloatFunc(FloatFunc::Cos)],
     ["sin", Function::FloatFunc(FloatFunc::Sin)],
     ["atan", Function::FloatFunc(FloatFunc::Atan)],
