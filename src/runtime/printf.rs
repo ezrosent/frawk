@@ -89,7 +89,7 @@ impl<'a> FormatArg<'a> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct FormatSpec {
     // leading '-' ? -- left justification.
     minus: bool,
@@ -317,6 +317,9 @@ pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> R
                             buf.clear();
                             if ch == '0' {
                                 fs.leading_zeros = true;
+                            } else if ch == '.' {
+                                stage = Rnum;
+                                continue;
                             } else {
                                 buf.push(ch as u8);
                             };
@@ -422,5 +425,7 @@ mod tests {
     fn float_rounding() {
         let s1 = sprintf!("%02.2f", 2.375);
         assert_eq!(s1.as_str(), "2.38");
+        let s2 = sprintf!("%.2f", 2.375);
+        assert_eq!(s2.as_str(), "2.38");
     }
 }
