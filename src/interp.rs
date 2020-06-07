@@ -309,6 +309,14 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let pat = index(&self.strs, r);
                         *self.get_mut(res) = self.regexes.is_regex_match(&pat, &l)? as Int;
                     }
+                    SubstrIndex(res, s, t) => {
+                        let res = *res;
+                        let s = index(&self.strs, s);
+                        let t = index(&self.strs, t);
+                        *self.get_mut(res) = s
+                            .with_str(|s| t.with_str(|t| s.find(t).map(|x| x + 1).unwrap_or(0)))
+                            as Int;
+                    }
                     LenStr(res, s) => {
                         let res = *res;
                         let s = *s;

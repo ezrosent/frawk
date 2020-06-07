@@ -129,6 +129,8 @@ pub(crate) enum Instr<'a> {
     Concat(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Str<'a>>),
     IsMatch(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     Match(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
+    // index(s, t) returns index of substring t in s, 0 if it does not appear.
+    SubstrIndex(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     LenStr(Reg<Int>, Reg<Str<'a>>),
     Sub(
         Reg<Int>,
@@ -552,6 +554,11 @@ impl<'a> Instr<'a> {
                 res.accum(&mut f);
                 l.accum(&mut f);
                 r.accum(&mut f);
+            }
+            SubstrIndex(res, s, t) => {
+                res.accum(&mut f);
+                s.accum(&mut f);
+                t.accum(&mut f);
             }
             LenStr(res, s) => {
                 res.accum(&mut f);

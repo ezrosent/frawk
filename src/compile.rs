@@ -1152,6 +1152,7 @@ impl<'a, 'b> View<'a, 'b> {
                 }
             }
             Match => gen_op!(Match, [Str, Match]),
+            SubstrIndex => gen_op!(SubstrIndex, [Str, SubstrIndex]),
             Contains => gen_op!(
                 Contains,
                 [MapIntInt, ContainsIntInt],

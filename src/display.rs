@@ -138,6 +138,7 @@ impl Display for Function {
             Delete => write!(f, "delete"),
             Close => write!(f, "close"),
             Match => write!(f, "match"),
+            SubstrIndex => write!(f, "index"),
             Sub => write!(f, "sub"),
             GSub => write!(f, "gsub"),
             EscapeCSV => write!(f, "escape_csv"),

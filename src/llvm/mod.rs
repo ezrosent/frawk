@@ -1282,6 +1282,12 @@ impl<'a> View<'a> {
                 let resv = self.call("match_pat", &mut [rt, lv, rv]);
                 self.bind_reg(res, resv);
             }
+            SubstrIndex(res, s, t) => {
+                let sv = self.get_local(s.reflect())?;
+                let tv = self.get_local(t.reflect())?;
+                let resv = self.call("substr_index", &mut [sv, tv]);
+                self.bind_reg(res, resv);
+            }
             LenStr(res, s) => {
                 let sv = self.get_local(s.reflect())?;
                 let lenv = self.call("str_len", &mut [sv]);

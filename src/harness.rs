@@ -725,6 +725,14 @@ for (k in m) {
     );
 
     test_program!(
+        str_index,
+        r#"BEGIN {
+        print index("foobar", "foo"), index("ofoobar", "foo"), index("ozdffooobar", "foo"), index("ozdffooobar", "xxx")
+        }"#,
+        "1 2 5 0\n"
+    );
+
+    test_program!(
         pattern_1,
         r#"/y.*/"#,
         "yellow\nyells\nyard\n",

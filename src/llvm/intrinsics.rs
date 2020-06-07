@@ -259,6 +259,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         concat(str_ref_ty, str_ref_ty) -> str_ty;
         [ReadOnly] match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         [ReadOnly] match_pat_loc(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] substr_index(str_ref_ty, str_ref_ty) -> int_ty;
         subst_first(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_all(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         escape_csv(str_ref_ty) -> str_ty;
@@ -655,6 +656,13 @@ pub unsafe extern "C" fn match_pat_loc(
     );
     mem::forget((s, pat));
     res as Int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn substr_index(s: *mut u128, t: *mut u128) -> Int {
+    let s = &*(s as *mut Str);
+    let t = &*(t as *mut Str);
+    s.with_str(|s| t.with_str(|t| s.find(t).map(|x| x + 1).unwrap_or(0) as Int))
 }
 
 #[no_mangle]
