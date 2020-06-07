@@ -2,22 +2,23 @@
 
 ## Disclaimer
 
-One of frawk's goals is to be efficient. Despite how common it is to do, I've
-found it is very hard to precisely state the degree to which an entire
-_programming language implementation_ is or is not efficient. I have no doubt
-that there are programs in frawk that are slower than an equivalent program in
-Rust, or C, or even mawk or gawk. Some of these programs will represent bugs or
-differences in the quality of the implementation, some will represent one
-program being better-written than another, and still more may demonstrate that
-in some nontrivial sense one language allows you to write the program more
-efficiently than another.
+One of frawk's goals is to be efficient. The abundance of such claims
+nonwithstanding, I've found it is very hard to precisely state the degree to
+which an entire _programming language implementation_ is or is not efficient. I
+have no doubt that there are programs in frawk that are slower than equivalent
+programs in Rust or C, or even mawk or gawk. In some cases this will be due to
+bugs or differences in the quality of the language implementations, in others it
+will be due to bugs or differences in the quality of the programs themselves,
+while in still others it may be due to the fact that in some nontrivial sense
+one language allows you to write the program more efficiently than another.
 
-I've found that it can be very hard to distinguish between these 3, so I
-encourage everyone reading this document to draw at most modest conclusions
-based on these numbers.  What I do hope this document demonstrates are some of
-frawk's strengths when it comes to some common scripting tasks on CSV and TSV
-data. Awk and frawk can process other data formats as well, but in my experience
-the larger files are usually in some standardized format.
+I've found that it can be very hard to distinguish between these three
+categories of explanations when doing performance analysis. As such, I encourage
+everyone reading this document to draw at most modest conclusions based on the
+numbers below.  What I do hope this document demonstrates are some of frawk's
+strengths when it comes to some common scripting tasks on CSV and TSV data. (Awk
+and frawk can process other data formats as well, but in my experience
+larger files are usually in CSV, TSV, or some similar standardized format).
 
 ## Benchmark Setup
 
@@ -80,7 +81,7 @@ possible configurations, for example:
 * Benchmarks for the `TREE_GRM_ESTN` dataset are not run on CSV input with
   `mawk` or `gawk`, as it contains quoted fields and these utilities do
   not handle CSV escaping out of the box. We still run them on the TSV versions
-  of these files, using `\t` as a field separator.
+  of these files using `\t` as a field separator.
 * `tsv-utils` and `xsv` are both limited to a specific menu of common functions.
   When those functions cannot easily express the computation in question, we
   leave them out.
@@ -95,7 +96,7 @@ Before we start benchmarking purpose-built tools, I want to emphasize the power
 that Awk provides for basic number-crunching tasks. Not only can you efficiently
 combine common tasks like filtering, group-by, and arithmetic, but you can build
 complex expressions as well. Suppose I wanted to take the scaled, weighted sum
-of the first column, and the maximum of column 4 and column 5 when column 8 had
+of the first column, and the maximum of column 4 and column 5, when column 8 had
 a particular value. In Awk this is a pretty simple script:
 
 ```
@@ -104,14 +105,14 @@ function max(x,y) { return x<y?y:x; }
 END { print accum; }
 ```
 
-> Note: Where the `+0`s ensure we are always performing a numeric comparison. In
-> Awk this is unnecessary if all instances of column $4 and column $5 are
-> numeric; in frawk this is required: max will perform a lexicographic
-> comparison instead of a numeric one without the explicit conversion.
+> Note: the `+0`s ensure we are always performing a numeric comparison. In Awk
+> this is unnecessary if all instances of column $4 and column $5 are numeric;
+> in frawk this is required: max will perform a lexicographic comparison instead
+> of a numeric one without the explicit conversion.
 
 But I have to preprocess the data to run Awk on it, as Awk doesn't properly
 support quoted CSV fields by default. Supposing I didn't want to do that, the
-next thing I'd reach for is to write a short script in Python:
+next thing I'd reach for is a short script in Python:
 ```
 import csv
 import sys
@@ -134,7 +135,7 @@ with open(sys.argv[1], "r") as f:
 print(accum)
 ```
 If I was concerned about the running time for the script, I would probably write
-the script in Rust instead, rather than spending time trying to optimize the
+the script in Rust instead rather than spending time trying to optimize the
 Python.  Here's one I came up with quickly using the
 [`csv`](https://github.com/BurntSushi/rust-csv) crate:
 
@@ -179,9 +180,10 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-This takes 8.2 seconds to compile a release build. Depending on the setting this
-either is or isn't important. We'll leave it out for now, but keep in mind that
-frawk's and python's runtimes include the time it takes to compile a program.
+This takes 8.2 seconds to compile for a release build. Depending on the setting
+this either is or isn't important. We'll leave it out for now, but keep in mind
+that frawk's and python's runtimes include the time it takes to compile a
+program.
 
 | Program | Running Time (TREE_GRM_ESTN.csv) |
 | -- | -- |
@@ -194,7 +196,7 @@ of course be optimized substantially (frawk is implemented in Rust, after all).
 But if you need to do exploratory, ad-hoc computations like this, a frawk script
 is probably going to be faster than the first few Rust programs you write.
 
-With that said, a lot of the time you do not need a full programming language,
+With that said, for many tasks you do not need a full programming language,
 and there are purpose-built tools for computing the particular value or
 transformation on the dataset. The rest of these benchmarks compare frawk and
 Awk to some of those.
@@ -208,8 +210,11 @@ Programs:
 * tsv-utils: `tsv-summarize -H --sum {6,4},{18,5}`
 
 Awk was only run on the TSV version of TREE_GRM_ESTN, as it has quote-escaped
-columns; tsv-utils was only run on TSV versions of both files, xsv was not
+columns, tsv-utils was only run on TSV versions of both files, and xsv was not
 included because there is no way to persuade it to _just_ compute a sum.
+
+As can be seen below, frawk was slower than tsv-utils at this task but faster
+than mawk and gawk:
 
 | Program | Format | Running Time (TREE_GRM_ESTN) | Running Time (all_train) |
 | -- | -- | -- | -- |
@@ -276,6 +281,9 @@ tsv-utils, but I am omitting it from the table because it does not support
 the given summary statistics on string fields. All numbers are reported for
 TREE_GRM_ESTN.
 
+As can be seen below, frawk performed this task more quickly than any of the
+other benchmark programs:
+
 | Program | Format | Running Time |
 | -- | -- | -- |
 | mawk | TSV | 1m13.5s |
@@ -297,6 +305,9 @@ frawk uses the `icsv` and `itsv` options.
 The xsv invocation looks like `xsv select [-d'\t'] 1,8,19`, and the tsv-utils
 invocation is `tsv-select -f1,8,19`. All output is written to `/dev/null`, so
 all times surely underestimate the true running time of such an operation.
+
+As with the sum task explored above, frawk performs this task slower than
+tsv-utils and faster than the other benchmark programs: 
 
 | Program | Format | Running Time |
 | -- | -- | -- |
@@ -320,6 +331,8 @@ The Awk script computing this filter is `$4 > 0.000024 && $16 > 0.3`. Because
 options. The tsv-utils invocation is `tsv-filter -H --gt 4:0.000025 --gt 16:0.3
 ./all_train.tsv` (taken from the same benchmark on the tsv-utils repo).  xsv
 does not support numeric filters, so it was omitted from this benchmark.
+
+Again, frawk is slower than tsv-utils and faster than everything else:
 
 | Program | Format | Running Time |
 | -- | -- | -- |
@@ -345,6 +358,9 @@ END {
     }
 }
 ```
+
+Again, the faster tsv-utils serves as a useful comparison, while frawk
+outperforms the remaining benchmark programs.
 
 | Program | Format | Running Time |
 | -- | -- | -- |
