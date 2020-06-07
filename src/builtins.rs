@@ -265,7 +265,7 @@ impl Function {
                     (_, _) => (smallvec![Int; 2], Int),
                 }
             }
-            Binop(Div) => (smallvec![Float;2], Float),
+            Binop(Pow) | Binop(Div) => (smallvec![Float;2], Float),
             Contains => match incoming[0] {
                 MapIntInt | MapIntStr | MapIntFloat => (smallvec![incoming[0], Int], Int),
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
@@ -358,7 +358,7 @@ impl Function {
                     (_, _) => Ok(Scalar(Int).abs()),
                 }
             }
-            Rand | Binop(Div) => Ok(Scalar(BaseTy::Float).abs()),
+            Rand | Binop(Div) | Binop(Pow) => Ok(Scalar(BaseTy::Float).abs()),
             Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
             Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE)
             | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains

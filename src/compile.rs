@@ -1133,6 +1133,7 @@ impl<'a, 'b> View<'a, 'b> {
             Binop(Minus) => gen_op!(Minus, [Float, MinusFloat], [Int, MinusInt]),
             Binop(Mult) => gen_op!(Minus, [Float, MulFloat], [Int, MulInt]),
             Binop(Div) => gen_op!(Div, [Float, Div]),
+            Binop(Pow) => gen_op!(Pow, [Float, Pow]),
             Binop(Mod) => gen_op!(Mod, [Float, ModFloat], [Int, ModInt]),
             Binop(Concat) => gen_op!(Concat, [Str, Concat]),
             Binop(IsMatch) => gen_op!(IsMatch, [Str, IsMatch]),

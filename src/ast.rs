@@ -216,22 +216,13 @@ pub enum Binop {
     Mod,
     Concat,
     IsMatch,
+    Pow,
     LT,
     GT,
     LTE,
     GTE,
     EQ,
 }
-
-// Features:
-// TODO printf
-// TODO add support for "next"; just continue to the toplevel loop -- annotate while loop?
-// TODO add "close", make cache for regexes LRU.
-// TODO trig functions, !=, any missing operators.
-//
-// Improvements:
-// * Remove `Vec`s in ASTs. This may be hard for lalrpop for now, but we should at least be able to
-//   move some of the Printf nodes onto an arena.
 
 static_map!(
     BINOPS<&'static str, Binop>,
@@ -246,7 +237,8 @@ static_map!(
     [">", Binop::GT],
     ["<=", Binop::LTE],
     [">=", Binop::GTE],
-    ["==", Binop::EQ]
+    ["==", Binop::EQ],
+    ["^", Binop::Pow]
 );
 
 #[derive(Debug, Clone)]

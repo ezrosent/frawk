@@ -209,6 +209,7 @@ impl Display for Binop {
                 Mod => "%",
                 Concat => "<concat>",
                 IsMatch => "~",
+                Pow => "^",
                 LT => "<",
                 GT => ">",
                 LTE => "<=",

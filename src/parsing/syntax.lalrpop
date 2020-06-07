@@ -179,6 +179,7 @@ PrecAsgn: &'a Expr<'a,'a,&'a str> = {
     <l: PrecIn> "-=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Minus, r)),
     <l: PrecIn> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
     <l: PrecIn> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
+    <l: PrecIn> "^=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Pow, r)),
     <l: PrecIn> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
     PrecTern,
 }
@@ -218,6 +219,7 @@ PrecAsgnNoIn: &'a Expr<'a,'a,&'a str> = {
     <l: PrecTernNoIn> "-=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Minus, r)),
     <l: PrecTernNoIn> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
     <l: PrecTernNoIn> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
+    <l: PrecTernNoIn> "^=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Pow, r)),
     <l: PrecTernNoIn> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
     PrecTernNoIn,
 }
@@ -261,13 +263,18 @@ PrecAdd: &'a Expr<'a,'a,&'a str> = {
 }
 
 PrecMul: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecMul> "*" <r:PrecUnop> => arena.alloc_v(Expr::Binop(Binop::Mult, l, r)),
-    <l: PrecMul> "/" <r:PrecUnop> => arena.alloc_v(Expr::Binop(Binop::Div, l, r)),
-    <l: PrecMul> "%" <r:PrecUnop> => arena.alloc_v(Expr::Binop(Binop::Mod, l, r)),
-    PrecUnop,
+    <l: PrecMul> "*" <r:PrecPow> => arena.alloc_v(Expr::Binop(Binop::Mult, l, r)),
+    <l: PrecMul> "/" <r:PrecPow> => arena.alloc_v(Expr::Binop(Binop::Div, l, r)),
+    <l: PrecMul> "%" <r:PrecPow> => arena.alloc_v(Expr::Binop(Binop::Mod, l, r)),
+    PrecPow,
 }
 
+PrecPow: &'a Expr<'a, 'a, &'a str> = {
+    <l: PrecUnop> "^" <r: PrecPow> => arena.alloc_v(Expr::Binop(Binop::Pow, l, r)),
+    PrecUnop
+}
 PrecUnop: &'a Expr<'a,'a,&'a str> = {
+
     "-" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Neg, e)),
     "+" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Pos, e)),
     "!" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Not, e)),
@@ -367,6 +374,8 @@ extern {
       "*=" =>  Tok::MulAssign,
       "/" =>  Tok::Div,
       "/=" =>  Tok::DivAssign,
+      "^" =>  Tok::Pow,
+      "^=" =>  Tok::PowAssign,
       "%" =>  Tok::Mod,
       "%=" =>  Tok::ModAssign,
       "~" =>  Tok::Match,

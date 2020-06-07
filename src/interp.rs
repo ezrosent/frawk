@@ -234,6 +234,12 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let r = *self.get(*r);
                         *self.get_mut(res) = l / r;
                     }
+                    Pow(res, l, r) => {
+                        let res = *res;
+                        let l = *self.get(*l);
+                        let r = *self.get(*r);
+                        *self.get_mut(res) = l.powf(r);
+                    }
                     Not(res, ir) => {
                         let res = *res;
                         let i = *self.get(*ir);

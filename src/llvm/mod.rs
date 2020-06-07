@@ -1,4 +1,5 @@
 mod attr;
+mod builtin_functions;
 mod intrinsics;
 
 pub(crate) use intrinsics::IntoRuntime;
@@ -30,6 +31,7 @@ use std::ptr;
 
 type Pred = llvm_sys::LLVMIntPredicate;
 type FPred = llvm_sys::LLVMRealPredicate;
+type BuiltinFunc = builtin_functions::Function;
 
 type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
@@ -95,7 +97,7 @@ impl TypeRef {
 }
 
 // Common LLVM types used in code generation.
-struct TypeMap {
+pub(crate) struct TypeMap {
     // Map from compile::Ty => TypeRef
     table: [TypeRef; compile::NUM_TYPES],
     runtime_ty: LLVMTypeRef,
@@ -739,6 +741,16 @@ impl<'a> View<'a> {
         LLVMBuildCall(self.f.builder, func, &mut val, 1, c_str!(""));
     }
 
+    unsafe fn call_builtin(&mut self, f: BuiltinFunc, args: &mut [LLVMValueRef]) -> LLVMValueRef {
+        let fv = f.get_val(self.module, self.tmap);
+        LLVMBuildCall(
+            self.f.builder,
+            fv,
+            args.as_mut_ptr(),
+            args.len() as libc::c_uint,
+            c_str!(""),
+        )
+    }
     unsafe fn call(&mut self, func: &'static str, args: &mut [LLVMValueRef]) -> LLVMValueRef {
         let f = self.intrinsics.get(func);
         LLVMBuildCall(
@@ -1185,6 +1197,12 @@ impl<'a> View<'a> {
                 let rv = self.get_local(r.reflect())?;
                 let addv = LLVMBuildFDiv(self.f.builder, lv, rv, c_str!(""));
                 self.bind_reg(res, addv);
+            }
+            Pow(res, l, r) => {
+                let lv = self.get_local(l.reflect())?;
+                let rv = self.get_local(r.reflect())?;
+                let resv = self.call_builtin(BuiltinFunc::Pow, &mut [lv, rv]);
+                self.bind_reg(res, resv);
             }
             Not(res, ir) => {
                 let operand = self.get_local(ir.reflect())?;

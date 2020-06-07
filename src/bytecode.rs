@@ -107,6 +107,7 @@ pub(crate) enum Instr<'a> {
     MulFloat(Reg<Float>, Reg<Float>, Reg<Float>),
     MulInt(Reg<Int>, Reg<Int>, Reg<Int>),
     Div(Reg<Float>, Reg<Float>, Reg<Float>),
+    Pow(Reg<Float>, Reg<Float>, Reg<Float>),
     MinusFloat(Reg<Float>, Reg<Float>, Reg<Float>),
     MinusInt(Reg<Int>, Reg<Int>, Reg<Int>),
     ModFloat(Reg<Float>, Reg<Float>, Reg<Float>),
@@ -118,7 +119,10 @@ pub(crate) enum Instr<'a> {
     Float1(FloatFunc, Reg<Float>, Reg<Float>),
     Float2(FloatFunc, Reg<Float>, Reg<Float>, Reg<Float>),
     Rand(Reg<Float>),
-    Srand(/* previous seed */ Reg<Int>, /* new seed */ Reg<Int>),
+    Srand(
+        /* previous seed */ Reg<Int>,
+        /* new seed */ Reg<Int>,
+    ),
     ReseedRng(/* previous seed */ Reg<Int>),
 
     // String processing
@@ -498,7 +502,7 @@ impl<'a> Instr<'a> {
                 l.accum(&mut f);
                 r.accum(&mut f);
             }
-            Div(res, l, r) => {
+            Pow(res, l, r) | Div(res, l, r) => {
                 res.accum(&mut f);
                 l.accum(&mut f);
                 r.accum(&mut f);

@@ -1029,6 +1029,12 @@ this as well"#
     );
 
     test_program!(
+        arithmetic,
+        r#"BEGIN { print 1+1; print 1+2*7; print 1+2*7^3; print 1+2*7^3*4; }"#,
+        "2\n15\n687.0\n2745.0\n"
+    );
+
+    test_program!(
         int_conversions,
         r#"BEGIN {
         x="123.456"
