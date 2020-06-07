@@ -1,5 +1,7 @@
 //! Compute dominance frontiers for a control flow graph. See the comments for `DomInfo` for more
 //! information.
+use std::mem;
+
 use crate::common::{Graph, NodeIx, NumTy};
 use hashbrown::HashSet;
 use petgraph::Direction;
@@ -106,7 +108,7 @@ impl<'a, V, E> DomInfo<'a, V, E> {
         // We need to borrow self.dfs, but also other parts of the struct, so we swap it out.
         // Note that this only works because we know that `eval` and `link` do not use the
         // `dfs` vector.
-        let dfs = std::mem::replace(&mut self.dfs, Default::default());
+        let mut dfs = mem::replace(&mut self.dfs, Default::default());
         for n in dfs[1..].iter().rev().map(|x| *x) {
             let parent = self.at(n).parent;
             let mut semi = parent;
@@ -127,13 +129,13 @@ impl<'a, V, E> DomInfo<'a, V, E> {
             *(&mut self.at_mut(n).sdom) = semi;
             self.link(parent, n);
         }
-        std::mem::replace(&mut self.dfs, dfs);
+        mem::swap(&mut self.dfs, &mut dfs);
     }
 
     // Compute dominator tree.
     // Assumes self.semis has been called.
     fn idoms(&mut self) {
-        let dfs = std::mem::replace(&mut self.dfs, Default::default());
+        let mut dfs = mem::replace(&mut self.dfs, Default::default());
         for n in dfs[1..].iter().map(|x| *x) {
             let (mut idom, semi_dfs) = {
                 let entry = self.at(n);
@@ -144,7 +146,7 @@ impl<'a, V, E> DomInfo<'a, V, E> {
             }
             (&mut self.at_mut(n)).idom = idom;
         }
-        std::mem::replace(&mut self.dfs, dfs);
+        mem::swap(&mut self.dfs, &mut dfs);
     }
 
     /// Compute the dominance fromtier.
