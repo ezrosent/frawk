@@ -67,6 +67,7 @@ struct View<'a> {
     ctx: LLVMContextRef,
     module: LLVMModuleRef,
     printfs: &'a mut HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
+    drop_str: LLVMValueRef,
     // We keep an extra builder always pointed at the start of the function. This is because
     // binding new string values requires an `alloca`; and we do not want to call `alloca` where a
     // string variable is referenced: for example, we do not want to call alloca in a loop.
@@ -151,6 +152,9 @@ pub(crate) struct Generator<'a, 'b> {
     intrinsics: IntrinsicMap,
     printfs: HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
     cfg: Config,
+
+    // Specialized implementation of string destruction.
+    drop_str: LLVMValueRef,
 }
 
 impl<'a, 'b> Drop for Generator<'a, 'b> {
@@ -276,8 +280,12 @@ impl<'a, 'b> Generator<'a, 'b> {
             intrinsics: intrinsics::register(module, ctx),
             printfs: Default::default(),
             cfg,
+            drop_str: ptr::null_mut(),
         };
         res.build_map();
+        let drop_slow = res.intrinsics.get("drop_str_slow");
+        res.drop_str =
+            builtin_functions::gen_drop_str(res.ctx, res.module, &res.type_map, drop_slow);
         res.build_decls();
         for i in 0..nframes {
             res.gen_function(i)?;
@@ -539,6 +547,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             printfs: &mut self.printfs,
             ctx: self.ctx,
             module: self.module,
+            drop_str: self.drop_str,
             entry_builder,
         };
         // handle arguments
@@ -727,17 +736,16 @@ impl<'a> View<'a> {
 
     unsafe fn drop_val(&mut self, mut val: LLVMValueRef, ty: Ty) {
         use Ty::*;
-        let fname = match ty {
-            MapIntInt => "drop_intint",
-            MapIntFloat => "drop_intfloat",
-            MapIntStr => "drop_intstr",
-            MapStrInt => "drop_strint",
-            MapStrFloat => "drop_strfloat",
-            MapStrStr => "drop_strstr",
-            Str => "drop_str",
+        let func = match ty {
+            MapIntInt => self.intrinsics.get("drop_intint"),
+            MapIntFloat => self.intrinsics.get("drop_intfloat"),
+            MapIntStr => self.intrinsics.get("drop_intstr"),
+            MapStrInt => self.intrinsics.get("drop_strint"),
+            MapStrFloat => self.intrinsics.get("drop_strfloat"),
+            MapStrStr => self.intrinsics.get("drop_strstr"),
+            Str => self.drop_str,
             _ => return,
         };
-        let func = self.intrinsics.get(fname);
         LLVMBuildCall(self.f.builder, func, &mut val, 1, c_str!(""));
     }
 
@@ -890,7 +898,7 @@ impl<'a> View<'a> {
                     LLVMBuildStore(self.f.builder, new_global, param);
                 }
                 Str => {
-                    self.call("drop_str", &mut [param]);
+                    self.drop_val(param, Ty::Str);
                     LLVMBuildStore(self.f.builder, new_global, param);
                     self.call("ref_str", &mut [param]);
                 }
@@ -912,7 +920,7 @@ impl<'a> View<'a> {
             }
             Str => {
                 let loc = self.alloca(Ty::Str);
-                self.call("drop_str", &mut [loc]);
+                self.drop_val(loc, Ty::Str);
                 LLVMBuildStore(self.f.builder, to, loc);
                 self.f.locals.insert(val, loc);
                 return;

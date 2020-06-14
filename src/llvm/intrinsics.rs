@@ -248,7 +248,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 
     register! {
         ref_str(str_ref_ty);
-        drop_str(str_ref_ty);
+        drop_str_slow(str_ref_ty, int_ty);
         ref_map(map_ty);
         [ReadOnly] int_to_str(int_ty) -> str_ty;
         [ReadOnly] float_to_str(float_ty) -> str_ty;
@@ -725,8 +725,8 @@ pub unsafe extern "C" fn ref_str(s: *mut c_void) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn drop_str(s: *mut c_void) {
-    std::ptr::drop_in_place(s as *mut Str);
+pub unsafe extern "C" fn drop_str_slow(s: *mut u128, tag: u64) {
+    (&*(s as *mut Str)).drop_with_tag(tag)
 }
 
 unsafe fn ref_map_generic<K, V>(m: *mut c_void) {
@@ -739,8 +739,6 @@ unsafe fn drop_map_generic<K, V>(m: *mut c_void) {
 
 // XXX: relying on this doing the same thing regardless of type. We probably want a custom Rc to
 // guarantee this.
-//
-// XXX: ... how could this ever work?
 #[no_mangle]
 pub unsafe extern "C" fn ref_map(m: *mut c_void) {
     ref_map_generic::<Int, Str>(m)

@@ -245,6 +245,32 @@ impl<'a> StrRep<'a> {
             _marker: PhantomData,
         }
     }
+
+    // drop_with_tag is a parallel implementation of drop given an explicit tag. It is used in
+    // conjunction with the LLVM-native "fast path" for dropping strings. See the gen_drop_str
+    // function in llvm/builtin_functions.rs for more context.
+    //
+    // drop_with_tag must not be called with an Inline or Literal tag.
+    unsafe fn drop_with_tag(&mut self, tag: u64) {
+        // Debug-asserts are here to ensure that we catch any perturbing of the tag values getting
+        // out of sync with this function.
+        debug_assert_eq!(tag, self.get_tag() as u64);
+        match tag {
+            2 => {
+                debug_assert_eq!(tag, StrTag::Shared as u64);
+                self.drop_as::<Shared>();
+            }
+            3 => {
+                debug_assert_eq!(tag, StrTag::Concat as u64);
+                self.drop_as::<Concat>();
+            }
+            4 => {
+                debug_assert_eq!(tag, StrTag::Boxed as u64);
+                self.drop_as::<Boxed>();
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl<'a> Drop for StrRep<'a> {
@@ -280,6 +306,9 @@ impl<'a> Str<'a> {
     }
     unsafe fn rep_mut(&self) -> &mut StrRep<'a> {
         &mut *self.0.get()
+    }
+    pub unsafe fn drop_with_tag(&self, tag: u64) {
+        self.rep_mut().drop_with_tag(tag)
     }
     // We rely on string literals having trivial drops for LLVM codegen, as they may be dropped
     // repeatedly.
