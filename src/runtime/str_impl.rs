@@ -834,6 +834,15 @@ impl DynamicBufHeap {
     fn size(&self) -> usize {
         unsafe { (*self.data.0).size }
     }
+    pub fn as_mut_bytes(&mut self) -> &mut [u8] {
+        self.data.as_mut_bytes()
+    }
+    pub fn write_head(&self) -> usize {
+        self.write_head
+    }
+    pub fn into_buf(self) -> Buf {
+        self.data.into_buf()
+    }
     pub unsafe fn into_str<'a>(mut self) -> Str<'a> {
         // Shrink the buffer to fit.
         self.realloc(self.write_head);

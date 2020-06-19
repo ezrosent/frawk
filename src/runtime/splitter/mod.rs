@@ -8,15 +8,14 @@
 pub mod batch;
 pub mod regex;
 
+use std::io::Write;
 use std::mem;
 
-use super::str_impl::{Buf, Str, UniqueBuf};
+use super::str_impl::{Buf, DynamicBufHeap, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
 use super::{Int, LazyVec, RegexCache};
 use crate::common::Result;
 use crate::pushdown::FieldSet;
-
-use smallvec::SmallVec;
 
 use std::io::{ErrorKind, Read};
 
@@ -269,7 +268,7 @@ fn is_ascii_whitespace_not_nl(b: u8) -> bool {
     matches!(b, b' ' | b'\x09' | b'\x0b'..=b'\x0d')
 }
 
-/// Split input by whitespace, using Awk semantics.
+/// Split input by (ASCII) whitespace, using Awk semantics.
 pub struct DefaultSplitter<R> {
     reader: Reader<R>,
     name: Str<'static>,
@@ -475,7 +474,7 @@ pub(crate) enum ReaderState {
 struct Reader<R> {
     inner: R,
     // The "stray bytes" that will be prepended to the next buffer.
-    prefix: SmallVec<[u8; 8]>,
+    prefix: DynamicBufHeap,
     buf: Buf,
     start: usize,
     end: usize,
@@ -514,7 +513,7 @@ impl<R: Read> Reader<R> {
     pub(crate) fn new(r: R, chunk_size: usize, padding: usize) -> Self {
         let res = Reader {
             inner: r,
-            prefix: Default::default(),
+            prefix: DynamicBufHeap::new(chunk_size + padding),
             buf: UniqueBuf::new(0).into_buf(),
             start: 0,
             end: 0,
@@ -576,28 +575,21 @@ impl<R: Read> Reader<R> {
 
     fn get_next_buf(&mut self) -> Result<(Buf, usize)> {
         let mut done = false;
-        // NB: UniqueBuf fills the allocation with zeros.
-        let mut data = UniqueBuf::new(self.chunk_size + self.padding);
+        // NB: DynamicBufHeap fills the allocation with zeros.
+        let mut data = mem::replace(
+            &mut self.prefix,
+            DynamicBufHeap::new(self.chunk_size + self.padding),
+        );
+        let plen = data.write_head();
         let mut bytes = &mut data.as_mut_bytes()[..self.chunk_size];
-        for (i, b) in self.prefix.iter().cloned().enumerate() {
-            bytes[i] = b;
-        }
-        let plen = self.prefix.len();
-        self.prefix.clear();
         // Try to fill up the rest of `data` with new bytes.
         let bytes_read = plen + read_to_slice(&mut self.inner, &mut bytes[plen..])?;
-        self.prefix.clear();
         if bytes_read != self.chunk_size {
             done = true;
             bytes = &mut bytes[..bytes_read];
         }
 
-        // For the odd benchmark to measure the impact of utf8 validation
-        const SKIP_UTF8: bool = false;
-
-        let ulen = if SKIP_UTF8 {
-            bytes.len()
-        } else {
+        let ulen = {
             let opt = if done {
                 if is_utf8(bytes) {
                     Some(bytes.len())
@@ -619,7 +611,7 @@ impl<R: Read> Reader<R> {
         };
         if !done && ulen != bytes_read {
             // We clipped a utf8 character at the end of the buffer. Add it to prefix.
-            self.prefix.extend_from_slice(&bytes[ulen..]);
+            self.prefix.write(&bytes[ulen..]).unwrap();
         }
         if done {
             self.state = ReaderState::EOF;
