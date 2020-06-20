@@ -8,10 +8,9 @@
 pub mod batch;
 pub mod regex;
 
-use std::io::Write;
 use std::mem;
 
-use super::str_impl::{Buf, DynamicBufHeap, Str, UniqueBuf};
+use super::str_impl::{Buf, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
 use super::{Int, LazyVec, RegexCache};
 use crate::common::Result;
@@ -473,11 +472,13 @@ pub(crate) enum ReaderState {
 
 struct Reader<R> {
     inner: R,
-    // The "stray bytes" that will be prepended to the next buffer.
-    prefix: DynamicBufHeap,
     buf: Buf,
+    // The current "read head" into buf.
     start: usize,
+    // Upper bound on readable bytes into buf (not including padding and clipped UTF8 bytes).
     end: usize,
+    // Upper bound on all bytes read from input, not including padding.
+    input_end: usize,
     chunk_size: usize,
     // Padding is used for the splitters in the [batch] module, which may read some bytes past the
     // end of the buffer.
@@ -513,10 +514,10 @@ impl<R: Read> Reader<R> {
     pub(crate) fn new(r: R, chunk_size: usize, padding: usize) -> Self {
         let res = Reader {
             inner: r,
-            prefix: DynamicBufHeap::new(chunk_size + padding),
             buf: UniqueBuf::new(0).into_buf(),
             start: 0,
             end: 0,
+            input_end: 0,
             chunk_size,
             padding,
             state: ReaderState::OK,
@@ -555,6 +556,15 @@ impl<R: Read> Reader<R> {
         }
     }
 
+    fn reset(&mut self) -> Result<()> {
+        let (next_buf, next_len, input_len) = self.get_next_buf(self.start)?;
+        self.buf = next_buf;
+        self.end = next_len;
+        self.input_end = input_len;
+        self.start = 0;
+        Ok(())
+    }
+
     fn advance(&mut self, n: usize) -> Result<()> {
         let len = self.end - self.start;
         if len > n {
@@ -565,24 +575,35 @@ impl<R: Read> Reader<R> {
             return Ok(());
         }
 
+        self.start = self.end;
         let residue = n - len;
-        let (next_buf, next_len) = self.get_next_buf()?;
-        self.buf = next_buf;
-        self.end = next_len;
-        self.start = 0;
+        self.reset()?;
         self.advance(residue)
     }
 
-    fn get_next_buf(&mut self) -> Result<(Buf, usize)> {
+    fn get_next_buf(
+        &mut self,
+        consume: usize,
+    ) -> Result<(Buf, /*end*/ usize, /*input_end*/ usize)> {
         let mut done = false;
-        // NB: DynamicBufHeap fills the allocation with zeros.
-        let mut data = mem::replace(
-            &mut self.prefix,
-            DynamicBufHeap::new(self.chunk_size + self.padding),
-        );
-        let plen = data.write_head();
+        let plen = self.input_end.saturating_sub(consume);
+        // Double the chunk size if it is too small to read a sufficient batch given the prefix
+        // size.
+        if plen > self.chunk_size / 2 {
+            self.chunk_size = std::cmp::max(self.chunk_size * 2, 1024);
+        }
+        // NB: UniqueBuf fills the allocation with zeros.
+        let mut data = UniqueBuf::new(self.chunk_size + self.padding);
+
+        // First, append the remaining bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.buf.as_ptr().offset(consume as isize),
+                data.as_mut_ptr(),
+                plen,
+            );
+        }
         let mut bytes = &mut data.as_mut_bytes()[..self.chunk_size];
-        // Try to fill up the rest of `data` with new bytes.
         let bytes_read = plen + read_to_slice(&mut self.inner, &mut bytes[plen..])?;
         if bytes_read != self.chunk_size {
             done = true;
@@ -609,14 +630,10 @@ impl<R: Read> Reader<R> {
                 };
             }
         };
-        if !done && ulen != bytes_read {
-            // We clipped a utf8 character at the end of the buffer. Add it to prefix.
-            self.prefix.write(&bytes[ulen..]).unwrap();
-        }
         if done {
             self.state = ReaderState::EOF;
         }
-        Ok((data.into_buf(), ulen))
+        Ok((data.into_buf(), ulen, bytes_read))
     }
 }
 
