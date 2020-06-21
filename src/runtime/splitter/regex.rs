@@ -88,59 +88,60 @@ impl<R: Read> RegexSplitter<R> {
     }
 
     fn read_line_inner(&mut self, pat: &Regex) -> (Str<'static>, usize) {
-        let mut consumed = 0;
-        macro_rules! handle_err {
-            ($e:expr) => {
-                if let Ok(e) = $e {
-                    e
-                } else {
-                    self.reader.state = ReaderState::ERROR;
-                    return (Str::default(), consumed);
-                }
-            };
-        }
-        let mut prefix: Str<'static> = Default::default();
         if self.reader.is_eof() {
-            return (prefix, consumed);
+            return (Str::default(), 0);
         }
-        self.reader.state = ReaderState::OK;
+        // We want to scan from reader.start to reader.end. If we have to reset the buffer, we want
+        // to avoid rescanning the data we have already resumed, so we add "scanned" to the offset.
+        //
+        // TODO: this may be unsound: suppose we were given a 1MB literal in a regex. The chunk
+        // size could start off at a few KB, and we'll need to rescan all of the smaller chunks to
+        // check that they aren't part of a match.
+        let mut scanned = 0;
         loop {
             let s = unsafe {
                 str::from_utf8_unchecked(
-                    &self.reader.buf.as_bytes()[self.reader.start..self.reader.end],
+                    &self.reader.buf.as_bytes()[self.reader.start + scanned..self.reader.end],
                 )
             };
             // Why this map invocation? Match objects hold a reference to the substring, which
             // makes it harder for us to call mutable methods like advance in the body, so just get
             // the start and end pointers.
-            let start_offset = self.reader.start;
             match pat.find(s).map(|m| (m.start(), m.end())) {
                 Some((start, end)) => {
                     // Valid offsets guaranteed by correctness of regex `find`.
                     let res = unsafe {
                         self.reader
                             .buf
-                            .slice_to_str(start_offset, start_offset + start)
+                            .slice_to_str(self.reader.start, self.reader.start + scanned + start)
                     };
-                    // NOTE if we get a read error here, then we will stop one line early.
-                    // That seems okay, but we could find out that it actually isn't, in which case
-                    // we would want some more complicated error handling here.
-                    consumed += end;
-                    handle_err!(self.reader.advance(end));
-                    return (Str::concat(prefix, res), consumed);
+                    self.reader.start += scanned + end;
+                    return (res, scanned + end);
                 }
                 None => {
-                    // Valid offsets guaranteed by read_buf
-                    let cur: Str =
-                        unsafe { self.reader.buf.slice_to_str(start_offset, self.reader.end) };
-                    let remaining = self.reader.remaining();
-                    consumed += remaining;
-                    handle_err!(self.reader.advance(remaining));
-                    prefix = Str::concat(prefix, cur);
-                    if self.reader.is_eof() {
-                        // All done! Just return the rest of the buffer.
-                        return (prefix, consumed);
-                    }
+                    // We have scanned up to the end of the current buffer, but we haven't found a
+                    // match.
+                    scanned = self.reader.end - self.reader.start;
+                    return match self.reader.reset() {
+                        Ok(true) => {
+                            // EOF: yield the rest of the buffer
+                            let line = unsafe {
+                                self.reader
+                                    .buf
+                                    .slice_to_str(self.reader.start, self.reader.end)
+                            };
+                            self.reader.start = self.reader.end;
+                            (line, scanned)
+                        }
+                        Ok(false) => {
+                            // search the new (potentially larger) buffer starting from `scanned`
+                            continue;
+                        }
+                        Err(_) => {
+                            self.reader.state = ReaderState::ERROR;
+                            (Str::default(), 0)
+                        }
+                    };
                 }
             }
         }
