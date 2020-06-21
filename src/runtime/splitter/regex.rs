@@ -93,15 +93,10 @@ impl<R: Read> RegexSplitter<R> {
         }
         // We want to scan from reader.start to reader.end. If we have to reset the buffer, we want
         // to avoid rescanning the data we have already resumed, so we add "scanned" to the offset.
-        //
-        // TODO: this may be unsound: suppose we were given a 1MB literal in a regex. The chunk
-        // size could start off at a few KB, and we'll need to rescan all of the smaller chunks to
-        // check that they aren't part of a match.
-        let mut scanned = 0;
         loop {
             let s = unsafe {
                 str::from_utf8_unchecked(
-                    &self.reader.buf.as_bytes()[self.reader.start + scanned..self.reader.end],
+                    &self.reader.buf.as_bytes()[self.reader.start..self.reader.end],
                 )
             };
             // Why this map invocation? Match objects hold a reference to the substring, which
@@ -113,15 +108,13 @@ impl<R: Read> RegexSplitter<R> {
                     let res = unsafe {
                         self.reader
                             .buf
-                            .slice_to_str(self.reader.start, self.reader.start + scanned + start)
+                            .slice_to_str(self.reader.start, self.reader.start + start)
                     };
-                    self.reader.start += scanned + end;
-                    return (res, scanned + end);
+                    self.reader.start += end;
+                    return (res, end);
                 }
                 None => {
-                    // We have scanned up to the end of the current buffer, but we haven't found a
-                    // match.
-                    scanned = self.reader.end - self.reader.start;
+                    let consumed = self.reader.end - self.reader.start;
                     return match self.reader.reset() {
                         Ok(true) => {
                             // EOF: yield the rest of the buffer
@@ -131,10 +124,26 @@ impl<R: Read> RegexSplitter<R> {
                                     .slice_to_str(self.reader.start, self.reader.end)
                             };
                             self.reader.start = self.reader.end;
-                            (line, scanned)
+                            (line, consumed)
                         }
                         Ok(false) => {
-                            // search the new (potentially larger) buffer starting from `scanned`
+                            // search the new (potentially larger) buffer.
+                            // NB: isn't this wasteful? The new buffer could be as much as half
+                            // already-read bytes, and we'll search those again in our next loop.
+                            //
+                            // That's true, and while that may be a safe optimization to make for
+                            // many common regexes (e.g. single-character ones), it does not work
+                            // if the the particular regex match is split across buffers.
+                            // Furthermore, we have no way to detect the offset at which such a
+                            // "partial match" might start. So, we take the performance hit here,
+                            // noting that:
+                            //
+                            // (1) Most record separators are going to be small and relatively
+                            // frequent, so that we will amortize the cost of rescanning bytes over
+                            // several successful matches that were found over the course of a
+                            // single traversal.
+                            // (2) Many common splitting strategies have special-case strategies
+                            // that avoid this kind of rescanning.
                             continue;
                         }
                         Err(_) => {
