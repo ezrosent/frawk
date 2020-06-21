@@ -8,8 +8,6 @@
 pub mod batch;
 pub mod regex;
 
-use std::mem;
-
 use super::str_impl::{Buf, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
 use super::{Int, LazyVec, RegexCache};
@@ -332,129 +330,81 @@ impl<R: Read> DefaultSplitter<R> {
         }
     }
     fn read_line_inner(&mut self, fields: &mut Vec<Str<'static>>) -> (Str<'static>, usize) {
-        // How many bytes has this call to read consumed?
-        let mut consumed = 0;
-        // We must handle lines and fields that cross buffer refresh boundaries. These fields
-        // contain prefixes of those values that we can prepend when we complete the field or line.
-        let mut line_prefix: Str<'static> = Default::default();
-        let mut last_field_prefix: Str<'static> = Default::default();
-        // Should we prepend last_field_prefix to the next field we find?
-        let mut has_field_prefix = false;
         if self.reader.is_eof() {
-            return (line_prefix, consumed);
+            return (Str::default(), 0);
         }
-        macro_rules! handle_err {
-            ($e:expr) => {
-                if let Ok(e) = $e {
-                    e
+        self.reader.state = ReaderState::OK;
+        let mut cur = self.reader.start;
+        let mut cur_field_start = cur;
+        macro_rules! get_field {
+            ($n:expr, $from:expr) => {
+                if self.used_fields.get($n) {
+                    unsafe { self.reader.buf.slice_to_str($from, cur) }
                 } else {
-                    fields.clear();
-                    self.reader.state = ReaderState::ERROR;
-                    return (Str::default(), 0);
+                    Str::default()
                 }
             };
         }
-        self.reader.state = ReaderState::OK;
         loop {
-            let bytes = &self.reader.buf.as_bytes()[self.reader.start..self.reader.end];
-            let mut cur = 0;
-            let mut cur_index = self.reader.start;
-            let mut current_field_start = self.reader.start;
-
-            // Grab the current field out of the buffer, if it is used.
-            macro_rules! get_field {
-                () => {
-                    if self.used_fields.get(fields.len() + 1) {
-                        let mut res =
-                            unsafe { self.reader.buf.slice_to_str(current_field_start, cur_index) };
-                        if has_field_prefix {
-                            res = Str::concat(
-                                mem::replace(&mut last_field_prefix, Str::default()),
-                                res,
-                            );
-                        }
-                        res
-                    } else {
-                        Str::default()
-                    };
-                };
-            }
-
-            // Loop over the remaining bytes in the current buffer.
+            let bytes = &self.reader.buf.as_bytes()[..self.reader.end];
             'inner: while cur < bytes.len() {
                 let mut cur_b = unsafe { *bytes.get_unchecked(cur) };
                 if cur_b == b'\n' {
-                    // Complete the line: get the line and the last field and add them to the
-                    // output, keeping in mind that empty fields are omitted using the Awk
-                    // whitespace splitting discipline.
-                    let line = if self.used_fields.get(0) {
-                        Str::concat(mem::replace(&mut line_prefix, Str::default()), unsafe {
-                            self.reader.buf.slice_to_str(self.reader.start, cur_index)
-                        })
-                    } else {
-                        Str::default()
-                    };
-                    if has_field_prefix || current_field_start != cur_index {
-                        let last_field = get_field!();
+                    let line = get_field!(0, self.reader.start);
+                    if cur_field_start != cur {
+                        let last_field = get_field!(fields.len() + 1, cur_field_start);
                         fields.push(last_field);
                     }
-                    let progress = cur + 1;
-                    consumed += progress;
-                    handle_err!(self.reader.advance(progress));
+                    let new_start = cur + 1;
+                    let consumed = new_start - self.reader.start;
+                    self.reader.start = new_start;
                     return (line, consumed);
                 }
-                // We've found some whitespace. This might be the end of a field.
                 if is_ascii_whitespace(cur_b) {
-                    if has_field_prefix || cur_index != current_field_start {
-                        // not an empty field
-                        let last_field = get_field!();
+                    if cur != cur_field_start {
+                        let last_field = get_field!(fields.len() + 1, cur_field_start);
                         fields.push(last_field);
                     }
-                    // Skip any adjacent whitespace.
-                    current_field_start = cur_index;
+                    cur_field_start = cur;
                     while is_ascii_whitespace_not_nl(cur_b) {
                         cur += 1;
-                        cur_index += 1;
-                        current_field_start += 1;
+                        cur_field_start += 1;
                         if cur == bytes.len() {
                             break 'inner;
                         }
                         cur_b = unsafe { *bytes.get_unchecked(cur) };
                     }
                 } else {
-                    // Continue the current field.
                     cur += 1;
-                    cur_index += 1;
                 }
             }
-
-            // Out of space in the current buffer. Populate last_field_prefix and line_prefix if we
-            // need them.
-            if current_field_start != cur_index {
-                // We still need to make sure we are skipping empty fields.
-                if self.used_fields.get(fields.len() + 1) {
-                    last_field_prefix = Str::concat(last_field_prefix, unsafe {
-                        self.reader.buf.slice_to_str(current_field_start, cur_index)
-                    });
+            // Out of space. Let's preserve the start of the current line and fetch a new buffer,
+            // resetting current_field_start as appropriate.
+            let next_cur_field_start = cur_field_start - self.reader.start;
+            let next_cur = cur - self.reader.start;
+            match self.reader.reset() {
+                Ok(true) => {
+                    // EOF. Grab what we have of the last field and the line.
+                    cur = self.reader.end;
+                    let line = get_field!(0, self.reader.start);
+                    if cur_field_start != cur {
+                        let last_field = get_field!(fields.len() + 1, cur_field_start);
+                        fields.push(last_field);
+                    }
+                    let consumed = self.reader.end - self.reader.start;
+                    self.reader.start = self.reader.end;
+                    return (line, consumed);
                 }
-                has_field_prefix = true;
-            }
-            if self.used_fields.get(0) {
-                line_prefix = Str::concat(line_prefix, unsafe {
-                    self.reader.buf.slice_to_str(self.reader.start, cur_index)
-                });
-            }
-
-            // Grab a new buffer.
-            let remaining = self.reader.remaining();
-            consumed += remaining;
-            handle_err!(self.reader.advance(remaining));
-            if self.reader.is_eof() {
-                // If there aren't any new buffers, return the last field and lines.
-                if has_field_prefix {
-                    fields.push(last_field_prefix);
+                Ok(false) => {
+                    // There's a new buffer! Reset the offsets.
+                    cur_field_start = next_cur_field_start;
+                    cur = next_cur;
                 }
-                return (line_prefix, consumed);
+                Err(_) => {
+                    fields.clear();
+                    self.reader.state = ReaderState::ERROR;
+                    return (Str::default(), 0);
+                }
             }
         }
     }
@@ -484,6 +434,8 @@ struct Reader<R> {
     // end of the buffer.
     padding: usize,
     state: ReaderState,
+    // Reads of the "error state" lag behind reads from the buffer. last_len helps us determine
+    // when an EOF has been reached from an external perspective.
     last_len: usize,
 }
 
@@ -556,15 +508,19 @@ impl<R: Read> Reader<R> {
         }
     }
 
-    fn reset(&mut self) -> Result<()> {
+    fn reset(&mut self) -> Result</*done*/ bool> {
+        if self.state == ReaderState::EOF {
+            return Ok(true);
+        }
         let (next_buf, next_len, input_len) = self.get_next_buf(self.start)?;
         self.buf = next_buf;
         self.end = next_len;
         self.input_end = input_len;
         self.start = 0;
-        Ok(())
+        Ok(false)
     }
 
+    // TODO: get rid of advance()
     fn advance(&mut self, n: usize) -> Result<()> {
         let len = self.end - self.start;
         if len > n {
