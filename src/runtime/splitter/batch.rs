@@ -481,6 +481,14 @@ impl InputFormat {
     }
 }
 
+// get_find_indexes{_bytes}, what's that all about?
+//
+// These functions use vector instructions that, while commonly supported, are occasionally
+// missing. The safest way to handle this fact is to query _at runtime_ whether or not a given
+// feature-set is supported. To avoid querying this on every function call, the calling library
+// will instead store a function pointer that is computed at startup based on the dynamically
+// available CPU features.
+
 pub fn get_find_indexes(
     ifmt: InputFormat,
 ) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
@@ -494,19 +502,19 @@ pub fn get_find_indexes(
     const ALLOW_AVX2: bool = false;
     assert!(IS_X64, "CSV is only supported on x86_64 machines");
 
-    if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
+    if ALLOW_AVX2 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("pclmulqdq") {
         match ifmt {
             InputFormat::CSV => generic::find_indexes_csv::<avx2::Impl>,
             InputFormat::TSV => generic::find_indexes_tsv::<avx2::Impl>,
         }
-    } else if is_x86_feature_detected!("sse2") {
+    } else if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("pclmulqdq") {
         match ifmt {
             InputFormat::CSV => generic::find_indexes_csv::<sse2::Impl>,
             InputFormat::TSV => generic::find_indexes_tsv::<sse2::Impl>,
         }
     } else {
         // TODO write a simple fallback implementation of Vector for non-x86
-        panic!("CSV requires at least SSE2 support");
+        panic!("CSV requires at least SSE2 and PCLMULQDQ support");
     }
 }
 
