@@ -27,7 +27,7 @@ use crate::runtime::{
     Int, LazyVec, RegexCache, CHUNK_SIZE,
 };
 
-use super::{normalize_join_indexes, DefaultLine, LineReader, Reader};
+use super::{normalize_join_indexes, DefaultLine, LineReader, Reader, ReaderState};
 
 pub struct CSVReader<R> {
     inner: Reader<R>,
@@ -1071,20 +1071,56 @@ impl<R: Read> ByteReader<R> {
         }
     }
 
-    fn refresh_buf(&mut self) -> Result<bool> {
-        self.inner.advance(self.inner.remaining())?;
-        if self.inner.is_eof() {
+    fn refresh_buf(&mut self) -> Result<bool /*eof*/> {
+        self.inner.start = self.progress;
+        // Fetch a new buffer.
+        if self.inner.reset()? {
             return Ok(true);
         }
+
+        // Compute its offsets and reset progress.
         unsafe {
+            // TODO: optimize this to avoid rescanning parts (i.e. start at the old value of
+            // end-start, then apply a diff to all offsets)
             (self.get_offsets)(
-                &self.inner.buf.as_bytes()[self.inner.start..self.inner.end],
+                &self.inner.buf.as_bytes()[0..self.inner.end],
                 &mut self.cur_offsets,
                 self.field_sep,
                 self.record_sep,
             )
         };
         self.progress = 0;
+
+        // Edge case: we padd the buffer with 0-bytes because get_offsets can read passed the end
+        // of that buffer. If we are passed the zero byte as a field separator or record separator,
+        // then we can return offsets past the end of the buffer. This branch ensures that we trim
+        // those off.
+        if self.field_sep == 0u8 || self.record_sep == 0u8 {
+            let end = self.inner.end as u64;
+            while let Some(off) = self.cur_offsets.fields.last() {
+                if *off >= end {
+                    self.cur_offsets.fields.pop().unwrap();
+                    continue;
+                }
+                break;
+            }
+        }
+
+        if self.inner.state != ReaderState::EOF {
+            // If this is not the last buffer. Trim off non-record separators.
+            let mut i = self.cur_offsets.fields.len();
+            for field in self.cur_offsets.fields.iter().rev().cloned() {
+                if self.inner.buf.as_bytes()[field as usize] == self.record_sep {
+                    break;
+                }
+                i -= 1;
+            }
+            self.cur_offsets.fields.truncate(i);
+            if i == 0 {
+                // We found no fields at all. Try again with a larger buffer.
+                return self.refresh_buf();
+            }
+        }
         Ok(false)
     }
 
@@ -1093,113 +1129,56 @@ impl<R: Read> ByteReader<R> {
         line: &'a mut Str<'static>,
         fields: &'a mut Vec<Str<'static>>,
     ) -> Result<()> {
-        let mut prev_field_prefix = Str::default();
-        let mut prev_line_prefix = Str::default();
-        let mut consumed = 0;
-        loop {
-            if self.progress >= self.inner.end {
-                if self.refresh_buf()? {
-                    fields.push(prev_field_prefix);
-                    *line = Str::concat(
-                        std::mem::replace(line, Default::default()),
-                        prev_line_prefix,
-                    );
-                    break;
-                }
+        // This doesn't work, we may need the old one?
+        if self.cur_offsets.start == self.cur_offsets.fields.len() {
+            if self.refresh_buf()? && self.progress == self.inner.end {
+                *line = Str::default();
+                self.inner.last_len = 0;
+                return Ok(());
             }
-            let mut stepper = ByteStepper {
-                buf: &self.inner.buf,
-                buf_len: self.inner.end,
-                off: &mut self.cur_offsets,
-                prev_ix: self.progress,
-                used_fields: self.used_fields.clone(),
-                line,
-                fields,
-                prev_field_prefix,
-                prev_line_prefix,
-                field_sep: self.field_sep,
-            };
-            let (done, consumed_in_step) = unsafe { stepper.consume_line() };
-            consumed += consumed_in_step;
-            self.progress = stepper.prev_ix;
-            if done {
-                break;
-            }
-            prev_field_prefix = stepper.prev_field_prefix;
-            prev_line_prefix = stepper.prev_line_prefix;
         }
+        let (next_line, consumed) = unsafe { self.consume_line(fields) };
+        *line = next_line;
         self.inner.last_len = consumed;
         Ok(())
     }
-}
 
-struct ByteStepper<'a> {
-    buf: &'a Buf,
-    buf_len: usize,
-    prev_ix: usize,
-    off: &'a mut Offsets,
-    line: &'a mut Str<'static>,
-    fields: &'a mut Vec<Str<'static>>,
-    prev_field_prefix: Str<'static>,
-    prev_line_prefix: Str<'static>,
-    used_fields: FieldSet,
-    field_sep: u8,
-}
-
-impl<'a> ByteStepper<'a> {
-    // Unsafe because Offsets must contain valid byte indexes.
-    unsafe fn consume_line(&mut self) -> (/* line done */ bool, /*bytes consumed*/ usize) {
-        let mut current_field = self.fields.len();
-        let mut start = true;
-        let line_start = self.prev_ix;
+    unsafe fn consume_line<'a, 'b: 'a>(
+        &'b mut self,
+        fields: &'a mut Vec<Str<'static>>,
+    ) -> (Str<'static>, /*bytes consumed */ usize) {
+        let buf = &self.inner.buf;
         macro_rules! get_field {
-            ($index:expr) => {
-                if self.used_fields.get(current_field + 1) {
-                    let mut res = self.buf.slice_to_str(self.prev_ix, $index);
-                    if start {
-                        res = Str::concat(
-                            mem::replace(&mut self.prev_field_prefix, Str::default()),
-                            res,
-                        )
-                    }
-                    res
+            ($fld:expr, $start:expr, $end:expr) => {
+                if self.used_fields.get($fld) {
+                    buf.slice_to_str($start, $end)
                 } else {
                     Str::default()
                 }
             };
+            ($index:expr) => {
+                get_field!(fields.len() + 1, self.progress, $index)
+            };
         }
-        let bytes = &self.buf.as_bytes()[0..self.buf_len];
-        while self.off.start < self.off.fields.len() {
-            let index = *self.off.fields.get_unchecked(self.off.start) as usize;
-            let is_field_sep = *bytes.get_unchecked(index) == self.field_sep;
-            self.off.start += 1;
-            if is_field_sep {
-                let fld = get_field!(index);
-                self.fields.push(fld);
-                current_field += 1;
-                self.prev_ix = index + 1;
-                start = false;
-            } else {
-                let line = if self.used_fields.get(0) {
-                    Str::concat(
-                        mem::replace(&mut self.prev_line_prefix, Str::default()),
-                        self.buf.slice_to_str(line_start, index),
-                    )
-                } else {
-                    Str::default()
-                };
-                let fld = get_field!(index);
-                self.fields.push(fld);
-                *self.line = line;
-                self.prev_ix = index + 1;
-                return (true, self.prev_ix - line_start);
+
+        let line_start = self.progress;
+        let buf_len = self.inner.end;
+        let bytes = &buf.as_bytes()[0..buf_len];
+        for index in &self.cur_offsets.fields[self.cur_offsets.start..] {
+            let index = *index as usize;
+            self.cur_offsets.start += 1;
+            let is_record_sep = *bytes.get_unchecked(index) == self.record_sep;
+            fields.push(get_field!(index));
+            self.progress = index + 1;
+            if is_record_sep {
+                let line = get_field!(0, line_start, index);
+                return (line, self.progress - line_start);
             }
-            self.prev_ix = index + 1;
         }
-        self.prev_field_prefix = self.buf.slice_to_str(self.prev_ix, self.buf_len);
-        self.prev_line_prefix = self.buf.slice_to_str(line_start, self.buf_len);
-        self.prev_ix = self.buf_len;
-        (false, self.buf_len - line_start)
+        fields.push(get_field!(buf_len));
+        self.progress = buf_len;
+        let line = get_field!(0, line_start, buf_len);
+        (line, buf_len - line_start)
     }
 }
 
@@ -1299,7 +1278,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
     }
 
     #[test]
-    fn bytes_splitter() {
+    fn bytes_splitter_basic() {
         if !bytereader_supported() {
             return;
         }
@@ -1309,5 +1288,27 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             b'\n',
             crate::test_string_constants::PRIDE_PREJUDICE_CH2,
         );
+    }
+
+    #[test]
+    fn bytes_splitter_no_linesep() {
+        // Lots of fields, but line separator not present
+        bytes_split(b' ', 0u8, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+    }
+
+    #[test]
+    fn bytes_splitter_no_fieldsep() {
+        // Many lines, lots of single fields
+        bytes_split(
+            0u8,
+            b'\n',
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2,
+        );
+    }
+
+    #[test]
+    fn bytes_splitter_no_sep() {
+        // One line, One field
+        bytes_split(0u8, 0u8, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
     }
 }
