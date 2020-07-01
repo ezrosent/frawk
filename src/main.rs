@@ -63,13 +63,13 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[derive(Clap, Debug)]
 struct Opts {
     #[clap(
-        short = "f",
+        short = 'f',
         long = "f",
         about = "a file containing a valid frawk program"
     )]
     program_file: Option<String>,
     #[clap(
-        short = "O",
+        short = 'O',
         long = "opt-level",
         default_value = "3",
         about = "the optimization level for the program. Levels 0 through 3 are passed \
@@ -96,7 +96,7 @@ good for debugging, and it will execute much faster for small scripts."
     out_file_bufsize: usize,
     #[clap(
         long = "input-format",
-        short = "i",
+        short = 'i',
         about = "Legal values are csv, tsv. Input is split according to the rules of (csv|tsv). \
 $0 contains the unescaped line, assigning to any columns including $0 does \
 nothing."
@@ -104,24 +104,24 @@ nothing."
     input_format: Option<String>,
     #[clap(
         long = "var",
-        short = "v",
+        short = 'v',
         multiple = true,
         about = "Has the form <identifier> = <expr>"
     )]
     var: Vec<String>,
     #[clap(
-        short = "F",
+        short = 'F',
         about = "Field separator for frawk program. This is interpreted as a regular expression"
     )]
     field_sep: Option<String>,
     #[clap(
-        short = "b",
+        short = 'b',
         long = "bytecode",
         about = "Execute the program with the bytecode interpreter."
     )]
     bytecode: bool,
     #[clap(
-        short = "o",
+        short = 'o',
         long = "output-format",
         about = "Legal values are csv, tsv. If set, records output via print \
 are escaped accoring to the rules of the corresponding format"
