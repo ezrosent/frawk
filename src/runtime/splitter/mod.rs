@@ -478,10 +478,6 @@ impl<R: Read> Reader<R> {
         res
     }
 
-    fn remaining(&self) -> usize {
-        self.end - self.start
-    }
-
     pub(crate) fn is_eof(&self) -> bool {
         self.end == self.start && self.state == ReaderState::EOF
     }
@@ -518,23 +514,6 @@ impl<R: Read> Reader<R> {
         self.input_end = input_len;
         self.start = 0;
         Ok(false)
-    }
-
-    // TODO: get rid of advance()
-    fn advance(&mut self, n: usize) -> Result<()> {
-        let len = self.end - self.start;
-        if len > n {
-            self.start += n;
-            return Ok(());
-        }
-        if self.is_eof() {
-            return Ok(());
-        }
-
-        self.start = self.end;
-        let residue = n - len;
-        self.reset()?;
-        self.advance(residue)
     }
 
     fn get_next_buf(

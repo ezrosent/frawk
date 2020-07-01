@@ -13,6 +13,12 @@
 //!
 //! Single-byte splitting is a simpler algorithm adapting the CSV/TSV parsing methods, but ignoring
 //! escaping issues.
+
+/// TODO: on uncommon/adversarial inputs, these parsers can exhibit quadratic behavior. They will
+/// rescan all of the input every time a line exceeds the input chunk size (a few KB by default).
+/// We can fix this easily enough by reusing the computed offsets at the end of the buffer into an
+/// auxiliary vector at the cost of 2x steady-state memory usage, or more complex offset management
+/// in the `Offsets` type.
 use std::io::Read;
 use std::mem;
 use std::str;
@@ -99,8 +105,8 @@ impl<R: Read> CSVReader<R> {
     }
     fn refresh_buf(&mut self) -> Result<bool> {
         // exhausted. Fetch a new `cur`.
-        self.inner.advance(self.inner.remaining())?;
-        if self.inner.is_eof() {
+        self.inner.start = self.prev_ix;
+        if self.inner.reset()? {
             return Ok(true);
         }
         let (next_iq, next_cre) = unsafe {
@@ -113,6 +119,22 @@ impl<R: Read> CSVReader<R> {
         };
         self.prev_iter_inside_quote = next_iq;
         self.prev_iter_cr_end = next_cre;
+        self.prev_ix = 0;
+        if self.inner.state != ReaderState::EOF {
+            // If this is not the last buffer. Trim off non-record separators.
+            let mut i = self.cur_offsets.fields.len();
+            for field in self.cur_offsets.fields.iter().rev().cloned() {
+                if self.inner.buf.as_bytes()[field as usize] != b'\n' {
+                    break;
+                }
+                i -= 1;
+            }
+            self.cur_offsets.fields.truncate(i);
+            if i == 0 {
+                // We found no fields at all. Try again with a larger buffer.
+                return self.refresh_buf();
+            }
+        }
         Ok(false)
     }
     fn stepper<'a, 'b: 'a>(&'b mut self, st: State, line: &'a mut Line) -> Stepper<'a> {
@@ -127,31 +149,34 @@ impl<R: Read> CSVReader<R> {
             st,
         }
     }
-    pub fn read_line_inner<'a, 'b: 'a>(&'b mut self, mut line: &'a mut Line) -> Result<()> {
+    pub fn read_line_inner<'a, 'b: 'a>(&'b mut self, line: &'a mut Line) -> Result<()> {
+        // TODO:
+        // * make chunk size configurable so we can test on smaller chunk sizes.
+        // * Once all tests are passing, remove the calls to concat and delete
+        //   remaining()/advance()
         line.clear();
-        let mut st = State::Init;
-        let mut prev_ix = self.prev_ix;
-        loop {
-            self.prev_ix = prev_ix;
-            // TODO: should this be ==? We get failures in that case, but is that a bug?
-            if self.prev_ix >= self.inner.remaining() {
-                if self.refresh_buf()? {
-                    // Out of space.
-                    line.promote();
-                    self.inner.last_len = line.len();
-                    return Ok(());
-                }
-                self.prev_ix = 0;
-            }
-            let mut stepper = self.stepper(st, &mut line);
-            prev_ix = unsafe { stepper.step() };
-            if let State::Done = stepper.st {
-                self.prev_ix = prev_ix;
-                self.inner.last_len = line.len();
+        if self.cur_offsets.start == self.cur_offsets.fields.len() {
+            // NB: why self.prev_ix >= self.inner.end, and not ==?
+            // When we are grabbing the end of the buffer we consume up to the last byte using the
+            // `push_past` method, which also increments prev_ix one past the ending offset. The
+            // end offset in this case is self.inner.end, so prev_ix will thereby point to "two
+            // past the end."
+            if self.refresh_buf()? && self.prev_ix >= self.inner.end {
+                self.inner.last_len = 0;
                 return Ok(());
             }
-            st = stepper.st;
         }
+        let (prev_ix, st) = {
+            let mut stepper = self.stepper(State::Init, line);
+            (unsafe { stepper.step() }, stepper.st)
+        };
+        let consumed = prev_ix - self.prev_ix;
+        self.prev_ix = prev_ix;
+        self.inner.last_len = consumed;
+        if st != State::Done {
+            line.promote();
+        }
+        Ok(())
     }
 }
 
@@ -253,7 +278,7 @@ impl Line {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum State {
     Init,
     BS,
@@ -483,7 +508,7 @@ impl InputFormat {
 
 // get_find_indexes{_bytes}, what's that all about?
 //
-// These functions use vector instructions that, while commonly supported, are occasionally
+// These functions use vector instructions that, while commonly supported on x86, are occasionally
 // missing. The safest way to handle this fact is to query _at runtime_ whether or not a given
 // feature-set is supported. To avoid querying this on every function call, the calling library
 // will instead store a function pointer that is computed at startup based on the dynamically
@@ -702,8 +727,8 @@ mod generic {
             };
         }
         macro_rules! write_offsets {
-                    ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
-                }
+             ($($ix:expr),*) => { $(write_offset_inner!($ix);)* };
+        }
         write_offsets!(0, 1, 2, 3, 4, 5, 6, 7);
         // Similarly for bits 8->16
         if count > 8 {
@@ -851,7 +876,8 @@ mod generic {
             flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
             ix += V::INPUT_SIZE;
         }
-        // For any text that remains, just copy the results to the stack with some padding and do one more iteration.
+        // For any text that remains, just copy the results to the stack with some padding and do
+        // one more iteration.
         let remaining = len - ix;
         if remaining > 0 {
             let mut rest = [0u8; MAX_INPUT_SIZE];
@@ -1131,6 +1157,12 @@ impl<R: Read> ByteReader<R> {
     ) -> Result<()> {
         // This doesn't work, we may need the old one?
         if self.cur_offsets.start == self.cur_offsets.fields.len() {
+            // What's going on with this second test? self.refresh_buf() returns Ok(true) if we
+            // were unable to fetch more data due to an EOF. The last execution consumed buffer up
+            // to the last record separator in the input, but there may be remaining data filling
+            // up the rest of the buffer with no more record or field separators. In that case, we
+            // want to return the rest of the input as a single-field record, which one more
+            // `consume_line` will indeed accomplish.
             if self.refresh_buf()? && self.progress == self.inner.end {
                 *line = Str::default();
                 self.inner.last_len = 0;
@@ -1232,6 +1264,62 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             "{:?}",
             v.iter().map(|s| format!("{}", s)).collect::<Vec<String>>()
         )
+    }
+
+    fn tsv_split(corpus: &str) {
+        // Replace spaces with tabs to get some traction here.
+        let fs = b'\t';
+        let rs = b'\n';
+        let corpus = String::from(corpus).replace(" ", "\t");
+        let mut _cache = RegexCache::default();
+        let _pat = Str::default();
+        let expected: Vec<Vec<Str<'static>>> = corpus
+            .split(rs as char)
+            .map(|line| {
+                line.split(fs as char)
+                    .map(|x| Str::from(x).unmoor())
+                    .collect()
+            })
+            .collect();
+        let mut got = Vec::with_capacity(corpus.len());
+        let reader = std::io::Cursor::new(corpus);
+        let mut reader = CSVReader::new(reader, InputFormat::TSV, "fake-stdin");
+        loop {
+            let (_, line) = reader
+                .read_line(&_pat, &mut _cache)
+                .expect("failed to read line");
+            if reader.read_state() != 1 {
+                break;
+            }
+            got.push(line.fields.clone());
+        }
+        if got != expected {
+            eprintln!(
+                "test failed! got vector of length {}, expected {} lines",
+                got.len(),
+                expected.len()
+            );
+            for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+                eprintln!("===============");
+                if g == e {
+                    eprintln!("line {} matches", i);
+                } else {
+                    eprintln!("line {} has a mismatch", i);
+                    eprintln!("got:  {}", disp_vec(g));
+                    eprintln!("want: {}", disp_vec(e));
+                }
+            }
+            panic!("test failed. See debug output");
+        }
+    }
+
+    #[test]
+    fn tsv_splitter_basic() {
+        if !bytereader_supported() {
+            return;
+        }
+        tsv_split(crate::test_string_constants::VIRGIL);
+        tsv_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
     }
 
     fn bytes_split(fs: u8, rs: u8, corpus: &str) {
