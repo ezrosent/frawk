@@ -323,8 +323,7 @@ impl<'a> Stepper<'a> {
     fn get(&mut self, line_start: usize, j: usize, cur: usize) -> usize {
         self.off.start = cur;
         if self.field_set.get(0) {
-            let line = mem::replace(&mut self.line.raw, Str::default());
-            self.line.raw = Str::concat(line, unsafe { self.buf.slice_to_str(line_start, j) });
+            self.line.raw = unsafe { self.buf.slice_to_str(line_start, j) };
         }
         self.line.len += j - line_start;
         self.prev_ix
