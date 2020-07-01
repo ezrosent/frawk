@@ -68,7 +68,9 @@ fn simulate_stdin_csv(
     ifmt: InputFormat,
     inp: impl Into<String>,
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
-    simulate_stdin(inp, |reader, name| CSVReader::new(reader, ifmt, name))
+    simulate_stdin(inp, |reader, name| {
+        CSVReader::new(reader, ifmt, runtime::CHUNK_SIZE, name)
+    })
 }
 
 fn simulate_stdin_regex(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtime::LineReader {

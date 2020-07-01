@@ -293,7 +293,12 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
     let fake_out: Box<dyn io::Write> = Box::new(Cursor::new(vec![]));
     let interp = match compile::bytecode(
         &mut ctx,
-        chained(CSVReader::new(fake_inp, InputFormat::CSV, "unused")),
+        chained(CSVReader::new(
+            fake_inp,
+            InputFormat::CSV,
+            CHUNK_SIZE,
+            "unused",
+        )),
         fake_out,
     ) {
         Ok(ctx) => ctx,
@@ -401,7 +406,7 @@ fn main() {
                 let _reader: Box<dyn io::Read> = Box::new(io::stdin());
                 match (ifmt, $analysis) {
                     (Some(ifmt), _) => {
-                        let $inp = chained(CSVReader::new(_reader, ifmt, "-"));
+                        let $inp = chained(CSVReader::new(_reader, ifmt, CHUNK_SIZE, "-"));
                         $body
                     }
                     (
@@ -445,7 +450,7 @@ fn main() {
             } else if let Some(ifmt) = ifmt {
                 let iter = opts.input_files.iter().cloned().map(|file| {
                     let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
-                    CSVReader::new(reader, ifmt, file)
+                    CSVReader::new(reader, ifmt, CHUNK_SIZE, file)
                 });
                 let $inp = ChainedReader::new(iter);
                 $body
