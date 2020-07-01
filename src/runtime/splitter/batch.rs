@@ -30,7 +30,7 @@ use crate::common::Result;
 use crate::pushdown::FieldSet;
 use crate::runtime::{
     str_impl::{Buf, Str},
-    Int, LazyVec, RegexCache, CHUNK_SIZE,
+    Int, LazyVec, RegexCache,
 };
 
 use super::{normalize_join_indexes, DefaultLine, LineReader, Reader, ReaderState};
@@ -40,8 +40,6 @@ pub struct CSVReader<R> {
     name: Str<'static>,
     cur_offsets: Offsets,
     prev_ix: usize,
-    prev_iter_inside_quote: u64,
-    prev_iter_cr_end: u64,
     // Used to trigger updating FILENAME on the first read.
     start: bool,
     ifmt: InputFormat,
@@ -87,17 +85,13 @@ impl<R: Read> LineReader for CSVReader<R> {
 
 // TODO rename as it handles CSV and TSV
 impl<R: Read> CSVReader<R> {
-    // TODO give this the same signature as RegexSplitter (passing in chunk size, or just making
-    // two constructors)
-    pub fn new(r: R, ifmt: InputFormat, name: impl Into<Str<'static>>) -> Self {
+    pub fn new(r: R, ifmt: InputFormat, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
         CSVReader {
             start: true,
-            inner: Reader::new(r, CHUNK_SIZE, /*padding=*/ 128),
+            inner: Reader::new(r, chunk_size, /*padding=*/ 128),
             name: name.into(),
             cur_offsets: Default::default(),
             prev_ix: 0,
-            prev_iter_inside_quote: 0,
-            prev_iter_cr_end: 0,
             find_indexes: get_find_indexes(ifmt),
             field_set: FieldSet::all(),
             ifmt,
@@ -109,22 +103,24 @@ impl<R: Read> CSVReader<R> {
         if self.inner.reset()? {
             return Ok(true);
         }
-        let (next_iq, next_cre) = unsafe {
+        let bytes = self.inner.buf.as_bytes();
+        // We always trim off the end, so we have no need for prev_iter_inside_quote.
+        // We aren't removing it entirely because it may be brought back if we ever implement the
+        // "avoid rescanning" optimization.
+        let (_next_iq, _next_cre) = unsafe {
             (self.find_indexes)(
-                &self.inner.buf.as_bytes()[self.inner.start..self.inner.end],
+                &bytes[0..self.inner.end],
                 &mut self.cur_offsets,
-                self.prev_iter_inside_quote,
-                self.prev_iter_cr_end,
+                /*prev_iter_inside_quote=*/ 0,
+                /*prev_iter_cr_end=*/ 0,
             )
         };
-        self.prev_iter_inside_quote = next_iq;
-        self.prev_iter_cr_end = next_cre;
         self.prev_ix = 0;
         if self.inner.state != ReaderState::EOF {
             // If this is not the last buffer. Trim off non-record separators.
             let mut i = self.cur_offsets.fields.len();
             for field in self.cur_offsets.fields.iter().rev().cloned() {
-                if self.inner.buf.as_bytes()[field as usize] != b'\n' {
+                if bytes[field as usize] == b'\n' {
                     break;
                 }
                 i -= 1;
@@ -150,10 +146,6 @@ impl<R: Read> CSVReader<R> {
         }
     }
     pub fn read_line_inner<'a, 'b: 'a>(&'b mut self, line: &'a mut Line) -> Result<()> {
-        // TODO:
-        // * make chunk size configurable so we can test on smaller chunk sizes.
-        // * Once all tests are passing, remove the calls to concat and delete
-        //   remaining()/advance()
         line.clear();
         if self.cur_offsets.start == self.cur_offsets.fields.len() {
             // NB: why self.prev_ix >= self.inner.end, and not ==?
@@ -287,6 +279,9 @@ pub enum State {
     Done,
 }
 
+// Stepper implements the core splitting algorithm given a "chunk" of offsets computed by a
+// CSVReader. The [step] method implements a basic state machine going through the control
+// characters extracted by initial pass.
 pub struct Stepper<'a> {
     pub ifmt: InputFormat,
     pub buf: &'a Buf,
@@ -1104,11 +1099,12 @@ impl<R: Read> ByteReader<R> {
         }
 
         // Compute its offsets and reset progress.
+        let bytes = self.inner.buf.as_bytes();
         unsafe {
             // TODO: optimize this to avoid rescanning parts (i.e. start at the old value of
             // end-start, then apply a diff to all offsets)
             (self.get_offsets)(
-                &self.inner.buf.as_bytes()[0..self.inner.end],
+                &bytes[0..self.inner.end],
                 &mut self.cur_offsets,
                 self.field_sep,
                 self.record_sep,
@@ -1135,7 +1131,7 @@ impl<R: Read> ByteReader<R> {
             // If this is not the last buffer. Trim off non-record separators.
             let mut i = self.cur_offsets.fields.len();
             for field in self.cur_offsets.fields.iter().rev().cloned() {
-                if self.inner.buf.as_bytes()[field as usize] == self.record_sep {
+                if bytes[field as usize] == self.record_sep {
                     break;
                 }
                 i -= 1;
@@ -1282,7 +1278,12 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             .collect();
         let mut got = Vec::with_capacity(corpus.len());
         let reader = std::io::Cursor::new(corpus);
-        let mut reader = CSVReader::new(reader, InputFormat::TSV, "fake-stdin");
+        let mut reader = CSVReader::new(
+            reader,
+            InputFormat::TSV,
+            /*chunk_size=*/ 512,
+            "fake-stdin",
+        );
         loop {
             let (_, line) = reader
                 .read_line(&_pat, &mut _cache)
