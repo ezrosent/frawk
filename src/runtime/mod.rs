@@ -13,6 +13,7 @@ pub mod printf;
 pub mod splitter;
 pub mod str_impl;
 pub mod utf8;
+pub mod writers;
 
 use crate::pushdown::FieldSet;
 use splitter::regex::RegexSplitter;
