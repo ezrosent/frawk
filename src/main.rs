@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 #![feature(core_intrinsics)]
 #![feature(test)]
+#![feature(write_all_vectored)]
 #[macro_use]
 pub mod common;
 pub mod arena;
@@ -24,6 +25,7 @@ pub mod runtime;
 mod test_string_constants;
 pub mod types;
 extern crate clap;
+extern crate crossbeam_channel;
 extern crate elsa;
 extern crate hashbrown;
 #[cfg(feature = "use_jemalloc")]
