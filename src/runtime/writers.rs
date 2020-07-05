@@ -15,11 +15,156 @@ use std::sync::{
     Arc, Condvar, Mutex,
 };
 
+// TODO:
+// * more tests
+//   - multiple threads writing data and flushing intermittently
+//   - threads closing but writing for append does not change output
+//   ^ named files for one of the above
+//   - error semantics (i.e. success, flush, set error, return errors)
+//   - consider removing the block_new stuff.
+// * document and rearrange the declarations in this file to make it easier to read.
+// * replace FileWrite in the runtime module, migrating harness to new fake stdout
+// * fix lint errors around u128/extern
+
 use crossbeam_channel::{bounded, Receiver, Sender};
 use hashbrown::HashMap;
 
 use crate::common::{CompileError, Result};
 use crate::runtime::Str;
+
+pub mod testing {
+    use super::*;
+
+    /// A file factory that writes all data in memory; used for unit testing.
+    #[derive(Clone)]
+    pub struct FakeFs {
+        pub block_new: bool,
+        pub stdout: FakeFile,
+        named: Arc<Mutex<HashMap<String, FakeFile>>>,
+    }
+
+    impl Default for FakeFs {
+        fn default() -> FakeFs {
+            FakeFs::new(/*block_new=*/ false)
+        }
+    }
+
+    impl FakeFs {
+        pub fn new(block_new: bool) -> FakeFs {
+            let stdout = FakeFile::default();
+            if !block_new {
+                stdout.unblock();
+            }
+            FakeFs {
+                block_new,
+                stdout,
+                named: Default::default(),
+            }
+        }
+        pub fn get_handle(&self, path: &str) -> Option<FakeFile> {
+            self.named.lock().unwrap().get(path).cloned()
+        }
+    }
+
+    impl FileFactory for FakeFs {
+        type Output = FakeFile;
+        type Stdout = FakeFile;
+        fn build(&self, path: &str, append: bool) -> io::Result<Self::Output> {
+            let mut named = self.named.lock().unwrap();
+            if let Some(file) = named.get(path) {
+                file.reopen(append);
+                if !self.block_new {
+                    file.unblock();
+                }
+                return Ok(file.clone());
+            }
+            let new_file = FakeFile::default();
+            if !self.block_new {
+                new_file.unblock();
+            }
+            named.insert(path.into(), new_file.clone());
+            Ok(new_file)
+        }
+        fn stdout(&self) -> Self::Stdout {
+            self.stdout.clone()
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeFileInner {
+        data: Mutex<Vec<u8>>,
+        poison: AtomicBool,
+        block: Notification,
+    }
+
+    impl FakeFileInner {
+        fn result(&self) -> io::Result<()> {
+            if self.poison.load(Ordering::Acquire) {
+                Err(io::Error::new(io::ErrorKind::Other, "poisoned fake file!"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// The files stored in a FakeFs.
+    ///
+    /// These are primarily vectors of bytes, but they can also be configured to return errors or
+    /// block write requests.
+    #[derive(Clone, Default)]
+    pub struct FakeFile(Arc<FakeFileInner>);
+
+    impl FakeFile {
+        pub fn set_poison(&self, p: bool) {
+            self.0.poison.store(p, Ordering::Release);
+        }
+        pub fn unblock(&self) {
+            self.0.block.notify()
+        }
+        pub fn read_data(&self) -> Vec<u8> {
+            (*self.0.data.lock().unwrap()).clone()
+        }
+        pub fn reopen(&self, append: bool) {
+            if !append {
+                self.0.data.lock().unwrap().clear();
+            }
+        }
+    }
+
+    impl Write for FakeFile {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.block.wait();
+            self.0.result()?;
+            self.0.data.lock().unwrap().extend(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.block.wait();
+            self.0.result()?;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::*;
+    use super::*;
+
+    #[test]
+    fn basic_writing() {
+        let fs = FakeFs::default();
+        let mut reg = Registry::from_factory(fs.clone());
+        let handle = reg.get_handle(/*stdout*/ None);
+        let s1 = Str::from("hello");
+        let s2 = Str::from(" there");
+        handle.write(&s1, /*append=*/ true).unwrap();
+        handle.write(&s2, /*append=*/ true).unwrap();
+        handle.flush().unwrap();
+        let data = fs.stdout.read_data();
+        assert_eq!(&data[..], "hello there".as_bytes());
+    }
+}
 
 /// Notification is a simple object used to synchronize multiple threads around a single event
 /// occuring. Based on the absl object of the same name.
@@ -66,6 +211,7 @@ impl Notification {
 #[derive(Default)]
 struct ErrorCode(AtomicUsize);
 
+#[derive(Debug)]
 enum RequestStatus {
     ONGOING = 0,
     OK = 1,
@@ -133,8 +279,9 @@ pub fn default_factory() -> impl FileFactory {
     }
 }
 
+const IO_CHAN_SIZE: usize = 128;
+
 fn build_handle<W: io::Write, F: Fn(bool) -> io::Result<W> + Send + 'static>(f: F) -> RawHandle {
-    const IO_CHAN_SIZE: usize = 128;
     let (sender, receiver) = bounded(IO_CHAN_SIZE);
     let error = Arc::new(Mutex::new(None));
     let receiver_error = error.clone();
@@ -156,7 +303,6 @@ impl<F: FileFactory> RootImpl<F> {
 
 impl<F: FileFactory> Root for RootImpl<F> {
     fn get_handle(&self, fname: &str) -> RawHandle {
-        const IO_CHAN_SIZE: usize = 128;
         let mut handles = self.handles.lock().unwrap();
         if let Some(h) = handles.get(fname) {
             return h.clone();
@@ -173,14 +319,14 @@ impl<F: FileFactory> Root for RootImpl<F> {
     }
 }
 
-struct Registry {
+pub struct Registry {
     global: Arc<dyn Root>,
     local: HashMap<Str<'static>, FileHandle>,
     stdout: FileHandle,
 }
 
 impl Registry {
-    fn from_factory(f: impl FileFactory) -> Registry {
+    pub fn from_factory(f: impl FileFactory) -> Registry {
         let root_impl = RootImpl::from_factory(f);
         let stdout = root_impl.get_stdout().into_handle();
         Registry {
@@ -190,7 +336,7 @@ impl Registry {
         }
     }
 
-    fn get_handle(&mut self, name: Option<&Str<'static>>) -> &mut FileHandle {
+    pub fn get_handle(&mut self, name: Option<&Str<'static>>) -> &mut FileHandle {
         match name {
             Some(path) => {
                 use hashbrown::hash_map::Entry;
@@ -301,12 +447,21 @@ impl WriteGuard {
     fn status(&self) -> RequestStatus {
         self.status.read()
     }
+
+    fn reset(&mut self) {
+        self.s = Str::default();
+        self.status = ErrorCode::default();
+    }
+
+    fn set_payload<'a>(&mut self, s: &Str<'a>) {
+        self.s = s.clone().unmoor();
+    }
 }
 
 impl Drop for WriteGuard {
     fn drop(&mut self) {
         let status = self.status();
-        assert!(!matches!(status, RequestStatus::ONGOING))
+        assert!(!matches!(status, RequestStatus::ONGOING));
     }
 }
 
@@ -316,16 +471,25 @@ struct RawHandle {
     sender: Sender<Request>,
 }
 
-struct FileHandle {
+pub struct FileHandle {
     raw: RawHandle,
-    guards: VecDeque<WriteGuard>,
+    // Why do we deal with Box<WriteGuard>s and not WriteGuards?
+    //
+    // We pass a reference to the ErrorCode within a WriteGuard to a write request. That address
+    // must remain stable; if we stored a WriteGuard in a VecDeque directly we would not have that
+    // guarantee. old_guards caches recent WriteGuards that have been discarded to avoid allocation
+    // overheads in cases where we aren't using a fast malloc (in cases where we are, doing this
+    // may still be marginally faster).
+    old_guards: Vec<Box<WriteGuard>>,
+    guards: VecDeque<Box<WriteGuard>>,
 }
 
 impl RawHandle {
     fn into_handle(self) -> FileHandle {
         FileHandle {
             raw: self,
-            guards: VecDeque::new(),
+            guards: Default::default(),
+            old_guards: Default::default(),
         }
     }
 }
@@ -344,9 +508,23 @@ impl FileHandle {
                 RequestStatus::ERROR => return Err(self.read_error()),
             }
         }
-        self.guards.rotate_left(done_count);
-        self.guards.truncate(self.guards.len() - done_count);
+        for _ in 0..done_count {
+            let mut old = self.guards.pop_front().unwrap();
+            if self.old_guards.len() < IO_CHAN_SIZE {
+                old.reset();
+                self.old_guards.push(old);
+            }
+        }
         Ok(())
+    }
+
+    fn guard<'a>(&mut self, s: &Str<'a>) -> Box<WriteGuard> {
+        if let Some(mut g) = self.old_guards.pop() {
+            g.set_payload(s);
+            g
+        } else {
+            Box::new(WriteGuard::new(s))
+        }
     }
 
     fn read_error(&self) -> CompileError {
@@ -366,15 +544,16 @@ impl FileHandle {
         }
     }
 
-    fn write<'a>(&mut self, s: &Str<'a>, append: bool) -> Result<()> {
+    pub fn write<'a>(&mut self, s: &Str<'a>, append: bool) -> Result<()> {
         self.clear_guards()?;
-        let guard = WriteGuard::new(s);
+        let guard = self.guard(s);
         let req = guard.request(append);
         self.raw.sender.send(req).unwrap();
         self.guards.push_back(guard);
         Ok(())
     }
-    fn flush(&mut self) -> Result<()> {
+
+    pub fn flush(&mut self) -> Result<()> {
         let (n, req) = Request::flush();
         self.raw.sender.send(req).unwrap();
         n.1.wait();
@@ -385,7 +564,8 @@ impl FileHandle {
             Ok(())
         }
     }
-    fn close(&self) {
+
+    pub fn close(&self) {
         self.raw.sender.send(Request::Close).unwrap();
     }
 }
