@@ -66,7 +66,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         main_func: usize,
         regs: impl Fn(compile::Ty) -> usize,
         stdin: LR,
-        stdout: impl std::io::Write + 'static,
+        ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
     ) -> Self {
         use compile::Ty::*;
@@ -84,7 +84,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
 
             line: Default::default(),
             regexes: Default::default(),
-            write_files: runtime::FileWrite::new(stdout),
+            write_files: runtime::FileWrite::new(ff),
             read_files: runtime::FileRead::new(stdin, used_fields),
 
             maps_int_float: default_of(regs(MapIntFloat)),

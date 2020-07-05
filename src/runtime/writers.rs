@@ -17,8 +17,6 @@ use std::sync::{
 
 // TODO:
 // * document and rearrange the declarations in this file to make it easier to read.
-// * replace FileWrite in the runtime module, migrating harness to new fake stdout
-// * fix lint errors around u128/extern
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use hashbrown::HashMap;
@@ -92,8 +90,11 @@ pub mod testing {
         }
         pub fn reopen(&self, append: bool) {
             if !append {
-                self.0.data.lock().unwrap().clear();
+                self.clear();
             }
+        }
+        pub fn clear(&self) {
+            self.0.data.lock().unwrap().clear();
         }
     }
 
@@ -342,14 +343,36 @@ struct RootImpl<F> {
     file_factory: F,
 }
 
+fn open_file(path: &str, append: bool) -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(append)
+        .open(path)
+}
+
 pub fn default_factory() -> impl FileFactory {
-    |path: &str, append| {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .append(append)
-            .open(path)
+    open_file
+}
+
+pub fn factory_from_file(fname: &str) -> io::Result<impl FileFactory> {
+    use std::fs::File;
+    // Do a test open+truncate of the file.
+    let _file = open_file(fname, /*append=*/ false)?;
+
+    #[derive(Clone)]
+    struct FileStdout(String);
+    impl FileFactory for FileStdout {
+        type Output = File;
+        type Stdout = File;
+        fn build(&self, path: &str, append: bool) -> io::Result<Self::Output> {
+            open_file(path, append)
+        }
+        fn stdout(&self) -> Self::Stdout {
+            open_file(self.0.as_str(), /*append=*/ true).expect("failed to open stdout")
+        }
     }
+    Ok(FileStdout(fname.into()))
 }
 
 const IO_CHAN_SIZE: usize = 128;
@@ -409,13 +432,13 @@ impl Registry {
         }
     }
 
-    pub fn get_handle(&mut self, name: Option<&Str<'static>>) -> &mut FileHandle {
+    pub fn get_handle<'a>(&mut self, name: Option<&Str<'a>>) -> &mut FileHandle {
         match name {
             Some(path) => {
                 use hashbrown::hash_map::Entry;
                 // borrowed by with_str closure.
                 let global = &self.global;
-                match self.local.entry(path.clone()) {
+                match self.local.entry(path.clone().unmoor()) {
                     Entry::Occupied(o) => o.into_mut(),
                     Entry::Vacant(v) => {
                         let raw = path.with_str(|s| global.get_handle(s));

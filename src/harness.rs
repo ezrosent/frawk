@@ -15,32 +15,14 @@ use crate::{
             batch::{bytereader_supported, ByteReader, CSVReader, InputFormat},
             regex::RegexSplitter,
         },
+        writers::testing::FakeFs,
         ChainedReader,
     },
     types::{self, get_types},
 };
 use hashbrown::HashMap;
-use std::cell::RefCell;
 use std::io;
 use std::io::Write;
-use std::rc::Rc;
-
-#[derive(Clone, Default)]
-struct FakeStdout(Rc<RefCell<Vec<u8>>>);
-impl io::Write for FakeStdout {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.borrow_mut().write(buf)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.borrow_mut().flush()
-    }
-}
-
-impl FakeStdout {
-    fn clear(&self) {
-        self.0.borrow_mut().truncate(0);
-    }
-}
 
 const FILE_BREAK: &'static str = "<<<FILE BREAK>>>";
 
@@ -191,23 +173,20 @@ pub(crate) fn run_llvm(
         ctx.dbg_print(&mut buf).unwrap();
         eprintln!("{}", String::from_utf8(buf).unwrap());
     }
-    let stdout = FakeStdout::default();
+    let fake_fs = FakeFs::default();
     if let Some(ifmt) = ifmt {
         compile::run_llvm(
             &mut ctx,
             simulate_stdin_csv(ifmt, stdin),
-            stdout.clone(),
+            fake_fs.clone(),
             LLVM_CONFIG,
         )?;
     } else {
         with_reader!(sep_analysis, stdin, |reader| {
-            compile::run_llvm(&mut ctx, reader, stdout.clone(), LLVM_CONFIG)?;
+            compile::run_llvm(&mut ctx, reader, fake_fs.clone(), LLVM_CONFIG)?;
         });
     }
-    let v = match Rc::try_unwrap(stdout.0) {
-        Ok(v) => v.into_inner(),
-        Err(rc) => rc.borrow().clone(),
-    };
+    let v = fake_fs.stdout.read_data();
     match String::from_utf8(v) {
         Ok(s) => Ok(s),
         Err(e) => err!("program produced invalid unicode: {}", e),
@@ -264,24 +243,21 @@ fn compile_program<'a, 'inp, 'outer>(
     prog: Prog<'a>,
     stdin: impl Into<String>,
     esc: Escaper,
-) -> Result<(Interp<'a, impl runtime::LineReader>, FakeStdout)> {
+) -> Result<(Interp<'a, impl runtime::LineReader>, FakeFs)> {
     let mut ctx = cfg::ProgramContext::from_prog(a, prog, esc)?;
-    let stdout = FakeStdout::default();
+    let fake_fs = FakeFs::default();
     Ok((
-        compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), stdout.clone())?,
-        stdout,
+        compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), fake_fs.clone())?,
+        fake_fs,
     ))
 }
 
 fn run_prog_nodebug<'a, LR: runtime::LineReader>(
     interp: &mut Interp<'a, LR>,
-    stdout: FakeStdout,
+    fake_fs: FakeFs,
 ) -> Result<String /*output*/> {
     interp.run()?;
-    let v = match Rc::try_unwrap(stdout.0) {
-        Ok(v) => v.into_inner(),
-        Err(rc) => rc.borrow().clone(),
-    };
+    let v = fake_fs.stdout.read_data();
     match String::from_utf8(v) {
         Ok(s) => Ok(s),
         Err(e) => err!("program produced invalid unicode: {}", e),
@@ -299,7 +275,7 @@ pub(crate) fn run_prog<'a>(
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
     // a limited capacity for locals, but it would require a lot more bookkeeping.
     let ident_map = ctx._invert_ident();
-    let stdout = FakeStdout::default();
+    let fake_fs = FakeFs::default();
     let (instrs, type_map) = {
         let mut instrs_buf = Vec::<u8>::new();
         write!(&mut instrs_buf, "\nCFG:\n").unwrap();
@@ -320,12 +296,12 @@ pub(crate) fn run_prog<'a>(
                     let mut $interp = compile::bytecode(
                         &mut ctx,
                         simulate_stdin_csv(ifmt, stdin),
-                        stdout.clone(),
+                        fake_fs.clone(),
                     )?;
                     $body
                 } else {
                     let mut $interp =
-                        compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), stdout.clone())?;
+                        compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), fake_fs.clone())?;
                     $body
                 }
             };
@@ -351,10 +327,7 @@ pub(crate) fn run_prog<'a>(
         })
     };
 
-    let v = match Rc::try_unwrap(stdout.0) {
-        Ok(v) => v.into_inner(),
-        Err(rc) => rc.borrow().clone(),
-    };
+    let v = fake_fs.stdout.read_data();
     match String::from_utf8(v) {
         Ok(s) => Ok((s, instrs, type_map)),
         Err(e) => err!("program produced invalid UTF-8: {}", e),
@@ -1106,17 +1079,17 @@ this as well"#
                     fn program_only(b: &mut Bencher) {
                         let a = Arena::default();
                         let prog = parse_program($e, &a, Escaper::Identity).unwrap();
-                        let (mut interp, stdout) =
+                        let (mut interp, fake_fs) =
                             compile_program(&a, prog, $inp, Escaper::Identity).unwrap();
                         b.iter(|| {
                             black_box(
                                 run_prog_nodebug(
                                     &mut interp,
-                                    stdout.clone(),
+                                    fake_fs.clone(),
                                 ).unwrap()
                             );
                             interp.reset();
-                            stdout.clear();
+                            fake_fs.stdout.clear();
                         });
                     }
                 }

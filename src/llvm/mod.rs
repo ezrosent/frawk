@@ -318,10 +318,10 @@ impl<'a, 'b> Generator<'a, 'b> {
     pub unsafe fn run_main(
         &mut self,
         stdin: impl IntoRuntime,
-        writer: impl std::io::Write + 'static,
+        ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
     ) -> Result<()> {
-        let mut rt = stdin.into_runtime(writer, used_fields);
+        let mut rt = stdin.into_runtime(ff, used_fields);
         self.gen_main()?;
         self.verify()?;
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
