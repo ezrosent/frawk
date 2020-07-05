@@ -1,28 +1,660 @@
-//! Support for writing to files from multiple threads.
+//! Writing data to output files
 //!
-//! The basic idea is to launch a thread per file and to send write requests down a bounded
-//! channel.
+//! This module has the following goals:
 //!
-//! This is tricky because frawk strings are not reference-counted in a thread-safe manner. We
-//! solve this by sending the raw bytes along the channel and keeping an instance of the string
-//! around in the sending thread to ensure the bytes are not garbage collected. The receiving
-//! thread then flips a per-request boolean to signal that a string is no longer needed.
+//! 1. Support writes to a single file from multiple threads.
+//! 2. Avoid cross-thread copying of data.
+//! 3. Support (potentially cross-thread) batching of writes.
+//!
+//! Supporting all of these requirements, along with the ability to inject fakes for the file
+//! system, leads to a fairly involved implementation. Callers build a Registry, which acts as a
+//! thread-local cache of a shared mapping from file name to file handle. The core of the
+//! implementation is in the implementation of these handles.
+//!
+//! File handles are each "clients" to a single thread issuing writes on their behalf. That thread
+//! reads requests to write, flush, or even close that file and issues them in order. When the
+//! thread receives adjacent write requests, it uses the write_vectored API to issue all of those
+//! writes at once. This grants us nice batching semantics a la BufWriter without the additional
+//! copies.
+//!
+//! (Aside: "thread per file" might become expensive if we want to support workloads with thousands
+//! of open output files. In that case, we could replace each of these background threads with a
+//! "task" a la futures/async.)
+//!
+//! To allow for this batching without additional copies or allocations, calls to write are
+//! asynchronous. This poses a problem because Str manages memory with a thread-unsafe reference
+//! count. We cannot rely on the receiver thread incrementing a reference count to keep the Str
+//! sent on a channel alive.
+//!
+//! Instead, we have a custom protocol in which the client thread keeps a reference to any Strs
+//! whose writes are pending in a local buffer, while passing a thread-safe signaling mechanism
+//! (ErrorCode) along with the raw bytes contained in the Str to the receiving thread. When the
+//! receiving thread completes a write to the Str, it sets the ErrorCode to signal either success
+//! or failure. During the next request, the sender thread reads the error codes of any pending
+//! requests and relinqueshes references to all requests that have completed (and returns an error
+//! if any failed -- write errors in frawk are not recoverable).
+//!
+//! To facilitate easier testing, the functionality of the file system that we use is abstracted in
+//! the `FileFactory` trait. The `testing` module contains an implementation of this trait that
+//! writes all data in memory.
 
 use std::collections::VecDeque;
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Condvar, Mutex,
 };
 
-// TODO:
-// * document and rearrange the declarations in this file to make it easier to read.
-
+// NB we only require mpsc semantics, but at time of writing there are a few open bugs on
+// std::sync::mpsc, while crossbeam_channel is seeing more attention.
 use crossbeam_channel::{bounded, Receiver, Sender};
 use hashbrown::HashMap;
 
 use crate::common::{CompileError, Result};
 use crate::runtime::Str;
+
+/// The maximum number of pending requests in the per-file channels.
+const IO_CHAN_SIZE: usize = 128;
+
+/// FileFactory abstracts over the portions of the file system used for the output of a frawk
+/// program. It includes "file objects" as well as "stdout", which both implement the io::Write
+/// trait.
+///
+/// The factories themselves must also be Clone and thread-safe, as they are passed to writer
+/// threads at construction time.
+pub trait FileFactory: Clone + 'static + Send + Sync {
+    type Output: io::Write;
+    type Stdout: io::Write;
+    fn build(&self, path: &str, append: bool) -> io::Result<Self::Output>;
+    // TODO maybe we shold support this returning an error.
+    fn stdout(&self) -> Self::Stdout;
+}
+
+impl<W: io::Write, T: Fn(&str, bool) -> io::Result<W> + Clone + 'static + Send + Sync> FileFactory
+    for T
+{
+    type Output = W;
+    type Stdout = std::io::Stdout;
+    fn build(&self, path: &str, append: bool) -> io::Result<W> {
+        (&self)(path, append)
+    }
+    fn stdout(&self) -> Self::Stdout {
+        std::io::stdout()
+    }
+}
+
+type FileWriter = BufWriter<std::fs::File>;
+
+fn open_file(path: &str, append: bool) -> io::Result<FileWriter> {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(append)
+        .open(path)?;
+    Ok(BufWriter::new(file))
+}
+
+pub fn default_factory() -> impl FileFactory {
+    open_file
+}
+
+pub fn factory_from_file(fname: &str) -> io::Result<impl FileFactory> {
+    // Do a test open+truncate of the file.
+    let _file = open_file(fname, /*append=*/ false)?;
+
+    #[derive(Clone)]
+    struct FileStdout(String);
+    impl FileFactory for FileStdout {
+        type Output = FileWriter;
+        type Stdout = FileWriter;
+        fn build(&self, path: &str, append: bool) -> io::Result<Self::Output> {
+            open_file(path, append)
+        }
+        fn stdout(&self) -> Self::Stdout {
+            open_file(self.0.as_str(), /*append=*/ true).expect("failed to open stdout")
+        }
+    }
+    Ok(FileStdout(fname.into()))
+}
+
+fn build_handle<W: io::Write, F: Fn(bool) -> io::Result<W> + Send + 'static>(f: F) -> RawHandle {
+    let (sender, receiver) = bounded(IO_CHAN_SIZE);
+    let error = Arc::new(Mutex::new(None));
+    let receiver_error = error.clone();
+    std::thread::spawn(move || receive_thread(receiver, receiver_error, f));
+    RawHandle { error, sender }
+}
+
+/// Registry is a thread-local handle on all files we have ever interacted with.
+///
+/// Note that handles are never removed, even after a file is closed. The single thread continues
+/// to run and listen for new requests that might trigger a reopen.
+pub struct Registry {
+    global: Arc<dyn Root>,
+    local: HashMap<Str<'static>, FileHandle>,
+    stdout: FileHandle,
+}
+
+impl Registry {
+    pub fn from_factory(f: impl FileFactory) -> Registry {
+        let root_impl = RootImpl::from_factory(f);
+        let stdout = root_impl.get_stdout().into_handle();
+        Registry {
+            global: Arc::new(root_impl),
+            local: Default::default(),
+            stdout,
+        }
+    }
+
+    pub fn get_handle<'a>(&mut self, name: Option<&Str<'a>>) -> &mut FileHandle {
+        match name {
+            Some(path) => {
+                use hashbrown::hash_map::Entry;
+                // borrowed by with_str closure.
+                let global = &self.global;
+                match self.local.entry(path.clone().unmoor()) {
+                    Entry::Occupied(o) => o.into_mut(),
+                    Entry::Vacant(v) => {
+                        let raw = path.with_str(|s| global.get_handle(s));
+                        v.insert(raw.into_handle())
+                    }
+                }
+            }
+            None => &mut self.stdout,
+        }
+    }
+}
+
+impl Clone for Registry {
+    fn clone(&self) -> Registry {
+        Registry {
+            global: self.global.clone(),
+            local: HashMap::new(),
+            stdout: self.stdout.raw().into_handle(),
+        }
+    }
+}
+
+// We place Root behind a trait so that we can maintain static dispatch at the level of the
+// receiver threads, while still avoiding an extra type parameter all the way up the stack.
+trait Root: 'static + Send + Sync {
+    fn get_handle(&self, fname: &str) -> RawHandle;
+    fn get_stdout(&self) -> RawHandle;
+}
+
+struct RootImpl<F> {
+    handles: Mutex<HashMap<String, RawHandle>>,
+    stdout_raw: RawHandle,
+    file_factory: F,
+}
+
+impl<F: FileFactory> RootImpl<F> {
+    fn from_factory(file_factory: F) -> RootImpl<F> {
+        let local_factory = file_factory.clone();
+        let stdout_raw = build_handle(move |_append| Ok(local_factory.stdout()));
+        RootImpl {
+            handles: Default::default(),
+            stdout_raw,
+            file_factory,
+        }
+    }
+}
+
+impl<F: FileFactory> Root for RootImpl<F> {
+    fn get_handle(&self, fname: &str) -> RawHandle {
+        let mut handles = self.handles.lock().unwrap();
+        if let Some(h) = handles.get(fname) {
+            return h.clone();
+        }
+        let local_factory = self.file_factory.clone();
+        let local_name = String::from(fname);
+        let global_name = local_name.clone();
+        let handle = build_handle(move |append| local_factory.build(local_name.as_str(), append));
+        handles.insert(global_name, handle.clone());
+        handle
+    }
+    fn get_stdout(&self) -> RawHandle {
+        self.stdout_raw.clone()
+    }
+}
+
+/// FileHandle contains thread-local state around writing to and closing an output file.
+pub struct FileHandle {
+    raw: RawHandle,
+    // Why do we deal with Box<WriteGuard>s and not WriteGuards?
+    //
+    // We pass a reference to the ErrorCode within a WriteGuard to a write request. That address
+    // must remain stable; if we stored a WriteGuard in a VecDeque directly we would not have that
+    // guarantee. old_guards caches recent WriteGuards that have been discarded to avoid allocation
+    // overheads in cases where we aren't using a fast malloc (in cases where we are, doing this
+    // may still be marginally faster).
+    old_guards: Vec<Box<WriteGuard>>,
+    guards: VecDeque<Box<WriteGuard>>,
+}
+
+impl FileHandle {
+    fn raw(&self) -> RawHandle {
+        self.raw.clone()
+    }
+
+    fn clear_guards(&mut self) -> Result<()> {
+        let mut done_count = 0;
+        for (i, guard) in self.guards.iter().enumerate() {
+            match guard.status() {
+                RequestStatus::ONGOING => break,
+                RequestStatus::OK => done_count = i,
+                RequestStatus::ERROR => return Err(self.read_error()),
+            }
+        }
+        for _ in 0..done_count {
+            let mut old = self.guards.pop_front().unwrap();
+            if self.old_guards.len() < IO_CHAN_SIZE {
+                // Reset drops the string, but keeps the errorcode in a "done" state, making it
+                // safe to drop.
+                old.reset();
+                self.old_guards.push(old);
+            }
+        }
+        Ok(())
+    }
+
+    fn guard<'a>(&mut self, s: &Str<'a>) -> Box<WriteGuard> {
+        if let Some(mut g) = self.old_guards.pop() {
+            g.set_payload(s);
+            g
+        } else {
+            Box::new(WriteGuard::new(s))
+        }
+    }
+
+    fn read_error(&self) -> CompileError {
+        // The receiver shut down before we did. That means something went wrong: probably an IO
+        // error of some kind. In that case, the receiver thread stashed away the error it recieved
+        // in raw.error for us to read it out. We don't optimize this path too aggressively because
+        // IO errors in frawk scripts are fatal.
+        const BAD_SHUTDOWN_MSG: &'static str =
+            "internal error: (writer?) thread did not shut down cleanly";
+        if let Ok(lock) = self.raw.error.lock() {
+            match &*lock {
+                Some(err) => err.clone(),
+                None => CompileError(BAD_SHUTDOWN_MSG.into()),
+            }
+        } else {
+            CompileError(BAD_SHUTDOWN_MSG.into())
+        }
+    }
+
+    pub fn write<'a>(&mut self, s: &Str<'a>, append: bool) -> Result<()> {
+        self.clear_guards()?;
+        let guard = self.guard(s);
+        let req = guard.request(append);
+        self.raw.sender.send(req).unwrap();
+        self.guards.push_back(guard);
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        let (n, req) = Request::flush();
+        self.raw.sender.send(req).unwrap();
+        n.1.wait();
+        self.guards.clear();
+        if let RequestStatus::ERROR = n.0.read() {
+            Err(self.read_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn close(&self) {
+        self.raw.sender.send(Request::Close).unwrap();
+    }
+}
+
+impl Drop for FileHandle {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
+
+/// A basic atomic error code type:
+///
+/// * 0 => "ONGOING"
+/// * 1 => "OK"
+/// * 2 => "ERROR"
+///
+/// ErrorCode is used in write and flush requests to signal if a request is still pending, has
+/// completed successfully, or ran into an error. The "ERROR" case contains no additional error
+/// information. FileHandle sets up a separate channel to transmit the full error; encountering an
+/// "ERROR" status is merely a signal to check this location for a more detailed error message.
+#[derive(Default)]
+struct ErrorCode(AtomicUsize);
+
+#[derive(Debug)]
+enum RequestStatus {
+    ONGOING = 0,
+    OK = 1,
+    ERROR = 2,
+}
+
+impl ErrorCode {
+    fn read(&self) -> RequestStatus {
+        match self.0.load(Ordering::Acquire) {
+            0 => RequestStatus::ONGOING,
+            1 => RequestStatus::OK,
+            2 => RequestStatus::ERROR,
+            _ => unreachable!(),
+        }
+    }
+    fn set_ok(&self) {
+        self.0.store(RequestStatus::OK as usize, Ordering::Release);
+    }
+    fn set_error(&self) {
+        self.0
+            .store(RequestStatus::ERROR as usize, Ordering::Release);
+    }
+}
+
+/// Request is the "wire protocol" sent from client threads to the writing thread for a given file.
+enum Request {
+    // Because frawk has no separate call for opening an output file, we pass `append` along with
+    // write requests. The append value does nothing unless this is the first write received (after
+    // a close).
+    Write {
+        data: *const [u8],
+        status: *const ErrorCode,
+        append: bool,
+    },
+    Flush(Arc<(ErrorCode, Notification)>),
+    Close,
+}
+
+// This isn't implemented automatically because of the raw pointers in Write. Those pointers are
+// never mutated or reassigned, and the protocol guarantees that they remain valid for as long as
+// the receiver thread has a reference to them.
+unsafe impl Send for Request {}
+
+impl Request {
+    fn flush() -> (Arc<(ErrorCode, Notification)>, Request) {
+        let notify = Arc::new((ErrorCode::default(), Notification::default()));
+        let req = Request::Flush(notify.clone());
+        (notify, req)
+    }
+    fn size(&self) -> usize {
+        match self {
+            // NB, aside from the invariants we maintain about the validity of `data`, grabbing the
+            // length here should _always_ be safe. This is tracked by the {const_}slice_ptr_len
+            // feature.
+            Request::Write { data, .. } => unsafe { &**data }.len(),
+            Request::Flush(_) | Request::Close => 0,
+        }
+    }
+    fn set_code(&self, mut f: impl FnMut(&ErrorCode)) {
+        match self {
+            Request::Write { status, .. } => f(unsafe { &**status }),
+            Request::Flush(n) => {
+                f(&n.0);
+                n.1.notify();
+            }
+            Request::Close => {}
+        }
+    }
+}
+
+impl Drop for Request {
+    fn drop(&mut self) {
+        match self {
+            Request::Write { status, .. } => {
+                // We have to have set this as either ok, or an error.
+                let status = unsafe { &**status }.read();
+                assert!(!matches!(status, RequestStatus::ONGOING));
+            }
+            Request::Flush(n) => {
+                assert!(n.1.has_been_notified());
+            }
+            Request::Close => {}
+        }
+    }
+}
+
+/// WriteGuard represents a pending write request.
+struct WriteGuard {
+    s: Str<'static>,
+    status: ErrorCode,
+}
+
+impl WriteGuard {
+    fn new<'a>(s: &Str<'a>) -> WriteGuard {
+        WriteGuard {
+            s: s.clone().unmoor(),
+            status: ErrorCode::default(),
+        }
+    }
+
+    fn request(&self, append: bool) -> Request {
+        Request::Write {
+            data: self.s.get_bytes(),
+            status: &self.status,
+            append,
+        }
+    }
+
+    fn status(&self) -> RequestStatus {
+        self.status.read()
+    }
+
+    fn reset(&mut self) {
+        self.s = Str::default();
+    }
+
+    fn set_payload<'a>(&mut self, s: &Str<'a>) {
+        self.status = ErrorCode::default();
+        self.s = s.clone().unmoor();
+    }
+}
+
+impl Drop for WriteGuard {
+    fn drop(&mut self) {
+        let status = self.status();
+        assert!(!matches!(status, RequestStatus::ONGOING));
+    }
+}
+
+#[derive(Clone)]
+struct RawHandle {
+    error: Arc<Mutex<Option<CompileError>>>,
+    sender: Sender<Request>,
+}
+
+impl RawHandle {
+    fn into_handle(self) -> FileHandle {
+        FileHandle {
+            raw: self,
+            guards: Default::default(),
+            old_guards: Default::default(),
+        }
+    }
+}
+
+// Implementation of the "server" thread issuing the writes.
+
+#[derive(Default)]
+struct WriteBatch {
+    io_vec: Vec<io::IoSlice<'static>>,
+    requests: Vec<Request>,
+    n_writes: usize,
+    flush: bool,
+    close: bool,
+}
+
+impl WriteBatch {
+    fn n_writes(&self) -> usize {
+        self.n_writes
+    }
+    fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
+        w.write_all_vectored(&mut self.io_vec[..])?;
+        if self.flush || self.close {
+            w.flush()?;
+        }
+        let close = self.close;
+        self.clear();
+        Ok(close)
+    }
+    fn is_append(&self) -> bool {
+        for req in self.requests.iter() {
+            if let Request::Write { append, .. } = req {
+                return *append;
+            }
+        }
+        false
+    }
+    fn push(&mut self, req: Request) -> bool {
+        match &req {
+            Request::Write { data, .. } => {
+                // TODO: this does not handle payloads larger than 4GB on windows, see
+                // documentation for IoSlice. Should be an easy fix if this comes up.
+                self.io_vec.push(io::IoSlice::new(unsafe { &**data }));
+                self.n_writes += 1;
+            }
+            Request::Flush(_) => self.flush = true,
+            Request::Close => self.close = true,
+        };
+        self.requests.push(req);
+        self.flush || self.close
+    }
+    fn clear_batch(&mut self, mut f: impl FnMut(&ErrorCode)) {
+        self.io_vec.clear();
+        for req in self.requests.drain(..) {
+            req.set_code(&mut f)
+        }
+        self.close = false;
+        self.flush = false;
+        self.n_writes = 0;
+    }
+    fn clear_error(&mut self) {
+        self.clear_batch(ErrorCode::set_error)
+    }
+    fn clear(&mut self) {
+        self.clear_batch(ErrorCode::set_ok)
+    }
+}
+
+fn receive_thread<W: io::Write>(
+    receiver: Receiver<Request>,
+    error: Arc<Mutex<Option<CompileError>>>,
+    f: impl Fn(bool) -> io::Result<W>,
+) {
+    let mut batch = WriteBatch::default();
+    if let Err(e) = receive_loop(&receiver, &mut batch, f) {
+        // We got an error! install it in the `error` mutex.
+        {
+            let mut err = error.lock().unwrap();
+            *err = Some(CompileError(format!("{}", e)));
+        }
+        // Now signal an error on any pending requests.
+        batch.clear_error();
+        // And send an error back for any more requests that come in.
+        while let Ok(req) = receiver.recv() {
+            req.set_code(ErrorCode::set_error)
+        }
+    }
+}
+
+fn receive_loop<W: io::Write>(
+    receiver: &Receiver<Request>,
+    batch: &mut WriteBatch,
+    f: impl Fn(bool) -> io::Result<W>,
+) -> io::Result<()> {
+    const MAX_BATCH_BYTES: usize = 1 << 20;
+    const MAX_BATCH_SIZE: usize = 1 << 10;
+
+    // Writer starts off closed. We use `f` to open it if a write appears.
+    let mut writer = None;
+
+    while let Ok(req) = receiver.recv() {
+        // We build up a reasonably-sized batch of writes in the channel if it contains pending
+        // operations in the channel.
+        //
+        // To simplify matters, we cut a batch short if we receive a "flush" or "close" request
+        // (signaled by batch.push returning true).
+        let mut batch_bytes = req.size();
+        if !batch.push(req) {
+            while let Ok(req) = receiver.try_recv() {
+                batch_bytes += req.size();
+                if batch.push(req)
+                    || batch.n_writes() >= MAX_BATCH_SIZE
+                    || batch_bytes >= MAX_BATCH_BYTES
+                {
+                    break;
+                }
+            }
+        }
+        if writer.is_none() {
+            if batch.n_writes() == 0 {
+                // check for a "flush/close-only batch", which we treat as a noop if the file is
+                // closed.
+                batch.clear();
+                continue;
+            }
+            // We need to (re)open the file, the first write request will tell us whether or not
+            // this is an append request.
+            writer = Some(f(batch.is_append())?);
+        }
+        if batch.issue(writer.as_mut().unwrap())? {
+            writer = None;
+        }
+    }
+    Ok(())
+}
+
+/// Notification is a simple object used to synchronize multiple threads around a single event
+/// occuring.
+///
+/// Notifications are "one-shot": they only transition from "not notified" to "notified" once.
+/// Based on the absl object of the same name.
+struct Notification {
+    notified: AtomicBool,
+    mu: Mutex<()>,
+    cv: Condvar,
+}
+
+impl Default for Notification {
+    fn default() -> Notification {
+        Notification {
+            notified: AtomicBool::new(false),
+            mu: Mutex::new(()),
+            cv: Condvar::new(),
+        }
+    }
+}
+
+impl Notification {
+    fn has_been_notified(&self) -> bool {
+        self.notified.load(Ordering::Acquire)
+    }
+    fn notify(&self) {
+        if self.has_been_notified() {
+            return;
+        }
+        let _guard = self.mu.lock().unwrap();
+        self.notified.store(true, Ordering::Release);
+        self.cv.notify_all();
+    }
+    fn wait(&self) {
+        loop {
+            // Fast path: check if the notification has already happened.
+            if self.has_been_notified() {
+                return;
+            }
+            // Slow path: grab the lock, and check notification state again before waiting on the
+            // condition variable.
+            let mut _guard = self.mu.lock().unwrap();
+            if self.has_been_notified() {
+                return;
+            }
+            _guard = self.cv.wait(_guard).unwrap();
+        }
+    }
+}
 
 pub mod testing {
     use super::*;
@@ -228,577 +860,4 @@ mod tests {
         assert_eq!(fs.get_handle("/fake/A").unwrap().read_data(), expected_a);
         assert_eq!(fs.get_handle("/fake/B").unwrap().read_data(), expected_b);
     }
-}
-
-/// Notification is a simple object used to synchronize multiple threads around a single event
-/// occuring. Based on the absl object of the same name.
-struct Notification {
-    notified: AtomicBool,
-    mu: Mutex<()>,
-    cv: Condvar,
-}
-
-impl Default for Notification {
-    fn default() -> Notification {
-        Notification {
-            notified: AtomicBool::new(false),
-            mu: Mutex::new(()),
-            cv: Condvar::new(),
-        }
-    }
-}
-
-impl Notification {
-    fn has_been_notified(&self) -> bool {
-        self.notified.load(Ordering::Acquire)
-    }
-    fn notify(&self) {
-        if self.has_been_notified() {
-            return;
-        }
-        let _guard = self.mu.lock().unwrap();
-        self.notified.store(true, Ordering::Release);
-        self.cv.notify_all();
-    }
-    fn wait(&self) {
-        loop {
-            // Fast path: check if the notification has already happened.
-            if self.has_been_notified() {
-                return;
-            }
-            // Slow path: grab the lock, and check notification state again before waiting on the
-            // condition variable.
-            let mut _guard = self.mu.lock().unwrap();
-            if self.has_been_notified() {
-                return;
-            }
-            _guard = self.cv.wait(_guard).unwrap();
-        }
-    }
-}
-
-/// A basic atomic error code type:
-///
-/// * 0 => "ONGOING"
-/// * 1 => "OK"
-/// * 2 => "ERROR"
-#[derive(Default)]
-struct ErrorCode(AtomicUsize);
-
-#[derive(Debug)]
-enum RequestStatus {
-    ONGOING = 0,
-    OK = 1,
-    ERROR = 2,
-}
-
-impl ErrorCode {
-    fn read(&self) -> RequestStatus {
-        match self.0.load(Ordering::Acquire) {
-            0 => RequestStatus::ONGOING,
-            1 => RequestStatus::OK,
-            2 => RequestStatus::ERROR,
-            _ => unreachable!(),
-        }
-    }
-    fn set_ok(&self) {
-        self.0.store(RequestStatus::OK as usize, Ordering::Release);
-    }
-    fn set_error(&self) {
-        self.0
-            .store(RequestStatus::ERROR as usize, Ordering::Release);
-    }
-}
-
-pub trait FileFactory: Clone + 'static + Send + Sync {
-    type Output: io::Write;
-    type Stdout: io::Write;
-    fn build(&self, path: &str, append: bool) -> io::Result<Self::Output>;
-    fn stdout(&self) -> Self::Stdout;
-}
-
-impl<W: io::Write, T: Fn(&str, bool) -> io::Result<W> + Clone + 'static + Send + Sync> FileFactory
-    for T
-{
-    type Output = W;
-    type Stdout = std::io::Stdout;
-    fn build(&self, path: &str, append: bool) -> io::Result<W> {
-        (&self)(path, append)
-    }
-    fn stdout(&self) -> Self::Stdout {
-        std::io::stdout()
-    }
-}
-
-// We place Root behind a trait so that we can maintain static dispatch at the level of the
-// receiver threads, while still avoiding an extra type parameter all the way up the stack.
-trait Root: 'static + Sync + Send {
-    fn get_handle(&self, fname: &str) -> RawHandle;
-    fn get_stdout(&self) -> RawHandle;
-}
-
-struct RootImpl<F> {
-    handles: Mutex<HashMap<String, RawHandle>>,
-    stdout_raw: RawHandle,
-    file_factory: F,
-}
-
-fn open_file(path: &str, append: bool) -> io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .append(append)
-        .open(path)
-}
-
-pub fn default_factory() -> impl FileFactory {
-    open_file
-}
-
-pub fn factory_from_file(fname: &str) -> io::Result<impl FileFactory> {
-    use std::fs::File;
-    // Do a test open+truncate of the file.
-    let _file = open_file(fname, /*append=*/ false)?;
-
-    #[derive(Clone)]
-    struct FileStdout(String);
-    impl FileFactory for FileStdout {
-        type Output = File;
-        type Stdout = File;
-        fn build(&self, path: &str, append: bool) -> io::Result<Self::Output> {
-            open_file(path, append)
-        }
-        fn stdout(&self) -> Self::Stdout {
-            open_file(self.0.as_str(), /*append=*/ true).expect("failed to open stdout")
-        }
-    }
-    Ok(FileStdout(fname.into()))
-}
-
-const IO_CHAN_SIZE: usize = 128;
-
-fn build_handle<W: io::Write, F: Fn(bool) -> io::Result<W> + Send + 'static>(f: F) -> RawHandle {
-    let (sender, receiver) = bounded(IO_CHAN_SIZE);
-    let error = Arc::new(Mutex::new(None));
-    let receiver_error = error.clone();
-    std::thread::spawn(move || receive_thread(receiver, receiver_error, f));
-    RawHandle { error, sender }
-}
-
-impl<F: FileFactory> RootImpl<F> {
-    fn from_factory(file_factory: F) -> RootImpl<F> {
-        let local_factory = file_factory.clone();
-        let stdout_raw = build_handle(move |_append| Ok(local_factory.stdout()));
-        RootImpl {
-            handles: Default::default(),
-            stdout_raw,
-            file_factory,
-        }
-    }
-}
-
-impl<F: FileFactory> Root for RootImpl<F> {
-    fn get_handle(&self, fname: &str) -> RawHandle {
-        let mut handles = self.handles.lock().unwrap();
-        if let Some(h) = handles.get(fname) {
-            return h.clone();
-        }
-        let local_factory = self.file_factory.clone();
-        let local_name = String::from(fname);
-        let global_name = local_name.clone();
-        let handle = build_handle(move |append| local_factory.build(local_name.as_str(), append));
-        handles.insert(global_name, handle.clone());
-        handle
-    }
-    fn get_stdout(&self) -> RawHandle {
-        self.stdout_raw.clone()
-    }
-}
-
-pub struct Registry {
-    global: Arc<dyn Root>,
-    local: HashMap<Str<'static>, FileHandle>,
-    stdout: FileHandle,
-}
-
-impl Registry {
-    pub fn from_factory(f: impl FileFactory) -> Registry {
-        let root_impl = RootImpl::from_factory(f);
-        let stdout = root_impl.get_stdout().into_handle();
-        Registry {
-            global: Arc::new(root_impl),
-            local: Default::default(),
-            stdout,
-        }
-    }
-
-    pub fn get_handle<'a>(&mut self, name: Option<&Str<'a>>) -> &mut FileHandle {
-        match name {
-            Some(path) => {
-                use hashbrown::hash_map::Entry;
-                // borrowed by with_str closure.
-                let global = &self.global;
-                match self.local.entry(path.clone().unmoor()) {
-                    Entry::Occupied(o) => o.into_mut(),
-                    Entry::Vacant(v) => {
-                        let raw = path.with_str(|s| global.get_handle(s));
-                        v.insert(raw.into_handle())
-                    }
-                }
-            }
-            None => &mut self.stdout,
-        }
-    }
-}
-
-impl Clone for Registry {
-    fn clone(&self) -> Registry {
-        Registry {
-            global: self.global.clone(),
-            local: HashMap::new(),
-            stdout: self.stdout.raw().into_handle(),
-        }
-    }
-}
-
-enum Request {
-    Write {
-        data: *const [u8],
-        status: *const ErrorCode,
-        append: bool,
-    },
-    Flush(Arc<(ErrorCode, Notification)>),
-    Close,
-}
-
-// This isn't implemented automatically because of the raw pointers in Write. Those pointers are
-// never mutated or reassigned, and the protocol guarantees that they remain valid for as long as
-// the receiver thread has a reference to them.
-unsafe impl Send for Request {}
-
-impl Request {
-    fn flush() -> (Arc<(ErrorCode, Notification)>, Request) {
-        let notify = Arc::new((ErrorCode::default(), Notification::default()));
-        let req = Request::Flush(notify.clone());
-        (notify, req)
-    }
-    fn size(&self) -> usize {
-        match self {
-            // NB, aside from the invariants we maintain about the validity of `data`, grabbing the
-            // length here should _always_ be safe. This is tracked by the {const_}slice_ptr_len
-            // feature.
-            Request::Write { data, .. } => unsafe { &**data }.len(),
-            Request::Flush(_) | Request::Close => 0,
-        }
-    }
-    fn set_code(&self, mut f: impl FnMut(&ErrorCode)) {
-        match self {
-            Request::Write { status, .. } => f(unsafe { &**status }),
-            Request::Flush(n) => {
-                f(&n.0);
-                n.1.notify();
-            }
-            Request::Close => {}
-        }
-    }
-}
-
-impl Drop for Request {
-    fn drop(&mut self) {
-        match self {
-            Request::Write { status, .. } => {
-                // We have to have set this as either ok, or an error.
-                let status = unsafe { &**status }.read();
-                assert!(!matches!(status, RequestStatus::ONGOING));
-            }
-            Request::Flush(n) => {
-                assert!(n.1.has_been_notified());
-            }
-            Request::Close => {}
-        }
-    }
-}
-
-struct WriteGuard {
-    s: Str<'static>,
-    status: ErrorCode,
-}
-
-impl WriteGuard {
-    fn new<'a>(s: &Str<'a>) -> WriteGuard {
-        WriteGuard {
-            s: s.clone().unmoor(),
-            status: ErrorCode::default(),
-        }
-    }
-
-    fn request(&self, append: bool) -> Request {
-        Request::Write {
-            data: self.s.get_bytes(),
-            status: &self.status,
-            append,
-        }
-    }
-
-    fn status(&self) -> RequestStatus {
-        self.status.read()
-    }
-
-    fn reset(&mut self) {
-        self.s = Str::default();
-    }
-
-    fn set_payload<'a>(&mut self, s: &Str<'a>) {
-        self.status = ErrorCode::default();
-        self.s = s.clone().unmoor();
-    }
-}
-
-impl Drop for WriteGuard {
-    fn drop(&mut self) {
-        let status = self.status();
-        assert!(!matches!(status, RequestStatus::ONGOING));
-    }
-}
-
-#[derive(Clone)]
-struct RawHandle {
-    error: Arc<Mutex<Option<CompileError>>>,
-    sender: Sender<Request>,
-}
-
-impl RawHandle {
-    fn into_handle(self) -> FileHandle {
-        FileHandle {
-            raw: self,
-            guards: Default::default(),
-            old_guards: Default::default(),
-        }
-    }
-}
-
-pub struct FileHandle {
-    raw: RawHandle,
-    // Why do we deal with Box<WriteGuard>s and not WriteGuards?
-    //
-    // We pass a reference to the ErrorCode within a WriteGuard to a write request. That address
-    // must remain stable; if we stored a WriteGuard in a VecDeque directly we would not have that
-    // guarantee. old_guards caches recent WriteGuards that have been discarded to avoid allocation
-    // overheads in cases where we aren't using a fast malloc (in cases where we are, doing this
-    // may still be marginally faster).
-    old_guards: Vec<Box<WriteGuard>>,
-    guards: VecDeque<Box<WriteGuard>>,
-}
-
-impl FileHandle {
-    fn raw(&self) -> RawHandle {
-        self.raw.clone()
-    }
-
-    fn clear_guards(&mut self) -> Result<()> {
-        let mut done_count = 0;
-        for (i, guard) in self.guards.iter().enumerate() {
-            match guard.status() {
-                RequestStatus::ONGOING => break,
-                RequestStatus::OK => done_count = i,
-                RequestStatus::ERROR => return Err(self.read_error()),
-            }
-        }
-        for _ in 0..done_count {
-            let mut old = self.guards.pop_front().unwrap();
-            if self.old_guards.len() < IO_CHAN_SIZE {
-                // Reset drops the string, but keeps the errorcode in a "done" state, making it
-                // safe to drop.
-                old.reset();
-                self.old_guards.push(old);
-            }
-        }
-        Ok(())
-    }
-
-    fn guard<'a>(&mut self, s: &Str<'a>) -> Box<WriteGuard> {
-        if let Some(mut g) = self.old_guards.pop() {
-            g.set_payload(s);
-            g
-        } else {
-            Box::new(WriteGuard::new(s))
-        }
-    }
-
-    fn read_error(&self) -> CompileError {
-        // The receiver shut down before we did. That means something went wrong: probably an IO
-        // error of some kind. In that case, the receiver thread stashed away the error it recieved
-        // in raw.error for us to read it out. We don't optimize this path too aggressively because
-        // IO errors in frawk scripts are fatal.
-        const BAD_SHUTDOWN_MSG: &'static str =
-            "internal error: (writer?) thread did not shut down cleanly";
-        if let Ok(lock) = self.raw.error.lock() {
-            match &*lock {
-                Some(err) => err.clone(),
-                None => CompileError(BAD_SHUTDOWN_MSG.into()),
-            }
-        } else {
-            CompileError(BAD_SHUTDOWN_MSG.into())
-        }
-    }
-
-    pub fn write<'a>(&mut self, s: &Str<'a>, append: bool) -> Result<()> {
-        self.clear_guards()?;
-        let guard = self.guard(s);
-        let req = guard.request(append);
-        self.raw.sender.send(req).unwrap();
-        self.guards.push_back(guard);
-        Ok(())
-    }
-
-    pub fn flush(&mut self) -> Result<()> {
-        let (n, req) = Request::flush();
-        self.raw.sender.send(req).unwrap();
-        n.1.wait();
-        self.guards.clear();
-        if let RequestStatus::ERROR = n.0.read() {
-            Err(self.read_error())
-        } else {
-            Ok(())
-        }
-    }
-
-    pub fn close(&self) {
-        self.raw.sender.send(Request::Close).unwrap();
-    }
-}
-
-impl Drop for FileHandle {
-    fn drop(&mut self) {
-        let _ = self.flush();
-    }
-}
-
-#[derive(Default)]
-struct WriteBatch {
-    io_vec: Vec<io::IoSlice<'static>>,
-    requests: Vec<Request>,
-    n_writes: usize,
-    flush: bool,
-    close: bool,
-}
-
-impl WriteBatch {
-    fn n_writes(&self) -> usize {
-        self.n_writes
-    }
-    fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
-        w.write_all_vectored(&mut self.io_vec[..])?;
-        if self.flush || self.close {
-            w.flush()?;
-        }
-        let close = self.close;
-        self.clear();
-        Ok(close)
-    }
-    fn is_append(&self) -> bool {
-        for req in self.requests.iter() {
-            if let Request::Write { append, .. } = req {
-                return *append;
-            }
-        }
-        false
-    }
-    fn push(&mut self, req: Request) -> bool {
-        match &req {
-            Request::Write { data, .. } => {
-                // TODO: this does not handle payloads larger than 4GB on windows, see
-                // documentation for IoSlice. Should be an easy fix if this comes up.
-                self.io_vec.push(io::IoSlice::new(unsafe { &**data }));
-                self.n_writes += 1;
-            }
-            Request::Flush(_) => self.flush = true,
-            Request::Close => self.close = true,
-        };
-        self.requests.push(req);
-        self.flush || self.close
-    }
-    fn clear_batch(&mut self, mut f: impl FnMut(&ErrorCode)) {
-        self.io_vec.clear();
-        for req in self.requests.drain(..) {
-            req.set_code(&mut f)
-        }
-        self.close = false;
-        self.flush = false;
-        self.n_writes = 0;
-    }
-    fn clear_error(&mut self) {
-        self.clear_batch(ErrorCode::set_error)
-    }
-    fn clear(&mut self) {
-        self.clear_batch(ErrorCode::set_ok)
-    }
-}
-
-fn receive_thread<W: io::Write>(
-    receiver: Receiver<Request>,
-    error: Arc<Mutex<Option<CompileError>>>,
-    f: impl Fn(bool) -> io::Result<W>,
-) {
-    let mut batch = WriteBatch::default();
-    if let Err(e) = receive_loop(&receiver, &mut batch, f) {
-        // We got an error! install it in the `error` mutex.
-        {
-            let mut err = error.lock().unwrap();
-            *err = Some(CompileError(format!("{}", e)));
-        }
-        // Now signal an error on any pending requests.
-        batch.clear_error();
-        // And send an error back for any more requests that come in.
-        while let Ok(req) = receiver.recv() {
-            req.set_code(ErrorCode::set_error)
-        }
-    }
-}
-
-fn receive_loop<W: io::Write>(
-    receiver: &Receiver<Request>,
-    batch: &mut WriteBatch,
-    f: impl Fn(bool) -> io::Result<W>,
-) -> io::Result<()> {
-    const MAX_BATCH_BYTES: usize = 1 << 20;
-    const MAX_BATCH_SIZE: usize = 1 << 10;
-
-    // Writer starts off closed. We use `f` to open it if a write appears.
-    let mut writer = None;
-
-    while let Ok(req) = receiver.recv() {
-        // We build up a reasonably-sized batch of writes in the channel if it contains pending
-        // operations in the channel.
-        //
-        // To simplify matters, we cut a batch short if we receive a "flush" or "close" request
-        // (signaled by batch.push returning true).
-        let mut batch_bytes = req.size();
-        if !batch.push(req) {
-            while let Ok(req) = receiver.try_recv() {
-                batch_bytes += req.size();
-                if batch.push(req)
-                    || batch.n_writes() >= MAX_BATCH_SIZE
-                    || batch_bytes >= MAX_BATCH_BYTES
-                {
-                    break;
-                }
-            }
-        }
-        if writer.is_none() {
-            if batch.n_writes() == 0 {
-                // check for a "flush/close-only batch", which we treat as a noop if the file is
-                // closed.
-                batch.clear();
-                continue;
-            }
-            // We need to (re)open the file, the first write request will tell us whether or not
-            // this is an append request.
-            writer = Some(f(batch.is_append())?);
-        }
-        if batch.issue(writer.as_mut().unwrap())? {
-            writer = None;
-        }
-    }
-    Ok(())
 }
