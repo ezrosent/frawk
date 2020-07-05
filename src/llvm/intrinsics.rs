@@ -25,6 +25,14 @@ use rand::{self, rngs::StdRng, Rng, SeedableRng};
 use smallvec;
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
+// We don't use u128 as there's a warning that the ABI is not stable. We're in big trouble if our
+// version of LLVM disagrees with Rust on the representation of a 128-bit integer, but our tests
+// _should_ catch any incompatibilities that arise on that front.
+//
+// TODO: what steps can we take to move the "should" above to "will"?
+#[repr(C)]
+pub struct U128(u64, u64);
+
 use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::io;
@@ -434,7 +442,7 @@ pub unsafe extern "C" fn next_file(runtime: *mut c_void) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
+pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let (changed, res) = try_abort!(
         with_input!(&mut runtime.input_data, |(_, read_files)| {
@@ -445,19 +453,19 @@ pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> u128 {
     if changed {
         runtime.reset_file_vars();
     }
-    mem::transmute::<Str, u128>(res)
+    mem::transmute::<Str, U128>(res)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> u128 {
+pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let file = &*(file as *mut Str);
     let res = with_input!(&mut runtime.input_data, |(_, read_files)| {
         runtime.regexes.get_line(file, &runtime.vars.rs, read_files)
     });
     match res {
-        Ok(res) => mem::transmute::<Str, u128>(res),
-        Err(_) => mem::transmute::<Str, u128>("".into()),
+        Ok(res) => mem::transmute::<Str, U128>(res),
+        Err(_) => mem::transmute::<Str, U128>("".into()),
     }
 }
 
@@ -536,7 +544,7 @@ pub unsafe extern "C" fn split_int(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> u128 {
+pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let col_str = with_input!(&mut runtime.input_data, |(line, _)| {
         line.get_col(
@@ -550,11 +558,11 @@ pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> u128 {
         Ok(s) => s,
         Err(e) => fail!("get_col: {}", e),
     };
-    mem::transmute::<Str, u128>(res)
+    mem::transmute::<Str, U128>(res)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> u128 {
+pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
     let sep: Str<'static> = ",".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
@@ -564,11 +572,11 @@ pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) ->
         }),
         "join_csv:"
     );
-    mem::transmute::<Str, u128>(res)
+    mem::transmute::<Str, U128>(res)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> u128 {
+pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
     let sep: Str<'static> = "\t".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
@@ -578,7 +586,7 @@ pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) ->
         }),
         "join_tsv:"
     );
-    mem::transmute::<Str, u128>(res)
+    mem::transmute::<Str, U128>(res)
 }
 
 #[no_mangle]
@@ -586,8 +594,8 @@ pub unsafe extern "C" fn join_cols(
     runtime: *mut c_void,
     start: Int,
     end: Int,
-    sep: *mut u128,
-) -> u128 {
+    sep: *mut U128,
+) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         with_input!(&mut runtime.input_data, |(line, _)| {
@@ -596,7 +604,7 @@ pub unsafe extern "C" fn join_cols(
         }),
         "join_cols:"
     );
-    mem::transmute::<Str, u128>(res)
+    mem::transmute::<Str, U128>(res)
 }
 
 #[no_mangle]
@@ -622,11 +630,11 @@ pub unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> u128 {
+pub unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128 {
     let s1 = &*(s1 as *mut Str);
     let s2 = &*(s2 as *mut Str);
     let res = Str::concat(s1.clone(), s2.clone());
-    mem::transmute::<Str, u128>(res)
+    mem::transmute::<Str, U128>(res)
 }
 
 #[no_mangle]
@@ -659,7 +667,7 @@ pub unsafe extern "C" fn match_pat_loc(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn substr_index(s: *mut u128, t: *mut u128) -> Int {
+pub unsafe extern "C" fn substr_index(s: *mut U128, t: *mut U128) -> Int {
     let s = &*(s as *mut Str);
     let t = &*(t as *mut Str);
     s.with_str(|s| t.with_str(|t| s.find(t).map(|x| x + 1).unwrap_or(0) as Int))
@@ -668,9 +676,9 @@ pub unsafe extern "C" fn substr_index(s: *mut u128, t: *mut u128) -> Int {
 #[no_mangle]
 pub unsafe extern "C" fn subst_first(
     runtime: *mut c_void,
-    pat: *mut u128,
-    s: *mut u128,
-    in_s: *mut u128,
+    pat: *mut U128,
+    s: *mut U128,
+    in_s: *mut U128,
 ) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     let s = &*(s as *mut Str);
@@ -686,9 +694,9 @@ pub unsafe extern "C" fn subst_first(
 #[no_mangle]
 pub unsafe extern "C" fn subst_all(
     runtime: *mut c_void,
-    pat: *mut u128,
-    s: *mut u128,
-    in_s: *mut u128,
+    pat: *mut U128,
+    s: *mut U128,
+    in_s: *mut U128,
 ) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     let s = &mut *(s as *mut Str);
@@ -700,23 +708,23 @@ pub unsafe extern "C" fn subst_all(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn escape_csv(s: *mut u128) -> u128 {
-    mem::transmute::<Str, u128>(runtime::escape_csv(&*(s as *mut Str)))
+pub unsafe extern "C" fn escape_csv(s: *mut U128) -> U128 {
+    mem::transmute::<Str, U128>(runtime::escape_csv(&*(s as *mut Str)))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn escape_tsv(s: *mut u128) -> u128 {
-    mem::transmute::<Str, u128>(runtime::escape_tsv(&*(s as *mut Str)))
+pub unsafe extern "C" fn escape_tsv(s: *mut U128) -> U128 {
+    mem::transmute::<Str, U128>(runtime::escape_tsv(&*(s as *mut Str)))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn substr(base: *mut u128, l: Int, r: Int) -> u128 {
+pub unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 {
     use std::cmp::{max, min};
     let base = &*(base as *mut Str);
     let len = base.len();
     let l = max(0, l - 1) as usize;
     let r = min(len as Int, r) as usize;
-    mem::transmute::<Str, u128>(base.slice(l, r))
+    mem::transmute::<Str, U128>(base.slice(l, r))
 }
 
 #[no_mangle]
@@ -725,7 +733,7 @@ pub unsafe extern "C" fn ref_str(s: *mut c_void) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn drop_str_slow(s: *mut u128, tag: u64) {
+pub unsafe extern "C" fn drop_str_slow(s: *mut U128, tag: u64) {
     (&*(s as *mut Str)).drop_with_tag(tag)
 }
 
@@ -745,13 +753,13 @@ pub unsafe extern "C" fn ref_map(m: *mut c_void) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn int_to_str(i: Int) -> u128 {
-    mem::transmute::<Str, u128>(runtime::convert::<Int, Str>(i))
+pub unsafe extern "C" fn int_to_str(i: Int) -> U128 {
+    mem::transmute::<Str, U128>(runtime::convert::<Int, Str>(i))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn float_to_str(f: Float) -> u128 {
-    mem::transmute::<Str, u128>(runtime::convert::<Float, Str>(f))
+pub unsafe extern "C" fn float_to_str(f: Float) -> U128 {
+    mem::transmute::<Str, U128>(runtime::convert::<Float, Str>(f))
 }
 
 // TODO: these next few mem::forgets don't seem necessary.
@@ -781,11 +789,11 @@ pub unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> u128 {
+pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime.vars.load_str(var));
-        mem::transmute::<Str, u128>(res)
+        mem::transmute::<Str, U128>(res)
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -879,7 +887,7 @@ pub unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn drop_iter_str(iter: *mut u128, len: usize) {
+pub unsafe extern "C" fn drop_iter_str(iter: *mut U128, len: usize) {
     let p = iter as *mut Str;
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
 }
@@ -911,11 +919,11 @@ unsafe fn wrap_args<'a>(args: *mut usize, tys: *mut u32, num_args: Int) -> Small
 #[no_mangle]
 pub unsafe extern "C" fn printf_impl_file(
     rt: *mut c_void,
-    spec: *mut u128,
+    spec: *mut U128,
     args: *mut usize,
     tys: *mut u32,
     num_args: Int,
-    output: *mut u128,
+    output: *mut U128,
     append: Int,
 ) {
     let output_wrapped = Some((&*(output as *mut Str), append != 0));
@@ -932,11 +940,11 @@ pub unsafe extern "C" fn printf_impl_file(
 
 #[no_mangle]
 pub unsafe extern "C" fn sprintf_impl(
-    spec: *mut u128,
+    spec: *mut U128,
     args: *mut usize,
     tys: *mut u32,
     num_args: Int,
-) -> u128 {
+) -> U128 {
     use runtime::str_impl::DynamicBuf;
     let mut buf = DynamicBuf::new(0);
     let format_args = wrap_args(args, tys, num_args);
@@ -944,13 +952,13 @@ pub unsafe extern "C" fn sprintf_impl(
     if let Err(e) = spec.with_str(|s| printf(&mut buf, s, &format_args[..])) {
         fail!("unexpected failure during sprintf: {}", e);
     }
-    mem::transmute::<Str, u128>(buf.into_str())
+    mem::transmute::<Str, U128>(buf.into_str())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn printf_impl_stdout(
     rt: *mut c_void,
-    spec: *mut u128,
+    spec: *mut U128,
     args: *mut usize,
     tys: *mut u32,
     num_args: Int,
@@ -966,7 +974,7 @@ pub unsafe extern "C" fn printf_impl_stdout(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut u128) {
+pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
     with_input!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
@@ -1013,7 +1021,7 @@ macro_rules! iter_ty {
 
 macro_rules! out_ty {
     (Str) => {
-        u128
+        U128
     };
     (Int) => {
         Int
@@ -1037,7 +1045,7 @@ macro_rules! convert_in {
 
 macro_rules! convert_out {
     (Str, $e:expr) => {
-        mem::transmute::<Str, u128>($e)
+        mem::transmute::<Str, U128>($e)
     };
     (Int, $e:expr) => {
         $e
