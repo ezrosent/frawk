@@ -16,12 +16,6 @@ use std::sync::{
 };
 
 // TODO:
-// * more tests
-//   - multiple threads writing data and flushing intermittently
-//   - threads closing but writing for append does not change output
-//   ^ named files for one of the above
-//   - error semantics (i.e. success, flush, set error, return errors)
-//   - consider removing the block_new stuff.
 // * document and rearrange the declarations in this file to make it easier to read.
 // * replace FileWrite in the runtime module, migrating harness to new fake stdout
 // * fix lint errors around u128/extern
@@ -36,31 +30,13 @@ pub mod testing {
     use super::*;
 
     /// A file factory that writes all data in memory; used for unit testing.
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     pub struct FakeFs {
-        pub block_new: bool,
         pub stdout: FakeFile,
         named: Arc<Mutex<HashMap<String, FakeFile>>>,
     }
 
-    impl Default for FakeFs {
-        fn default() -> FakeFs {
-            FakeFs::new(/*block_new=*/ false)
-        }
-    }
-
     impl FakeFs {
-        pub fn new(block_new: bool) -> FakeFs {
-            let stdout = FakeFile::default();
-            if !block_new {
-                stdout.unblock();
-            }
-            FakeFs {
-                block_new,
-                stdout,
-                named: Default::default(),
-            }
-        }
         pub fn get_handle(&self, path: &str) -> Option<FakeFile> {
             self.named.lock().unwrap().get(path).cloned()
         }
@@ -73,15 +49,9 @@ pub mod testing {
             let mut named = self.named.lock().unwrap();
             if let Some(file) = named.get(path) {
                 file.reopen(append);
-                if !self.block_new {
-                    file.unblock();
-                }
                 return Ok(file.clone());
             }
             let new_file = FakeFile::default();
-            if !self.block_new {
-                new_file.unblock();
-            }
             named.insert(path.into(), new_file.clone());
             Ok(new_file)
         }
@@ -94,7 +64,6 @@ pub mod testing {
     struct FakeFileInner {
         data: Mutex<Vec<u8>>,
         poison: AtomicBool,
-        block: Notification,
     }
 
     impl FakeFileInner {
@@ -118,9 +87,6 @@ pub mod testing {
         pub fn set_poison(&self, p: bool) {
             self.0.poison.store(p, Ordering::Release);
         }
-        pub fn unblock(&self) {
-            self.0.block.notify()
-        }
         pub fn read_data(&self) -> Vec<u8> {
             (*self.0.data.lock().unwrap()).clone()
         }
@@ -133,15 +99,24 @@ pub mod testing {
 
     impl Write for FakeFile {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.0.block.wait();
             self.0.result()?;
             self.0.data.lock().unwrap().extend(bytes);
             Ok(bytes.len())
         }
         fn flush(&mut self) -> io::Result<()> {
-            self.0.block.wait();
             self.0.result()?;
             Ok(())
+        }
+        fn write_vectored(&mut self, bufs: &[io::IoSlice]) -> io::Result<usize> {
+            self.0.result()?;
+            let mut written = 0;
+            let mut data = self.0.data.lock().unwrap();
+            for b in bufs {
+                let bytes: &[u8] = &*b;
+                data.extend(bytes);
+                written += bytes.len();
+            }
+            Ok(written)
         }
     }
 }
@@ -153,16 +128,104 @@ mod tests {
 
     #[test]
     fn basic_writing() {
-        let fs = FakeFs::default();
-        let mut reg = Registry::from_factory(fs.clone());
-        let handle = reg.get_handle(/*stdout*/ None);
         let s1 = Str::from("hello");
         let s2 = Str::from(" there");
-        handle.write(&s1, /*append=*/ true).unwrap();
-        handle.write(&s2, /*append=*/ true).unwrap();
-        handle.flush().unwrap();
+        let fs = FakeFs::default();
+        let mut reg = Registry::from_factory(fs.clone());
+        {
+            let handle = reg.get_handle(/*stdout*/ None);
+            handle.write(&s1, /*append=*/ true).unwrap();
+            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.flush().unwrap();
+            handle.write(&s1, /*append=*/ true).unwrap();
+            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.flush().unwrap();
+        }
         let data = fs.stdout.read_data();
+        assert_eq!(&data[..], "hello therehello there".as_bytes());
+    }
+
+    #[test]
+    fn reopen_named_file() {
+        let fname_str = "/fake";
+        let fname = Str::from(fname_str);
+        let s1 = Str::from("hello");
+        let s2 = Str::from(" there");
+        let fs = FakeFs::default();
+        let mut reg = Registry::from_factory(fs.clone());
+        {
+            let handle = reg.get_handle(Some(&fname));
+            handle.write(&s1, /*append=*/ true).unwrap();
+            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.flush().unwrap();
+            handle.write(&s1, /*append=*/ true).unwrap();
+            handle.write(&s2, /*append=*/ true).unwrap();
+        }
+        {
+            let handle = reg.get_handle(Some(&fname));
+            handle.close();
+            handle.write(&s1, /*append=*/ false).unwrap();
+            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.flush().unwrap();
+        }
+        let data = fs.get_handle(fname_str).unwrap().read_data();
         assert_eq!(&data[..], "hello there".as_bytes());
+    }
+
+    #[test]
+    fn multithreaded_write() {
+        const N_THREADS: usize = 100;
+        const WRITES_PER_THREAD: usize = 1000;
+        let fs = FakeFs::default();
+        fs.build("/fake/BAD", false).unwrap().set_poison(true);
+        let mut threads = Vec::with_capacity(N_THREADS);
+        {
+            let reg = Registry::from_factory(fs.clone());
+            for t in 0..N_THREADS {
+                let mut treg = reg.clone();
+                threads.push(std::thread::spawn(move || {
+                    let a = Str::from("A");
+                    let b = Str::from("B");
+                    let fa = Str::from("/fake/A");
+                    let fb = Str::from("/fake/B");
+                    let fbad = Str::from("/fake/BAD");
+                    for i in 0..WRITES_PER_THREAD {
+                        {
+                            let h1 = treg.get_handle(Some(&fa));
+                            h1.write(&a, /*append=*/ true).unwrap();
+                            if (t + i) % 100 == 0 {
+                                h1.close();
+                            }
+                        }
+                        {
+                            // We do not close file b, so append=false should not matter.
+                            let h2 = treg.get_handle(Some(&fb));
+                            h2.write(&b, /*append=*/ false).unwrap();
+                            if (t + i) % 105 == 0 {
+                                h2.flush().unwrap();
+                            }
+                        }
+
+                        {
+                            let h3 = treg.get_handle(Some(&fbad));
+                            // These won't all be errors.
+                            let _ = h3.write(&a, /*append=*/ true);
+                            if (t + i) % 103 == 0 {
+                                // But all of these will be
+                                assert!(h3.flush().is_err())
+                            }
+                        }
+                    }
+                }));
+            }
+        }
+        for t in threads.into_iter() {
+            t.join().unwrap();
+        }
+        let expected_a = vec![b'A'; N_THREADS * WRITES_PER_THREAD];
+        let expected_b = vec![b'B'; N_THREADS * WRITES_PER_THREAD];
+        assert_eq!(fs.get_handle("/fake/A").unwrap().read_data(), expected_a);
+        assert_eq!(fs.get_handle("/fake/B").unwrap().read_data(), expected_b);
     }
 }
 
@@ -197,8 +260,18 @@ impl Notification {
         self.cv.notify_all();
     }
     fn wait(&self) {
-        while !self.has_been_notified() {
-            let _guard = self.cv.wait(self.mu.lock().unwrap()).unwrap();
+        loop {
+            // Fast path: check if the notification has already happened.
+            if self.has_been_notified() {
+                return;
+            }
+            // Slow path: grab the lock, and check notification state again before waiting on the
+            // condition variable.
+            let mut _guard = self.mu.lock().unwrap();
+            if self.has_been_notified() {
+                return;
+            }
+            _guard = self.cv.wait(_guard).unwrap();
         }
     }
 }
@@ -450,10 +523,10 @@ impl WriteGuard {
 
     fn reset(&mut self) {
         self.s = Str::default();
-        self.status = ErrorCode::default();
     }
 
     fn set_payload<'a>(&mut self, s: &Str<'a>) {
+        self.status = ErrorCode::default();
         self.s = s.clone().unmoor();
     }
 }
@@ -471,6 +544,16 @@ struct RawHandle {
     sender: Sender<Request>,
 }
 
+impl RawHandle {
+    fn into_handle(self) -> FileHandle {
+        FileHandle {
+            raw: self,
+            guards: Default::default(),
+            old_guards: Default::default(),
+        }
+    }
+}
+
 pub struct FileHandle {
     raw: RawHandle,
     // Why do we deal with Box<WriteGuard>s and not WriteGuards?
@@ -482,16 +565,6 @@ pub struct FileHandle {
     // may still be marginally faster).
     old_guards: Vec<Box<WriteGuard>>,
     guards: VecDeque<Box<WriteGuard>>,
-}
-
-impl RawHandle {
-    fn into_handle(self) -> FileHandle {
-        FileHandle {
-            raw: self,
-            guards: Default::default(),
-            old_guards: Default::default(),
-        }
-    }
 }
 
 impl FileHandle {
@@ -511,6 +584,8 @@ impl FileHandle {
         for _ in 0..done_count {
             let mut old = self.guards.pop_front().unwrap();
             if self.old_guards.len() < IO_CHAN_SIZE {
+                // Reset drops the string, but keeps the errorcode in a "done" state, making it
+                // safe to drop.
                 old.reset();
                 self.old_guards.push(old);
             }
@@ -567,6 +642,12 @@ impl FileHandle {
 
     pub fn close(&self) {
         self.raw.sender.send(Request::Close).unwrap();
+    }
+}
+
+impl Drop for FileHandle {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }
 
