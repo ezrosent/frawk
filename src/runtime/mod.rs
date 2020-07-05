@@ -4,7 +4,7 @@ use regex::Regex;
 use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{self, BufWriter, Write};
+use std::io;
 use std::iter::FromIterator;
 use std::rc::Rc;
 
@@ -309,47 +309,20 @@ impl RegexCache {
     }
 }
 
-pub(crate) struct FileWrite {
-    files: Registry<io::BufWriter<File>>,
-    stdout: Box<dyn io::Write>,
+pub(crate) struct FileWrite(writers::Registry);
+
+impl Default for FileWrite {
+    fn default() -> FileWrite {
+        FileWrite::new(writers::default_factory())
+    }
 }
 
 impl FileWrite {
     pub(crate) fn close(&mut self, path: &Str) {
-        self.files.remove(path);
+        self.0.get_handle(Some(path)).close()
     }
-    pub(crate) fn new(w: impl io::Write + 'static) -> FileWrite {
-        let stdout: Box<dyn io::Write> = Box::new(w);
-        FileWrite {
-            files: Default::default(),
-            stdout,
-        }
-    }
-
-    fn with_handle(
-        &mut self,
-        append: bool,
-        path: &Str,
-        f: impl FnOnce(&mut io::BufWriter<File>) -> Result<()>,
-    ) -> Result<()> {
-        self.files.get_fallible(
-            path,
-            |s| match std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .append(append)
-                .open(s)
-            {
-                Ok(f) => Ok(BufWriter::new(f)),
-                Err(e) => err!(
-                    "failed to open file {} for {}: {}",
-                    s,
-                    if append { "append" } else { "write" },
-                    e
-                ),
-            },
-            f,
-        )
+    pub(crate) fn new(ff: impl writers::FileFactory) -> FileWrite {
+        FileWrite(writers::Registry::from_factory(ff))
     }
 
     pub(crate) fn printf(
@@ -358,32 +331,23 @@ impl FileWrite {
         spec: &Str,
         pa: &[printf::FormatArg],
     ) -> Result<()> {
-        if let Some((out_file, append)) = path {
-            self.with_handle(append, out_file, |writer| {
-                spec.with_str(|spec| printf::printf(writer, spec, pa))
-            })
+        let (handle, append) = if let Some((out_file, append)) = path {
+            (self.0.get_handle(Some(out_file)), append)
         } else {
-            spec.with_str(|spec| printf::printf(&mut self.stdout, spec, pa))
-        }
+            (self.0.get_handle(None), true)
+        };
+        let mut text = str_impl::DynamicBuf::default();
+        spec.with_str(|spec| printf::printf(&mut text, spec, pa))?;
+        let s = unsafe { text.into_str() };
+        handle.write(&s, append)
     }
 
     pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
-        if let Err(e) = s.with_str(|s| self.stdout.write_all(s.as_bytes())) {
-            err!("failed to write to stdout (stdout closed?): {}", e)
-        } else {
-            Ok(())
-        }
+        self.0.get_handle(None).write(s, /*append=*/ true)
     }
 
     pub(crate) fn write_str(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
-        self.with_handle(append, path, |writer| {
-            s.with_str(|s| {
-                if let Err(e) = writer.write_all(s.as_bytes()) {
-                    return err!("failed to write to {}: {}", path, e);
-                }
-                Ok(())
-            })
-        })
+        self.0.get_handle(Some(path)).write(s, append)
     }
 }
 

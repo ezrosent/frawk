@@ -95,7 +95,7 @@ enum InputData {
 pub(crate) trait IntoRuntime {
     fn into_runtime<'a>(
         self,
-        stdout: impl io::Write + 'static,
+        ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
     ) -> Runtime<'a>;
 }
@@ -105,7 +105,7 @@ macro_rules! impl_into_runtime {
         impl IntoRuntime for ChainedReader<$ty> {
             fn into_runtime<'a>(
                 self,
-                stdout: impl io::Write + 'static,
+                ff: impl runtime::writers::FileFactory,
                 used_fields: &FieldSet,
             ) -> Runtime<'a> {
                 let seed: u64 = rand::thread_rng().gen();
@@ -116,7 +116,7 @@ macro_rules! impl_into_runtime {
                         FileRead::new(self, used_fields),
                     )),
                     regexes: Default::default(),
-                    write_files: FileWrite::new(stdout),
+                    write_files: FileWrite::new(ff),
                     rng: StdRng::seed_from_u64(seed),
                     current_seed: seed,
                 }

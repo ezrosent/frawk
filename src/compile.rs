@@ -9,7 +9,6 @@ use crate::smallvec::{self, smallvec};
 use crate::types;
 
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
-use std::io;
 use std::mem;
 
 pub(crate) const UNUSED: u32 = u32::max_value();
@@ -109,9 +108,9 @@ impl Ty {
 pub(crate) fn bytecode<'a, LR: runtime::LineReader>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     reader: LR,
-    writer: impl io::Write + 'static,
+    ff: impl runtime::writers::FileFactory,
 ) -> Result<bytecode::Interp<'a, LR>> {
-    Typer::init_from_ctx(ctx)?.to_interp(reader, writer)
+    Typer::init_from_ctx(ctx)?.to_interp(reader, ff)
 }
 
 pub(crate) fn dump_llvm<'a>(
@@ -147,7 +146,7 @@ pub(crate) fn used_fields<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Res
 pub(crate) fn run_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     reader: impl llvm::IntoRuntime,
-    writer: impl io::Write + 'static,
+    ff: impl runtime::writers::FileFactory,
     cfg: llvm::Config,
 ) -> Result<()> {
     use crate::llvm::Generator;
@@ -155,7 +154,7 @@ pub(crate) fn run_llvm<'a>(
     let used_fields = typer.used_fields.clone();
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main(reader, writer, &used_fields)
+        gen.run_main(reader, ff, &used_fields)
     }
 }
 
@@ -385,7 +384,7 @@ impl<'a> Typer<'a> {
     fn to_interp<LR: runtime::LineReader>(
         &mut self,
         reader: LR,
-        writer: impl io::Write + 'static,
+        ff: impl runtime::writers::FileFactory,
     ) -> Result<bytecode::Interp<'a, LR>> {
         let instrs = self.to_bytecode()?;
         Ok(bytecode::Interp::new(
@@ -393,7 +392,7 @@ impl<'a> Typer<'a> {
             self.main_offset,
             |ty| self.regs.stats.count(ty) as usize,
             reader,
-            writer,
+            ff,
             &self.used_fields,
         ))
     }

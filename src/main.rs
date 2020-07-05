@@ -91,12 +91,6 @@ good for debugging, and it will execute much faster for small scripts."
     #[clap(long = "dump-cfg", about = "dump untyped SSA form for input program")]
     dump_cfg: bool,
     #[clap(
-        default_value = "32768",
-        long = "out-buffer-size",
-        about = "output to --out-file is buffered; this flag determines buffer size"
-    )]
-    out_file_bufsize: usize,
-    #[clap(
         long = "input-format",
         short = 'i',
         about = "Legal values are csv, tsv. Input is split according to the rules of (csv|tsv). \
@@ -256,9 +250,9 @@ fn get_context<'a>(
 fn run_interp_with_context<'a>(
     mut ctx: cfg::ProgramContext<'a, &'a str>,
     stdin: impl LineReader,
-    stdout: impl io::Write + 'static,
+    ff: impl runtime::writers::FileFactory,
 ) {
-    let mut interp = match compile::bytecode(&mut ctx, stdin, stdout) {
+    let mut interp = match compile::bytecode(&mut ctx, stdin, ff) {
         Ok(ctx) => ctx,
         Err(e) => fail!("bytecode compilation failure: {}", e),
     };
@@ -270,10 +264,10 @@ fn run_interp_with_context<'a>(
 fn run_llvm_with_context<'a>(
     mut ctx: cfg::ProgramContext<'a, &'a str>,
     stdin: impl IntoRuntime,
-    stdout: impl io::Write + 'static,
+    ff: impl runtime::writers::FileFactory,
     cfg: llvm::Config,
 ) {
-    if let Err(e) = compile::run_llvm(&mut ctx, stdin, stdout, cfg) {
+    if let Err(e) = compile::run_llvm(&mut ctx, stdin, ff, cfg) {
         fail!("error compiling llvm: {}", e)
     }
 }
@@ -292,7 +286,6 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
     let a = Arena::default();
     let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
     let fake_inp: Box<dyn io::Read> = Box::new(Cursor::new(vec![]));
-    let fake_out: Box<dyn io::Write> = Box::new(Cursor::new(vec![]));
     let interp = match compile::bytecode(
         &mut ctx,
         chained(CSVReader::new(
@@ -301,7 +294,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
             CHUNK_SIZE,
             "unused",
         )),
-        fake_out,
+        runtime::writers::default_factory(),
     ) {
         Ok(ctx) => ctx,
         Err(e) => fail!("bytecode compilation failure: {}", e),
@@ -526,15 +519,12 @@ fn main() {
         (|$inp:ident, $out:ident| $body:expr) => {
             match opts.out_file {
                 Some(oup) => {
-                    let $out = io::BufWriter::with_capacity(
-                        opts.out_file_bufsize,
-                        File::create(oup.as_str())
-                            .unwrap_or_else(|e| fail!("failed to open {}: {}", oup.as_str(), e)),
-                    );
+                    let $out = runtime::writers::factory_from_file(oup.as_str())
+                        .unwrap_or_else(|e| fail!("failed to open {}: {}", oup.as_str(), e));
                     with_inp!(analysis_result, $inp, $body);
                 }
                 None => {
-                    let $out = std::io::stdout();
+                    let $out = runtime::writers::default_factory();
                     with_inp!(analysis_result, $inp, $body);
                 }
             }
