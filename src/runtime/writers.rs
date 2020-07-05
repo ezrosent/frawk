@@ -3,8 +3,7 @@
 //! This module has the following goals:
 //!
 //! 1. Support writes to a single file from multiple threads.
-//! 2. Avoid cross-thread copying of data.
-//! 3. Support (potentially cross-thread) batching of writes.
+//! 2. Support batching writes both within a single thread and also across threads.
 //!
 //! Supporting all of these requirements, along with the ability to inject fakes for the file
 //! system, leads to a fairly involved implementation. Callers build a Registry, which acts as a
@@ -21,25 +20,21 @@
 //! of open output files. In that case, we could replace each of these background threads with a
 //! "task" a la futures/async.)
 //!
-//! To allow for this batching without additional copies or allocations, calls to write are
-//! asynchronous. This poses a problem because Str manages memory with a thread-unsafe reference
-//! count. We cannot rely on the receiver thread incrementing a reference count to keep the Str
-//! sent on a channel alive.
-//!
-//! Instead, we have a custom protocol in which the client thread keeps a reference to any Strs
-//! whose writes are pending in a local buffer, while passing a thread-safe signaling mechanism
-//! (ErrorCode) along with the raw bytes contained in the Str to the receiving thread. When the
-//! receiving thread completes a write to the Str, it sets the ErrorCode to signal either success
-//! or failure. During the next request, the sender thread reads the error codes of any pending
-//! requests and relinqueshes references to all requests that have completed (and returns an error
-//! if any failed -- write errors in frawk are not recoverable).
+//! Within a client, we batch writes similar to how a BufWriter would: copying them to a local
+//! vector and then sending a reference to that vector on the channel to the receiving thread.
+//! While this write is pending, the vector is kept alive in a separate buffer of "guards" that
+//! also contain an ErrorCode which the receiver thread can use to signal that the pending write
+//! has been issued. This protocol (as opposed to one that transfers ownership of the buffer to the
+//! thread performing the writes) allows each client thread to avoid allocating new buffers
+//! continuously. It also mitigates a "producer-consumer" allocation and freeing pattern, which can
+//! put a lot of strain on some allocators.
 //!
 //! To facilitate easier testing, the functionality of the file system that we use is abstracted in
 //! the `FileFactory` trait. The `testing` module contains an implementation of this trait that
 //! writes all data in memory.
 
 use std::collections::VecDeque;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, Write};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Condvar, Mutex,
@@ -54,7 +49,10 @@ use crate::common::{CompileError, Result};
 use crate::runtime::Str;
 
 /// The maximum number of pending requests in the per-file channels.
-const IO_CHAN_SIZE: usize = 128;
+const IO_CHAN_SIZE: usize = 16;
+
+/// The size of client-side batches.
+const BUFFER_SIZE: usize = 8 << 10;
 
 /// FileFactory abstracts over the portions of the file system used for the output of a frawk
 /// program. It includes "file objects" as well as "stdout", which both implement the io::Write
@@ -83,7 +81,7 @@ impl<W: io::Write, T: Fn(&str, bool) -> io::Result<W> + Clone + 'static + Send +
     }
 }
 
-type FileWriter = BufWriter<std::fs::File>;
+type FileWriter = std::fs::File;
 
 fn open_file(path: &str, append: bool) -> io::Result<FileWriter> {
     let file = std::fs::OpenOptions::new()
@@ -91,7 +89,7 @@ fn open_file(path: &str, append: bool) -> io::Result<FileWriter> {
         .create(true)
         .append(append)
         .open(path)?;
-    Ok(BufWriter::new(file))
+    Ok(file)
 }
 
 pub fn default_factory() -> impl FileFactory {
@@ -230,6 +228,7 @@ pub struct FileHandle {
     // may still be marginally faster).
     old_guards: Vec<Box<WriteGuard>>,
     guards: VecDeque<Box<WriteGuard>>,
+    cur_batch: Box<WriteGuard>,
 }
 
 impl FileHandle {
@@ -247,23 +246,20 @@ impl FileHandle {
             }
         }
         for _ in 0..done_count {
-            let mut old = self.guards.pop_front().unwrap();
+            let old = self.guards.pop_front().unwrap();
             if self.old_guards.len() < IO_CHAN_SIZE {
-                // Reset drops the string, but keeps the errorcode in a "done" state, making it
-                // safe to drop.
-                old.reset();
                 self.old_guards.push(old);
             }
         }
         Ok(())
     }
 
-    fn guard<'a>(&mut self, s: &Str<'a>) -> Box<WriteGuard> {
+    fn guard<'a>(&mut self) -> Box<WriteGuard> {
         if let Some(mut g) = self.old_guards.pop() {
-            g.set_payload(s);
+            g.activate();
             g
         } else {
-            Box::new(WriteGuard::new(s))
+            Box::new(WriteGuard::default())
         }
     }
 
@@ -284,16 +280,30 @@ impl FileHandle {
         }
     }
 
-    pub fn write<'a>(&mut self, s: &Str<'a>, append: bool) -> Result<()> {
+    fn clear_batch(&mut self) -> Result<()> {
+        if self.cur_batch.data.len() == 0 {
+            return Ok(());
+        }
         self.clear_guards()?;
-        let guard = self.guard(s);
-        let req = guard.request(append);
+        let mut next_batch = self.guard();
+        let req = self.cur_batch.request();
         self.raw.sender.send(req).unwrap();
-        self.guards.push_back(guard);
+        std::mem::swap(&mut next_batch, &mut self.cur_batch);
+        self.guards.push_back(next_batch);
+        Ok(())
+    }
+
+    pub fn write<'a>(&mut self, s: &Str<'a>, append: bool) -> Result<()> {
+        let bs = unsafe { &*s.get_bytes() };
+        if bs.len() + self.cur_batch.data.len() > BUFFER_SIZE {
+            self.clear_batch()?;
+        }
+        self.cur_batch.extend(&*bs, append);
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
+        self.clear_batch()?;
         let (n, req) = Request::flush();
         self.raw.sender.send(req).unwrap();
         n.1.wait();
@@ -305,7 +315,9 @@ impl FileHandle {
         }
     }
 
-    pub fn close(&self) {
+    // TODO: close should return an error.
+    pub fn close(&mut self) {
+        let _ = self.clear_batch();
         self.raw.sender.send(Request::Close).unwrap();
     }
 }
@@ -313,6 +325,7 @@ impl FileHandle {
 impl Drop for FileHandle {
     fn drop(&mut self) {
         let _ = self.flush();
+        self.cur_batch.status.set_ok();
     }
 }
 
@@ -417,24 +430,24 @@ impl Drop for Request {
 }
 
 /// WriteGuard represents a pending write request.
+#[derive(Default)]
 struct WriteGuard {
-    s: Str<'static>,
+    data: Vec<u8>,
     status: ErrorCode,
+    append: bool,
 }
 
 impl WriteGuard {
-    fn new<'a>(s: &Str<'a>) -> WriteGuard {
-        WriteGuard {
-            s: s.clone().unmoor(),
-            status: ErrorCode::default(),
-        }
+    fn extend(&mut self, bs: &[u8], append: bool) {
+        self.data.extend(bs);
+        self.append = append;
     }
 
-    fn request(&self, append: bool) -> Request {
+    fn request(&self) -> Request {
         Request::Write {
-            data: self.s.get_bytes(),
+            data: &self.data[..],
             status: &self.status,
-            append,
+            append: self.append,
         }
     }
 
@@ -442,13 +455,10 @@ impl WriteGuard {
         self.status.read()
     }
 
-    fn reset(&mut self) {
-        self.s = Str::default();
-    }
-
-    fn set_payload<'a>(&mut self, s: &Str<'a>) {
+    fn activate(&mut self) {
         self.status = ErrorCode::default();
-        self.s = s.clone().unmoor();
+        self.append = false;
+        self.data.clear();
     }
 }
 
@@ -468,6 +478,7 @@ struct RawHandle {
 impl RawHandle {
     fn into_handle(self) -> FileHandle {
         FileHandle {
+            cur_batch: Default::default(),
             raw: self,
             guards: Default::default(),
             old_guards: Default::default(),
@@ -491,7 +502,11 @@ impl WriteBatch {
         self.n_writes
     }
     fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
-        w.write_all_vectored(&mut self.io_vec[..])?;
+        let e = w.write_all_vectored(&mut self.io_vec[..]);
+        if let Err(e) = e {
+            eprintln!("error! {}", e);
+            return Err(e);
+        }
         if self.flush || self.close {
             w.flush()?;
         }
@@ -798,7 +813,7 @@ mod tests {
             let handle = reg.get_handle(Some(&fname));
             handle.close();
             handle.write(&s1, /*append=*/ false).unwrap();
-            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.write(&s2, /*append=*/ false).unwrap();
             handle.flush().unwrap();
         }
         let data = fs.get_handle(fname_str).unwrap().read_data();
