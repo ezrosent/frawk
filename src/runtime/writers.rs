@@ -20,14 +20,16 @@
 //! of open output files. In that case, we could replace each of these background threads with a
 //! "task" a la futures/async.)
 //!
-//! Within a client, we batch writes similar to how a BufWriter would: copying them to a local
-//! vector and then sending a reference to that vector on the channel to the receiving thread.
-//! While this write is pending, the vector is kept alive in a separate buffer of "guards" that
-//! also contain an ErrorCode which the receiver thread can use to signal that the pending write
-//! has been issued. This protocol (as opposed to one that transfers ownership of the buffer to the
-//! thread performing the writes) allows each client thread to avoid allocating new buffers
-//! continuously. It also mitigates a "producer-consumer" allocation and freeing pattern, which can
-//! put a lot of strain on some allocators.
+//! Within a client, we batch writes similar to how a BufWriter would: copy incoming writes to a
+//! local vector until we have buffered up to a given threshold. Once that threshold is reached, we
+//! then send a reference to buffer on the channel to the receiving thread. While this write is
+//! pending, the vector is kept alive in a separate buffer of "guards" that also contain an
+//! ErrorCode which the receiver thread can use to signal that the pending write has been issued.
+//! Buffers corresponding to writes that have completed are reused for future batches. This
+//! protocol (as opposed to one that transfers ownership of the buffer to the thread performing the
+//! writes) allows each client thread to avoid allocating new buffers continuously. It also
+//! mitigates a "producer-consumer" allocation and freeing pattern, which can put a lot of strain
+//! on some allocators.
 //!
 //! To facilitate easier testing, the functionality of the file system that we use is abstracted in
 //! the `FileFactory` trait. The `testing` module contains an implementation of this trait that
