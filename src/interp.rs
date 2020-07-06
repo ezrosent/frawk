@@ -575,7 +575,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     }
                     Close(file) => {
                         let file = index(&self.strs, file);
-                        self.write_files.close(file);
+                        // NB this may create an unused entry in write_files. It would not be
+                        // terribly difficult to optimize the close path to include an existence
+                        // check first.
+                        self.write_files.close(file)?;
                         self.read_files.close(file);
                     }
                     LookupIntInt(res, arr, k) => {

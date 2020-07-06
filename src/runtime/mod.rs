@@ -318,7 +318,7 @@ impl Default for FileWrite {
 }
 
 impl FileWrite {
-    pub(crate) fn close(&mut self, path: &Str) {
+    pub(crate) fn close(&mut self, path: &Str) -> Result<()> {
         self.0.get_handle(Some(path)).close()
     }
     pub(crate) fn new(ff: impl writers::FileFactory) -> FileWrite {

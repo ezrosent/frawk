@@ -317,10 +317,10 @@ impl FileHandle {
         }
     }
 
-    // TODO: close should return an error.
-    pub fn close(&mut self) {
-        let _ = self.clear_batch();
+    pub fn close(&mut self) -> Result<()> {
+        self.clear_batch()?;
         self.raw.sender.send(Request::Close).unwrap();
+        Ok(())
     }
 }
 
@@ -813,7 +813,7 @@ mod tests {
         }
         {
             let handle = reg.get_handle(Some(&fname));
-            handle.close();
+            handle.close().unwrap();
             handle.write(&s1, /*append=*/ false).unwrap();
             handle.write(&s2, /*append=*/ false).unwrap();
             handle.flush().unwrap();
@@ -844,7 +844,7 @@ mod tests {
                             let h1 = treg.get_handle(Some(&fa));
                             h1.write(&a, /*append=*/ true).unwrap();
                             if (t + i) % 100 == 0 {
-                                h1.close();
+                                h1.close().unwrap();
                             }
                         }
                         {

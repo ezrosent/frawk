@@ -978,7 +978,7 @@ pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
     with_input!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
-    rt.write_files.close(file);
+    try_abort!(rt.write_files.close(file));
 }
 
 #[no_mangle]
