@@ -1663,6 +1663,27 @@ impl<'a> View<'a> {
                 let sv = self.get_local(src.reflect())?;
                 self.call("store_var_intmap", &mut [self.runtime_val(), v, sv]);
             }
+
+            LoadSlotInt(dst, _) => unimplemented!(),
+            LoadSlotFloat(dst, _) => unimplemented!(),
+            LoadSlotStr(dst, _) => unimplemented!(),
+            LoadSlotIntInt(dst, _) => unimplemented!(),
+            LoadSlotIntFloat(dst, _) => unimplemented!(),
+            LoadSlotIntStr(dst, _) => unimplemented!(),
+            LoadSlotStrInt(dst, _) => unimplemented!(),
+            LoadSlotStrFloat(dst, _) => unimplemented!(),
+            LoadSlotStrStr(dst, _) => unimplemented!(),
+
+            StoreSlotInt(src, _) => unimplemented!(),
+            StoreSlotFloat(src, _) => unimplemented!(),
+            StoreSlotStr(src, _) => unimplemented!(),
+            StoreSlotIntInt(src, _) => unimplemented!(),
+            StoreSlotIntFloat(src, _) => unimplemented!(),
+            StoreSlotIntStr(src, _) => unimplemented!(),
+            StoreSlotStrInt(src, _) => unimplemented!(),
+            StoreSlotStrFloat(src, _) => unimplemented!(),
+            StoreSlotStrStr(src, _) => unimplemented!(),
+
             MovInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovStr(dst, src) => {
