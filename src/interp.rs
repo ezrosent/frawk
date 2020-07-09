@@ -17,6 +17,10 @@ pub(crate) struct Storage<T> {
     pub(crate) stack: Vec<T>,
 }
 
+// TODO create shared `Runtime` sub-struct. Add to it an array of slots.
+// TODO add array or map indexed by type to runtime for each slot to this struct.
+// TODO implement these instructions.
+
 pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     // index of `instrs` that contains "main"
     main_func: usize,
@@ -802,6 +806,27 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let s = self.get(src).clone();
                         self.vars.store_intmap(*var, s)?;
                     }
+
+                    LoadSlotInt(dst, _) => unimplemented!(),
+                    LoadSlotFloat(dst, _) => unimplemented!(),
+                    LoadSlotStr(dst, _) => unimplemented!(),
+                    LoadSlotIntInt(dst, _) => unimplemented!(),
+                    LoadSlotIntFloat(dst, _) => unimplemented!(),
+                    LoadSlotIntStr(dst, _) => unimplemented!(),
+                    LoadSlotStrInt(dst, _) => unimplemented!(),
+                    LoadSlotStrFloat(dst, _) => unimplemented!(),
+                    LoadSlotStrStr(dst, _) => unimplemented!(),
+
+                    StoreSlotInt(src, _) => unimplemented!(),
+                    StoreSlotFloat(src, _) => unimplemented!(),
+                    StoreSlotStr(src, _) => unimplemented!(),
+                    StoreSlotIntInt(src, _) => unimplemented!(),
+                    StoreSlotIntFloat(src, _) => unimplemented!(),
+                    StoreSlotIntStr(src, _) => unimplemented!(),
+                    StoreSlotStrInt(src, _) => unimplemented!(),
+                    StoreSlotStrFloat(src, _) => unimplemented!(),
+                    StoreSlotStrStr(src, _) => unimplemented!(),
+
                     IterBeginIntInt(dst, arr) => {
                         let arr = *arr;
                         let iter = self.get(arr).to_iter();
