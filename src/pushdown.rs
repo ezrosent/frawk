@@ -6,7 +6,7 @@
 //! Short scripts can spend a surprising amount of time just slicing and escaping strings for each
 //! input record; this module provides the core components of a static analysis that constructs a
 //! conservative representation of all fields referenced in a given program. By "conservative" we
-//! mean taht it will sometimes return more fields than a program actually uses, but it will never
+//! mean that it will sometimes return more fields than a program actually uses, but it will never
 //! produce false negatives.
 //!
 //! # Overview of the analysis
