@@ -930,6 +930,51 @@ impl<'a> View<'a> {
         self.f.locals.insert(val, to);
     }
 
+    unsafe fn load_slot(&mut self, dst: (NumTy, Ty), slot: i64) {
+        let slot_v = LLVMConstInt(
+            self.tmap.get_ty(Ty::Int),
+            slot as u64,
+            /*sign_extend=*/ 0,
+        );
+        let func = match dst.1 {
+            Ty::Int => "load_slot_int",
+            Ty::Float => "load_slot_float",
+            Ty::Str => "load_slot_str",
+            Ty::MapIntInt => "load_slot_intint",
+            Ty::MapIntFloat => "load_slot_intfloat",
+            Ty::MapIntStr => "load_slot_intstr",
+            Ty::MapStrInt => "load_slot_strint",
+            Ty::MapStrFloat => "load_slot_strfloat",
+            Ty::MapStrStr => "load_slot_strstr",
+            _ => unreachable!(),
+        };
+        let resv = self.call(func, &mut [self.runtime_val(), slot_v]);
+        self.bind_val(dst, resv);
+    }
+
+    unsafe fn store_slot(&mut self, src: (NumTy, Ty), slot: i64) -> Result<()> {
+        let slot_v = LLVMConstInt(
+            self.tmap.get_ty(Ty::Int),
+            slot as u64,
+            /*sign_extend=*/ 0,
+        );
+        let func = match src.1 {
+            Ty::Int => "store_slot_int",
+            Ty::Float => "store_slot_float",
+            Ty::Str => "store_slot_str",
+            Ty::MapIntInt => "store_slot_intint",
+            Ty::MapIntFloat => "store_slot_intfloat",
+            Ty::MapIntStr => "store_slot_intstr",
+            Ty::MapStrInt => "store_slot_strint",
+            Ty::MapStrFloat => "store_slot_strfloat",
+            Ty::MapStrStr => "store_slot_strstr",
+            _ => unreachable!(),
+        };
+        let arg = self.get_local(src)?;
+        self.call(func, &mut [self.runtime_val(), slot_v, arg]);
+        Ok(())
+    }
+
     unsafe fn lookup_map(
         &mut self,
         map: (NumTy, Ty),
@@ -1664,25 +1709,25 @@ impl<'a> View<'a> {
                 self.call("store_var_intmap", &mut [self.runtime_val(), v, sv]);
             }
 
-            LoadSlotInt(dst, _) => unimplemented!(),
-            LoadSlotFloat(dst, _) => unimplemented!(),
-            LoadSlotStr(dst, _) => unimplemented!(),
-            LoadSlotIntInt(dst, _) => unimplemented!(),
-            LoadSlotIntFloat(dst, _) => unimplemented!(),
-            LoadSlotIntStr(dst, _) => unimplemented!(),
-            LoadSlotStrInt(dst, _) => unimplemented!(),
-            LoadSlotStrFloat(dst, _) => unimplemented!(),
-            LoadSlotStrStr(dst, _) => unimplemented!(),
+            LoadSlotInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
+            LoadSlotFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
+            LoadSlotStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
+            LoadSlotIntInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
+            LoadSlotIntFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
+            LoadSlotIntStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
+            LoadSlotStrInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
+            LoadSlotStrFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
+            LoadSlotStrStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
 
-            StoreSlotInt(src, _) => unimplemented!(),
-            StoreSlotFloat(src, _) => unimplemented!(),
-            StoreSlotStr(src, _) => unimplemented!(),
-            StoreSlotIntInt(src, _) => unimplemented!(),
-            StoreSlotIntFloat(src, _) => unimplemented!(),
-            StoreSlotIntStr(src, _) => unimplemented!(),
-            StoreSlotStrInt(src, _) => unimplemented!(),
-            StoreSlotStrFloat(src, _) => unimplemented!(),
-            StoreSlotStrStr(src, _) => unimplemented!(),
+            StoreSlotInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
+            StoreSlotFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
+            StoreSlotStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
+            StoreSlotIntInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
+            StoreSlotIntFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
+            StoreSlotIntStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
+            StoreSlotStrInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
+            StoreSlotStrFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
+            StoreSlotStrStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
 
             MovInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             MovFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
