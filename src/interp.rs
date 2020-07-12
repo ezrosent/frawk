@@ -32,7 +32,7 @@ pub(crate) struct Core<'a> {
 }
 
 impl<'a> Core<'a> {
-    fn new(ff: impl runtime::writers::FileFactory) -> Core<'a> {
+    pub fn new(ff: impl runtime::writers::FileFactory) -> Core<'a> {
         let seed: u64 = rand::thread_rng().gen();
         Core {
             vars: Default::default(),
@@ -43,20 +43,20 @@ impl<'a> Core<'a> {
         }
     }
 
-    fn reseed(&mut self, seed: u64) -> u64 /* old seed */ {
+    pub fn reseed(&mut self, seed: u64) -> u64 /* old seed */ {
         self.rng = StdRng::seed_from_u64(seed);
         let old_seed = self.current_seed;
         self.current_seed = seed;
         old_seed
     }
-    fn reseed_random(&mut self) -> u64 /* old seed */ {
+    pub fn reseed_random(&mut self) -> u64 /* old seed */ {
         self.reseed(rand::thread_rng().gen::<u64>())
     }
 
-    fn match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<Int> {
+    pub fn match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<Int> {
         self.regexes.regex_match_loc(&mut self.vars, pat, s)
     }
-    fn is_match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<bool> {
+    pub fn is_match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<bool> {
         self.regexes.is_regex_match(pat, s)
     }
 }

@@ -12,8 +12,7 @@ use crate::runtime::{
         regex::RegexSplitter,
         DefaultSplitter,
     },
-    ChainedReader, FileRead, FileWrite, Float, Int, IntMap, Line, LineReader, RegexCache, Str,
-    StrMap, Variables,
+    ChainedReader, FileRead, Float, Int, IntMap, Line, LineReader, Str, StrMap,
 };
 
 use hashbrown::HashMap;
@@ -21,7 +20,7 @@ use llvm_sys::{
     self,
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
 };
-use rand::{self, rngs::StdRng, Rng, SeedableRng};
+use rand::{self, Rng};
 use smallvec;
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
@@ -108,17 +107,12 @@ macro_rules! impl_into_runtime {
                 ff: impl runtime::writers::FileFactory,
                 used_fields: &FieldSet,
             ) -> Runtime<'a> {
-                let seed: u64 = rand::thread_rng().gen();
                 Runtime {
-                    vars: Default::default(),
                     input_data: InputData::$var((
                         Default::default(),
                         FileRead::new(self, used_fields),
                     )),
-                    regexes: Default::default(),
-                    write_files: FileWrite::new(ff),
-                    rng: StdRng::seed_from_u64(seed),
-                    current_seed: seed,
+                    core: crate::interp::Core::new(ff),
                 }
             }
         }
@@ -131,18 +125,19 @@ impl_into_runtime!(ByteReader<Box<dyn io::Read>>, V3);
 impl_into_runtime!(RegexSplitter<Box<dyn io::Read>>, V4);
 
 pub(crate) struct Runtime<'a> {
-    vars: Variables<'a>,
+    core: crate::interp::Core<'a>,
     input_data: InputData,
-    regexes: RegexCache,
-    write_files: FileWrite,
-    rng: StdRng,
-    current_seed: u64,
+    // vars: Variables<'a>,
+    // regexes: RegexCache,
+    // write_files: FileWrite,
+    // rng: StdRng,
+    // current_seed: u64,
 }
 
 impl<'a> Runtime<'a> {
     fn reset_file_vars(&mut self) {
-        self.vars.fnr = 0;
-        self.vars.filename = with_input!(&mut self.input_data, |(_, read_files)| {
+        self.core.vars.fnr = 0;
+        self.core.vars.filename = with_input!(&mut self.input_data, |(_, read_files)| {
             read_files.stdin_filename().upcast()
         });
     }
@@ -376,27 +371,19 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 #[no_mangle]
 pub unsafe extern "C" fn rand_float(runtime: *mut c_void) -> f64 {
     let runtime = &mut *(runtime as *mut Runtime);
-    runtime.rng.gen_range(0.0, 1.0)
+    runtime.core.rng.gen_range(0.0, 1.0)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn seed_rng(runtime: *mut c_void, seed: Int) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
-    let seed_u64 = seed as u64;
-    runtime.rng = StdRng::seed_from_u64(seed_u64);
-    let res = runtime.current_seed;
-    runtime.current_seed = seed_u64;
-    res as Int
+    runtime.core.reseed(seed as u64) as Int
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
-    let seed: u64 = rand::thread_rng().gen();
-    let old_seed = runtime.current_seed;
-    runtime.rng = StdRng::seed_from_u64(seed);
-    runtime.current_seed = seed;
-    old_seed as Int
+    runtime.core.reseed_random() as Int
 }
 
 #[no_mangle]
@@ -424,8 +411,9 @@ pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     let changed = try_abort!(
         with_input!(&mut runtime.input_data, |(line, read_files)| {
             runtime
+                .core
                 .regexes
-                .get_line_stdin_reuse(&runtime.vars.rs, read_files, line)
+                .get_line_stdin_reuse(&runtime.core.vars.rs, read_files, line)
         }),
         "unexpected error when reading line from stdin:"
     );
@@ -446,7 +434,10 @@ pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let (changed, res) = try_abort!(
         with_input!(&mut runtime.input_data, |(_, read_files)| {
-            runtime.regexes.get_line_stdin(&runtime.vars.rs, read_files)
+            runtime
+                .core
+                .regexes
+                .get_line_stdin(&runtime.core.vars.rs, read_files)
         }),
         "unexpected error when reading line from stdin:"
     );
@@ -461,7 +452,10 @@ pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> U
     let runtime = &mut *(runtime as *mut Runtime);
     let file = &*(file as *mut Str);
     let res = with_input!(&mut runtime.input_data, |(_, read_files)| {
-        runtime.regexes.get_line(file, &runtime.vars.rs, read_files)
+        runtime
+            .core
+            .regexes
+            .get_line(file, &runtime.core.vars.rs, read_files)
     });
     match res {
         Ok(res) => mem::transmute::<Str, U128>(res),
@@ -473,7 +467,7 @@ pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> U
 pub unsafe extern "C" fn print_stdout(runtime: *mut c_void, txt: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let txt = &*(txt as *mut Str);
-    if let Err(_) = runtime.write_files.write_str_stdout(txt) {
+    if let Err(_) = runtime.core.write_files.write_str_stdout(txt) {
         exit!(runtime);
     }
 }
@@ -489,6 +483,7 @@ pub unsafe extern "C" fn print(
     let txt = &*(txt as *mut Str);
     let out = &*(out as *mut Str);
     if runtime
+        .core
         .write_files
         .write_str(out, txt, append != 0)
         .is_err()
@@ -510,6 +505,7 @@ pub unsafe extern "C" fn split_str(
     let pat = &*(pat as *mut Str);
     let old_len = into_arr.len();
     if let Err(e) = runtime
+        .core
         .regexes
         .split_regex_strmap(&pat, &to_split, &into_arr)
     {
@@ -533,6 +529,7 @@ pub unsafe extern "C" fn split_int(
     let pat = &*(pat as *mut Str);
     let old_len = into_arr.len();
     if let Err(e) = runtime
+        .core
         .regexes
         .split_regex_intmap(&pat, &to_split, &into_arr)
     {
@@ -549,9 +546,9 @@ pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
     let col_str = with_input!(&mut runtime.input_data, |(line, _)| {
         line.get_col(
             col,
-            &runtime.vars.fs,
-            &runtime.vars.ofs,
-            &mut runtime.regexes,
+            &runtime.core.vars.fs,
+            &runtime.core.vars.ofs,
+            &mut runtime.core.regexes,
         )
     });
     let res = match col_str {
@@ -567,7 +564,10 @@ pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) ->
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         with_input!(&mut runtime.input_data, |(line, _)| {
-            let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
+            let nf = try_abort!(
+                line.nf(&runtime.core.vars.fs, &mut runtime.core.regexes),
+                "nf:"
+            );
             line.join_cols(start, end, &sep, nf, |s| runtime::escape_csv(&s))
         }),
         "join_csv:"
@@ -581,7 +581,10 @@ pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) ->
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         with_input!(&mut runtime.input_data, |(line, _)| {
-            let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
+            let nf = try_abort!(
+                line.nf(&runtime.core.vars.fs, &mut runtime.core.regexes),
+                "nf:"
+            );
             line.join_cols(start, end, &sep, nf, |s| runtime::escape_tsv(&s))
         }),
         "join_tsv:"
@@ -599,7 +602,10 @@ pub unsafe extern "C" fn join_cols(
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         with_input!(&mut runtime.input_data, |(line, _)| {
-            let nf = try_abort!(line.nf(&runtime.vars.fs, &mut runtime.regexes), "nf:");
+            let nf = try_abort!(
+                line.nf(&runtime.core.vars.fs, &mut runtime.core.regexes),
+                "nf:"
+            );
             line.join_cols(start, end, &*(sep as *mut Str), nf, |s| s)
         }),
         "join_cols:"
@@ -614,8 +620,8 @@ pub unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void)
     if let Err(e) = with_input!(&mut runtime.input_data, |(line, _)| line.set_col(
         col,
         s,
-        &runtime.vars.ofs,
-        &mut runtime.regexes,
+        &runtime.core.vars.ofs,
+        &mut runtime.core.regexes,
     )) {
         fail!("set_col: {}", e);
     }
@@ -642,7 +648,7 @@ pub unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *m
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
-    let res = try_abort!((*runtime).regexes.is_regex_match(&pat, &s), "match_pat:");
+    let res = try_abort!((*runtime).core.is_match_regex(s, pat), "match_pat:");
     mem::forget((s, pat));
     res as Int
 }
@@ -656,12 +662,7 @@ pub unsafe extern "C" fn match_pat_loc(
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
-    let res = try_abort!(
-        (*runtime)
-            .regexes
-            .regex_match_loc(&mut (*runtime).vars, &pat, &s),
-        "match_pat_loc:"
-    );
+    let res = try_abort!((*runtime).core.match_regex(s, pat), "match_pat_loc:");
     mem::forget((s, pat));
     res as Int
 }
@@ -685,6 +686,7 @@ pub unsafe extern "C" fn subst_first(
     let pat = &*(pat as *mut Str);
     let in_s = &mut *(in_s as *mut Str);
     let (subbed, new) = try_abort!(runtime
+        .core
         .regexes
         .with_regex(pat, |re| in_s.subst_first(re, s)));
     *in_s = subbed;
@@ -702,7 +704,10 @@ pub unsafe extern "C" fn subst_all(
     let s = &mut *(s as *mut Str);
     let pat = &*(pat as *mut Str);
     let in_s = &mut *(in_s as *mut Str);
-    let (subbed, nsubs) = try_abort!(runtime.regexes.with_regex(pat, |re| in_s.subst_all(re, s)));
+    let (subbed, nsubs) = try_abort!(runtime
+        .core
+        .regexes
+        .with_regex(pat, |re| in_s.subst_all(re, s)));
     *in_s = subbed;
     nsubs
 }
@@ -792,7 +797,7 @@ pub unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
 pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        let res = try_abort!(runtime.vars.load_str(var));
+        let res = try_abort!(runtime.core.vars.load_str(var));
         mem::transmute::<Str, U128>(res)
     } else {
         fail!("invalid variable code={}", var)
@@ -804,7 +809,7 @@ pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_vo
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let s = (&*(s as *mut Str)).clone();
-        try_abort!(runtime.vars.store_str(var, s))
+        try_abort!(runtime.core.vars.store_str(var, s))
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -815,14 +820,14 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         if let Variable::NF = var {
-            runtime.vars.nf = match with_input!(&mut runtime.input_data, |(line, _)| line
-                .nf(&runtime.vars.fs, &mut runtime.regexes))
+            runtime.core.vars.nf = match with_input!(&mut runtime.input_data, |(line, _)| line
+                .nf(&runtime.core.vars.fs, &mut runtime.core.regexes))
             {
                 Ok(nf) => nf as Int,
                 Err(e) => fail!("nf: {}", e),
             };
         }
-        try_abort!(runtime.vars.load_int(var))
+        try_abort!(runtime.core.vars.load_int(var))
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -832,7 +837,7 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
 pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        try_abort!(runtime.vars.store_int(var, i));
+        try_abort!(runtime.core.vars.store_int(var, i));
     } else {
         fail!("invalid variable code={}", var)
     }
@@ -842,7 +847,7 @@ pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
 pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        let res = try_abort!(runtime.vars.load_intmap(var));
+        let res = try_abort!(runtime.core.vars.load_intmap(var));
         mem::transmute::<IntMap<_>, *mut c_void>(res)
     } else {
         fail!("invalid variable code={}", var)
@@ -854,7 +859,7 @@ pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
-        try_abort!(runtime.vars.store_intmap(var, map.clone()));
+        try_abort!(runtime.core.vars.store_intmap(var, map.clone()));
         mem::forget(map);
     } else {
         fail!("invalid variable code={}", var)
@@ -928,7 +933,7 @@ pub unsafe extern "C" fn printf_impl_file(
 ) {
     let output_wrapped = Some((&*(output as *mut Str), append != 0));
     let format_args = wrap_args(args, tys, num_args);
-    let res = (*(rt as *mut Runtime)).write_files.printf(
+    let res = (*(rt as *mut Runtime)).core.write_files.printf(
         output_wrapped,
         &*(spec as *mut Str),
         &format_args[..],
@@ -964,10 +969,11 @@ pub unsafe extern "C" fn printf_impl_stdout(
     num_args: Int,
 ) {
     let format_args = wrap_args(args, tys, num_args);
-    let res =
-        (*(rt as *mut Runtime))
-            .write_files
-            .printf(None, &*(spec as *mut Str), &format_args[..]);
+    let res = (*(rt as *mut Runtime)).core.write_files.printf(
+        None,
+        &*(spec as *mut Str),
+        &format_args[..],
+    );
     if res.is_err() {
         exit!(rt);
     }
@@ -978,7 +984,7 @@ pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
     with_input!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
-    try_abort!(rt.write_files.close(file));
+    try_abort!(rt.core.write_files.close(file));
 }
 
 #[no_mangle]
