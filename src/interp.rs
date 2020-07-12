@@ -8,6 +8,7 @@ use crate::runtime::{self, Float, Int, Line, LineReader, Str};
 use rand::{self, rngs::StdRng, Rng, SeedableRng};
 
 use std::cmp;
+use std::mem;
 
 type ClassicReader = runtime::splitter::regex::RegexSplitter<Box<dyn std::io::Read>>;
 
@@ -29,6 +30,26 @@ pub(crate) struct Core<'a> {
     pub write_files: runtime::FileWrite,
     pub rng: StdRng,
     pub current_seed: u64,
+
+    // TODO: all mentions of str will have to change.
+    pub slot_int: Vec<Int>,
+    pub slot_float: Vec<Float>,
+    pub slot_str: Vec<Str<'a>>,
+    pub slot_intint: Vec<runtime::IntMap<Int>>,
+    pub slot_intfloat: Vec<runtime::IntMap<Float>>,
+    pub slot_intstr: Vec<runtime::IntMap<Str<'a>>>,
+    pub slot_strint: Vec<runtime::StrMap<'a, Int>>,
+    pub slot_strfloat: Vec<runtime::StrMap<'a, Float>>,
+    pub slot_strstr: Vec<runtime::StrMap<'a, Str<'a>>>,
+}
+
+pub fn set_slot<T: Default>(vec: &mut Vec<T>, slot: usize, v: T) {
+    if slot < vec.len() {
+        vec[slot] = v;
+        return;
+    }
+    vec.resize_with(slot, Default::default);
+    vec.push(v)
 }
 
 impl<'a> Core<'a> {
@@ -40,6 +61,16 @@ impl<'a> Core<'a> {
             write_files: runtime::FileWrite::new(ff),
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             current_seed: seed,
+
+            slot_int: Default::default(),
+            slot_float: Default::default(),
+            slot_str: Default::default(),
+            slot_intint: Default::default(),
+            slot_intfloat: Default::default(),
+            slot_intstr: Default::default(),
+            slot_strint: Default::default(),
+            slot_strfloat: Default::default(),
+            slot_strstr: Default::default(),
         }
     }
 
@@ -161,6 +192,34 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         let mut cur_fn = self.main_func;
         let mut instrs = (&mut self.instrs[cur_fn]) as *mut Vec<Instr<'a>>;
         let mut cur = 0;
+
+        // Local macros help to eliminate boilerplate in type-specific instructions.
+        // StoreSlot<T>(ident, slot_id)
+        macro_rules! store_slot {
+            ($src: ident, $slot_id: ident, $slot:tt) => {{
+                let src = *$src;
+                let new_val = self.get(src).clone();
+                set_slot(&mut self.core.$slot, *$slot_id as usize, new_val);
+            }};
+        }
+        // LoadSlot<T>(ident, slot_id)
+        macro_rules! load_slot {
+            ($dst: ident, $slot_id: ident, $slot:tt) => {{
+                let dst = *$dst;
+                let new_val =
+                    mem::replace(&mut self.core.$slot[*$slot_id as usize], Default::default());
+                *self.get_mut(dst) = new_val;
+            }};
+        }
+        // IterBegin<T>(dst, arr)
+        macro_rules! iter_begin {
+            ($dst:ident, $arr:ident) => {{
+                let arr = *$arr;
+                let dst = *$dst;
+                let iter = self.get(arr).to_iter();
+                *self.get_mut(dst) = iter;
+            }};
+        }
         'outer: loop {
             // must end with Halt
             cur = loop {
@@ -837,62 +896,32 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.core.vars.store_intmap(*var, s)?;
                     }
 
-                    LoadSlotInt(dst, _) => unimplemented!(),
-                    LoadSlotFloat(dst, _) => unimplemented!(),
-                    LoadSlotStr(dst, _) => unimplemented!(),
-                    LoadSlotIntInt(dst, _) => unimplemented!(),
-                    LoadSlotIntFloat(dst, _) => unimplemented!(),
-                    LoadSlotIntStr(dst, _) => unimplemented!(),
-                    LoadSlotStrInt(dst, _) => unimplemented!(),
-                    LoadSlotStrFloat(dst, _) => unimplemented!(),
-                    LoadSlotStrStr(dst, _) => unimplemented!(),
+                    LoadSlotInt(dst, slot) => load_slot!(dst, slot, slot_int),
+                    LoadSlotFloat(dst, slot) => load_slot!(dst, slot, slot_float),
+                    LoadSlotStr(dst, slot) => load_slot!(dst, slot, slot_str),
+                    LoadSlotIntInt(dst, slot) => load_slot!(dst, slot, slot_intint),
+                    LoadSlotIntFloat(dst, slot) => load_slot!(dst, slot, slot_intfloat),
+                    LoadSlotIntStr(dst, slot) => load_slot!(dst, slot, slot_intstr),
+                    LoadSlotStrInt(dst, slot) => load_slot!(dst, slot, slot_strint),
+                    LoadSlotStrFloat(dst, slot) => load_slot!(dst, slot, slot_strfloat),
+                    LoadSlotStrStr(dst, slot) => load_slot!(dst, slot, slot_strstr),
+                    StoreSlotInt(src, slot) => store_slot!(src, slot, slot_int),
+                    StoreSlotFloat(src, slot) => store_slot!(src, slot, slot_float),
+                    StoreSlotStr(src, slot) => store_slot!(src, slot, slot_str),
+                    StoreSlotIntInt(src, slot) => store_slot!(src, slot, slot_intint),
+                    StoreSlotIntFloat(src, slot) => store_slot!(src, slot, slot_intfloat),
+                    StoreSlotIntStr(src, slot) => store_slot!(src, slot, slot_intstr),
+                    StoreSlotStrInt(src, slot) => store_slot!(src, slot, slot_strint),
+                    StoreSlotStrFloat(src, slot) => store_slot!(src, slot, slot_strfloat),
+                    StoreSlotStrStr(src, slot) => store_slot!(src, slot, slot_strstr),
 
-                    StoreSlotInt(src, _) => unimplemented!(),
-                    StoreSlotFloat(src, _) => unimplemented!(),
-                    StoreSlotStr(src, _) => unimplemented!(),
-                    StoreSlotIntInt(src, _) => unimplemented!(),
-                    StoreSlotIntFloat(src, _) => unimplemented!(),
-                    StoreSlotIntStr(src, _) => unimplemented!(),
-                    StoreSlotStrInt(src, _) => unimplemented!(),
-                    StoreSlotStrFloat(src, _) => unimplemented!(),
-                    StoreSlotStrStr(src, _) => unimplemented!(),
+                    IterBeginIntInt(dst, arr) => iter_begin!(dst, arr),
+                    IterBeginIntFloat(dst, arr) => iter_begin!(dst, arr),
+                    IterBeginIntStr(dst, arr) => iter_begin!(dst, arr),
+                    IterBeginStrInt(dst, arr) => iter_begin!(dst, arr),
+                    IterBeginStrFloat(dst, arr) => iter_begin!(dst, arr),
+                    IterBeginStrStr(dst, arr) => iter_begin!(dst, arr),
 
-                    IterBeginIntInt(dst, arr) => {
-                        let arr = *arr;
-                        let iter = self.get(arr).to_iter();
-                        let dst = *dst;
-                        *self.get_mut(dst) = iter;
-                    }
-                    IterBeginIntFloat(dst, arr) => {
-                        let arr = *arr;
-                        let iter = self.get(arr).to_iter();
-                        let dst = *dst;
-                        *self.get_mut(dst) = iter;
-                    }
-                    IterBeginIntStr(dst, arr) => {
-                        let arr = *arr;
-                        let iter = self.get(arr).to_iter();
-                        let dst = *dst;
-                        *self.get_mut(dst) = iter;
-                    }
-                    IterBeginStrInt(dst, arr) => {
-                        let arr = *arr;
-                        let iter = self.get(arr).to_iter();
-                        let dst = *dst;
-                        *self.get_mut(dst) = iter;
-                    }
-                    IterBeginStrFloat(dst, arr) => {
-                        let arr = *arr;
-                        let iter = self.get(arr).to_iter();
-                        let dst = *dst;
-                        *self.get_mut(dst) = iter;
-                    }
-                    IterBeginStrStr(dst, arr) => {
-                        let arr = *arr;
-                        let iter = self.get(arr).to_iter();
-                        let dst = *dst;
-                        *self.get_mut(dst) = iter;
-                    }
                     IterHasNextInt(dst, iter) => {
                         let res = self.get(*iter).has_next() as Int;
                         let dst = *dst;
