@@ -21,23 +21,58 @@ pub(crate) struct Storage<T> {
 // TODO add array or map indexed by type to runtime for each slot to this struct.
 // TODO implement these instructions.
 
+/// Core represents a subset of runtime structures that are relevant to both the bytecode
+/// interpreter and the compiled runtimes.
+pub(crate) struct Core<'a> {
+    pub vars: runtime::Variables<'a>,
+    pub regexes: runtime::RegexCache,
+    pub write_files: runtime::FileWrite,
+    pub rng: StdRng,
+    pub current_seed: u64,
+}
+
+impl<'a> Core<'a> {
+    fn new(ff: impl runtime::writers::FileFactory) -> Core<'a> {
+        let seed: u64 = rand::thread_rng().gen();
+        Core {
+            vars: Default::default(),
+            regexes: Default::default(),
+            write_files: runtime::FileWrite::new(ff),
+            rng: rand::rngs::StdRng::seed_from_u64(seed),
+            current_seed: seed,
+        }
+    }
+
+    fn reseed(&mut self, seed: u64) -> u64 /* old seed */ {
+        self.rng = StdRng::seed_from_u64(seed);
+        let old_seed = self.current_seed;
+        self.current_seed = seed;
+        old_seed
+    }
+    fn reseed_random(&mut self) -> u64 /* old seed */ {
+        self.reseed(rand::thread_rng().gen::<u64>())
+    }
+
+    fn match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<Int> {
+        self.regexes.regex_match_loc(&mut self.vars, pat, s)
+    }
+    fn is_match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<bool> {
+        self.regexes.is_regex_match(pat, s)
+    }
+}
+
 pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     // index of `instrs` that contains "main"
     main_func: usize,
     instrs: Vec<Vec<Instr<'a>>>,
     stack: Vec<(usize /*function*/, Label /*instr*/)>,
 
-    vars: runtime::Variables<'a>,
-
     line: LR::Line,
-
-    regexes: runtime::RegexCache,
-    write_files: runtime::FileWrite,
     read_files: runtime::FileRead<LR>,
 
-    current_seed: u64,
-    rng: StdRng,
+    core: Core<'a>,
 
+    // Core storage.
     // TODO: should these be smallvec<[T; 32]>? We never add registers, so could we allocate one
     // contiguous region ahead of time?
     pub(crate) floats: Storage<Float>,
@@ -74,7 +109,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         used_fields: &FieldSet,
     ) -> Self {
         use compile::Ty::*;
-        let seed: u64 = rand::thread_rng().gen();
         Interp {
             main_func,
             instrs,
@@ -82,13 +116,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             floats: default_of(regs(Float)),
             ints: default_of(regs(Int)),
             strs: default_of(regs(Str)),
-            vars: Default::default(),
-            current_seed: seed,
-            rng: rand::rngs::StdRng::seed_from_u64(seed),
+            core: Core::new(ff),
 
             line: Default::default(),
-            regexes: Default::default(),
-            write_files: runtime::FileWrite::new(ff),
             read_files: runtime::FileRead::new(stdin, used_fields),
 
             maps_int_float: default_of(regs(MapIntFloat)),
@@ -119,8 +149,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     }
 
     fn reset_file_vars(&mut self) {
-        self.vars.fnr = 0;
-        self.vars.filename = self.read_files.stdin_filename().upcast();
+        self.core.vars.fnr = 0;
+        self.core.vars.filename = self.read_files.stdin_filename().upcast();
     }
 
     pub(crate) fn run(&mut self) -> Result<()> {
@@ -277,22 +307,15 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         *self.get_mut(dst) = ff.eval2(fx, fy);
                     }
                     Rand(dst) => {
-                        let res: f64 = self.rng.gen_range(0.0, 1.0);
+                        let res: f64 = self.core.rng.gen_range(0.0, 1.0);
                         *index_mut(&mut self.floats, dst) = res;
                     }
                     Srand(res, seed) => {
-                        let seed: u64 = *index(&self.ints, seed) as u64;
-                        self.rng = StdRng::seed_from_u64(seed);
-                        let old_seed = self.current_seed;
-                        self.current_seed = seed;
+                        let old_seed = self.core.reseed(*index(&self.ints, seed) as u64);
                         *index_mut(&mut self.ints, res) = old_seed as Int;
                     }
                     ReseedRng(res) => {
-                        let seed: u64 = rand::thread_rng().gen();
-                        let old_seed = self.current_seed;
-                        self.rng = StdRng::seed_from_u64(seed);
-                        self.current_seed = seed;
-                        *index_mut(&mut self.ints, res) = old_seed as Int;
+                        *index_mut(&mut self.ints, res) = self.core.reseed_random() as Int;
                     }
                     Concat(res, l, r) => {
                         let res = *res;
@@ -301,17 +324,15 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         *self.get_mut(res) = Str::concat(l, r);
                     }
                     Match(res, l, r) => {
-                        let res = *res;
-                        let l = index(&self.strs, l);
-                        let pat = index(&self.strs, r);
-                        *self.get_mut(res) =
-                            self.regexes.regex_match_loc(&mut self.vars, &pat, &l)? as Int;
+                        *index_mut(&mut self.ints, res) = self
+                            .core
+                            .match_regex(index(&self.strs, l), index(&self.strs, r))?;
                     }
                     IsMatch(res, l, r) => {
-                        let res = *res;
-                        let l = index(&self.strs, l);
-                        let pat = index(&self.strs, r);
-                        *self.get_mut(res) = self.regexes.is_regex_match(&pat, &l)? as Int;
+                        *index_mut(&mut self.ints, res) = self
+                            .core
+                            .is_match_regex(index(&self.strs, l), index(&self.strs, r))?
+                            as Int;
                     }
                     SubstrIndex(res, s, t) => {
                         let res = *res;
@@ -334,7 +355,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             let pat = index(&self.strs, pat);
                             let s = index(&self.strs, s);
                             let in_s = index(&self.strs, in_s);
-                            self.regexes.with_regex(pat, |re| in_s.subst_first(re, s))?
+                            self.core
+                                .regexes
+                                .with_regex(pat, |re| in_s.subst_first(re, s))?
                         };
                         *index_mut(&mut self.strs, in_s) = subbed;
                         *index_mut(&mut self.ints, res) = new as Int;
@@ -344,7 +367,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             let pat = index(&self.strs, pat);
                             let s = index(&self.strs, s);
                             let in_s = index(&self.strs, in_s);
-                            self.regexes.with_regex(pat, |re| in_s.subst_all(re, s))?
+                            self.core
+                                .regexes
+                                .with_regex(pat, |re| in_s.subst_all(re, s))?
                         };
                         *index_mut(&mut self.strs, in_s) = subbed;
                         *index_mut(&mut self.ints, res) = subs_made;
@@ -462,21 +487,21 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let col = *self.get(*dst);
                         let v = index(&self.strs, src);
                         self.line
-                            .set_col(col, v, &self.vars.ofs, &mut self.regexes)?;
+                            .set_col(col, v, &self.core.vars.ofs, &mut self.core.regexes)?;
                     }
                     GetColumn(dst, src) => {
                         let col = *self.get(*src);
                         let dst = *dst;
                         let res = self.line.get_col(
                             col,
-                            &self.vars.fs,
-                            &self.vars.ofs,
-                            &mut self.regexes,
+                            &self.core.vars.fs,
+                            &self.core.vars.ofs,
+                            &mut self.core.regexes,
                         )?;
                         *self.get_mut(dst) = res;
                     }
                     JoinCSV(dst, start, end) => {
-                        let nf = self.line.nf(&self.vars.fs, &mut self.regexes)?;
+                        let nf = self.line.nf(&self.core.vars.fs, &mut self.core.regexes)?;
                         *index_mut(&mut self.strs, dst) = {
                             let start = *index(&self.ints, start);
                             let end = *index(&self.ints, end);
@@ -486,7 +511,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         };
                     }
                     JoinTSV(dst, start, end) => {
-                        let nf = self.line.nf(&self.vars.fs, &mut self.regexes)?;
+                        let nf = self.line.nf(&self.core.vars.fs, &mut self.core.regexes)?;
                         *index_mut(&mut self.strs, dst) = {
                             let start = *index(&self.ints, start);
                             let end = *index(&self.ints, end);
@@ -496,7 +521,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         };
                     }
                     JoinColumns(dst, start, end, sep) => {
-                        let nf = self.line.nf(&self.vars.fs, &mut self.regexes)?;
+                        let nf = self.line.nf(&self.core.vars.fs, &mut self.core.regexes)?;
                         *index_mut(&mut self.strs, dst) = {
                             let sep = index(&self.strs, sep);
                             let start = *index(&self.ints, start);
@@ -510,7 +535,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let arr = index(&self.maps_int_str, arr);
                         let pat = index(&self.strs, pat);
                         let old_len = arr.len();
-                        self.regexes.split_regex_intmap(&pat, &to_split, &arr)?;
+                        self.core
+                            .regexes
+                            .split_regex_intmap(&pat, &to_split, &arr)?;
                         let res = (arr.len() - old_len) as i64;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
@@ -521,7 +548,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let arr = index(&self.maps_str_str, arr);
                         let pat = index(&self.strs, pat);
                         let old_len = arr.len();
-                        self.regexes.split_regex_strmap(&pat, &to_split, &arr)?;
+                        self.core
+                            .regexes
+                            .split_regex_strmap(&pat, &to_split, &arr)?;
                         let res = (arr.len() - old_len) as Int;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
@@ -530,14 +559,14 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let txt = index(&self.strs, txt);
                         // Why do this? We want to exit cleanly when output is closed. We use this
                         // pattern for other IO functions as well.
-                        if let Err(_) = self.write_files.write_str_stdout(txt) {
+                        if let Err(_) = self.core.write_files.write_str_stdout(txt) {
                             return Ok(());
                         }
                     }
                     Print(txt, out, append) => {
                         let txt = index(&self.strs, txt);
                         let out = index(&self.strs, out);
-                        if let Err(_) = self.write_files.write_str(out, txt, *append) {
+                        if let Err(_) = self.core.write_files.write_str(out, txt, *append) {
                             return Ok(());
                         };
                     }
@@ -563,14 +592,14 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let fmt_str = index(&self.strs, fmt);
                         let res = if let Some((out_path_reg, append)) = output {
                             let out_path = index(&self.strs, out_path_reg);
-                            self.write_files.printf(
+                            self.core.write_files.printf(
                                 Some((out_path, *append)),
                                 fmt_str,
                                 &scratch[..],
                             )
                         } else {
                             // print to stdout.
-                            self.write_files.printf(None, fmt_str, &scratch[..])
+                            self.core.write_files.printf(None, fmt_str, &scratch[..])
                         };
                         if res.is_err() {
                             return Ok(());
@@ -582,7 +611,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         // NB this may create an unused entry in write_files. It would not be
                         // terribly difficult to optimize the close path to include an existence
                         // check first.
-                        self.write_files.close(file)?;
+                        self.core.write_files.close(file)?;
                         self.read_files.close(file);
                     }
                     LookupIntInt(res, arr, k) => {
@@ -772,39 +801,40 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         arr.insert(k, v);
                     }
                     LoadVarStr(dst, var) => {
-                        let s = self.vars.load_str(*var)?;
+                        let s = self.core.vars.load_str(*var)?;
                         let dst = *dst;
                         *self.get_mut(dst) = s;
                     }
                     StoreVarStr(var, src) => {
                         let src = *src;
                         let s = self.get(src).clone();
-                        self.vars.store_str(*var, s)?;
+                        self.core.vars.store_str(*var, s)?;
                     }
                     LoadVarInt(dst, var) => {
                         // If someone explicitly sets NF to a different value, this means we will
                         // ignore it. I think that is fine.
                         if let NF = *var {
-                            self.vars.nf = self.line.nf(&self.vars.fs, &mut self.regexes)? as Int;
+                            self.core.vars.nf =
+                                self.line.nf(&self.core.vars.fs, &mut self.core.regexes)? as Int;
                         }
-                        let i = self.vars.load_int(*var)?;
+                        let i = self.core.vars.load_int(*var)?;
                         let dst = *dst;
                         *self.get_mut(dst) = i;
                     }
                     StoreVarInt(var, src) => {
                         let src = *src;
                         let s = *self.get(src);
-                        self.vars.store_int(*var, s)?;
+                        self.core.vars.store_int(*var, s)?;
                     }
                     LoadVarIntMap(dst, var) => {
-                        let arr = self.vars.load_intmap(*var)?;
+                        let arr = self.core.vars.load_intmap(*var)?;
                         let dst = *dst;
                         *self.get_mut(dst) = arr;
                     }
                     StoreVarIntMap(var, src) => {
                         let src = *src;
                         let s = self.get(src).clone();
-                        self.vars.store_intmap(*var, s)?;
+                        self.core.vars.store_intmap(*var, s)?;
                     }
 
                     LoadSlotInt(dst, _) => unimplemented!(),
@@ -971,10 +1001,11 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     NextLine(dst, file) => {
                         let dst = *dst;
                         let file = index(&self.strs, file);
-                        match self
-                            .regexes
-                            .get_line(file, &self.vars.rs, &mut self.read_files)
-                        {
+                        match self.core.regexes.get_line(
+                            file,
+                            &self.core.vars.rs,
+                            &mut self.read_files,
+                        ) {
                             Ok(l) => *self.get_mut(dst) = l,
                             Err(_) => *self.get_mut(dst) = "".into(),
                         };
@@ -987,16 +1018,17 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     NextLineStdin(dst) => {
                         let dst = *dst;
                         let (changed, res) = self
+                            .core
                             .regexes
-                            .get_line_stdin(&self.vars.rs, &mut self.read_files)?;
+                            .get_line_stdin(&self.core.vars.rs, &mut self.read_files)?;
                         if changed {
                             self.reset_file_vars();
                         }
                         *self.get_mut(dst) = res;
                     }
                     NextLineStdinFused() => {
-                        let changed = self.regexes.get_line_stdin_reuse(
-                            &self.vars.rs,
+                        let changed = self.core.regexes.get_line_stdin_reuse(
+                            &self.core.vars.rs,
                             &mut self.read_files,
                             &mut self.line,
                         )?;
@@ -1168,9 +1200,9 @@ impl<T: Default> Storage<T> {
 impl<'a, LR: LineReader> Interp<'a, LR> {
     pub(crate) fn reset(&mut self) {
         self.stack = Default::default();
-        self.vars = Default::default();
+        self.core.vars = Default::default();
         self.line = Default::default();
-        self.regexes = Default::default();
+        self.core.regexes = Default::default();
         self.floats.reset();
         self.ints.reset();
         self.strs.reset();
