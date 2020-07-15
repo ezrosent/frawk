@@ -5,7 +5,7 @@ use crate::{
   arena::Arena,
   ast::{Pattern, Expr, Stmt, Binop, Unop, Prog, FunDec},
   builtins::Function,
-  common::Either,
+  common::{Either, Stage},
   runtime::{strtoi,strtod,hextoi},
   lexer::{self, Tok},
 };
@@ -27,6 +27,7 @@ pub Prog: Prog<'a,'a,&'a str> = {
             decs: fs,
             begin,
             end,
+            stage: Stage::Main(()),
             pats: {
                 let mut pats = pats;
                 if let Some(sa) = sa {

@@ -6,6 +6,52 @@ pub(crate) type NumTy = u32;
 pub(crate) type NodeIx = petgraph::graph::NodeIndex<NumTy>;
 pub(crate) type Graph<V, E> = petgraph::Graph<V, E, petgraph::Directed, NumTy>;
 pub(crate) type Result<T> = std::result::Result<T, CompileError>;
+
+pub enum Stage<T> {
+    Main(T),
+    Par {
+        begin: Option<T>,
+        main_loop: Option<T>,
+        end: Option<T>,
+    },
+}
+
+impl<T> Stage<T> {
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        use smallvec::{smallvec, SmallVec};
+        let res: SmallVec<[&T; 3]> = match self {
+            Stage::Main(t) => smallvec![t],
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => {
+                let mut x = SmallVec::new();
+                x.extend(begin.into_iter().chain(main_loop).chain(end));
+                x
+            }
+        };
+        res.into_iter()
+    }
+    fn map<F, R>(&self, mut f: F) -> Stage<R>
+    where
+        F: FnMut(&T) -> R,
+    {
+        match self {
+            Stage::Main(t) => Stage::Main(f(t)),
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => Stage::Par {
+                begin: begin.as_ref().map(&mut f),
+                main_loop: main_loop.as_ref().map(&mut f),
+                end: end.as_ref().map(&mut f),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Either<L, R> {
     Left(L),
