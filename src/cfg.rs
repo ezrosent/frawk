@@ -10,11 +10,38 @@ use smallvec::smallvec; // macro
 
 use std::collections::VecDeque;
 use std::convert::TryFrom;
+use std::fmt;
 use std::hash::Hash;
 use std::io;
 use std::mem;
 
 pub(crate) type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+pub(crate) enum FunctionName<I> {
+    Begin,
+    MainLoop,
+    End,
+    Named(I),
+}
+
+impl<I: fmt::Display> fmt::Display for FunctionName<I> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let name = match self {
+            FunctionName::Begin => "<begin>",
+            FunctionName::MainLoop => "<main>",
+            FunctionName::End => "<end>",
+            FunctionName::Named(i) => return write!(f, "{}", i),
+        };
+        write!(f, "{}", name)
+    }
+}
+
+impl<I> FunctionName<I> {
+    fn is_main(&self) -> bool {
+        !matches!(self, FunctionName::Named(_))
+    }
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct BasicBlock<'a> {
@@ -250,7 +277,7 @@ pub(crate) struct ProgramContext<'a, I> {
 impl<'a> ProgramContext<'a, &'a str> {
     pub(crate) fn dbg_print(&self, w: &mut impl io::Write) -> io::Result<()> {
         for f in self.funcs.iter() {
-            write!(w, "function {}={}(", f.name.unwrap_or("<main>"), f.ident)?;
+            write!(w, "function {}={}(", f.name, f.ident)?;
             for (i, a) in f.args.iter().enumerate() {
                 use crate::display::Wrap;
                 write!(w, "{}={}", a.name, Wrap(a.id))?;
@@ -386,10 +413,13 @@ where
             conds: Default::default(),
             esc,
         };
-        let mut func_table: HashMap<Option<I>, NumTy> = Default::default();
+        let mut func_table: HashMap<FunctionName<I>, NumTy> = Default::default();
         let mut funcs: Vec<Function<'a, I>> = Default::default();
         for fundec in p.decs.iter() {
-            if let Some(_) = func_table.insert(Some(fundec.name.clone()), funcs.len() as NumTy) {
+            if let Some(_) = func_table.insert(
+                FunctionName::Named(fundec.name.clone()),
+                funcs.len() as NumTy,
+            ) {
                 return err!("duplicate function found for name {}", fundec.name);
             }
             if let Ok(bi) = builtins::Function::try_from(fundec.name.clone()) {
@@ -410,7 +440,7 @@ where
             let mut orig: HashMap<NodeIx, HashSet<Ident>> = Default::default();
 
             let f = Function {
-                name: Some(fundec.name.clone()),
+                name: FunctionName::Named(fundec.name.clone()),
                 ident: funcs.len() as NumTy,
                 args: fundec
                     .args
@@ -442,13 +472,16 @@ where
             };
             funcs.push(f);
         }
+        // TODO: replace main_offset with a Stage<usize>, and replace this code snippet with one
+        // that runs for each of begin/loop/end.
+        //
         // Bind the main function
         let main_stmt = arena.alloc_v(p.desugar(arena));
         let mut cfg = CFG::default();
         let entry = cfg.add_node(Default::default());
         let exit = cfg.add_node(Default::default());
         let mut main_func = Function {
-            name: None,
+            name: FunctionName::MainLoop,
             ident: funcs.len() as NumTy,
             args: Default::default(),
             args_map: Default::default(),
@@ -473,10 +506,12 @@ where
         }
         .fill(main_stmt)?;
         let main_offset = funcs.len();
-        func_table.insert(None, main_offset as NumTy);
+        func_table.insert(FunctionName::MainLoop, main_offset as NumTy);
         funcs.push(main_func);
         for fundec in p.decs.iter() {
-            let f = *func_table.get_mut(&Some(fundec.name.clone())).unwrap();
+            let f = *func_table
+                .get_mut(&FunctionName::Named(fundec.name.clone()))
+                .unwrap();
             View {
                 ctx: &mut shared,
                 f: funcs.get_mut(f as usize).unwrap(),
@@ -495,7 +530,7 @@ where
 struct View<'a, 'b, I> {
     ctx: &'a mut GlobalContext<I>,
     f: &'a mut Function<'b, I>,
-    func_table: &'a HashMap<Option<I>, NumTy>,
+    func_table: &'a HashMap<FunctionName<I>, NumTy>,
 }
 
 #[derive(Debug)]
@@ -540,7 +575,7 @@ pub(crate) struct Arg<I> {
 
 #[derive(Debug)]
 pub(crate) struct Function<'a, I> {
-    pub name: Option<I>,
+    pub name: FunctionName<I>,
     pub ident: NumTy,
     // args_map maps from ast-level ident to an index into args.
     args_map: HashMap<I, NumTy>,
@@ -1471,7 +1506,7 @@ where
         }
         match bi {
             Either::Left(fname) => {
-                return if let Some(i) = self.func_table.get(&Some(fname.clone())) {
+                return if let Some(i) = self.func_table.get(&FunctionName::Named(fname.clone())) {
                     // For field separator optimizations, any UDF calls in the BEGIN block of main
                     // causes fallback to the generic regex-based splitter.
                     //
@@ -1629,7 +1664,7 @@ where
         } else if let Some(id) = self.ctx.hm.get(i) {
             // We have found a global identifier that is not in main. Make sure it is not marked as
             // local.
-            if id.global && self.f.name.is_some() {
+            if id.global && !self.f.name.is_main() {
                 self.ctx.local_globals.remove(&id.low);
             }
             *id
@@ -1637,7 +1672,7 @@ where
             let next = self.fresh();
             self.ctx.hm.insert(i.clone(), next);
             self.ctx.may_rename.push(next);
-            if self.f.name.is_none() {
+            if self.f.name.is_main() {
                 self.ctx.local_globals.insert(next.low);
             }
             next

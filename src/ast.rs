@@ -21,7 +21,7 @@
 ///    patterns are _not sparse_ in the input.
 use crate::arena::Arena;
 use crate::builtins::Function;
-use crate::common::Either;
+use crate::common::{Either, Stage};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Unop {
@@ -63,42 +63,52 @@ pub struct Prog<'a, 'b, I> {
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
     pub end: Option<&'a Stmt<'a, 'b, I>>,
     pub pats: Vec<(Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
+    pub stage: Stage<()>,
 }
 
 impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
     pub(crate) fn desugar<'outer>(&self, arena: &'a Arena<'outer>) -> Stmt<'a, 'b, I> {
+        match self.desugar_stage(arena) {
+            Stage::Main(t) => t,
+            _ => unimplemented!(),
+        }
+    }
+    pub(crate) fn desugar_stage<'outer>(&self, arena: &'a Arena<'outer>) -> Stage<Stmt<'a, 'b, I>> {
         use {self::Binop::*, self::Expr::*, Stmt::*};
         let mut conds = 0;
-        let mut res = vec![];
+
+        let mut begin = vec![];
+        let mut main_loop = None;
+        let mut end = None;
 
         // Desugar -F flag
         if let Some(sep) = self.field_sep {
-            res.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
+            begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("FS".into())),
                 arena.alloc_v(StrLit(sep)),
             )))));
         }
         // Support "output csv/tsv" mode
         if let Some(sep) = self.output_sep {
-            res.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
+            begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("OFS".into())),
                 arena.alloc_v(StrLit(sep)),
             )))));
         }
         if let Some(sep) = self.output_record_sep {
-            res.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
+            begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("ORS".into())),
                 arena.alloc_v(StrLit(sep)),
             )))));
         }
         // Desugar -v flags
         for (ident, exp) in self.prelude_vardecs.iter() {
-            res.push(arena.alloc_v(Expr(
+            begin.push(arena.alloc_v(Expr(
                 arena.alloc_v(Assign(arena.alloc_v(Var(ident.clone())), exp)),
             )));
         }
-        if let Some(begin) = self.begin {
-            res.push(begin);
+        if let Some(begin_block) = self.begin {
+            begin.push(begin_block);
         }
 
         // Desugar patterns into if statements, with the usual desugaring for an empty action.
@@ -190,20 +200,31 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
 
         if self.end.is_some() || inner.len() > init_len {
             // Wrap the whole thing in a while((getline) > 0) { } statement.
-            res.push(arena.alloc(move || {
-                While(
-                    /*is_toplevel=*/ true,
-                    arena.alloc(|| Binop(GT, arena.alloc(|| ReadStdin), arena.alloc(|| ILit(0)))),
-                    arena.alloc(move || Block(inner)),
-                )
-            }));
+            main_loop = Some(While(
+                /*is_toplevel=*/ true,
+                arena.alloc(|| Binop(GT, arena.alloc(|| ReadStdin), arena.alloc(|| ILit(0)))),
+                arena.alloc(move || Block(inner)),
+            ));
         }
 
-        if let Some(end) = self.end {
-            res.push(end);
+        if let Some(end_block) = self.end {
+            end = Some(end_block);
         }
-
-        Stmt::Block(res)
+        match self.stage {
+            Stage::Main(_) => {
+                begin.extend(main_loop.into_iter().map(|x| arena.alloc_v(x)).chain(end));
+                Stage::Main(Stmt::Block(begin))
+            }
+            Stage::Par { .. } => Stage::Par {
+                begin: if begin.len() > 0 {
+                    Some(Stmt::Block(begin))
+                } else {
+                    None
+                },
+                main_loop,
+                end: end.as_ref().map(|s| Stmt::Block(vec![s])),
+            },
+        }
     }
 }
 
