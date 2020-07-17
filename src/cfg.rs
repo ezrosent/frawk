@@ -106,6 +106,9 @@ impl Ident {
             global: true,
         }
     }
+    fn unused() -> Ident {
+        Ident::new_global(0)
+    }
     fn new_local(low: NumTy) -> Ident {
         Ident {
             low,
@@ -426,77 +429,39 @@ where
                 return err!("attempted redefinition of builtin function {}", bi);
             }
             let mut ix = 0;
-            let mut args_map = HashMap::new();
-            let mut cfg = CFG::default();
-            let entry = cfg.add_node(Default::default());
-
             // All exit blocks simply return the designated return node. Return statements in the
             // AST will becode assignments to this variable followed by an unconditional jump to
             // this block.
             let ret = shared.fresh_local();
             shared.may_rename.push(ret);
-            let exit = cfg.add_node(Default::default());
-            let mut defsites: HashMap<Ident, HashSet<NodeIx>> = Default::default();
-            let mut orig: HashMap<NodeIx, HashSet<Ident>> = Default::default();
-
-            let f = Function {
-                name: FunctionName::Named(fundec.name.clone()),
-                ident: funcs.len() as NumTy,
-                args: fundec
-                    .args
-                    .iter()
-                    .map(|i| {
-                        let name = i.clone();
-                        let id = shared.fresh_local();
-                        args_map.insert(i.clone(), ix);
-                        // Args are just like standard local variables --- in fact it's a major
-                        // use-case for arguments in AWK.
-                        shared.may_rename.push(id);
-                        record_ident(&mut defsites, &mut orig, id, entry);
-                        ix += 1;
-                        Arg { name, id }
-                    })
-                    .collect(),
-                args_map,
-                ret,
-                cfg,
-                defsites,
-                orig,
-                entry,
-                exit,
-                loop_ctx: Default::default(),
-                toplevel_header: None,
-                vars: Default::default(),
-                dt: Default::default(),
-                df: Default::default(),
-            };
+            let mut f = Function::new(
+                FunctionName::Named(fundec.name.clone()),
+                funcs.len() as NumTy,
+            );
+            f.args = fundec
+                .args
+                .iter()
+                .map(|i| {
+                    let name = i.clone();
+                    let id = shared.fresh_local();
+                    f.args_map.insert(i.clone(), ix);
+                    // Args are just like standard local variables --- in fact it's a major
+                    // use-case for arguments in AWK.
+                    shared.may_rename.push(id);
+                    record_ident(&mut f.defsites, &mut f.orig, id, f.entry);
+                    ix += 1;
+                    Arg { name, id }
+                })
+                .collect();
+            f.ret = ret;
             funcs.push(f);
         }
         // TODO: replace main_offset with a Stage<usize>, and replace this code snippet with one
         // that runs for each of begin/loop/end.
-        //
+
         // Bind the main function
         let main_stmt = arena.alloc_v(p.desugar(arena));
-        let mut cfg = CFG::default();
-        let entry = cfg.add_node(Default::default());
-        let exit = cfg.add_node(Default::default());
-        let mut main_func = Function {
-            name: FunctionName::MainLoop,
-            ident: funcs.len() as NumTy,
-            args: Default::default(),
-            args_map: Default::default(),
-            ret: View::<'a, 'a, I>::unused(),
-            cfg,
-            defsites: Default::default(),
-            orig: Default::default(),
-            entry,
-            exit,
-            loop_ctx: Default::default(),
-            toplevel_header: None,
-            vars: Default::default(),
-            dt: Default::default(),
-            df: Default::default(),
-        };
+        let mut main_func = Function::new(FunctionName::MainLoop, funcs.len() as NumTy);
         // Now that we have all the functions in place, it's time to fill them up and convert them
         // to SSA.
         View {
@@ -607,6 +572,31 @@ pub(crate) struct Function<'a, I> {
     df: dom::Frontier,
 }
 
+impl<'a, I> Function<'a, I> {
+    fn new(name: FunctionName<I>, ident: NumTy) -> Function<'a, I> {
+        let mut cfg = CFG::default();
+        let entry = cfg.add_node(Default::default());
+        let exit = cfg.add_node(Default::default());
+        Function {
+            name,
+            ident,
+            args: Default::default(),
+            args_map: Default::default(),
+            ret: Ident::unused(),
+            cfg,
+            defsites: Default::default(),
+            orig: Default::default(),
+            entry,
+            exit,
+            loop_ctx: Default::default(),
+            toplevel_header: None,
+            vars: Default::default(),
+            dt: Default::default(),
+            df: Default::default(),
+        }
+    }
+}
+
 pub(crate) fn is_unused(i: Ident) -> bool {
     i.low == 0
 }
@@ -670,10 +660,6 @@ where
         self.add_stmt(self.f.exit, PrimStmt::Return(PrimVal::Var(self.f.ret)))
     }
 
-    fn unused() -> Ident {
-        Ident::new_global(0)
-    }
-
     fn standalone_expr<'c>(
         &mut self,
         expr: &'c Expr<'c, 'b, I>,
@@ -725,7 +711,7 @@ where
                 // We need to assign to unused here, otherwise we could generate the expression but
                 // then drop it on the floor.
                 let (next, e) = self.convert_expr(e, current_open)?;
-                self.add_stmt(next, PrimStmt::AsgnVar(Self::unused(), e))?;
+                self.add_stmt(next, PrimStmt::AsgnVar(Ident::unused(), e))?;
                 next
             }
             Block(stmts) => {
@@ -786,7 +772,7 @@ where
                         } else {
                             PrimExpr::CallBuiltin(builtins::Function::PrintStdout, smallvec![_v])
                         };
-                        self.add_stmt(current_open, PrimStmt::AsgnVar(Self::unused(), v))
+                        self.add_stmt(current_open, PrimStmt::AsgnVar(Ident::unused(), v))
                     }};
                 };
                 macro_rules! print_stmt_escaped {
@@ -956,7 +942,7 @@ where
                 let (current_open, e) = if let Some(ret) = ret {
                     self.convert_expr(ret, current_open)?
                 } else {
-                    (current_open, PrimExpr::Val(PrimVal::Var(Self::unused())))
+                    (current_open, PrimExpr::Val(PrimVal::Var(Ident::unused())))
                 };
                 self.add_stmt(current_open, PrimStmt::AsgnVar(self.f.ret, e))?;
                 self.f
@@ -1112,7 +1098,7 @@ where
                 self.add_stmt(
                     current_open,
                     PrimStmt::AsgnVar(
-                        Self::unused(),
+                        Ident::unused(),
                         PrimExpr::CallBuiltin(ReadLineStdinFused, smallvec![]),
                     ),
                 )?;
@@ -1265,7 +1251,7 @@ where
                 self.add_stmt(
                     next,
                     PrimStmt::AsgnVar(
-                        Self::unused(),
+                        Ident::unused(),
                         PrimExpr::CallBuiltin(Function::Setcol, smallvec![v, to_v]),
                     ),
                 )?;
@@ -1390,7 +1376,7 @@ where
                 self.add_stmt(
                     current_open,
                     PrimStmt::AsgnVar(
-                        Self::unused(),
+                        Ident::unused(),
                         PrimExpr::CallBuiltin(builtins::Function::NextFile, smallvec![]),
                     ),
                 )?;
