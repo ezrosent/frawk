@@ -1,7 +1,7 @@
 use crate::arena;
 use crate::ast::{self, Expr, Stmt, Unop};
 use crate::builtins::{self, IsSprintf};
-use crate::common::{Either, Graph, NodeIx, NumTy, Result};
+use crate::common::{Either, Graph, NodeIx, NumTy, Result, Stage};
 use crate::dom;
 
 use hashbrown::{HashMap, HashSet};
@@ -274,7 +274,16 @@ pub(crate) struct ProgramContext<'a, I> {
     // Functions "know" which Option<Ident> maps to which offset in this
     // table at construction time (in the func_table passed to View).
     pub funcs: Vec<Function<'a, I>>,
-    pub main_offset: usize,
+    main_offset: Stage<usize>,
+}
+
+impl<'a, I> ProgramContext<'a, I> {
+    pub(crate) fn main_offset(&self) -> usize {
+        match self.main_offset {
+            Stage::Main(off) => off,
+            Stage::Par { .. } => unimplemented!(),
+        }
+    }
 }
 
 impl<'a> ProgramContext<'a, &'a str> {
@@ -339,7 +348,7 @@ where
         let mut record_sep = None;
         let mut has_getline = false;
         for (i, f) in self.funcs.iter().enumerate() {
-            if i == self.main_offset {
+            if i == self.main_offset() {
                 for (bi, sep) in [
                     (builtins::Variable::FS, &mut field_sep),
                     (builtins::Variable::RS, &mut record_sep),
@@ -428,7 +437,6 @@ where
             if let Ok(bi) = builtins::Function::try_from(fundec.name.clone()) {
                 return err!("attempted redefinition of builtin function {}", bi);
             }
-            let mut ix = 0;
             // All exit blocks simply return the designated return node. Return statements in the
             // AST will becode assignments to this variable followed by an unconditional jump to
             // this block.
@@ -438,6 +446,8 @@ where
                 FunctionName::Named(fundec.name.clone()),
                 funcs.len() as NumTy,
             );
+
+            let mut ix = 0;
             f.args = fundec
                 .args
                 .iter()
@@ -456,23 +466,49 @@ where
             f.ret = ret;
             funcs.push(f);
         }
-        // TODO: replace main_offset with a Stage<usize>, and replace this code snippet with one
-        // that runs for each of begin/loop/end.
-
-        // Bind the main function
-        let main_stmt = arena.alloc_v(p.desugar(arena));
-        let mut main_func = Function::new(FunctionName::MainLoop, funcs.len() as NumTy);
         // Now that we have all the functions in place, it's time to fill them up and convert them
         // to SSA.
-        View {
-            ctx: &mut shared,
-            f: &mut main_func,
-            func_table: &func_table,
+        macro_rules! fill {
+            ($stmt: expr, $name:expr) => {
+                if let Some(s) = $stmt {
+                    let offset = funcs.len();
+                    let mut func = Function::new($name, offset as NumTy);
+                    View {
+                        ctx: &mut shared,
+                        f: &mut func,
+                        func_table: &func_table,
+                    }
+                    .fill(s)?;
+                    func_table.insert($name, offset as NumTy);
+                    funcs.push(func);
+                    Some(offset)
+                } else {
+                    None
+                }
+            };
         }
-        .fill(main_stmt)?;
-        let main_offset = funcs.len();
-        func_table.insert(FunctionName::MainLoop, main_offset as NumTy);
-        funcs.push(main_func);
+
+        // Bind the main function
+        let main_offset = match p.desugar_stage(arena).map(|s| arena.alloc_v(s)) {
+            Stage::Main(main_stmt) => {
+                Stage::Main(fill!(Some(main_stmt), FunctionName::MainLoop).unwrap())
+            }
+            Stage::Par {
+                begin: None,
+                main_loop: None,
+                end: None,
+            } => Stage::Main(fill!(Some(&Stmt::Block(vec![])), FunctionName::Begin).unwrap()),
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => Stage::Par {
+                begin: fill!(begin, FunctionName::Begin),
+                main_loop: fill!(main_loop, FunctionName::MainLoop),
+                end: fill!(end, FunctionName::End),
+            },
+        };
+
         for fundec in p.decs.iter() {
             let f = *func_table
                 .get_mut(&FunctionName::Named(fundec.name.clone()))

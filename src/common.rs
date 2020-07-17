@@ -7,6 +7,7 @@ pub(crate) type NodeIx = petgraph::graph::NodeIndex<NumTy>;
 pub(crate) type Graph<V, E> = petgraph::Graph<V, E, petgraph::Directed, NumTy>;
 pub(crate) type Result<T> = std::result::Result<T, CompileError>;
 
+#[derive(Debug)]
 pub enum Stage<T> {
     Main(T),
     Par {
@@ -33,7 +34,8 @@ impl<T> Stage<T> {
         };
         res.into_iter()
     }
-    fn map<F, R>(&self, mut f: F) -> Stage<R>
+
+    pub fn map_ref<F, R>(&self, mut f: F) -> Stage<R>
     where
         F: FnMut(&T) -> R,
     {
@@ -47,6 +49,24 @@ impl<T> Stage<T> {
                 begin: begin.as_ref().map(&mut f),
                 main_loop: main_loop.as_ref().map(&mut f),
                 end: end.as_ref().map(&mut f),
+            },
+        }
+    }
+
+    pub fn map<F, R>(self, mut f: F) -> Stage<R>
+    where
+        F: FnMut(T) -> R,
+    {
+        match self {
+            Stage::Main(t) => Stage::Main(f(t)),
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => Stage::Par {
+                begin: begin.map(&mut f),
+                main_loop: main_loop.map(&mut f),
+                end: end.map(&mut f),
             },
         }
     }

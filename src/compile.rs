@@ -623,7 +623,7 @@ impl<'a> Typer<'a> {
                 );
             }
         }
-        let main_offset = gen.id_map[&(pc.main_offset as NumTy, Default::default())];
+        let main_offset = gen.id_map[&(pc.main_offset() as NumTy, Default::default())];
         gen.main_offset = main_offset as usize;
         gen.local_globals = local_globals;
         for frame in gen.frames.iter_mut() {
