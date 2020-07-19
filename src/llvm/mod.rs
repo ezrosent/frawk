@@ -459,32 +459,35 @@ impl<'a, 'b> Generator<'a, 'b> {
         let bb = LLVMAppendBasicBlockInContext(self.ctx, decl, c_str!(""));
         LLVMPositionBuilderAtEnd(builder, bb);
 
-        // We need to allocate all of the global variables that our main function uses, and then
-        // pass them as arguments, along with the runtime.
-        let main_info = &self.decls[self.types.main_offset()];
-        let mut args: SmallVec<_> = smallvec![ptr::null_mut(); main_info.num_args];
-        for ((_reg, ty), arg_ix) in main_info.globals.iter() {
-            let local = self.alloc_local(builder, *ty)?;
-            let param = if let Ty::Str = ty {
-                // Already a pointer; we're good to go!
-                local
-            } else {
-                let loc = LLVMBuildAlloca(builder, self.llvm_ty(*ty), c_str!(""));
-                LLVMBuildStore(builder, local, loc);
-                loc
-            };
-            args[*arg_ix] = param;
+        // For now, iterate over each element of the stage and call each component in sequence.
+        for sub_main in self.types.stage().iter().cloned() {
+            // We need to allocate all of the global variables that our main function uses, and then
+            // pass them as arguments, along with the runtime.
+            let main_info = &self.decls[sub_main];
+            let mut args: SmallVec<_> = smallvec![ptr::null_mut(); main_info.num_args];
+            for ((_reg, ty), arg_ix) in main_info.globals.iter() {
+                let local = self.alloc_local(builder, *ty)?;
+                let param = if let Ty::Str = ty {
+                    // Already a pointer; we're good to go!
+                    local
+                } else {
+                    let loc = LLVMBuildAlloca(builder, self.llvm_ty(*ty), c_str!(""));
+                    LLVMBuildStore(builder, local, loc);
+                    loc
+                };
+                args[*arg_ix] = param;
+            }
+            // Pass the runtime last.
+            args[main_info.num_args - 1] = LLVMGetParam(decl, 0);
+            LLVMBuildCall(
+                builder,
+                main_info.val,
+                args.as_mut_ptr(),
+                args.len() as libc::c_uint,
+                c_str!(""),
+            );
         }
 
-        // Pass the runtime last.
-        args[main_info.num_args - 1] = LLVMGetParam(decl, 0);
-        LLVMBuildCall(
-            builder,
-            main_info.val,
-            args.as_mut_ptr(),
-            args.len() as libc::c_uint,
-            c_str!(""),
-        );
         LLVMBuildRetVoid(builder);
         LLVMDisposeBuilder(builder);
         self.optimize(decl)?;

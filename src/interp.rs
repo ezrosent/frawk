@@ -1,6 +1,6 @@
 use crate::builtins::Variable;
 use crate::bytecode::{Get, Instr, Label, Pop, Reg};
-use crate::common::{NumTy, Result};
+use crate::common::{NumTy, Result, Stage};
 use crate::compile::{self, Ty};
 use crate::pushdown::FieldSet;
 use crate::runtime::{self, Float, Int, Line, LineReader, Str};
@@ -94,7 +94,7 @@ impl<'a> Core<'a> {
 
 pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     // index of `instrs` that contains "main"
-    main_func: usize,
+    main_func: Stage<usize>,
     instrs: Vec<Vec<Instr<'a>>>,
     stack: Vec<(usize /*function*/, Label /*instr*/)>,
 
@@ -133,7 +133,7 @@ fn default_of<T: Default>(n: usize) -> Storage<T> {
 impl<'a, LR: LineReader> Interp<'a, LR> {
     pub(crate) fn new(
         instrs: Vec<Vec<Instr<'a>>>,
-        main_func: usize,
+        main_func: Stage<usize>,
         regs: impl Fn(compile::Ty) -> usize,
         stdin: LR,
         ff: impl runtime::writers::FileFactory,
@@ -185,11 +185,17 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     }
 
     pub(crate) fn run(&mut self) -> Result<()> {
+        let offs: crate::smallvec::SmallVec<[usize; 3]> = self.main_func.iter().cloned().collect();
+        for off in offs.into_iter() {
+            self.run_at(off)?
+        }
+        Ok(())
+    }
+    pub(crate) fn run_at(&mut self, mut cur_fn: usize) -> Result<()> {
         use Instr::*;
         let mut scratch: Vec<runtime::FormatArg> = Vec::new();
         // We are only accessing one vector at a time here, but it's hard to convince the borrow
         // checker of this fact, so we access the vectors through raw pointers.
-        let mut cur_fn = self.main_func;
         let mut instrs = (&mut self.instrs[cur_fn]) as *mut Vec<Instr<'a>>;
         let mut cur = 0;
 
