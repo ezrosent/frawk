@@ -381,12 +381,10 @@ fn accum<'a>(inst: &Instr<'a>, mut f: impl FnMut(NumTy, Ty)) {
 }
 
 impl<'a> Typer<'a> {
-    pub fn main_offset(&self) -> usize {
-        match self.main_offset {
-            Stage::Main(o) => o,
-            Stage::Par { .. } => unimplemented!(),
-        }
+    pub fn stage(&self) -> Stage<usize> {
+        self.main_offset.clone()
     }
+
     fn to_interp<LR: runtime::LineReader>(
         &mut self,
         reader: LR,
@@ -395,7 +393,7 @@ impl<'a> Typer<'a> {
         let instrs = self.to_bytecode()?;
         Ok(bytecode::Interp::new(
             instrs,
-            self.main_offset(),
+            self.stage(),
             |ty| self.regs.stats.count(ty) as usize,
             reader,
             ff,
