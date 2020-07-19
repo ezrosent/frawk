@@ -1,7 +1,7 @@
 use crate::builtins;
 use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
-use crate::common::{Either, Graph, NodeIx, NumTy, Result, WorkList};
+use crate::common::{Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::llvm;
 use crate::pushdown::{self, FieldSet};
 use crate::runtime;
@@ -249,7 +249,7 @@ pub(crate) struct Typer<'a> {
     // error-prone.
     pub func_info: Vec<FuncInfo>,
     pub frames: Vec<Frame<'a>>,
-    pub main_offset: usize,
+    pub main_offset: Stage<usize>,
 
     // For projection pushdown
     used_fields: FieldSet,
@@ -381,6 +381,12 @@ fn accum<'a>(inst: &Instr<'a>, mut f: impl FnMut(NumTy, Ty)) {
 }
 
 impl<'a> Typer<'a> {
+    pub fn main_offset(&self) -> usize {
+        match self.main_offset {
+            Stage::Main(o) => o,
+            Stage::Par { .. } => unimplemented!(),
+        }
+    }
     fn to_interp<LR: runtime::LineReader>(
         &mut self,
         reader: LR,
@@ -389,7 +395,7 @@ impl<'a> Typer<'a> {
         let instrs = self.to_bytecode()?;
         Ok(bytecode::Interp::new(
             instrs,
-            self.main_offset,
+            self.main_offset(),
             |ty| self.regs.stats.count(ty) as usize,
             reader,
             ff,
@@ -623,8 +629,9 @@ impl<'a> Typer<'a> {
                 );
             }
         }
-        let main_offset = gen.id_map[&(pc.main_offset() as NumTy, Default::default())];
-        gen.main_offset = main_offset as usize;
+        gen.main_offset = pc
+            .main_stage()
+            .map_ref(|o| gen.id_map[&(*o as NumTy, Default::default())] as usize);
         gen.local_globals = local_globals;
         for frame in gen.frames.iter_mut() {
             let src_func = frame.src_function as usize;
@@ -684,9 +691,11 @@ impl<'a> Typer<'a> {
 
     fn mark_used_frames(&mut self) {
         use petgraph::visit::Dfs;
-        let mut dfs = Dfs::new(&self.callgraph, NodeIx::new(self.main_offset));
-        while let Some(ix) = dfs.next(&self.callgraph) {
-            self.frames[ix.index()].is_called = true;
+        for offset in self.main_offset.iter() {
+            let mut dfs = Dfs::new(&self.callgraph, NodeIx::new(*offset));
+            while let Some(ix) = dfs.next(&self.callgraph) {
+                self.frames[ix.index()].is_called = true;
+            }
         }
     }
 

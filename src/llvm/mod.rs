@@ -461,7 +461,7 @@ impl<'a, 'b> Generator<'a, 'b> {
 
         // We need to allocate all of the global variables that our main function uses, and then
         // pass them as arguments, along with the runtime.
-        let main_info = &self.decls[self.types.main_offset];
+        let main_info = &self.decls[self.types.main_offset()];
         let mut args: SmallVec<_> = smallvec![ptr::null_mut(); main_info.num_args];
         for ((_reg, ty), arg_ix) in main_info.globals.iter() {
             let local = self.alloc_local(builder, *ty)?;

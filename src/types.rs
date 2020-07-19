@@ -664,9 +664,12 @@ impl<'b, 'c> TypeContext<'b, 'c> {
     pub(crate) fn from_prog<'a>(pc: &ProgramContext<'a, &'a str>) -> Result<TypeInfo> {
         use hashbrown::hash_map::Entry;
         let mut tc = TypeContext::from_pc(pc);
-        let main = &pc.funcs[pc.main_offset()];
-        let main_base = tc.udf_nodes[pc.main_offset()];
-        tc.get_function(main, /*arg_nodes=*/ Default::default(), main_base);
+        // TODO: to migrate, simply iterate over the Stage variant of this and solve at the end?
+        for offset in pc.main_offsets() {
+            let main = &pc.funcs[offset];
+            let main_base = tc.udf_nodes[offset];
+            tc.get_function(main, /*arg_nodes=*/ Default::default(), main_base);
+        }
         tc.solve()?;
         let mut var_tys = HashMap::new();
         let mut func_tys = HashMap::new();
