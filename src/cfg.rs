@@ -278,11 +278,11 @@ pub(crate) struct ProgramContext<'a, I> {
 }
 
 impl<'a, I> ProgramContext<'a, I> {
-    pub(crate) fn main_offset(&self) -> usize {
-        match self.main_offset {
-            Stage::Main(off) => off,
-            Stage::Par { .. } => unimplemented!(),
-        }
+    pub fn main_stage(&self) -> &Stage<usize> {
+        &self.main_offset
+    }
+    pub fn main_offsets(&self) -> impl Iterator<Item = usize> + '_ {
+        self.main_offset.iter().cloned()
     }
 }
 
@@ -343,12 +343,18 @@ where
     // TODO This is all a bit crude, but we might have to build up full def-use chains to do
     // something more principled. It's worth looking at a more robust approach if there are scripts
     // that we would prefer triggered this optimizations but did not.
+    fn begin_offset(&self) -> Option<usize> {
+        match self.main_offset {
+            Stage::Main(x) => Some(x),
+            Stage::Par { begin, .. } => begin,
+        }
+    }
     pub fn analyze_sep_assignments(&self) -> SepAssign<'a> {
         let mut field_sep = None;
         let mut record_sep = None;
         let mut has_getline = false;
         for (i, f) in self.funcs.iter().enumerate() {
-            if i == self.main_offset() {
+            if Some(i) == self.begin_offset() {
                 for (bi, sep) in [
                     (builtins::Variable::FS, &mut field_sep),
                     (builtins::Variable::RS, &mut record_sep),

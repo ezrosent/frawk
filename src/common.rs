@@ -7,7 +7,7 @@ pub(crate) type NodeIx = petgraph::graph::NodeIndex<NumTy>;
 pub(crate) type Graph<V, E> = petgraph::Graph<V, E, petgraph::Directed, NumTy>;
 pub(crate) type Result<T> = std::result::Result<T, CompileError>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stage<T> {
     Main(T),
     Par {
@@ -17,8 +17,14 @@ pub enum Stage<T> {
     },
 }
 
+impl<T: Default> Default for Stage<T> {
+    fn default() -> Stage<T> {
+        Stage::Main(Default::default())
+    }
+}
+
 impl<T> Stage<T> {
-    fn iter(&self) -> impl Iterator<Item = &T> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
         use smallvec::{smallvec, SmallVec};
         let res: SmallVec<[&T; 3]> = match self {
             Stage::Main(t) => smallvec![t],
