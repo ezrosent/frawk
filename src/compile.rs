@@ -9,6 +9,8 @@ use crate::smallvec::{self, smallvec};
 use crate::types;
 
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
+
+use std::collections::VecDeque;
 use std::mem;
 
 pub(crate) const UNUSED: u32 = u32::max_value();
@@ -220,7 +222,7 @@ impl RegStatuses {
 
 pub(crate) type LL<'a> = bytecode::Instr<'a>;
 type Instr<'a> = Either<LL<'a>, HighLevel>;
-type CFG<'a> = Graph<Vec<Instr<'a>>, Option<NumTy /* Int register */>>;
+type CFG<'a> = Graph<VecDeque<Instr<'a>>, Option<NumTy /* Int register */>>;
 type CallGraph = Graph<HashSet<(NumTy, Ty)>, ()>;
 
 // Typer contains much of the state necessary for generating a typed CFG, which in turn can
@@ -284,7 +286,7 @@ struct View<'a, 'b> {
     func_info: &'b Vec<FuncInfo>,
     // The current basic block being filled; It'll be swaped into `frame.cfg` as we translate a
     // given function cfg.
-    stream: &'b mut Vec<Instr<'a>>,
+    stream: &'b mut VecDeque<Instr<'a>>,
 }
 
 fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
@@ -633,7 +635,7 @@ impl<'a> Typer<'a> {
         gen.local_globals = local_globals;
         for frame in gen.frames.iter_mut() {
             let src_func = frame.src_function as usize;
-            let mut stream = Vec::new();
+            let mut stream = VecDeque::new();
             View {
                 frame,
                 regs: &mut gen.regs,
@@ -858,7 +860,7 @@ impl<'a, 'b> View<'a, 'b> {
     }
 
     fn pushl(&mut self, i: LL<'a>) {
-        self.stream.push(Either::Left(i))
+        self.stream.push_back(Either::Left(i))
     }
 
     fn pushr(&mut self, i: HighLevel) {
@@ -874,7 +876,7 @@ impl<'a, 'b> View<'a, 'b> {
                 (),
             );
         }
-        self.stream.push(Either::Right(i))
+        self.stream.push_back(Either::Right(i))
     }
 
     // Get the register associated with a value. For identifiers this has the same semantics as
