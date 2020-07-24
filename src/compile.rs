@@ -257,6 +257,12 @@ pub(crate) struct Typer<'a> {
     used_fields: FieldSet,
     // Not used for bytecode generation.
     callgraph: Graph<HashSet<(NumTy, Ty)>, ()>,
+
+    // The global variables referenced (transitively) by each function. This is used both for
+    // cross-stage state propagation for parallel execution, as well as for implementing global
+    // variables in the LLVM backend. It is computed lazily because these are not needed for
+    // serial, bytecode-only scripts.
+    global_refs: Option<Vec<HashSet<(NumTy, Ty)>>>,
 }
 
 #[derive(Debug)]
@@ -699,7 +705,39 @@ impl<'a> Typer<'a> {
         }
     }
 
+    pub(crate) fn get_locals(
+        &self,
+        offsets: impl Iterator<Item = usize>,
+    ) -> Vec<(usize, HashSet<(NumTy, Ty)>)> {
+        let mut res = Vec::new();
+        for i in offsets {
+            let mut hs = HashSet::new();
+            let frame = &self.frames[i];
+            let stats = &self.regs.stats;
+            for bb in frame.cfg.raw_nodes() {
+                for stmt in bb.weight.iter() {
+                    accum(stmt, |reg, ty| {
+                        if reg == UNUSED {
+                            return;
+                        }
+                        match stats.get_status(reg, ty) {
+                            RegStatus::Local => {
+                                hs.insert((reg, ty));
+                            }
+                            RegStatus::Ret | RegStatus::Global => {}
+                        }
+                    })
+                }
+            }
+            res.push((i, hs))
+        }
+        res
+    }
+
     pub(crate) fn get_global_refs(&mut self) -> Vec<HashSet<(NumTy, Ty)>> {
+        if let Some(globals) = &self.global_refs {
+            return globals.clone();
+        }
         let mut globals = vec![HashSet::new(); self.frames.len()];
         // First, accumulate all the local and global registers referenced in all the functions.
         // We need these for LLVM because relevant globals are passed as function parameters, and
@@ -768,6 +806,7 @@ impl<'a> Typer<'a> {
         for (i, set) in globals.iter_mut().enumerate() {
             mem::swap(set, self.callgraph.node_weight_mut(NodeIx::new(i)).unwrap());
         }
+        self.global_refs = Some(globals.clone());
         globals
     }
 }
