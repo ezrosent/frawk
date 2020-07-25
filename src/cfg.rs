@@ -592,7 +592,7 @@ pub(crate) struct Function<'a, I> {
 
     defsites: HashMap<Ident, HashSet<NodeIx>>,
     orig: HashMap<NodeIx, HashSet<Ident>>,
-    entry: NodeIx,
+    pub entry: NodeIx,
     // We enforce that a single basic block has a return statement. This is to ensure that type
     // inference infers the same type for each return site.
     pub exit: NodeIx,
