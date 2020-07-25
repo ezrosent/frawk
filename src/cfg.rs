@@ -39,7 +39,7 @@ impl<I: fmt::Display> fmt::Display for FunctionName<I> {
 
 impl<I> FunctionName<I> {
     fn is_main(&self) -> bool {
-        !matches!(self, FunctionName::Named(_))
+        matches!(self, FunctionName::MainLoop)
     }
 }
 
@@ -494,8 +494,20 @@ where
             };
         }
 
+        for fundec in p.decs.iter() {
+            let f = *func_table
+                .get_mut(&FunctionName::Named(fundec.name.clone()))
+                .unwrap();
+            View {
+                ctx: &mut shared,
+                f: funcs.get_mut(f as usize).unwrap(),
+                func_table: &func_table,
+            }
+            .fill(fundec.body)?;
+        }
+
         // Bind the main function
-        let main_offset = match p.desugar_stage(arena).map(|s| arena.alloc_v(s)) {
+        let main_offset = match p.desugar_stage(arena) {
             Stage::Main(main_stmt) => {
                 Stage::Main(fill!(Some(main_stmt), FunctionName::MainLoop).unwrap())
             }
@@ -508,24 +520,20 @@ where
                 begin,
                 main_loop,
                 end,
-            } => Stage::Par {
-                begin: fill!(begin, FunctionName::Begin),
-                main_loop: fill!(main_loop, FunctionName::MainLoop),
-                end: fill!(end, FunctionName::End),
-            },
+            } => {
+                // Need to fill begin and end before main_loop to ensure that variables accessed in
+                // those two as well as main are marked as global.
+                let begin = fill!(begin, FunctionName::Begin);
+                let end = fill!(end, FunctionName::End);
+                let main_loop = fill!(main_loop, FunctionName::MainLoop);
+                Stage::Par {
+                    begin,
+                    main_loop,
+                    end,
+                }
+            }
         };
 
-        for fundec in p.decs.iter() {
-            let f = *func_table
-                .get_mut(&FunctionName::Named(fundec.name.clone()))
-                .unwrap();
-            View {
-                ctx: &mut shared,
-                f: funcs.get_mut(f as usize).unwrap(),
-                func_table: &func_table,
-            }
-            .fill(fundec.body)?;
-        }
         Ok(ProgramContext {
             shared,
             funcs,

@@ -128,7 +128,7 @@ type ProgResult<'a> = Result<(
     HashMap<&'a str, compile::Ty>, /* type info */
 )>;
 
-const LLVM_CONFIG: llvm::Config = llvm::Config { opt_level: 3 };
+const LLVM_CONFIG: llvm::Config = llvm::Config { opt_level: 1 };
 
 pub(crate) fn run_program<'a>(
     a: &'a Arena,

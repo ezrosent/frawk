@@ -67,13 +67,10 @@ pub struct Prog<'a, 'b, I> {
 }
 
 impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
-    pub(crate) fn desugar<'outer>(&self, arena: &'a Arena<'outer>) -> Stmt<'a, 'b, I> {
-        match self.desugar_stage(arena) {
-            Stage::Main(t) => t,
-            _ => unimplemented!(),
-        }
-    }
-    pub(crate) fn desugar_stage<'outer>(&self, arena: &'a Arena<'outer>) -> Stage<Stmt<'a, 'b, I>> {
+    pub(crate) fn desugar_stage<'outer>(
+        &self,
+        arena: &'a Arena<'outer>,
+    ) -> Stage<&'a Stmt<'a, 'b, I>> {
         use {self::Binop::*, self::Expr::*, Stmt::*};
         let mut conds = 0;
 
@@ -200,11 +197,11 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
 
         if self.end.is_some() || inner.len() > init_len {
             // Wrap the whole thing in a while((getline) > 0) { } statement.
-            main_loop = Some(While(
+            main_loop = Some(arena.alloc_v(While(
                 /*is_toplevel=*/ true,
                 arena.alloc(|| Binop(GT, arena.alloc(|| ReadStdin), arena.alloc(|| ILit(0)))),
                 arena.alloc(move || Block(inner)),
-            ));
+            )));
         }
 
         if let Some(end_block) = self.end {
@@ -212,17 +209,17 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         }
         match self.stage {
             Stage::Main(_) => {
-                begin.extend(main_loop.into_iter().map(|x| arena.alloc_v(x)).chain(end));
-                Stage::Main(Stmt::Block(begin))
+                begin.extend(main_loop.into_iter().chain(end));
+                Stage::Main(arena.alloc_v(Stmt::Block(begin)))
             }
             Stage::Par { .. } => Stage::Par {
                 begin: if begin.len() > 0 {
-                    Some(Stmt::Block(begin))
+                    Some(arena.alloc_v(Stmt::Block(begin)))
                 } else {
                     None
                 },
                 main_loop,
-                end: end.as_ref().map(|s| Stmt::Block(vec![s])),
+                end,
             },
         }
     }
