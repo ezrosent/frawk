@@ -310,12 +310,12 @@ impl<'a> Frame<'a> {
         regs: impl Iterator<Item = (NumTy, Ty)>,
         ctr: &mut SlotCounter,
     ) -> Result<()> {
-        let stream = self.cfg.node_weight_mut(self.exit).unwrap();
+        let stream = self.cfg.node_weight_mut(self.entry).unwrap();
         for reg in regs {
             let slot = ctr.get_slot(reg);
-            stream.push_front(Either::Left(cross_stage::load_slot_instr(
-                reg.0, reg.1, slot,
-            )?));
+            if let Some(inst) = cross_stage::load_slot_instr(reg.0, reg.1, slot)? {
+                stream.push_front(Either::Left(inst))
+            }
         }
         Ok(())
     }
@@ -327,9 +327,9 @@ impl<'a> Frame<'a> {
         let stream = self.cfg.node_weight_mut(self.exit).unwrap();
         for reg in regs {
             let slot = ctr.get_slot(reg);
-            stream.push_back(Either::Left(cross_stage::store_slot_instr(
-                reg.0, reg.1, slot,
-            )?));
+            if let Some(inst) = cross_stage::store_slot_instr(reg.0, reg.1, slot)? {
+                stream.push_front(Either::Left(inst))
+            }
         }
         Ok(())
     }
@@ -759,35 +759,6 @@ impl<'a> Typer<'a> {
         }
     }
 
-    pub(crate) fn get_locals(
-        &self,
-        offsets: impl Iterator<Item = usize>,
-    ) -> Vec<(usize, HashSet<(NumTy, Ty)>)> {
-        let mut res = Vec::new();
-        for i in offsets {
-            let mut hs = HashSet::new();
-            let frame = &self.frames[i];
-            let stats = &self.regs.stats;
-            for bb in frame.cfg.raw_nodes() {
-                for stmt in bb.weight.iter() {
-                    accum(stmt, |reg, ty| {
-                        if reg == UNUSED {
-                            return;
-                        }
-                        match stats.get_status(reg, ty) {
-                            RegStatus::Local => {
-                                hs.insert((reg, ty));
-                            }
-                            RegStatus::Ret | RegStatus::Global => {}
-                        }
-                    })
-                }
-            }
-            res.push((i, hs))
-        }
-        res
-    }
-
     fn add_slots(&mut self) -> Result<()> {
         use cross_stage::compute_slots;
         let (begin, main_loop, end) = match self.main_offset {
@@ -799,8 +770,7 @@ impl<'a> Typer<'a> {
             } => (begin, main_loop, end),
         };
         let global_refs = self.get_global_refs();
-        let local_refs = self.get_locals(self.main_offset.iter().cloned());
-        let slots = compute_slots(&begin, &main_loop, &end, global_refs, local_refs);
+        let slots = compute_slots(&begin, &main_loop, &end, global_refs);
         let mut ctr = SlotCounter::default();
 
         // Begin stores the context of begin_stores

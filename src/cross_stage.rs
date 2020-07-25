@@ -16,9 +16,9 @@ pub(crate) struct SlotOps {
     pub(crate) loop_stores: SlotSet,
 }
 
-pub(crate) fn load_slot_instr<'a>(reg: NumTy, ty: Ty, slot: usize) -> Result<LL<'a>> {
+pub(crate) fn load_slot_instr<'a>(reg: NumTy, ty: Ty, slot: usize) -> Result<Option<LL<'a>>> {
     use Ty::*;
-    Ok(match ty {
+    Ok(Some(match ty {
         Int => LL::LoadSlotInt(reg.into(), slot as _),
         Float => LL::LoadSlotFloat(reg.into(), slot as _),
         Str => LL::LoadSlotStr(reg.into(), slot as _),
@@ -28,13 +28,14 @@ pub(crate) fn load_slot_instr<'a>(reg: NumTy, ty: Ty, slot: usize) -> Result<LL<
         MapStrInt => LL::LoadSlotStrInt(reg.into(), slot as _),
         MapStrFloat => LL::LoadSlotStrFloat(reg.into(), slot as _),
         MapStrStr => LL::LoadSlotStrStr(reg.into(), slot as _),
-        Null | IterInt | IterStr => return err!("unexpected slot type: {:?}", ty),
-    })
+        Null => return Ok(None),
+        IterInt | IterStr => return err!("unexpected slot type: {:?}", ty),
+    }))
 }
 
-pub(crate) fn store_slot_instr<'a>(reg: NumTy, ty: Ty, slot: usize) -> Result<LL<'a>> {
+pub(crate) fn store_slot_instr<'a>(reg: NumTy, ty: Ty, slot: usize) -> Result<Option<LL<'a>>> {
     use Ty::*;
-    Ok(match ty {
+    Ok(Some(match ty {
         Int => LL::StoreSlotInt(reg.into(), slot as _),
         Float => LL::StoreSlotFloat(reg.into(), slot as _),
         Str => LL::StoreSlotStr(reg.into(), slot as _),
@@ -44,8 +45,9 @@ pub(crate) fn store_slot_instr<'a>(reg: NumTy, ty: Ty, slot: usize) -> Result<LL
         MapStrInt => LL::StoreSlotStrInt(reg.into(), slot as _),
         MapStrFloat => LL::StoreSlotStrFloat(reg.into(), slot as _),
         MapStrStr => LL::StoreSlotStrStr(reg.into(), slot as _),
-        Null | IterInt | IterStr => return err!("unexpected slot type: {:?}", ty),
-    })
+        Null => return Ok(None),
+        IterInt | IterStr => return err!("unexpected slot type: {:?}", ty),
+    }))
 }
 
 fn compute_par(
@@ -57,8 +59,6 @@ fn compute_par(
         begin_stores: begin_refs.intersection(loop_refs).cloned().collect(),
         loop_stores: loop_refs.intersection(end_refs).cloned().collect(),
     };
-    eprintln!("compute_par begin={:?}, loop={:?}, end={:?}, bs={:?}, ls={:?}",
-              begin_refs, loop_refs, end_refs, res.begin_stores, res.loop_stores);
     res
 }
 
@@ -67,12 +67,8 @@ pub(crate) fn compute_slots(
     begin: &Option<usize>,
     main_loop: &Option<usize>,
     end: &Option<usize>,
-    mut global_refs: Vec<HashSet<(NumTy, Ty)>>,
-    local_refs: Vec<(usize, HashSet<(NumTy, Ty)>)>,
+    global_refs: Vec<HashSet<(NumTy, Ty)>>,
 ) -> SlotOps {
-    for (i, s) in local_refs.into_iter() {
-        global_refs[i].extend(s.into_iter())
-    }
     let empty: HashSet<(NumTy, Ty)> = Default::default();
     let get_ref = |x: &Option<usize>| x.as_ref().map(|i| &global_refs[*i]).unwrap_or(&empty);
     compute_par(get_ref(begin), get_ref(main_loop), get_ref(end))

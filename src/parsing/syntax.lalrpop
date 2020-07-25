@@ -27,8 +27,8 @@ pub Prog: Prog<'a,'a,&'a str> = {
             decs: fs,
             begin,
             end,
-            // stage: Stage::Main(()),
-            stage: Stage::Par{begin:None,main_loop:None,end:None},
+            stage: Stage::Main(()),
+            // stage: Stage::Par{begin:None,main_loop:None,end:None},
             pats: {
                 let mut pats = pats;
                 if let Some(sa) = sa {

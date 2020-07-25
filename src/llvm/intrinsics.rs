@@ -1216,6 +1216,7 @@ map_impl! {
 
 macro_rules! slot_impl_inner {
     ($load:ident, $store:ident, $slot_fld:tt, $ty:tt) => {
+        #[no_mangle]
         pub unsafe extern "C" fn $load(runtime: *mut c_void, slot: Int) -> out_ty!($ty) {
             let runtime = &mut *(runtime as *mut Runtime);
             convert_out!(
@@ -1227,6 +1228,7 @@ macro_rules! slot_impl_inner {
             )
         }
 
+        #[no_mangle]
         pub unsafe extern "C" fn $store(runtime: *mut c_void, slot: Int, v: in_ty!($ty)) {
             let runtime = &mut *(runtime as *mut Runtime);
             crate::interp::set_slot(
