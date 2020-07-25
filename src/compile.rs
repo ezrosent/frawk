@@ -2,6 +2,7 @@ use crate::builtins;
 use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
+use crate::cross_stage;
 use crate::llvm;
 use crate::pushdown::{self, FieldSet};
 use crate::runtime;
@@ -265,6 +266,25 @@ pub(crate) struct Typer<'a> {
     global_refs: Option<Vec<HashSet<(NumTy, Ty)>>>,
 }
 
+#[derive(Default)]
+struct SlotCounter {
+    slots: HashMap<(NumTy, Ty), usize>,
+    counter: HashMap<Ty, usize>,
+}
+
+impl SlotCounter {
+    fn get_slot(&mut self, reg: (NumTy, Ty)) -> usize {
+        if let Some(c) = self.slots.get(&reg) {
+            return *c;
+        }
+        let ctr = self.counter.entry(reg.1).or_insert(0);
+        let res = *ctr;
+        *ctr += 1;
+        self.slots.insert(reg, res);
+        res
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct FuncInfo {
     pub ret_ty: Ty,
@@ -276,10 +296,43 @@ pub(crate) struct FuncInfo {
 pub(crate) struct Frame<'a> {
     src_function: NumTy,
     cur_ident: NumTy,
+    entry: NodeIx,
+    exit: NodeIx,
     pub locals: HashMap<Ident, (u32, Ty)>,
     pub arg_regs: SmallVec<NumTy>,
     pub cfg: CFG<'a>,
     pub is_called: bool,
+}
+
+impl<'a> Frame<'a> {
+    fn load_slots(
+        &mut self,
+        regs: impl Iterator<Item = (NumTy, Ty)>,
+        ctr: &mut SlotCounter,
+    ) -> Result<()> {
+        let stream = self.cfg.node_weight_mut(self.exit).unwrap();
+        for reg in regs {
+            let slot = ctr.get_slot(reg);
+            stream.push_front(Either::Left(cross_stage::load_slot_instr(
+                reg.0, reg.1, slot,
+            )?));
+        }
+        Ok(())
+    }
+    fn store_slots(
+        &mut self,
+        regs: impl Iterator<Item = (NumTy, Ty)>,
+        ctr: &mut SlotCounter,
+    ) -> Result<()> {
+        let stream = self.cfg.node_weight_mut(self.exit).unwrap();
+        for reg in regs {
+            let slot = ctr.get_slot(reg);
+            stream.push_back(Either::Left(cross_stage::store_slot_instr(
+                reg.0, reg.1, slot,
+            )?));
+        }
+        Ok(())
+    }
 }
 
 struct View<'a, 'b> {
@@ -656,6 +709,7 @@ impl<'a> Typer<'a> {
         }
         gen.compute_used_fields();
         gen.mark_used_frames();
+        gen.add_slots()?;
         Ok(gen)
     }
 
@@ -732,6 +786,36 @@ impl<'a> Typer<'a> {
             res.push((i, hs))
         }
         res
+    }
+
+    fn add_slots(&mut self) -> Result<()> {
+        use cross_stage::compute_slots;
+        let (begin, main_loop, end) = match self.main_offset {
+            Stage::Main(_) => return Ok(()),
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => (begin, main_loop, end),
+        };
+        let global_refs = self.get_global_refs();
+        let local_refs = self.get_locals(self.main_offset.iter().cloned());
+        let slots = compute_slots(&begin, &main_loop, &end, global_refs, local_refs);
+        let mut ctr = SlotCounter::default();
+
+        // Begin stores the context of begin_stores
+        if let Some(off) = begin {
+            self.frames[off].store_slots(slots.begin_stores.iter().cloned(), &mut ctr)?;
+        }
+        if let Some(off) = main_loop {
+            self.frames[off].load_slots(slots.begin_stores.iter().cloned(), &mut ctr)?;
+            self.frames[off].store_slots(slots.loop_stores.iter().cloned(), &mut ctr)?;
+        }
+        if let Some(off) = end {
+            self.frames[off].load_slots(slots.loop_stores.iter().cloned(), &mut ctr)?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn get_global_refs(&mut self) -> Vec<HashSet<(NumTy, Ty)>> {
@@ -813,6 +897,8 @@ impl<'a> Typer<'a> {
 
 impl<'a, 'b> View<'a, 'b> {
     fn process_function(&mut self, func: &Function<'a, &'a str>) -> Result<()> {
+        self.frame.entry = func.entry;
+        self.frame.exit = func.exit;
         // Record registers for arguments.
         for arg in func.args.iter() {
             let (reg, _) = self.reg_of_ident(&arg.id);
@@ -899,6 +985,8 @@ impl<'a, 'b> View<'a, 'b> {
     }
 
     fn pushl(&mut self, i: LL<'a>) {
+        // NB: unlike pushr, this isn't the sole entrypoint for adding LLs to the stream. See also
+        // the load_slots and store_slots functions.
         self.stream.push_back(Either::Left(i))
     }
 
