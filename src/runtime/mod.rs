@@ -26,7 +26,7 @@ pub use splitter::{
     batch::{escape_csv, escape_tsv},
     ChainedReader, Line, LineReader,
 };
-pub use str_impl::Str;
+pub use str_impl::{Str, UniqueStr};
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.
@@ -534,7 +534,14 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
     pub(crate) fn delete(&self, k: &K) {
         self.0.borrow_mut().remove(k);
     }
+    pub(crate) fn iter<'a, F, R>(&'a self, f: F) -> R
+    where
+        F: FnOnce(hashbrown::hash_map::Iter<K, V>) -> R,
+    {
+        f(self.0.borrow().iter())
+    }
 }
+
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     pub(crate) fn get(&self, k: &K) -> Option<V> {
         self.0.borrow().get(k).cloned()
@@ -546,6 +553,12 @@ impl<K: Hash + Eq + Clone, V> SharedMap<K, V> {
     }
     pub(crate) fn to_vec(&self) -> Vec<K> {
         self.0.borrow().keys().cloned().collect()
+    }
+}
+
+impl<K: Hash + Eq, V> From<HashMap<K, V>> for SharedMap<K, V> {
+    fn from(m: HashMap<K, V>) -> SharedMap<K, V> {
+        SharedMap(Rc::new(RefCell::new(m)))
     }
 }
 

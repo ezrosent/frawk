@@ -3,8 +3,9 @@ use crate::bytecode::{Get, Instr, Label, Pop, Reg};
 use crate::common::{NumTy, Result, Stage};
 use crate::compile::{self, Ty};
 use crate::pushdown::FieldSet;
-use crate::runtime::{self, Float, Int, Line, LineReader, Str};
+use crate::runtime::{self, Float, Int, Line, LineReader, Str, UniqueStr};
 
+use hashbrown::HashMap;
 use rand::{self, rngs::StdRng, Rng, SeedableRng};
 
 use std::cmp;
@@ -18,10 +19,6 @@ pub(crate) struct Storage<T> {
     pub(crate) stack: Vec<T>,
 }
 
-// TODO create shared `Runtime` sub-struct. Add to it an array of slots.
-// TODO add array or map indexed by type to runtime for each slot to this struct.
-// TODO implement these instructions.
-
 /// Core represents a subset of runtime structures that are relevant to both the bytecode
 /// interpreter and the compiled runtimes.
 pub(crate) struct Core<'a> {
@@ -30,17 +27,20 @@ pub(crate) struct Core<'a> {
     pub write_files: runtime::FileWrite,
     pub rng: StdRng,
     pub current_seed: u64,
+    pub slots: Slots,
+}
 
-    // TODO: all mentions of str will have to change.
-    pub slot_int: Vec<Int>,
-    pub slot_float: Vec<Float>,
-    pub slot_str: Vec<Str<'a>>,
-    pub slot_intint: Vec<runtime::IntMap<Int>>,
-    pub slot_intfloat: Vec<runtime::IntMap<Float>>,
-    pub slot_intstr: Vec<runtime::IntMap<Str<'a>>>,
-    pub slot_strint: Vec<runtime::StrMap<'a, Int>>,
-    pub slot_strfloat: Vec<runtime::StrMap<'a, Float>>,
-    pub slot_strstr: Vec<runtime::StrMap<'a, Str<'a>>>,
+#[derive(Default)]
+pub(crate) struct Slots {
+    pub int: Vec<Int>,
+    pub float: Vec<Float>,
+    pub strs: Vec<UniqueStr>,
+    pub intint: Vec<HashMap<Int, Int>>,
+    pub intfloat: Vec<HashMap<Int, Float>>,
+    pub intstr: Vec<HashMap<Int, UniqueStr>>,
+    pub strint: Vec<HashMap<UniqueStr, Int>>,
+    pub strfloat: Vec<HashMap<UniqueStr, Float>>,
+    pub strstr: Vec<HashMap<UniqueStr, UniqueStr>>,
 }
 
 pub fn set_slot<T: Default>(vec: &mut Vec<T>, slot: usize, v: T) {
@@ -61,16 +61,7 @@ impl<'a> Core<'a> {
             write_files: runtime::FileWrite::new(ff),
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             current_seed: seed,
-
-            slot_int: Default::default(),
-            slot_float: Default::default(),
-            slot_str: Default::default(),
-            slot_intint: Default::default(),
-            slot_intfloat: Default::default(),
-            slot_intstr: Default::default(),
-            slot_strint: Default::default(),
-            slot_strfloat: Default::default(),
-            slot_strstr: Default::default(),
+            slots: Default::default(),
         }
     }
 
@@ -80,6 +71,7 @@ impl<'a> Core<'a> {
         self.current_seed = seed;
         old_seed
     }
+
     pub fn reseed_random(&mut self) -> u64 /* old seed */ {
         self.reseed(rand::thread_rng().gen::<u64>())
     }
@@ -87,8 +79,104 @@ impl<'a> Core<'a> {
     pub fn match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<Int> {
         self.regexes.regex_match_loc(&mut self.vars, pat, s)
     }
+
     pub fn is_match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<bool> {
         self.regexes.is_regex_match(pat, s)
+    }
+
+    pub fn load_int(&mut self, slot: usize) -> Int {
+        self.slots.int[slot]
+    }
+    pub fn load_float(&mut self, slot: usize) -> Float {
+        self.slots.float[slot]
+    }
+    pub fn load_str(&mut self, slot: usize) -> Str<'a> {
+        mem::replace(&mut self.slots.strs[slot], Default::default()).into_str()
+    }
+    pub fn load_intint(&mut self, slot: usize) -> runtime::IntMap<Int> {
+        mem::replace(&mut self.slots.intint[slot], Default::default()).into()
+    }
+    pub fn load_intfloat(&mut self, slot: usize) -> runtime::IntMap<Float> {
+        mem::replace(&mut self.slots.intfloat[slot], Default::default()).into()
+    }
+    pub fn load_intstr(&mut self, slot: usize) -> runtime::IntMap<Str<'a>> {
+        mem::replace(&mut self.slots.intstr[slot], Default::default())
+            .into_iter()
+            .map(|(k, v)| (k, v.into_str()))
+            .collect()
+    }
+    pub fn load_strint(&mut self, slot: usize) -> runtime::StrMap<'a, Int> {
+        mem::replace(&mut self.slots.strint[slot], Default::default())
+            .into_iter()
+            .map(|(k, v)| (k.into_str(), v))
+            .collect()
+    }
+    pub fn load_strfloat(&mut self, slot: usize) -> runtime::StrMap<'a, Float> {
+        mem::replace(&mut self.slots.strfloat[slot], Default::default())
+            .into_iter()
+            .map(|(k, v)| (k.into_str(), v))
+            .collect()
+    }
+    pub fn load_strstr(&mut self, slot: usize) -> runtime::StrMap<'a, Str<'a>> {
+        mem::replace(&mut self.slots.strstr[slot], Default::default())
+            .into_iter()
+            .map(|(k, v)| (k.into_str(), v.into_str()))
+            .collect()
+    }
+
+    pub fn store_int(&mut self, slot: usize, i: Int) {
+        set_slot(&mut self.slots.int, slot, i)
+    }
+    pub fn store_float(&mut self, slot: usize, f: Float) {
+        set_slot(&mut self.slots.float, slot, f)
+    }
+    pub fn store_str(&mut self, slot: usize, s: Str<'a>) {
+        set_slot(&mut self.slots.strs, slot, s.into())
+    }
+    pub fn store_intint(&mut self, slot: usize, s: runtime::IntMap<Int>) {
+        set_slot(
+            &mut self.slots.intint,
+            slot,
+            s.iter(|i| i.map(|(k, v)| (*k, *v)).collect()),
+        )
+    }
+    pub fn store_intfloat(&mut self, slot: usize, s: runtime::IntMap<Float>) {
+        set_slot(
+            &mut self.slots.intfloat,
+            slot,
+            s.iter(|i| i.map(|(k, v)| (*k, *v)).collect()),
+        )
+    }
+    pub fn store_intstr(&mut self, slot: usize, s: runtime::IntMap<Str<'a>>) {
+        set_slot(
+            &mut self.slots.intstr,
+            slot,
+            s.iter(|i| i.map(|(k, v)| (*k, v.clone().into())).collect()),
+        )
+    }
+    pub fn store_strint(&mut self, slot: usize, s: runtime::StrMap<'a, Int>) {
+        set_slot(
+            &mut self.slots.strint,
+            slot,
+            s.iter(|i| i.map(|(k, v)| (k.clone().into(), *v)).collect()),
+        )
+    }
+    pub fn store_strfloat(&mut self, slot: usize, s: runtime::StrMap<'a, Float>) {
+        set_slot(
+            &mut self.slots.strfloat,
+            slot,
+            s.iter(|i| i.map(|(k, v)| (k.clone().into(), *v)).collect()),
+        )
+    }
+    pub fn store_strstr(&mut self, slot: usize, s: runtime::StrMap<'a, Str<'a>>) {
+        set_slot(
+            &mut self.slots.strstr,
+            slot,
+            s.iter(|i| {
+                i.map(|(k, v)| (k.clone().into(), v.clone().into()))
+                    .collect()
+            }),
+        )
     }
 }
 
@@ -202,18 +290,17 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         // Local macros help to eliminate boilerplate in type-specific instructions.
         // StoreSlot<T>(ident, slot_id)
         macro_rules! store_slot {
-            ($src: ident, $slot_id: ident, $slot:tt) => {{
+            ($src: ident, $slot_id: ident, $slot_meth:tt) => {{
                 let src = *$src;
                 let new_val = self.get(src).clone();
-                set_slot(&mut self.core.$slot, *$slot_id as usize, new_val);
+                self.core.$slot_meth(*$slot_id as usize, new_val);
             }};
         }
         // LoadSlot<T>(ident, slot_id)
         macro_rules! load_slot {
-            ($dst: ident, $slot_id: ident, $slot:tt) => {{
+            ($dst: ident, $slot_id: ident, $slot_meth:tt) => {{
                 let dst = *$dst;
-                let new_val =
-                    mem::replace(&mut self.core.$slot[*$slot_id as usize], Default::default());
+                let new_val = self.core.$slot_meth(*$slot_id as usize);
                 *self.get_mut(dst) = new_val;
             }};
         }
@@ -902,24 +989,24 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.core.vars.store_intmap(*var, s)?;
                     }
 
-                    LoadSlotInt(dst, slot) => load_slot!(dst, slot, slot_int),
-                    LoadSlotFloat(dst, slot) => load_slot!(dst, slot, slot_float),
-                    LoadSlotStr(dst, slot) => load_slot!(dst, slot, slot_str),
-                    LoadSlotIntInt(dst, slot) => load_slot!(dst, slot, slot_intint),
-                    LoadSlotIntFloat(dst, slot) => load_slot!(dst, slot, slot_intfloat),
-                    LoadSlotIntStr(dst, slot) => load_slot!(dst, slot, slot_intstr),
-                    LoadSlotStrInt(dst, slot) => load_slot!(dst, slot, slot_strint),
-                    LoadSlotStrFloat(dst, slot) => load_slot!(dst, slot, slot_strfloat),
-                    LoadSlotStrStr(dst, slot) => load_slot!(dst, slot, slot_strstr),
-                    StoreSlotInt(src, slot) => store_slot!(src, slot, slot_int),
-                    StoreSlotFloat(src, slot) => store_slot!(src, slot, slot_float),
-                    StoreSlotStr(src, slot) => store_slot!(src, slot, slot_str),
-                    StoreSlotIntInt(src, slot) => store_slot!(src, slot, slot_intint),
-                    StoreSlotIntFloat(src, slot) => store_slot!(src, slot, slot_intfloat),
-                    StoreSlotIntStr(src, slot) => store_slot!(src, slot, slot_intstr),
-                    StoreSlotStrInt(src, slot) => store_slot!(src, slot, slot_strint),
-                    StoreSlotStrFloat(src, slot) => store_slot!(src, slot, slot_strfloat),
-                    StoreSlotStrStr(src, slot) => store_slot!(src, slot, slot_strstr),
+                    LoadSlotInt(dst, slot) => load_slot!(dst, slot, load_int),
+                    LoadSlotFloat(dst, slot) => load_slot!(dst, slot, load_float),
+                    LoadSlotStr(dst, slot) => load_slot!(dst, slot, load_str),
+                    LoadSlotIntInt(dst, slot) => load_slot!(dst, slot, load_intint),
+                    LoadSlotIntFloat(dst, slot) => load_slot!(dst, slot, load_intfloat),
+                    LoadSlotIntStr(dst, slot) => load_slot!(dst, slot, load_intstr),
+                    LoadSlotStrInt(dst, slot) => load_slot!(dst, slot, load_strint),
+                    LoadSlotStrFloat(dst, slot) => load_slot!(dst, slot, load_strfloat),
+                    LoadSlotStrStr(dst, slot) => load_slot!(dst, slot, load_strstr),
+                    StoreSlotInt(src, slot) => store_slot!(src, slot, store_int),
+                    StoreSlotFloat(src, slot) => store_slot!(src, slot, store_float),
+                    StoreSlotStr(src, slot) => store_slot!(src, slot, store_str),
+                    StoreSlotIntInt(src, slot) => store_slot!(src, slot, store_intint),
+                    StoreSlotIntFloat(src, slot) => store_slot!(src, slot, store_intfloat),
+                    StoreSlotIntStr(src, slot) => store_slot!(src, slot, store_intstr),
+                    StoreSlotStrInt(src, slot) => store_slot!(src, slot, store_strint),
+                    StoreSlotStrFloat(src, slot) => store_slot!(src, slot, store_strfloat),
+                    StoreSlotStrStr(src, slot) => store_slot!(src, slot, store_strstr),
 
                     IterBeginIntInt(dst, arr) => iter_begin!(dst, arr),
                     IterBeginIntFloat(dst, arr) => iter_begin!(dst, arr),

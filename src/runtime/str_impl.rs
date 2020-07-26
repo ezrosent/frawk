@@ -293,8 +293,15 @@ impl<'a> Drop for StrRep<'a> {
 /// A Str that is either trivially copyable or holds the sole reference to some heap-allocated
 /// memory. We also ensure no non-static Literal variants are active in the string, as we intend to
 /// send this across threads, and non-static lifetimes are cumbersome in that context.
+#[derive(Default, Hash, PartialEq, Eq)]
 pub struct UniqueStr(Str<'static>);
 unsafe impl Send for UniqueStr {}
+
+impl UniqueStr {
+    pub fn into_str<'a>(self) -> Str<'a> {
+        self.0.upcast()
+    }
+}
 
 impl<'a> From<Str<'a>> for UniqueStr {
     fn from(s: Str<'a>) -> UniqueStr {
