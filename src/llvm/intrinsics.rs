@@ -1215,45 +1215,37 @@ map_impl! {
 }
 
 macro_rules! slot_impl_inner {
-    ($load:ident, $store:ident, $slot_fld:tt, $ty:tt) => {
+    ($load:ident, $store:ident, $load_fn:ident, $store_fn:ident, $ty:tt) => {
         #[no_mangle]
         pub unsafe extern "C" fn $load(runtime: *mut c_void, slot: Int) -> out_ty!($ty) {
             let runtime = &mut *(runtime as *mut Runtime);
-            convert_out!(
-                $ty,
-                mem::replace(
-                    &mut runtime.core.$slot_fld[slot as usize],
-                    Default::default()
-                )
-            )
+            convert_out!($ty, runtime.core.$load_fn(slot as usize))
         }
 
         #[no_mangle]
         pub unsafe extern "C" fn $store(runtime: *mut c_void, slot: Int, v: in_ty!($ty)) {
             let runtime = &mut *(runtime as *mut Runtime);
-            crate::interp::set_slot(
-                &mut runtime.core.$slot_fld,
-                slot as usize,
-                convert_in_val!($ty, v),
-            );
+            runtime
+                .core
+                .$store_fn(slot as usize, convert_in_val!($ty, v));
         }
     };
 }
 
 macro_rules! slot_impl {
-    ($($load:ident, $store:ident, $slot_fld:tt, $ty:tt;)*) => {
-        $( slot_impl_inner!($load, $store, $slot_fld, $ty); )*
+    ($($load:ident, $store:ident, $load_fn:ident, $store_fn:ident, $ty:tt;)*) => {
+        $( slot_impl_inner!($load, $store, $load_fn, $store_fn, $ty); )*
     }
 }
 
 slot_impl! {
-    load_slot_int, store_slot_int, slot_int, Int;
-    load_slot_float, store_slot_float, slot_float, Float;
-    load_slot_str, store_slot_str, slot_str, Str;
-    load_slot_intint, store_slot_intint, slot_intint, Map;
-    load_slot_intfloat, store_slot_intfloat, slot_intfloat, Map;
-    load_slot_intstr, store_slot_intstr, slot_intstr, Map;
-    load_slot_strint, store_slot_strint, slot_strint, Map;
-    load_slot_strfloat, store_slot_strfloat, slot_strfloat, Map;
-    load_slot_strstr, store_slot_strstr, slot_strstr, Map;
+    load_slot_int, store_slot_int, load_int, store_int, Int;
+    load_slot_float, store_slot_float, load_float, store_float, Float;
+    load_slot_str, store_slot_str, load_str, store_str, Str;
+    load_slot_intint, store_slot_intint, load_intint, store_intint, Map;
+    load_slot_intfloat, store_slot_intfloat, load_intfloat, store_intfloat, Map;
+    load_slot_intstr, store_slot_intstr, load_intstr, store_intstr, Map;
+    load_slot_strint, store_slot_strint, load_strint, store_strint, Map;
+    load_slot_strfloat, store_slot_strfloat, load_strfloat, store_strfloat, Map;
+    load_slot_strstr, store_slot_strstr, load_strstr, store_strstr, Map;
 }
