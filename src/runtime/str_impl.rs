@@ -290,6 +290,45 @@ impl<'a> Drop for StrRep<'a> {
     }
 }
 
+/// A Str that is either trivially copyable or holds the sole reference to some heap-allocated
+/// memory. We also ensure no non-static Literal variants are active in the string, as we intend to
+/// send this across threads, and non-static lifetimes are cumbersome in that context.
+pub struct UniqueStr(Str<'static>);
+unsafe impl Send for UniqueStr {}
+
+impl<'a> From<Str<'a>> for UniqueStr {
+    fn from(s: Str<'a>) -> UniqueStr {
+        unsafe {
+            let s = s.unmoor();
+            let rep = s.rep_mut();
+            match rep.get_tag() {
+                StrTag::Inline | StrTag::Literal => return UniqueStr(s),
+                StrTag::Shared | StrTag::Concat => s.force(),
+                StrTag::Boxed => {}
+            };
+            debug_assert_eq!(StrTag::Boxed, rep.get_tag());
+            // We have a box in place, check its refcount
+            if let Some(boxed) = rep.view_as(|b: &Boxed| {
+                if b.buf.refcount() == 1 {
+                    None
+                } else {
+                    // Copy a new buffer.
+                    let bs = b.buf.as_bytes();
+                    debug_assert_eq!(bs.len() as u64, b.len);
+                    Some(Boxed {
+                        buf: Buf::read_from_raw(bs.as_ptr(), bs.len()),
+                        len: bs.len() as u64,
+                    })
+                }
+            }) {
+                UniqueStr(Str::from_rep(boxed.into()))
+            } else {
+                UniqueStr(s)
+            }
+        }
+    }
+}
+
 // Why UnsafeCell? We want something that wont increase the size of StrRep, but we also need to
 // mutate it in-place. We can *almost* just use Cell here, but we cannot implement Clone behind
 // cell.
@@ -1033,9 +1072,11 @@ impl Buf {
             .into(),
         )
     }
+
     pub fn len(&self) -> usize {
         unsafe { &(*self.0) }.size
     }
+
     pub fn as_bytes(&self) -> &[u8] {
         let size = self.len();
         unsafe { slice::from_raw_parts(self.as_ptr(), size) }
@@ -1043,6 +1084,11 @@ impl Buf {
 
     pub fn as_ptr(&self) -> *const u8 {
         unsafe { self.0.offset(1) as *const u8 }
+    }
+
+    fn refcount(&self) -> usize {
+        let header: &BufHeader = unsafe { &(*self.0) };
+        header.count.get()
     }
 
     // Unsafe because `from` and `to` must point to the start of characters.
