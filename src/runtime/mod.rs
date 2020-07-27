@@ -379,8 +379,9 @@ impl<LR: LineReader> FileRead<LR> {
     pub(crate) fn read_err<'a>(&mut self, path: &Str<'a>) -> Result<Int> {
         self.with_file(path, |reader| Ok(reader.read_state()))
     }
-    pub(crate) fn next_file(&mut self) {
-        let _ = self.stdin.next_file();
+    pub(crate) fn next_file(&mut self) -> Result<()> {
+        let _ = self.stdin.next_file()?;
+        Ok(())
     }
     fn with_file<'a, R>(
         &mut self,

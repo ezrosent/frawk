@@ -9,6 +9,7 @@ use crate::runtime::{
     printf::{printf, FormatArg},
     splitter::{
         batch::{ByteReader, CSVReader},
+        chunk::{ChunkProducer, OffsetChunk},
         regex::RegexSplitter,
         DefaultSplitter,
     },
@@ -85,9 +86,9 @@ macro_rules! with_input {
 
 type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
 enum InputData {
-    V1(InputTuple<ChainedReader<CSVReader<Box<dyn io::Read>>>>),
+    V1(InputTuple<ChainedReader<CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>>),
     V2(InputTuple<ChainedReader<DefaultSplitter<Box<dyn io::Read>>>>),
-    V3(InputTuple<ChainedReader<ByteReader<Box<dyn io::Read>>>>),
+    V3(InputTuple<ChainedReader<ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>>),
     V4(InputTuple<ChainedReader<RegexSplitter<Box<dyn io::Read>>>>),
 }
 
@@ -119,9 +120,9 @@ macro_rules! impl_into_runtime {
     };
 }
 
-impl_into_runtime!(CSVReader<Box<dyn io::Read>>, V1);
+impl_into_runtime!(CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V1);
 impl_into_runtime!(DefaultSplitter<Box<dyn io::Read>>, V2);
-impl_into_runtime!(ByteReader<Box<dyn io::Read>>, V3);
+impl_into_runtime!(ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V3);
 impl_into_runtime!(RegexSplitter<Box<dyn io::Read>>, V4);
 
 pub(crate) struct Runtime<'a> {
@@ -440,8 +441,9 @@ pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn next_file(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
-    with_input!(&mut runtime.input_data, |(_, read_files)| read_files
-        .next_file());
+    try_abort!(with_input!(&mut runtime.input_data, |(_, read_files)| {
+        read_files.next_file()
+    }));
 }
 
 #[no_mangle]

@@ -6,6 +6,7 @@
 
 // TODO: add padding to the linereader trait
 pub mod batch;
+pub mod chunk;
 pub mod regex;
 
 use super::str_impl::{Buf, Str, UniqueBuf};
@@ -55,8 +56,8 @@ pub trait LineReader {
         Ok(changed)
     }
     fn read_state(&self) -> i64;
-    fn next_file(&mut self) -> bool;
-    fn set_used_fields(&mut self, _used_fields: &crate::pushdown::FieldSet);
+    fn next_file(&mut self) -> Result<bool>;
+    fn set_used_fields(&mut self, _used_fields: &FieldSet);
 }
 
 fn normalize_join_indexes(start: Int, end: Int, nf: usize) -> Result<(usize, usize)> {
@@ -226,7 +227,7 @@ where
             }
         };
         let changed = cur.read_line_reuse(pat, rc, old)?;
-        if cur.read_state() == 0 /* EOF */ && self.next_file() {
+        if cur.read_state() == 0 /* EOF */ && self.next_file()? {
             self.read_line_reuse(pat, rc, old)?;
             Ok(true)
         } else {
@@ -239,16 +240,16 @@ where
             None => 0, /* EOF */
         }
     }
-    fn next_file(&mut self) -> bool {
-        match self.0.last_mut() {
+    fn next_file(&mut self) -> Result<bool> {
+        Ok(match self.0.last_mut() {
             Some(e) => {
-                if !e.next_file() {
+                if !e.next_file()? {
                     self.0.pop();
                 }
                 true
             }
             None => false,
-        }
+        })
     }
     fn set_used_fields(&mut self, used_fields: &FieldSet) {
         for i in self.0.iter_mut() {
@@ -282,9 +283,9 @@ impl<R: Read> LineReader for DefaultSplitter<R> {
     fn read_state(&self) -> i64 {
         self.reader.read_state()
     }
-    fn next_file(&mut self) -> bool {
+    fn next_file(&mut self) -> Result<bool> {
         self.reader.force_eof();
-        false
+        Ok(false)
     }
     fn set_used_fields(&mut self, used_fields: &FieldSet) {
         self.used_fields = used_fields.clone();
@@ -420,6 +421,12 @@ pub(crate) enum ReaderState {
     OK = 1,
 }
 
+/// frawk inputs read chunks of data into large contiguous buffers, and then advance progress
+/// within those buffers. The logic for reading, and conserving unused portions of previous buffers
+/// when reading a new one, is handled by the Reader type.
+///
+/// Reader is currently not a great abstraction boundary, all of its state tends to "leak" into the
+/// surrounding implementations of the LineReader trait that use it.
 struct Reader<R> {
     inner: R,
     buf: Buf,
@@ -504,12 +511,19 @@ impl<R: Read> Reader<R> {
         }
     }
 
+    fn clear_buf(&mut self) {
+        self.start = 0;
+        self.end = 0;
+        self.input_end = 0;
+        self.buf = UniqueBuf::new(0).into_buf();
+    }
+
     fn reset(&mut self) -> Result</*done*/ bool> {
         if self.state == ReaderState::EOF {
             return Ok(true);
         }
         let (next_buf, next_len, input_len) = self.get_next_buf(self.start)?;
-        self.buf = next_buf;
+        self.buf = next_buf.into_buf();
         self.end = next_len;
         self.input_end = input_len;
         self.start = 0;
@@ -519,7 +533,7 @@ impl<R: Read> Reader<R> {
     fn get_next_buf(
         &mut self,
         consume: usize,
-    ) -> Result<(Buf, /*end*/ usize, /*input_end*/ usize)> {
+    ) -> Result<(UniqueBuf, /*end*/ usize, /*input_end*/ usize)> {
         let mut done = false;
         let plen = self.input_end.saturating_sub(consume);
         // Double the chunk size if it is too small to read a sufficient batch given the prefix
@@ -568,7 +582,7 @@ impl<R: Read> Reader<R> {
         if done {
             self.state = ReaderState::EOF;
         }
-        Ok((data.into_buf(), ulen, bytes_read))
+        Ok((data, ulen, bytes_read))
     }
 }
 
