@@ -155,7 +155,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                     //   Cond(0) { i++; }        # if _cond_0
                     //   /*\// { EndCond(0); }   # _cond_0 = 0
                     // We get into trouble, however, if control flow is more complex. If we wanted
-                    // to strip comments we might right:
+                    // to strip comments we might write:
                     //   /\/*/,/*\// { next; }
                     //   { print; }
                     // But applying the above desugaring rules leads us to running `next` before we

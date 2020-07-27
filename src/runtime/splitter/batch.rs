@@ -19,6 +19,7 @@
 /// We can fix this easily enough by reusing the computed offsets at the end of the buffer into an
 /// auxiliary vector at the cost of 2x steady-state memory usage, or more complex offset management
 /// in the `Offsets` type.
+use std::borrow::Borrow;
 use std::io::Read;
 use std::mem;
 use std::str;
@@ -29,31 +30,32 @@ use regex::{bytes, Regex};
 use crate::common::Result;
 use crate::pushdown::FieldSet;
 use crate::runtime::{
-    str_impl::{Buf, Str},
+    str_impl::{Buf, Str, UniqueBuf},
     Int, LazyVec, RegexCache,
 };
 
-use super::{normalize_join_indexes, DefaultLine, LineReader, Reader, ReaderState};
+use super::{
+    chunk::{self, ChunkProducer, OffsetChunk},
+    normalize_join_indexes, DefaultLine, LineReader, ReaderState,
+};
 
-pub struct CSVReader<R> {
-    inner: Reader<R>,
-    name: Str<'static>,
-    cur_offsets: Offsets,
+pub struct CSVReader<P> {
+    prod: P,
+    cur_chunk: OffsetChunk,
+    cur_buf: Buf,
+    buf_len: usize,
     prev_ix: usize,
+    last_len: usize,
     // Used to trigger updating FILENAME on the first read.
     start: bool,
     ifmt: InputFormat,
     field_set: FieldSet,
-
-    // This is a function pointer because we query the preferred instruction set at construction
-    // time.
-    find_indexes: unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64),
 }
 
-impl<R: Read> LineReader for CSVReader<R> {
+impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for CSVReader<P> {
     type Line = Line;
     fn filename(&self) -> Str<'static> {
-        self.name.clone()
+        Str::from(self.prod.get_name()).unmoor()
     }
     fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, Line)> {
         let mut line = Line::default();
@@ -72,72 +74,67 @@ impl<R: Read> LineReader for CSVReader<R> {
         Ok(start)
     }
     fn read_state(&self) -> i64 {
-        self.inner.read_state()
+        if !self.start && self.last_len == 0 {
+            ReaderState::EOF as i64
+        } else {
+            ReaderState::OK as i64
+        }
     }
-    fn next_file(&mut self) -> bool {
-        self.inner.force_eof();
-        false
+    fn next_file(&mut self) -> Result<bool> {
+        self.prod.next_file()
     }
     fn set_used_fields(&mut self, field_set: &FieldSet) {
         self.field_set = field_set.clone();
     }
 }
 
-// TODO rename as it handles CSV and TSV
-impl<R: Read> CSVReader<R> {
-    pub fn new(r: R, ifmt: InputFormat, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
+impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
+    pub fn new(
+        r: impl Read + 'static,
+        ifmt: InputFormat,
+        chunk_size: usize,
+        name: impl Borrow<str>,
+    ) -> Self {
         CSVReader {
+            prod: Box::new(chunk::new_offset_chunk_producer_csv(
+                r,
+                chunk_size,
+                name.borrow(),
+                ifmt,
+            )),
             start: true,
-            inner: Reader::new(r, chunk_size, /*padding=*/ 128),
-            name: name.into(),
-            cur_offsets: Default::default(),
+            cur_buf: UniqueBuf::new(0).into_buf(),
+            buf_len: 0,
+            cur_chunk: OffsetChunk {
+                buf: None,
+                len: 0,
+                off: Offsets::default(),
+            },
             prev_ix: 0,
-            find_indexes: get_find_indexes(ifmt),
+            last_len: 0,
             field_set: FieldSet::all(),
             ifmt,
         }
     }
+}
+
+// TODO rename as it handles CSV and TSV
+impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
     fn refresh_buf(&mut self) -> Result<bool> {
-        // exhausted. Fetch a new `cur`.
-        self.inner.start = self.prev_ix;
-        if self.inner.reset()? {
+        if self.prod.get_chunk(&mut self.cur_chunk)? {
             return Ok(true);
         }
-        let bytes = self.inner.buf.as_bytes();
-        // We always trim off the end, so we have no need for prev_iter_inside_quote.
-        // We aren't removing it entirely because it may be brought back if we ever implement the
-        // "avoid rescanning" optimization.
-        let (_next_iq, _next_cre) = unsafe {
-            (self.find_indexes)(
-                &bytes[0..self.inner.end],
-                &mut self.cur_offsets,
-                /*prev_iter_inside_quote=*/ 0,
-                /*prev_iter_cr_end=*/ 0,
-            )
-        };
+        self.cur_buf = self.cur_chunk.buf.take().unwrap().into_buf();
+        self.buf_len = self.cur_chunk.len;
         self.prev_ix = 0;
-        if self.inner.state != ReaderState::EOF {
-            // If this is not the last buffer. Trim off non-record separators.
-            let mut i = self.cur_offsets.fields.len();
-            for field in self.cur_offsets.fields.iter().rev().cloned() {
-                if bytes[field as usize] == b'\n' {
-                    break;
-                }
-                i -= 1;
-            }
-            self.cur_offsets.fields.truncate(i);
-            if i == 0 {
-                // We found no fields at all. Try again with a larger buffer.
-                return self.refresh_buf();
-            }
-        }
         Ok(false)
     }
+
     fn stepper<'a, 'b: 'a>(&'b mut self, st: State, line: &'a mut Line) -> Stepper<'a> {
         Stepper {
-            buf: &self.inner.buf,
-            buf_len: self.inner.end,
-            off: &mut self.cur_offsets,
+            buf: &self.cur_buf,
+            buf_len: self.buf_len,
+            off: &mut self.cur_chunk.off,
             prev_ix: self.prev_ix,
             ifmt: self.ifmt,
             field_set: self.field_set.clone(),
@@ -147,24 +144,24 @@ impl<R: Read> CSVReader<R> {
     }
     pub fn read_line_inner<'a, 'b: 'a>(&'b mut self, line: &'a mut Line) -> Result<()> {
         line.clear();
-        if self.cur_offsets.start == self.cur_offsets.fields.len() {
-            // NB: why self.prev_ix >= self.inner.end, and not ==?
-            // When we are grabbing the end of the buffer we consume up to the last byte using the
-            // `push_past` method, which also increments prev_ix one past the ending offset. The
-            // end offset in this case is self.inner.end, so prev_ix will thereby point to "two
-            // past the end."
-            if self.refresh_buf()? && self.prev_ix >= self.inner.end {
-                self.inner.last_len = 0;
+        if self.cur_chunk.off.start == self.cur_chunk.off.fields.len() {
+            // NB: see comment on corresponding condition in ByteReader.
+            let is_eof = self.refresh_buf()?;
+            // NB: >= because the `push_past` logic in stepper can result in prev_ix pointing two
+            // past the end of the buffer.
+            if is_eof && self.prev_ix >= self.buf_len {
+                self.last_len = 0;
                 return Ok(());
             }
         }
+
         let (prev_ix, st) = {
             let mut stepper = self.stepper(State::Init, line);
             (unsafe { stepper.step() }, stepper.st)
         };
         let consumed = prev_ix - self.prev_ix;
         self.prev_ix = prev_ix;
-        self.inner.last_len = consumed;
+        self.last_len = consumed;
         if st != State::Done {
             line.promote();
         }
@@ -178,7 +175,7 @@ pub struct Offsets {
     // NB We're using u64s to potentially handle huge input streams.
     // An alternative option would be to save lines and fields in separate vectors, but this is
     // more efficient for iteration
-    fields: Vec<u64>,
+    pub fields: Vec<u64>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -1008,24 +1005,60 @@ mod avx2 {
     }
 }
 
-pub struct ByteReader<R> {
-    inner: Reader<R>,
-    name: Str<'static>,
-    cur_offsets: Offsets,
+pub fn bytereader_supported() -> bool {
+    get_find_indexes_bytes().is_some()
+}
+
+pub struct ByteReader<P> {
+    prod: P,
+    cur_chunk: OffsetChunk,
+    cur_buf: Buf,
+    buf_len: usize,
     used_fields: FieldSet,
     // Progress in the current buffer.
     progress: usize,
-    field_sep: u8,
     record_sep: u8,
     start: bool,
 
-    get_offsets: unsafe fn(&[u8], &mut Offsets, u8, u8),
+    last_len: usize,
 }
 
-impl<R: Read> LineReader for ByteReader<R> {
+impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
+    pub fn new(
+        r: impl Read + 'static,
+        field_sep: u8,
+        record_sep: u8,
+        chunk_size: usize,
+        name: impl Borrow<str>,
+    ) -> Self {
+        ByteReader {
+            prod: Box::new(chunk::new_offset_chunk_producer_bytes(
+                r,
+                chunk_size,
+                name.borrow(),
+                field_sep,
+                record_sep,
+            )),
+            cur_chunk: OffsetChunk {
+                buf: None,
+                len: 0,
+                off: Offsets::default(),
+            },
+            cur_buf: UniqueBuf::new(0).into_buf(),
+            buf_len: 0,
+            progress: 0,
+            record_sep,
+            used_fields: FieldSet::all(),
+            start: true,
+            last_len: usize::max_value(),
+        }
+    }
+}
+
+impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for ByteReader<P> {
     type Line = DefaultLine;
     fn filename(&self) -> Str<'static> {
-        self.name.clone()
+        Str::from(self.prod.get_name()).unmoor()
     }
     fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, DefaultLine)> {
         let mut line = DefaultLine::default();
@@ -1053,95 +1086,32 @@ impl<R: Read> LineReader for ByteReader<R> {
         Ok(start)
     }
     fn read_state(&self) -> i64 {
-        self.inner.read_state()
+        if !self.start && self.last_len == 0 {
+            ReaderState::EOF as i64
+        } else {
+            ReaderState::OK as i64
+        }
     }
-    fn next_file(&mut self) -> bool {
-        self.inner.force_eof();
-        false
+
+    fn next_file(&mut self) -> Result<bool> {
+        self.prod.next_file()
     }
+
     fn set_used_fields(&mut self, field_set: &FieldSet) {
         self.used_fields = field_set.clone();
     }
 }
-pub fn bytereader_supported() -> bool {
-    get_find_indexes_bytes().is_some()
-}
 
-impl<R: Read> ByteReader<R> {
+impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReader<P> {
     // This will panic if the current architecture does not support SIMD, etc. bytereader_supported
     // does this check.
-    pub fn new(
-        r: R,
-        field_sep: u8,
-        record_sep: u8,
-        chunk_size: usize,
-        name: impl Into<Str<'static>>,
-    ) -> Self {
-        ByteReader {
-            inner: Reader::new(r, chunk_size, /*padding=*/ 128),
-            name: name.into(),
-            cur_offsets: Default::default(),
-            progress: 0,
-            field_sep,
-            record_sep,
-            used_fields: FieldSet::all(),
-            start: true,
-            get_offsets: get_find_indexes_bytes()
-                .expect("bytereader must be supported on the current platform"),
-        }
-    }
-
     fn refresh_buf(&mut self) -> Result<bool /*eof*/> {
-        self.inner.start = self.progress;
-        // Fetch a new buffer.
-        if self.inner.reset()? {
+        if self.prod.get_chunk(&mut self.cur_chunk)? {
             return Ok(true);
         }
-
-        // Compute its offsets and reset progress.
-        let bytes = self.inner.buf.as_bytes();
-        unsafe {
-            // TODO: optimize this to avoid rescanning parts (i.e. start at the old value of
-            // end-start, then apply a diff to all offsets)
-            (self.get_offsets)(
-                &bytes[0..self.inner.end],
-                &mut self.cur_offsets,
-                self.field_sep,
-                self.record_sep,
-            )
-        };
+        self.cur_buf = self.cur_chunk.buf.take().unwrap().into_buf();
+        self.buf_len = self.cur_chunk.len;
         self.progress = 0;
-
-        // Edge case: we padd the buffer with 0-bytes because get_offsets can read passed the end
-        // of that buffer. If we are passed the zero byte as a field separator or record separator,
-        // then we can return offsets past the end of the buffer. This branch ensures that we trim
-        // those off.
-        if self.field_sep == 0u8 || self.record_sep == 0u8 {
-            let end = self.inner.end as u64;
-            while let Some(off) = self.cur_offsets.fields.last() {
-                if *off >= end {
-                    self.cur_offsets.fields.pop().unwrap();
-                    continue;
-                }
-                break;
-            }
-        }
-
-        if self.inner.state != ReaderState::EOF {
-            // If this is not the last buffer. Trim off non-record separators.
-            let mut i = self.cur_offsets.fields.len();
-            for field in self.cur_offsets.fields.iter().rev().cloned() {
-                if bytes[field as usize] == self.record_sep {
-                    break;
-                }
-                i -= 1;
-            }
-            self.cur_offsets.fields.truncate(i);
-            if i == 0 {
-                // We found no fields at all. Try again with a larger buffer.
-                return self.refresh_buf();
-            }
-        }
         Ok(false)
     }
 
@@ -1150,23 +1120,23 @@ impl<R: Read> ByteReader<R> {
         line: &'a mut Str<'static>,
         fields: &'a mut Vec<Str<'static>>,
     ) -> Result<()> {
-        // This doesn't work, we may need the old one?
-        if self.cur_offsets.start == self.cur_offsets.fields.len() {
+        if self.cur_chunk.off.start == self.cur_chunk.off.fields.len() {
             // What's going on with this second test? self.refresh_buf() returns Ok(true) if we
             // were unable to fetch more data due to an EOF. The last execution consumed buffer up
             // to the last record separator in the input, but there may be remaining data filling
             // up the rest of the buffer with no more record or field separators. In that case, we
             // want to return the rest of the input as a single-field record, which one more
             // `consume_line` will indeed accomplish.
-            if self.refresh_buf()? && self.progress == self.inner.end {
+            let is_eof = self.refresh_buf()?;
+            if is_eof && self.progress == self.buf_len {
                 *line = Str::default();
-                self.inner.last_len = 0;
+                self.last_len = 0;
                 return Ok(());
             }
         }
         let (next_line, consumed) = unsafe { self.consume_line(fields) };
         *line = next_line;
-        self.inner.last_len = consumed;
+        self.last_len = consumed;
         Ok(())
     }
 
@@ -1174,7 +1144,7 @@ impl<R: Read> ByteReader<R> {
         &'b mut self,
         fields: &'a mut Vec<Str<'static>>,
     ) -> (Str<'static>, /*bytes consumed */ usize) {
-        let buf = &self.inner.buf;
+        let buf = &self.cur_buf;
         macro_rules! get_field {
             ($fld:expr, $start:expr, $end:expr) => {
                 if self.used_fields.get($fld) {
@@ -1189,11 +1159,13 @@ impl<R: Read> ByteReader<R> {
         }
 
         let line_start = self.progress;
-        let buf_len = self.inner.end;
-        let bytes = &buf.as_bytes()[0..buf_len];
-        for index in &self.cur_offsets.fields[self.cur_offsets.start..] {
+        let bytes = &buf.as_bytes()[0..self.buf_len];
+        let offs = &mut self.cur_chunk.off;
+        for index in &offs.fields[offs.start..] {
             let index = *index as usize;
-            self.cur_offsets.start += 1;
+            debug_assert!(index < self.buf_len);
+
+            offs.start += 1;
             let is_record_sep = *bytes.get_unchecked(index) == self.record_sep;
             fields.push(get_field!(index));
             self.progress = index + 1;
@@ -1202,10 +1174,10 @@ impl<R: Read> ByteReader<R> {
                 return (line, self.progress - line_start);
             }
         }
-        fields.push(get_field!(buf_len));
-        self.progress = buf_len;
-        let line = get_field!(0, line_start, buf_len);
-        (line, buf_len - line_start)
+        fields.push(get_field!(self.buf_len));
+        self.progress = self.buf_len;
+        let line = get_field!(0, line_start, self.buf_len);
+        (line, self.buf_len - line_start)
     }
 }
 
@@ -1322,7 +1294,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         tsv_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
     }
 
-    fn bytes_split(fs: u8, rs: u8, corpus: &str) {
+    fn bytes_split(fs: u8, rs: u8, corpus: &'static str) {
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
         let expected: Vec<Vec<Str<'static>>> = corpus

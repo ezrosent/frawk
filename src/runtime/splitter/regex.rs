@@ -60,10 +60,10 @@ impl<R: Read> LineReader for RegexSplitter<R> {
     fn read_state(&self) -> i64 {
         self.reader.read_state()
     }
-    fn next_file(&mut self) -> bool {
+    fn next_file(&mut self) -> Result<bool> {
         // There is just one file. Set EOF.
         self.reader.force_eof();
-        false
+        Ok(false)
     }
     fn set_used_fields(&mut self, used_fields: &FieldSet) {
         self.used_fields = used_fields.clone();

@@ -864,6 +864,7 @@ struct BufHeader {
 
 #[repr(transparent)]
 pub struct UniqueBuf(*mut BufHeader);
+unsafe impl Send for UniqueBuf {}
 
 pub struct DynamicBufHeap {
     data: UniqueBuf,
@@ -1133,6 +1134,15 @@ impl Buf {
     pub fn read_from_str(s: &str) -> Buf {
         let res = unsafe { Buf::read_from_raw(s.as_ptr(), s.len()) };
         res
+    }
+    pub fn try_unique(self) -> Result<UniqueBuf, Buf> {
+        if self.refcount() == 1 {
+            let res = UniqueBuf(self.0 as *mut _);
+            mem::forget(self);
+            Ok(res)
+        } else {
+            Err(self)
+        }
     }
 }
 

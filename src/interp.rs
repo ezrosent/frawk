@@ -1159,7 +1159,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         }
                     }
                     NextFile() => {
-                        self.read_files.next_file();
+                        self.read_files.next_file()?;
                         self.reset_file_vars();
                     }
                     JmpIf(cond, lbl) => {
