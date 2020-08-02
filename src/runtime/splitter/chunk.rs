@@ -10,6 +10,16 @@ use crate::runtime::{
 use std::io::Read;
 use std::sync::Arc;
 
+pub trait ChunkProducer {
+    type Chunk: Chunk;
+    fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool /*done*/>;
+    fn next_file(&mut self) -> Result<bool /*new file available*/>;
+}
+
+pub trait Chunk: Send {
+    fn get_name(&self) -> &str;
+}
+
 // TODO: rephrase CSVReader + BytesReader + DefaultReader in terms of a ChnunkProducer
 //      (in that order: DefaultReader will need its own ChunkProducer, I think?)
 // TODO: write a ParallelChunkProducer that wraps an arbitrary ChunkProducer
@@ -23,6 +33,7 @@ enum ChunkState {
 
 pub struct OffsetChunkProducer<R, F> {
     inner: Reader<R>,
+    cur_file_version: u32,
     name: Arc<str>,
     find_indexes: F,
     record_sep: u8,
@@ -34,6 +45,7 @@ pub fn new_offset_chunk_producer_csv<R: Read>(
     chunk_size: usize,
     name: &str,
     ifmt: InputFormat,
+    start_version: u32,
 ) -> OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)> {
     let find_indexes = get_find_indexes(ifmt);
     OffsetChunkProducer {
@@ -43,6 +55,7 @@ pub fn new_offset_chunk_producer_csv<R: Read>(
             unsafe { find_indexes(bs, offs, 0, 0) };
         },
         record_sep: b'\n',
+        cur_file_version: start_version,
         state: ChunkState::Init,
     }
 }
@@ -53,6 +66,7 @@ pub fn new_offset_chunk_producer_bytes<R: Read>(
     name: &str,
     field_sep: u8,
     record_sep: u8,
+    start_version: u32,
 ) -> OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)> {
     let find_indexes = get_find_indexes_bytes().expect("byte splitter not available");
     OffsetChunkProducer {
@@ -61,43 +75,88 @@ pub fn new_offset_chunk_producer_bytes<R: Read>(
         find_indexes: move |bs: &[u8], offs: &mut Offsets| unsafe {
             find_indexes(bs, offs, field_sep, record_sep)
         },
+        cur_file_version: start_version,
         record_sep,
         state: ChunkState::Init,
     }
 }
 
-// TODO: strategy-wise, build a new LineReader which is just bytereader on top of the new stack.
-// get it passing the bytereader tests.
-// TODO: need to decide on semantics of "nextfile":
-//   * hard error on "per-record" works as expected on "per-file" ?
-//   * should converge on how to construct LineReaders, probably want to pass in the chunk-reader?
-//   * add a "try_clone" method that attempts to make another parallel reader?
-//   * figure out read_state (we should be able to "never return an error" and keep an eof signal).
-//   * We'll eventually need to be able to send a "shutdown" signal.
+pub fn new_chained_offset_chunk_producer_csv<'a, R: Read, I: Iterator<Item = (R, &'a str)>>(
+    r: I,
+    chunk_size: usize,
+    ifmt: InputFormat,
+) -> ChainedChunkProducer<OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)>> {
+    ChainedChunkProducer(
+        r.enumerate()
+            .map(|(i, (r, name))| {
+                new_offset_chunk_producer_csv(
+                    r,
+                    chunk_size,
+                    name,
+                    ifmt,
+                    /*start_version=*/ (i as u32).wrapping_add(1),
+                )
+            })
+            .collect(),
+    )
+}
+
+pub fn new_chained_offset_chunk_producer_bytes<'a, R: Read, I: Iterator<Item = (R, &'a str)>>(
+    r: I,
+    chunk_size: usize,
+    field_sep: u8,
+    record_sep: u8,
+) -> ChainedChunkProducer<OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)>> {
+    ChainedChunkProducer(
+        r.enumerate()
+            .map(|(i, (r, name))| {
+                new_offset_chunk_producer_bytes(
+                    r,
+                    chunk_size,
+                    name,
+                    field_sep,
+                    record_sep,
+                    /*start_version=*/ (i as u32).wrapping_add(1),
+                )
+            })
+            .collect(),
+    )
+}
+
+// TODO: Errors
 
 pub struct OffsetChunk {
+    pub version: u32,
+    pub name: Arc<str>,
     pub buf: Option<UniqueBuf>,
     pub len: usize,
     pub off: Offsets,
 }
 
-pub trait ChunkProducer {
-    type Chunk: Send;
-    fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool /*done*/>;
-    fn get_name(&self) -> &str;
-    fn next_file(&mut self) -> Result<bool>;
+impl Default for OffsetChunk {
+    fn default() -> OffsetChunk {
+        OffsetChunk {
+            version: 0,
+            name: "".into(),
+            buf: None,
+            len: 0,
+            off: Offsets::default(),
+        }
+    }
 }
 
-impl<C: Send> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
+impl Chunk for OffsetChunk {
+    fn get_name(&self) -> &str {
+        &*self.name
+    }
+}
+impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
     type Chunk = C;
     fn next_file(&mut self) -> Result<bool> {
         (&mut **self).next_file()
     }
     fn get_chunk(&mut self, chunk: &mut C) -> Result<bool> {
         (&mut **self).get_chunk(chunk)
-    }
-    fn get_name(&self) -> &str {
-        (&**self).get_name()
     }
 }
 
@@ -119,6 +178,8 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                     };
                 }
                 ChunkState::Main => {
+                    chunk.version = self.cur_file_version;
+                    chunk.name = self.name.clone();
                     let buf = self.inner.buf.clone();
                     let bs = buf.as_bytes();
                     (self.find_indexes)(bs, &mut chunk.off);
@@ -173,7 +234,32 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
             }
         }
     }
-    fn get_name(&self) -> &str {
-        &*self.name
+}
+
+pub struct ChainedChunkProducer<P>(Vec<P>);
+impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
+    type Chunk = P::Chunk;
+
+    fn next_file(&mut self) -> Result<bool> {
+        if let Some(cur) = self.0.last_mut() {
+            if !cur.next_file()? {
+                let _last = self.0.pop();
+                debug_assert!(_last.is_some());
+            }
+            Ok(self.0.len() != 0)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
+        while let Some(cur) = self.0.last_mut() {
+            if cur.get_chunk(chunk)? {
+                return Ok(false);
+            }
+            let _last = self.0.pop();
+            debug_assert!(_last.is_some());
+        }
+        Ok(true)
     }
 }
