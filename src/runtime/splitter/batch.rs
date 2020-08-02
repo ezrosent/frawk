@@ -35,7 +35,7 @@ use crate::runtime::{
 };
 
 use super::{
-    chunk::{self, ChunkProducer, OffsetChunk},
+    chunk::{self, Chunk, ChunkProducer, OffsetChunk},
     normalize_join_indexes, DefaultLine, LineReader, ReaderState,
 };
 
@@ -47,7 +47,6 @@ pub struct CSVReader<P> {
     prev_ix: usize,
     last_len: usize,
     // Used to trigger updating FILENAME on the first read.
-    start: bool,
     ifmt: InputFormat,
     field_set: FieldSet,
 }
@@ -55,7 +54,7 @@ pub struct CSVReader<P> {
 impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for CSVReader<P> {
     type Line = Line;
     fn filename(&self) -> Str<'static> {
-        Str::from(self.prod.get_name()).unmoor()
+        Str::from(self.cur_chunk.get_name()).unmoor()
     }
     fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, Line)> {
         let mut line = Line::default();
@@ -68,13 +67,10 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for CSVReader<P> {
         _rc: &mut RegexCache,
         old: &'a mut Line,
     ) -> Result<bool> {
-        let start = self.start;
-        self.start = false;
-        self.read_line_inner(old)?;
-        Ok(start)
+        Ok(self.read_line_inner(old)?)
     }
     fn read_state(&self) -> i64 {
-        if !self.start && self.last_len == 0 {
+        if self.cur_chunk.version != 0 && self.last_len == 0 {
             ReaderState::EOF as i64
         } else {
             ReaderState::OK as i64
@@ -101,15 +97,11 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 chunk_size,
                 name.borrow(),
                 ifmt,
+                /*version=*/ 1,
             )),
-            start: true,
             cur_buf: UniqueBuf::new(0).into_buf(),
             buf_len: 0,
-            cur_chunk: OffsetChunk {
-                buf: None,
-                len: 0,
-                off: Offsets::default(),
-            },
+            cur_chunk: OffsetChunk::default(),
             prev_ix: 0,
             last_len: 0,
             field_set: FieldSet::all(),
@@ -120,14 +112,15 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
 
 // TODO rename as it handles CSV and TSV
 impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
-    fn refresh_buf(&mut self) -> Result<bool> {
+    fn refresh_buf(&mut self) -> Result<(/*is eof*/ bool, /* file changed */ bool)> {
+        let prev_version = self.cur_chunk.version;
         if self.prod.get_chunk(&mut self.cur_chunk)? {
-            return Ok(true);
+            return Ok((true, false));
         }
         self.cur_buf = self.cur_chunk.buf.take().unwrap().into_buf();
         self.buf_len = self.cur_chunk.len;
         self.prev_ix = 0;
-        Ok(false)
+        Ok((false, prev_version != self.cur_chunk.version))
     }
 
     fn stepper<'a, 'b: 'a>(&'b mut self, st: State, line: &'a mut Line) -> Stepper<'a> {
@@ -142,16 +135,22 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
             st,
         }
     }
-    pub fn read_line_inner<'a, 'b: 'a>(&'b mut self, line: &'a mut Line) -> Result<()> {
+    pub fn read_line_inner<'a, 'b: 'a>(
+        &'b mut self,
+        line: &'a mut Line,
+    ) -> Result</*file changed*/ bool> {
         line.clear();
+        let mut changed = false;
         if self.cur_chunk.off.start == self.cur_chunk.off.fields.len() {
             // NB: see comment on corresponding condition in ByteReader.
-            let is_eof = self.refresh_buf()?;
+            let (is_eof, has_changed) = self.refresh_buf()?;
+            changed = has_changed;
             // NB: >= because the `push_past` logic in stepper can result in prev_ix pointing two
             // past the end of the buffer.
             if is_eof && self.prev_ix >= self.buf_len {
                 self.last_len = 0;
-                return Ok(());
+                debug_assert!(!changed);
+                return Ok(false);
             }
         }
 
@@ -165,7 +164,7 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
         if st != State::Done {
             line.promote();
         }
-        Ok(())
+        Ok(changed)
     }
 }
 
@@ -1018,7 +1017,6 @@ pub struct ByteReader<P> {
     // Progress in the current buffer.
     progress: usize,
     record_sep: u8,
-    start: bool,
 
     last_len: usize,
 }
@@ -1038,18 +1036,14 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 name.borrow(),
                 field_sep,
                 record_sep,
+                /*version=*/1,
             )),
-            cur_chunk: OffsetChunk {
-                buf: None,
-                len: 0,
-                off: Offsets::default(),
-            },
+            cur_chunk: OffsetChunk::default(),
             cur_buf: UniqueBuf::new(0).into_buf(),
             buf_len: 0,
             progress: 0,
             record_sep,
             used_fields: FieldSet::all(),
-            start: true,
             last_len: usize::max_value(),
         }
     }
@@ -1058,7 +1052,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
 impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for ByteReader<P> {
     type Line = DefaultLine;
     fn filename(&self) -> Str<'static> {
-        Str::from(self.prod.get_name()).unmoor()
+        Str::from(self.cur_chunk.get_name()).unmoor()
     }
     fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, DefaultLine)> {
         let mut line = DefaultLine::default();
@@ -1071,8 +1065,7 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for ByteReader<P> {
         _rc: &mut RegexCache,
         old: &'a mut DefaultLine,
     ) -> Result<bool> {
-        let start = self.start;
-        self.start = false;
+        let start = self.cur_chunk.version == 0;
         old.diverged = false;
         // We use the same protocol as DefaultSplitter, RegexSplitter. See comments for more info.
         if start {
@@ -1081,12 +1074,12 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for ByteReader<P> {
             self.used_fields = old.used_fields.clone()
         }
         let mut old_fields = old.fields.get_cleared_vec();
-        self.read_line_inner(&mut old.line, &mut old_fields)?;
+        let changed = self.read_line_inner(&mut old.line, &mut old_fields)?;
         old.fields = LazyVec::from_vec(old_fields);
-        Ok(start)
+        Ok(changed)
     }
     fn read_state(&self) -> i64 {
-        if !self.start && self.last_len == 0 {
+        if self.cur_chunk.version != 0 && self.last_len == 0 {
             ReaderState::EOF as i64
         } else {
             ReaderState::OK as i64
@@ -1105,21 +1098,23 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for ByteReader<P> {
 impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReader<P> {
     // This will panic if the current architecture does not support SIMD, etc. bytereader_supported
     // does this check.
-    fn refresh_buf(&mut self) -> Result<bool /*eof*/> {
+    fn refresh_buf(&mut self) -> Result<(/* eof */ bool, /*file changed*/ bool)> {
+        let prev_version = self.cur_chunk.version;
         if self.prod.get_chunk(&mut self.cur_chunk)? {
-            return Ok(true);
+            return Ok((true, false));
         }
         self.cur_buf = self.cur_chunk.buf.take().unwrap().into_buf();
         self.buf_len = self.cur_chunk.len;
         self.progress = 0;
-        Ok(false)
+        Ok((false, prev_version != self.cur_chunk.version))
     }
 
     fn read_line_inner<'a, 'b: 'a>(
         &'b mut self,
         line: &'a mut Str<'static>,
         fields: &'a mut Vec<Str<'static>>,
-    ) -> Result<()> {
+    ) -> Result</* file changed */ bool> {
+        let mut changed = false;
         if self.cur_chunk.off.start == self.cur_chunk.off.fields.len() {
             // What's going on with this second test? self.refresh_buf() returns Ok(true) if we
             // were unable to fetch more data due to an EOF. The last execution consumed buffer up
@@ -1127,17 +1122,19 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReader<P> {
             // up the rest of the buffer with no more record or field separators. In that case, we
             // want to return the rest of the input as a single-field record, which one more
             // `consume_line` will indeed accomplish.
-            let is_eof = self.refresh_buf()?;
+            let (is_eof, has_changed) = self.refresh_buf()?;
+            changed = has_changed;
             if is_eof && self.progress == self.buf_len {
                 *line = Str::default();
                 self.last_len = 0;
-                return Ok(());
+                debug_assert!(!changed);
+                return Ok(false);
             }
         }
         let (next_line, consumed) = unsafe { self.consume_line(fields) };
         *line = next_line;
         self.last_len = consumed;
-        Ok(())
+        Ok(changed)
     }
 
     unsafe fn consume_line<'a, 'b: 'a>(
