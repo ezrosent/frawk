@@ -1,3 +1,9 @@
+use std::io::Read;
+use std::mem;
+use std::sync::Arc;
+
+use crossbeam_channel::{bounded, Receiver, Sender};
+
 use crate::common::Result;
 use crate::runtime::{
     splitter::{
@@ -7,16 +13,13 @@ use crate::runtime::{
     str_impl::UniqueBuf,
 };
 
-use std::io::Read;
-use std::sync::Arc;
-
 pub trait ChunkProducer {
     type Chunk: Chunk;
     fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool /*done*/>;
     fn next_file(&mut self) -> Result<bool /*new file available*/>;
 }
 
-pub trait Chunk: Send {
+pub trait Chunk: Send + Default {
     fn get_name(&self) -> &str;
 }
 
@@ -261,5 +264,65 @@ impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
             debug_assert!(_last.is_some());
         }
         Ok(true)
+    }
+}
+
+pub struct ParallelChunkProducer<P: ChunkProducer> {
+    incoming: Receiver<P::Chunk>,
+    spent: Sender<P::Chunk>,
+}
+
+impl<P: ChunkProducer> Clone for ParallelChunkProducer<P> {
+    fn clone(&self) -> ParallelChunkProducer<P> {
+        ParallelChunkProducer {
+            incoming: self.incoming.clone(),
+            spent: self.spent.clone(),
+        }
+    }
+}
+
+impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
+    pub fn new(
+        p_maker: impl FnOnce() -> P + Send + 'static,
+        chan_size: usize,
+    ) -> ParallelChunkProducer<P> {
+        let (in_sender, in_receiver) = bounded(chan_size);
+        let (spent_sender, spent_receiver) = bounded(chan_size);
+        std::thread::spawn(move || {
+            let mut p = p_maker();
+            loop {
+                let mut chunk = spent_receiver
+                    .try_recv()
+                    .ok()
+                    .unwrap_or_else(P::Chunk::default);
+                let chunk_res = p.get_chunk(&mut chunk);
+                if chunk_res.is_err() || matches!(chunk_res, Ok(true)) {
+                    return;
+                }
+                if in_sender.send(chunk).is_err() {
+                    return;
+                }
+            }
+        });
+        ParallelChunkProducer {
+            incoming: in_receiver,
+            spent: spent_sender,
+        }
+    }
+}
+
+impl<P: ChunkProducer> ChunkProducer for ParallelChunkProducer<P> {
+    type Chunk = P::Chunk;
+    fn next_file(&mut self) -> Result<bool> {
+        err!("nextfile is not supported in record-oriented parallel mode")
+    }
+    fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
+        if let Ok(mut new_chunk) = self.incoming.recv() {
+            mem::swap(chunk, &mut new_chunk);
+            let _ = self.spent.try_send(new_chunk);
+            Ok(false)
+        } else {
+            Ok(true)
+        }
     }
 }
