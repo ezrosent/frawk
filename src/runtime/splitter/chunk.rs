@@ -267,6 +267,8 @@ impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
     }
 }
 
+/// ParallelChunkProducer allows for consumption of individual chunks from a ChunkProducer in
+/// parallel.
 pub struct ParallelChunkProducer<P: ChunkProducer> {
     incoming: Receiver<P::Chunk>,
     spent: Sender<P::Chunk>,
@@ -283,13 +285,13 @@ impl<P: ChunkProducer> Clone for ParallelChunkProducer<P> {
 
 impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
     pub fn new(
-        p_maker: impl FnOnce() -> P + Send + 'static,
+        p_factory: impl FnOnce() -> P + Send + 'static,
         chan_size: usize,
     ) -> ParallelChunkProducer<P> {
         let (in_sender, in_receiver) = bounded(chan_size);
         let (spent_sender, spent_receiver) = bounded(chan_size);
         std::thread::spawn(move || {
-            let mut p = p_maker();
+            let mut p = p_factory();
             loop {
                 let mut chunk = spent_receiver
                     .try_recv()
@@ -323,6 +325,78 @@ impl<P: ChunkProducer> ChunkProducer for ParallelChunkProducer<P> {
             Ok(false)
         } else {
             Ok(true)
+        }
+    }
+}
+
+enum ProducerState<T> {
+    Init,
+    Main(T),
+    Done,
+}
+
+/// ShardedChunkProducer allows consuption of entire chunk producers in parallel
+pub struct ShardedChunkProducer<P> {
+    incoming: Receiver<Box<dyn FnOnce() -> P + Send>>,
+    state: ProducerState<P>,
+}
+
+impl<P: ChunkProducer + 'static> ShardedChunkProducer<P> {
+    pub fn new<Iter>(ps: Iter) -> ShardedChunkProducer<P>
+    where
+        Iter: Iterator + 'static + Send,
+        Iter::Item: FnOnce() -> P + 'static + Send,
+    {
+        // These are usually individual files, which should be fairly large, so we hard-code a
+        // small buffer.
+        let (sender, receiver) = bounded(1);
+        std::thread::spawn(move || {
+            for p_factory in ps {
+                let to_send: Box<dyn FnOnce() -> P + Send> = Box::new(p_factory);
+                if sender.send(to_send).is_err() {
+                    return;
+                }
+            }
+        });
+        ShardedChunkProducer {
+            incoming: receiver,
+            state: ProducerState::Init,
+        }
+    }
+
+    fn refresh_producer(&mut self) -> bool {
+        let next = if let Ok(p) = self.incoming.recv() {
+            p
+        } else {
+            self.state = ProducerState::Done;
+            return false;
+        };
+        self.state = ProducerState::Main(next());
+        true
+    }
+}
+
+impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
+    type Chunk = P::Chunk;
+    fn next_file(&mut self) -> Result<bool> {
+        match &mut self.state {
+            ProducerState::Init => Ok(self.refresh_producer()),
+            ProducerState::Done => Ok(false),
+            ProducerState::Main(p) => Ok(p.next_file()? || self.refresh_producer()),
+        }
+    }
+    fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool> {
+        loop {
+            match &mut self.state {
+                ProducerState::Main(p) => {
+                    if !p.get_chunk(chunk)? {
+                        return Ok(false);
+                    }
+                    self.refresh_producer()
+                }
+                ProducerState::Init => self.refresh_producer(),
+                ProducerState::Done => return Ok(true),
+            };
         }
     }
 }
