@@ -15,6 +15,14 @@ use crate::runtime::{
 
 pub trait ChunkProducer {
     type Chunk: Chunk;
+    // Create up to _requested_size additional handles to the ChunkProducer, if possible. Chunk is
+    // Send, so these new producers can be used to read from the same source in parallel.
+    fn try_dyn_resize(
+        &self,
+        _requested_size: usize,
+    ) -> Vec<Box<dyn ChunkProducer<Chunk = Self::Chunk>>> {
+        vec![]
+    }
     fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool /*done*/>;
     fn next_file(&mut self) -> Result<bool /*new file available*/>;
 }
@@ -25,7 +33,6 @@ pub trait Chunk: Send + Default {
 
 // TODO: rephrase CSVReader + BytesReader + DefaultReader in terms of a ChnunkProducer
 //      (in that order: DefaultReader will need its own ChunkProducer, I think?)
-// TODO: write a ParallelChunkProducer that wraps an arbitrary ChunkProducer
 
 #[derive(Copy, Clone)]
 enum ChunkState {
@@ -313,8 +320,23 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
     }
 }
 
-impl<P: ChunkProducer> ChunkProducer for ParallelChunkProducer<P> {
+fn dyn_resize_for_clone<P: ChunkProducer + 'static + Clone>(
+    p: &P,
+    requested_size: usize,
+) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk>>> {
+    (0..requested_size)
+        .map(|_| Box::new(p.clone()) as _)
+        .collect()
+}
+
+impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
     type Chunk = P::Chunk;
+    fn try_dyn_resize(
+        &self,
+        requested_size: usize,
+    ) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk>>> {
+        dyn_resize_for_clone(self, requested_size)
+    }
     fn next_file(&mut self) -> Result<bool> {
         err!("nextfile is not supported in record-oriented parallel mode")
     }
@@ -339,6 +361,15 @@ enum ProducerState<T> {
 pub struct ShardedChunkProducer<P> {
     incoming: Receiver<Box<dyn FnOnce() -> P + Send>>,
     state: ProducerState<P>,
+}
+
+impl<P> Clone for ShardedChunkProducer<P> {
+    fn clone(&self) -> ShardedChunkProducer<P> {
+        ShardedChunkProducer {
+            incoming: self.incoming.clone(),
+            state: ProducerState::Init,
+        }
+    }
 }
 
 impl<P: ChunkProducer + 'static> ShardedChunkProducer<P> {
@@ -378,6 +409,12 @@ impl<P: ChunkProducer + 'static> ShardedChunkProducer<P> {
 
 impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
     type Chunk = P::Chunk;
+    fn try_dyn_resize(
+        &self,
+        requested_size: usize,
+    ) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk>>> {
+        dyn_resize_for_clone(self, requested_size)
+    }
     fn next_file(&mut self) -> Result<bool> {
         match &mut self.state {
             ProducerState::Init => Ok(self.refresh_producer()),
