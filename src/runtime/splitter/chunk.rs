@@ -437,3 +437,69 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
         }
     }
 }
+
+mod tests {
+    use super::*;
+
+    // Basic machinery to turn an iterator into a ChunkProducer. This makes it easier to unit test
+    // the "derived ChunkProducers" like ParallelChunkProducer.
+
+    fn producer_from_iter<I>(
+        iter: I,
+        name: Arc<str>,
+    ) -> impl ChunkProducer<Chunk = ItemChunk<I::Item>>
+    where
+        I: Iterator,
+        I::Item: Send + Default,
+    {
+        IterChunkProducer { iter, name }
+    }
+    struct IterChunkProducer<I> {
+        iter: I,
+        name: Arc<str>,
+    }
+
+    struct ItemChunk<T> {
+        item: T,
+        name: Arc<str>,
+    }
+
+    impl<T: Default> Default for ItemChunk<T> {
+        fn default() -> ItemChunk<T> {
+            ItemChunk {
+                item: Default::default(),
+                name: "".into(),
+            }
+        }
+    }
+
+    impl<T: Send + Default> Chunk for ItemChunk<T> {
+        fn get_name(&self) -> &str {
+            &*self.name
+        }
+    }
+
+    impl<I: Iterator> ChunkProducer for IterChunkProducer<I>
+    where
+        I::Item: Send + Default,
+    {
+        type Chunk = ItemChunk<I::Item>;
+        fn next_file(&mut self) -> Result<bool> {
+            // clear remaining items
+            while let Some(_) = self.iter.next() {}
+            Ok(false)
+        }
+        fn get_chunk(&mut self, chunk: &mut ItemChunk<I::Item>) -> Result<bool> {
+            if let Some(item) = self.iter.next() {
+                chunk.item = item;
+                chunk.name = self.name.clone();
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        }
+    }
+
+    // TODO: test that we get all elements in Chained, Sharded and Parallel chunkproducers.
+    // TODO: test nextfile behavior for Chained and Sharded chunk producer.
+}
