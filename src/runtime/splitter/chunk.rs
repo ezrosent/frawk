@@ -20,7 +20,7 @@ pub trait ChunkProducer {
     fn try_dyn_resize(
         &self,
         _requested_size: usize,
-    ) -> Vec<Box<dyn ChunkProducer<Chunk = Self::Chunk>>> {
+    ) -> Vec<Box<dyn ChunkProducer<Chunk = Self::Chunk> + Send>> {
         vec![]
     }
     fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool /*done*/>;
@@ -264,7 +264,7 @@ impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
 
     fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
         while let Some(cur) = self.0.last_mut() {
-            if cur.get_chunk(chunk)? {
+            if !cur.get_chunk(chunk)? {
                 return Ok(false);
             }
             let _last = self.0.pop();
@@ -320,10 +320,10 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
     }
 }
 
-fn dyn_resize_for_clone<P: ChunkProducer + 'static + Clone>(
+fn dyn_resize_for_clone<P: ChunkProducer + 'static + Clone + Send>(
     p: &P,
     requested_size: usize,
-) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk>>> {
+) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk> + Send>> {
     (0..requested_size)
         .map(|_| Box::new(p.clone()) as _)
         .collect()
@@ -334,7 +334,7 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
     fn try_dyn_resize(
         &self,
         requested_size: usize,
-    ) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk>>> {
+    ) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk> + Send>> {
         dyn_resize_for_clone(self, requested_size)
     }
     fn next_file(&mut self) -> Result<bool> {
@@ -412,8 +412,9 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
     fn try_dyn_resize(
         &self,
         requested_size: usize,
-    ) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk>>> {
-        dyn_resize_for_clone(self, requested_size)
+    ) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk> + Send>> {
+        unimplemented!()
+        // dyn_resize_for_clone(self, requested_size)
     }
     fn next_file(&mut self) -> Result<bool> {
         match &mut self.state {
@@ -498,6 +499,138 @@ mod tests {
                 Ok(true)
             }
         }
+    }
+
+    #[test]
+    fn chained_all_elements() {
+        let mut chained_producer = ChainedChunkProducer(vec![
+            producer_from_iter(20..30, "file3".into()),
+            producer_from_iter(10..20, "file2".into()),
+            producer_from_iter(0..10, "file1".into()),
+        ]);
+        let mut got = Vec::new();
+        let mut names = Vec::new();
+        let mut chunk = ItemChunk::default();
+        let mut i = 0;
+        while !chained_producer
+            .get_chunk(&mut chunk)
+            .expect("get_chunk should succeed")
+        {
+            if i % 10 == 0 {
+                names.push(chunk.name.clone())
+            }
+            got.push(chunk.item);
+            i += 1;
+        }
+
+        assert_eq!(got, (0..30).collect::<Vec<_>>());
+        assert_eq!(names, vec!["file1".into(), "file2".into(), "file3".into()]);
+    }
+
+    #[test]
+    fn chained_next_file() {
+        let mut chained_producer = ChainedChunkProducer(vec![
+            producer_from_iter(20..30, "file3".into()),
+            producer_from_iter(10..20, "file2".into()),
+            producer_from_iter(0..10, "file1".into()),
+        ]);
+        let mut got = Vec::new();
+        let mut names = Vec::new();
+        let mut chunk = ItemChunk::default();
+        while !chained_producer
+            .get_chunk(&mut chunk)
+            .expect("get_chunk should succeed")
+        {
+            names.push(chunk.name.clone());
+            got.push(chunk.item);
+            if !chained_producer
+                .next_file()
+                .expect("next_file should succeed")
+            {
+                break;
+            }
+        }
+
+        assert_eq!(got, vec![0, 10, 20]);
+        assert_eq!(names, vec!["file1".into(), "file2".into(), "file3".into()]);
+    }
+
+    #[test]
+    fn sharded_next_file() {
+        fn new_iter(
+            low: usize,
+            high: usize,
+            name: &str,
+        ) -> impl FnOnce() -> IterChunkProducer<std::ops::Range<usize>> {
+            let name: Arc<str> = name.into();
+            move || IterChunkProducer {
+                iter: (low..high),
+                name,
+            }
+        }
+        let mut sharded_producer = ShardedChunkProducer::new(
+            vec![
+                new_iter(0, 10, "file1"),
+                new_iter(10, 20, "file2"),
+                new_iter(20, 30, "file3"),
+            ]
+            .into_iter(),
+        );
+        let mut got = Vec::new();
+        let mut names = Vec::new();
+        let mut chunk = ItemChunk::default();
+        while !sharded_producer
+            .get_chunk(&mut chunk)
+            .expect("get_chunk should succeed")
+        {
+            names.push(chunk.name.clone());
+            got.push(chunk.item);
+            if !sharded_producer
+                .next_file()
+                .expect("next_file should succeed")
+            {
+                break;
+            }
+        }
+
+        assert_eq!(got, vec![0, 10, 20]);
+        assert_eq!(names, vec!["file1".into(), "file2".into(), "file3".into()]);
+    }
+
+    #[test]
+    fn parallel_all_elements() {
+        use std::{sync::Mutex, thread};
+        let parallel_producer = ParallelChunkProducer::new(
+            || producer_from_iter(0..100, "file1".into()),
+            /*chan_size=*/ 10,
+        );
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let threads = {
+            let _guard = got.lock().unwrap();
+            let mut threads = Vec::with_capacity(5);
+            for mut prod in parallel_producer.try_dyn_resize(5) {
+                let got = got.clone();
+                threads.push(thread::spawn(move || {
+                    let mut chunk = ItemChunk::default();
+                    while !prod
+                        .get_chunk(&mut chunk)
+                        .expect("get_chunk should succeed")
+                    {
+                        assert_eq!(chunk.name, "file1".into());
+                        got.lock().unwrap().push(chunk.item);
+                    }
+                }));
+            }
+            threads
+        };
+        for t in threads.into_iter() {
+            t.join().unwrap();
+        }
+
+        let mut g = got.lock().unwrap();
+        g.sort();
+
+        assert_eq!(*g, (0..100).collect::<Vec<_>>());
     }
 
     // TODO: test that we get all elements in Chained, Sharded and Parallel chunkproducers.
