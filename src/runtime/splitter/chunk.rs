@@ -13,14 +13,25 @@ use crate::runtime::{
     str_impl::UniqueBuf,
 };
 
+// TODO: We probably want a better story here about ChunkProducers propagating error values.
+
 pub trait ChunkProducer {
     type Chunk: Chunk;
     // Create up to _requested_size additional handles to the ChunkProducer, if possible. Chunk is
     // Send, so these new producers can be used to read from the same source in parallel.
+    //
+    // NB: what's going on with this gnarly return type? All implementations either return an empty
+    // vector or a vector containing functions returning Box<Self>, but we need this trait to be
+    // object-safe, so it returns a trait object instead.
+    //
+    // Why return a FnOnce rather than  a trait object directly? Some ChunkProducer
+    // implementations are not Send, even though the data to initialize a new ChunkProducer reading
+    // from the same source is Send. Passing a FnOnce allows us to handle this, which is the case
+    // for (e.g.) ShardedChunkProducer.
     fn try_dyn_resize(
         &self,
         _requested_size: usize,
-    ) -> Vec<Box<dyn ChunkProducer<Chunk = Self::Chunk> + Send>> {
+    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
         vec![]
     }
     fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool /*done*/>;
@@ -133,8 +144,6 @@ pub fn new_chained_offset_chunk_producer_bytes<'a, R: Read, I: Iterator<Item = (
     )
 }
 
-// TODO: Errors
-
 pub struct OffsetChunk {
     pub version: u32,
     pub name: Arc<str>,
@@ -162,6 +171,12 @@ impl Chunk for OffsetChunk {
 }
 impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
     type Chunk = C;
+    fn try_dyn_resize(
+        &self,
+        requested_size: usize,
+    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = C>> + Send>> {
+        (&**self).try_dyn_resize(requested_size)
+    }
     fn next_file(&mut self) -> Result<bool> {
         (&mut **self).next_file()
     }
@@ -320,22 +335,18 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
     }
 }
 
-fn dyn_resize_for_clone<P: ChunkProducer + 'static + Clone + Send>(
-    p: &P,
-    requested_size: usize,
-) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk> + Send>> {
-    (0..requested_size)
-        .map(|_| Box::new(p.clone()) as _)
-        .collect()
-}
-
 impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
     type Chunk = P::Chunk;
     fn try_dyn_resize(
         &self,
         requested_size: usize,
-    ) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk> + Send>> {
-        dyn_resize_for_clone(self, requested_size)
+    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
+        let mut res = Vec::with_capacity(requested_size);
+        for _ in 0..requested_size {
+            let p = self.clone();
+            res.push(Box::new(move || Box::new(p) as Box<dyn ChunkProducer<Chunk = P::Chunk>>) as _)
+        }
+        res
     }
     fn next_file(&mut self) -> Result<bool> {
         err!("nextfile is not supported in record-oriented parallel mode")
@@ -361,15 +372,6 @@ enum ProducerState<T> {
 pub struct ShardedChunkProducer<P> {
     incoming: Receiver<Box<dyn FnOnce() -> P + Send>>,
     state: ProducerState<P>,
-}
-
-impl<P> Clone for ShardedChunkProducer<P> {
-    fn clone(&self) -> ShardedChunkProducer<P> {
-        ShardedChunkProducer {
-            incoming: self.incoming.clone(),
-            state: ProducerState::Init,
-        }
-    }
 }
 
 impl<P: ChunkProducer + 'static> ShardedChunkProducer<P> {
@@ -412,9 +414,18 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
     fn try_dyn_resize(
         &self,
         requested_size: usize,
-    ) -> Vec<Box<dyn ChunkProducer<Chunk = P::Chunk> + Send>> {
-        unimplemented!()
-        // dyn_resize_for_clone(self, requested_size)
+    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
+        let mut res = Vec::with_capacity(requested_size);
+        for _ in 0..requested_size {
+            let incoming = self.incoming.clone();
+            res.push(Box::new(move || {
+                Box::new(ShardedChunkProducer {
+                    incoming,
+                    state: ProducerState::Init,
+                }) as Box<dyn ChunkProducer<Chunk = P::Chunk>>
+            }) as _)
+        }
+        res
     }
     fn next_file(&mut self) -> Result<bool> {
         match &mut self.state {
@@ -439,22 +450,25 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
     // Basic machinery to turn an iterator into a ChunkProducer. This makes it easier to unit test
     // the "derived ChunkProducers" like ParallelChunkProducer.
 
-    fn producer_from_iter<I>(
-        iter: I,
-        name: Arc<str>,
-    ) -> impl ChunkProducer<Chunk = ItemChunk<I::Item>>
-    where
-        I: Iterator,
-        I::Item: Send + Default,
-    {
-        IterChunkProducer { iter, name }
+    fn new_iter(
+        low: usize,
+        high: usize,
+        name: &str,
+    ) -> impl FnOnce() -> IterChunkProducer<std::ops::Range<usize>> {
+        let name: Arc<str> = name.into();
+        move || IterChunkProducer {
+            iter: (low..high),
+            name,
+        }
     }
+
     struct IterChunkProducer<I> {
         iter: I,
         name: Arc<str>,
@@ -504,9 +518,9 @@ mod tests {
     #[test]
     fn chained_all_elements() {
         let mut chained_producer = ChainedChunkProducer(vec![
-            producer_from_iter(20..30, "file3".into()),
-            producer_from_iter(10..20, "file2".into()),
-            producer_from_iter(0..10, "file1".into()),
+            new_iter(20, 30, "file3")(),
+            new_iter(10, 20, "file2")(),
+            new_iter(0, 10, "file1")(),
         ]);
         let mut got = Vec::new();
         let mut names = Vec::new();
@@ -530,9 +544,9 @@ mod tests {
     #[test]
     fn chained_next_file() {
         let mut chained_producer = ChainedChunkProducer(vec![
-            producer_from_iter(20..30, "file3".into()),
-            producer_from_iter(10..20, "file2".into()),
-            producer_from_iter(0..10, "file1".into()),
+            new_iter(20, 30, "file3")(),
+            new_iter(10, 20, "file2")(),
+            new_iter(0, 10, "file1")(),
         ]);
         let mut got = Vec::new();
         let mut names = Vec::new();
@@ -557,17 +571,6 @@ mod tests {
 
     #[test]
     fn sharded_next_file() {
-        fn new_iter(
-            low: usize,
-            high: usize,
-            name: &str,
-        ) -> impl FnOnce() -> IterChunkProducer<std::ops::Range<usize>> {
-            let name: Arc<str> = name.into();
-            move || IterChunkProducer {
-                iter: (low..high),
-                name,
-            }
-        }
         let mut sharded_producer = ShardedChunkProducer::new(
             vec![
                 new_iter(0, 10, "file1"),
@@ -600,17 +603,16 @@ mod tests {
     #[test]
     fn parallel_all_elements() {
         use std::{sync::Mutex, thread};
-        let parallel_producer = ParallelChunkProducer::new(
-            || producer_from_iter(0..100, "file1".into()),
-            /*chan_size=*/ 10,
-        );
+        let parallel_producer =
+            ParallelChunkProducer::new(new_iter(0, 100, "file1"), /*chan_size=*/ 10);
         let got = Arc::new(Mutex::new(Vec::new()));
         let threads = {
             let _guard = got.lock().unwrap();
             let mut threads = Vec::with_capacity(5);
-            for mut prod in parallel_producer.try_dyn_resize(5) {
+            for prod in parallel_producer.try_dyn_resize(5) {
                 let got = got.clone();
                 threads.push(thread::spawn(move || {
+                    let mut prod = prod();
                     let mut chunk = ItemChunk::default();
                     while !prod
                         .get_chunk(&mut chunk)
@@ -631,6 +633,59 @@ mod tests {
         g.sort();
 
         assert_eq!(*g, (0..100).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn sharded_all_elements() {
+        use std::{sync::Mutex, thread};
+        let sharded_producer = ShardedChunkProducer::new(
+            vec![
+                new_iter(0, 10, "file1"),
+                new_iter(10, 20, "file2"),
+                new_iter(20, 30, "file3"),
+                new_iter(30, 40, "file4"),
+                new_iter(40, 50, "file5"),
+                new_iter(50, 60, "file6"),
+            ]
+            .into_iter(),
+        );
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let threads = {
+            let _guard = got.lock().unwrap();
+            let mut threads = Vec::with_capacity(5);
+            for prod in sharded_producer.try_dyn_resize(5) {
+                let got = got.clone();
+                threads.push(thread::spawn(move || {
+                    let mut prod = prod();
+                    let mut chunk = ItemChunk::default();
+                    while !prod
+                        .get_chunk(&mut chunk)
+                        .expect("get_chunk should succeed")
+                    {
+                        let expected_name = match chunk.item {
+                            0..=9 => "file1",
+                            10..=19 => "file2",
+                            20..=29 => "file3",
+                            30..=39 => "file4",
+                            40..=49 => "file5",
+                            50..=59 => "file6",
+                            x => panic!("unexpected item {} (should be in range [0,59])", x),
+                        };
+                        assert_eq!(&*chunk.name, expected_name);
+                        got.lock().unwrap().push(chunk.item);
+                    }
+                }));
+            }
+            threads
+        };
+        for t in threads.into_iter() {
+            t.join().unwrap();
+        }
+
+        let mut g = got.lock().unwrap();
+        g.sort();
+
+        assert_eq!(*g, (0..60).collect::<Vec<_>>());
     }
 
     // TODO: test that we get all elements in Chained, Sharded and Parallel chunkproducers.
