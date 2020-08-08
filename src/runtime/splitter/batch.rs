@@ -51,10 +51,29 @@ pub struct CSVReader<P> {
     field_set: FieldSet,
 }
 
-impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for CSVReader<P> {
+impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     type Line = Line;
     fn filename(&self) -> Str<'static> {
         Str::from(self.cur_chunk.get_name()).unmoor()
+    }
+    fn request_handles(&self, size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
+        let producers = self.prod.try_dyn_resize(size);
+        let mut res = Vec::with_capacity(producers.len());
+        let ifmt = self.ifmt;
+        for p_factory in producers.into_iter() {
+            let field_set = self.field_set.clone();
+            res.push(Box::new(move || CSVReader {
+                prod: p_factory(),
+                cur_chunk: OffsetChunk::default(),
+                cur_buf: UniqueBuf::new(0).into_buf(),
+                buf_len: 0,
+                prev_ix: 0,
+                last_len: 0,
+                ifmt,
+                field_set,
+            }) as _)
+        }
+        res
     }
     fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, Line)> {
         let mut line = Line::default();
@@ -85,6 +104,7 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for CSVReader<P> {
 }
 
 impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
+    // TODO: make a new enum called ParallelStrategy and pass that in here?
     pub fn new(
         r: impl Read + 'static,
         ifmt: InputFormat,
@@ -1036,7 +1056,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 name.borrow(),
                 field_sep,
                 record_sep,
-                /*version=*/1,
+                /*version=*/ 1,
             )),
             cur_chunk: OffsetChunk::default(),
             cur_buf: UniqueBuf::new(0).into_buf(),
@@ -1049,10 +1069,29 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     }
 }
 
-impl<P: ChunkProducer<Chunk = OffsetChunk>> LineReader for ByteReader<P> {
+impl LineReader for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     type Line = DefaultLine;
     fn filename(&self) -> Str<'static> {
         Str::from(self.cur_chunk.get_name()).unmoor()
+    }
+    fn request_handles(&self, size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
+        let producers = self.prod.try_dyn_resize(size);
+        let mut res = Vec::with_capacity(producers.len());
+        for p_factory in producers.into_iter() {
+            let used_fields = self.used_fields.clone();
+            let record_sep = self.record_sep;
+            res.push(Box::new(move || ByteReader {
+                prod: p_factory(),
+                cur_chunk: OffsetChunk::default(),
+                cur_buf: UniqueBuf::new(0).into_buf(),
+                buf_len: 0,
+                progress: 0,
+                record_sep,
+                last_len: usize::max_value(),
+                used_fields,
+            }) as _)
+        }
+        res
     }
     fn read_line(&mut self, _pat: &Str, _rc: &mut RegexCache) -> Result<(bool, DefaultLine)> {
         let mut line = DefaultLine::default();

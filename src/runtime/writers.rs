@@ -506,7 +506,6 @@ impl WriteBatch {
     fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
         let e = w.write_all_vectored(&mut self.io_vec[..]);
         if let Err(e) = e {
-            eprintln!("error! {}", e);
             return Err(e);
         }
         if self.flush || self.close {

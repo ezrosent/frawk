@@ -36,9 +36,12 @@ pub trait Line<'a>: Default {
     fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()>;
 }
 
-pub trait LineReader {
+pub trait LineReader: Sized {
     type Line: for<'a> Line<'a>;
     fn filename(&self) -> Str<'static>;
+    fn request_handles(&self, _size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
+        vec![]
+    }
     // TODO we should probably have the default impl the other way around.
     fn read_line(
         &mut self,
