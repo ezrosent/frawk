@@ -7,6 +7,17 @@ pub(crate) type NodeIx = petgraph::graph::NodeIndex<NumTy>;
 pub(crate) type Graph<V, E> = petgraph::Graph<V, E, petgraph::Directed, NumTy>;
 pub(crate) type Result<T> = std::result::Result<T, CompileError>;
 
+pub enum ExecutionStrategy {
+    /// Execute the script in a single thread. This is the default.
+    Serial,
+    /// Attempt to parallelize the script, breaking the input into chunks of records with different
+    /// worker threads processing different chunks.
+    ShardPerRecord,
+    /// Attempt to parallelize the script, where multiple worker threads each process a file at a
+    /// time.
+    ShardPerFile,
+}
+
 #[derive(Debug, Clone)]
 pub enum Stage<T> {
     Main(T),
