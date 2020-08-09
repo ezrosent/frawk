@@ -5,7 +5,7 @@ use crate::builtins::{FloatFunc, Variable};
 use crate::common::NumTy;
 use crate::compile::{self, Ty};
 use crate::interp::{index, index_mut, pop, push, Storage};
-use crate::runtime::{self, Float, Int, Str};
+use crate::runtime::{self, Float, Int, Str, UniqueStr};
 
 pub(crate) use crate::interp::Interp;
 
@@ -56,11 +56,13 @@ impl<T> PartialEq for Reg<T> {
     }
 }
 impl<T> Eq for Reg<T> {}
+// PhantomData gets in the way here.
+unsafe impl<T> Send for Reg<T> {}
 
 #[derive(Debug, Clone)]
 pub(crate) enum Instr<'a> {
     // By default, instructions have destination first, and src(s) second.
-    StoreConstStr(Reg<Str<'a>>, Str<'a>),
+    StoreConstStr(Reg<Str<'a>>, UniqueStr<'a>),
     StoreConstInt(Reg<Int>, Int),
     StoreConstFloat(Reg<Float>, Float),
 

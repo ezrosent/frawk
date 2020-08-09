@@ -293,20 +293,44 @@ impl<'a> Drop for StrRep<'a> {
 /// A Str that is either trivially copyable or holds the sole reference to some heap-allocated
 /// memory. We also ensure no non-static Literal variants are active in the string, as we intend to
 /// send this across threads, and non-static lifetimes are cumbersome in that context.
-#[derive(Default, Hash, PartialEq, Eq)]
-pub struct UniqueStr(Str<'static>);
-unsafe impl Send for UniqueStr {}
+#[derive(Default, Debug, Hash, PartialEq, Eq)]
+pub struct UniqueStr<'a>(Str<'a>);
+unsafe impl<'a> Send for UniqueStr<'a> {}
 
-impl UniqueStr {
-    pub fn into_str<'a>(self) -> Str<'a> {
-        self.0.upcast()
+impl<'a> Clone for UniqueStr<'a> {
+    fn clone(&self) -> UniqueStr<'a> {
+        UniqueStr(self.clone_str())
     }
 }
 
-impl<'a> From<Str<'a>> for UniqueStr {
-    fn from(s: Str<'a>) -> UniqueStr {
+impl<'a> UniqueStr<'a> {
+    pub fn into_str(self) -> Str<'a> {
+        self.0
+    }
+    pub fn clone_str(&self) -> Str<'a> {
+        let rep = unsafe { self.0.rep_mut() };
+        match rep.get_tag() {
+            StrTag::Inline | StrTag::Literal => self.0.clone(),
+            StrTag::Boxed => unsafe {
+                rep.view_as(|b: &Boxed| {
+                    let bs = b.buf.as_bytes();
+                    Str::from_rep(
+                        Boxed {
+                            buf: Buf::read_from_raw(bs.as_ptr(), bs.len()),
+                            len: bs.len() as u64,
+                        }
+                        .into(),
+                    )
+                })
+            },
+            StrTag::Shared | StrTag::Concat => unreachable!(),
+        }
+    }
+}
+
+impl<'a> From<Str<'a>> for UniqueStr<'a> {
+    fn from(s: Str<'a>) -> UniqueStr<'a> {
         unsafe {
-            let s = s.unmoor();
             let rep = s.rep_mut();
             match rep.get_tag() {
                 StrTag::Inline | StrTag::Literal => return UniqueStr(s),

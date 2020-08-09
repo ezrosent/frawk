@@ -1142,8 +1142,9 @@ impl<'a> View<'a> {
                 // will lead to double-frees. In our current setup, these literals will all be
                 // either empty, or references to word-aligned arena-allocated strings, so that's
                 // actually fine.
-                assert!(s.drop_is_trivial());
-                let sc = s.clone().into_bits();
+                let as_str = s.clone_str();
+                assert!(as_str.drop_is_trivial());
+                let sc = as_str.into_bits();
                 // There is no way to pass a 128-bit integer to LLVM directly. We have to convert
                 // it to a string first.
                 let as_hex = CString::new(format!("{:x}", sc)).unwrap();

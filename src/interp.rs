@@ -34,13 +34,13 @@ pub(crate) struct Core<'a> {
 pub(crate) struct Slots {
     pub int: Vec<Int>,
     pub float: Vec<Float>,
-    pub strs: Vec<UniqueStr>,
+    pub strs: Vec<UniqueStr<'static>>,
     pub intint: Vec<HashMap<Int, Int>>,
     pub intfloat: Vec<HashMap<Int, Float>>,
-    pub intstr: Vec<HashMap<Int, UniqueStr>>,
-    pub strint: Vec<HashMap<UniqueStr, Int>>,
-    pub strfloat: Vec<HashMap<UniqueStr, Float>>,
-    pub strstr: Vec<HashMap<UniqueStr, UniqueStr>>,
+    pub intstr: Vec<HashMap<Int, UniqueStr<'static>>>,
+    pub strint: Vec<HashMap<UniqueStr<'static>, Int>>,
+    pub strfloat: Vec<HashMap<UniqueStr<'static>, Float>>,
+    pub strstr: Vec<HashMap<UniqueStr<'static>, UniqueStr<'static>>>,
 }
 
 /// A Simple helper trait for implement aggregations for slot values and variables.
@@ -57,8 +57,8 @@ impl Agg for Float {
         self + other
     }
 }
-impl Agg for UniqueStr {
-    fn agg(self, other: UniqueStr) -> UniqueStr {
+impl<'a> Agg for UniqueStr<'a> {
+    fn agg(self, other: UniqueStr<'a>) -> UniqueStr<'a> {
         let slf = self.into_str();
         let otr = other.into_str();
         UniqueStr::from(Str::concat(slf, otr))
@@ -181,7 +181,9 @@ impl<'a> Core<'a> {
         self.slots.float[slot]
     }
     pub fn load_str(&mut self, slot: usize) -> Str<'a> {
-        mem::replace(&mut self.slots.strs[slot], Default::default()).into_str()
+        mem::replace(&mut self.slots.strs[slot], Default::default())
+            .into_str()
+            .upcast()
     }
     pub fn load_intint(&mut self, slot: usize) -> runtime::IntMap<Int> {
         mem::replace(&mut self.slots.intint[slot], Default::default()).into()
@@ -192,25 +194,25 @@ impl<'a> Core<'a> {
     pub fn load_intstr(&mut self, slot: usize) -> runtime::IntMap<Str<'a>> {
         mem::replace(&mut self.slots.intstr[slot], Default::default())
             .into_iter()
-            .map(|(k, v)| (k, v.into_str()))
+            .map(|(k, v)| (k, v.into_str().upcast()))
             .collect()
     }
     pub fn load_strint(&mut self, slot: usize) -> runtime::StrMap<'a, Int> {
         mem::replace(&mut self.slots.strint[slot], Default::default())
             .into_iter()
-            .map(|(k, v)| (k.into_str(), v))
+            .map(|(k, v)| (k.into_str().upcast(), v))
             .collect()
     }
     pub fn load_strfloat(&mut self, slot: usize) -> runtime::StrMap<'a, Float> {
         mem::replace(&mut self.slots.strfloat[slot], Default::default())
             .into_iter()
-            .map(|(k, v)| (k.into_str(), v))
+            .map(|(k, v)| (k.into_str().upcast(), v))
             .collect()
     }
     pub fn load_strstr(&mut self, slot: usize) -> runtime::StrMap<'a, Str<'a>> {
         mem::replace(&mut self.slots.strstr[slot], Default::default())
             .into_iter()
-            .map(|(k, v)| (k.into_str(), v.into_str()))
+            .map(|(k, v)| (k.into_str().upcast(), v.into_str().upcast()))
             .collect()
     }
 
@@ -221,7 +223,7 @@ impl<'a> Core<'a> {
         set_slot(&mut self.slots.float, slot, f)
     }
     pub fn store_str(&mut self, slot: usize, s: Str<'a>) {
-        set_slot(&mut self.slots.strs, slot, s.into())
+        set_slot(&mut self.slots.strs, slot, s.unmoor().into())
     }
     pub fn store_intint(&mut self, slot: usize, s: runtime::IntMap<Int>) {
         set_slot(
@@ -241,21 +243,21 @@ impl<'a> Core<'a> {
         set_slot(
             &mut self.slots.intstr,
             slot,
-            s.iter(|i| i.map(|(k, v)| (*k, v.clone().into())).collect()),
+            s.iter(|i| i.map(|(k, v)| (*k, v.clone().unmoor().into())).collect()),
         )
     }
     pub fn store_strint(&mut self, slot: usize, s: runtime::StrMap<'a, Int>) {
         set_slot(
             &mut self.slots.strint,
             slot,
-            s.iter(|i| i.map(|(k, v)| (k.clone().into(), *v)).collect()),
+            s.iter(|i| i.map(|(k, v)| (k.clone().unmoor().into(), *v)).collect()),
         )
     }
     pub fn store_strfloat(&mut self, slot: usize, s: runtime::StrMap<'a, Float>) {
         set_slot(
             &mut self.slots.strfloat,
             slot,
-            s.iter(|i| i.map(|(k, v)| (k.clone().into(), *v)).collect()),
+            s.iter(|i| i.map(|(k, v)| (k.clone().unmoor().into(), *v)).collect()),
         )
     }
     pub fn store_strstr(&mut self, slot: usize, s: runtime::StrMap<'a, Str<'a>>) {
@@ -263,7 +265,7 @@ impl<'a> Core<'a> {
             &mut self.slots.strstr,
             slot,
             s.iter(|i| {
-                i.map(|(k, v)| (k.clone().into(), v.clone().into()))
+                i.map(|(k, v)| (k.clone().unmoor().into(), v.clone().unmoor().into()))
                     .collect()
             }),
         )
@@ -411,7 +413,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 match unsafe { (*instrs).get_unchecked(cur) } {
                     StoreConstStr(sr, s) => {
                         let sr = *sr;
-                        *self.get_mut(sr) = s.clone()
+                        *self.get_mut(sr) = s.clone_str()
                     }
                     StoreConstInt(ir, i) => {
                         let ir = *ir;

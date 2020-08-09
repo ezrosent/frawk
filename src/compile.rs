@@ -5,7 +5,7 @@ use crate::common::{Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
 use crate::llvm;
 use crate::pushdown::{self, FieldSet};
-use crate::runtime;
+use crate::runtime::{self, Str};
 use crate::smallvec::{self, smallvec};
 use crate::types;
 
@@ -998,7 +998,7 @@ impl<'a, 'b> View<'a, 'b> {
             }
             PrimVal::StrLit(s) => {
                 let nreg = self.regs.stats.new_reg(Ty::Str, Local);
-                self.pushl(LL::StoreConstStr(nreg.into(), (*s).into()));
+                self.pushl(LL::StoreConstStr(nreg.into(), Str::from(*s).into()));
                 Ok((nreg, Ty::Str, Local))
             }
             PrimVal::Var(v) => Ok(self.reg_of_ident_status(v)),
@@ -1092,10 +1092,10 @@ impl<'a, 'b> View<'a, 'b> {
             }
             PrimVal::StrLit(s) => {
                 if dst_ty == Ty::Str {
-                    self.pushl(LL::StoreConstStr(dst_reg.into(), (*s).into()));
+                    self.pushl(LL::StoreConstStr(dst_reg.into(), Str::from(*s).into()));
                 } else {
                     let ir = self.regs.stats.reg_of_ty(Ty::Str);
-                    self.pushl(LL::StoreConstStr(ir.into(), (*s).into()));
+                    self.pushl(LL::StoreConstStr(ir.into(), Str::from(*s).into()));
                     self.convert(dst_reg, dst_ty, ir, Ty::Str)?;
                 }
             }
@@ -1424,7 +1424,7 @@ impl<'a, 'b> View<'a, 'b> {
                 self.pushl(LL::Close(conv_regs[0].into()));
                 assert_eq!(res_ty, Ty::Str);
                 if res_reg != UNUSED {
-                    self.pushl(LL::StoreConstStr(res_reg.into(), "".into()));
+                    self.pushl(LL::StoreConstStr(res_reg.into(), Default::default()));
                 }
             }
             JoinCSV => {

@@ -47,6 +47,7 @@ use clap::{App, Arg};
 
 use arena::Arena;
 use cfg::Escaper;
+use common::ExecutionStrategy;
 use llvm::IntoRuntime;
 use runtime::{
     splitter::{
@@ -287,15 +288,29 @@ fn main() {
              .about("Input files to be read by frawk program")
              .index(2)
              .multiple(true))
+        .arg(Arg::with_name("parallel-strategy")
+             .about("Attempt to execute the script in parallel. Strategy r[ecord] parallelizes within and accross files. Strategy f[ile] parallelizes between input files.")
+             .long("parallel-strategy")
+             .short('p')
+             .possible_values(&["r", "record", "f", "file"]))
         .get_matches();
     if matches.is_present("input-format") && !csv_supported() {
         fail!("CSV/TSV requires an x86 processor with SSE2 support");
     }
     let ifmt = match matches.value_of("input-format") {
-        Some("csv") | Some("CSV") => Some(InputFormat::CSV),
-        Some("tsv") | Some("TSV") => Some(InputFormat::TSV),
+        Some("csv") => Some(InputFormat::CSV),
+        Some("tsv") => Some(InputFormat::TSV),
         Some(x) => fail!("invalid input format: {}", x),
         None => None,
+    };
+    let exec_strategy = match matches.value_of("parallel-strategy") {
+        Some("r") | Some("record") => ExecutionStrategy::ShardPerRecord,
+        Some("f") | Some("file") => ExecutionStrategy::ShardPerFile,
+        None => ExecutionStrategy::Serial,
+        Some(x) => fail!(
+            "invalid execution strategy (clap arg parsing should handle this): {}",
+            x
+        ),
     };
     let mut input_files: Vec<&str> = matches
         .values_of("input-files")
