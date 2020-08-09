@@ -43,6 +43,73 @@ pub(crate) struct Slots {
     pub strstr: Vec<HashMap<UniqueStr, UniqueStr>>,
 }
 
+/// A Simple helper trait for implement aggregations for slot values and variables.
+trait Agg {
+    fn agg(self, other: Self) -> Self;
+}
+impl Agg for Int {
+    fn agg(self, other: Int) -> Int {
+        self + other
+    }
+}
+impl Agg for Float {
+    fn agg(self, other: Float) -> Float {
+        self + other
+    }
+}
+impl Agg for UniqueStr {
+    fn agg(self, other: UniqueStr) -> UniqueStr {
+        let slf = self.into_str();
+        let otr = other.into_str();
+        UniqueStr::from(Str::concat(slf, otr))
+    }
+}
+impl<K: std::hash::Hash + Eq, V: Agg + Default> Agg for HashMap<K, V> {
+    fn agg(mut self, other: HashMap<K, V>) -> HashMap<K, V> {
+        for (k, v) in other {
+            let entry = self.entry(k).or_insert(Default::default());
+            let v2 = mem::replace(entry, Default::default());
+            *entry = v2.agg(v);
+        }
+        self
+    }
+}
+
+/// StageResult is a Send subset of Core that can be extracted for inter-stage aggregation in a
+/// parallel script.
+pub(crate) struct StageResult {
+    slots: Slots,
+    // TODO: put more variables in here?
+    nr: Int,
+}
+
+impl Slots {
+    // TODO: Concatenation of UniqueStr could be faster if we implemented N-way combine.
+    fn combine(&mut self, mut other: Slots) {
+        macro_rules! for_each_slot_pair {
+            ($s1:ident, $s2:ident, $body:expr) => {
+                for_each_slot_pair!(
+                    $s1, $s2, $body, int, float, strs, intint, intfloat, intstr, strint, strfloat,
+                    strstr
+                );
+            };
+            ($s1:ident, $s2:ident, $body:expr, $($fld:tt),*) => {$({
+                let $s1 = &mut self.$fld;
+                let $s2 = &mut other.$fld;
+                $body
+            });*};
+        }
+
+        for_each_slot_pair!(a, b, {
+            a.resize_with(std::cmp::max(a.len(), b.len()), Default::default);
+            for (a_elt, b_elt_v) in a.iter_mut().zip(b.drain(..)) {
+                let a_elt_v = mem::replace(a_elt, Default::default());
+                *a_elt = a_elt_v.agg(b_elt_v);
+            }
+        });
+    }
+}
+
 pub fn set_slot<T: Default>(vec: &mut Vec<T>, slot: usize, v: T) {
     if slot < vec.len() {
         vec[slot] = v;
@@ -50,6 +117,17 @@ pub fn set_slot<T: Default>(vec: &mut Vec<T>, slot: usize, v: T) {
     }
     vec.resize_with(slot, Default::default);
     vec.push(v)
+}
+
+pub fn combine_slot<T: Default>(vec: &mut Vec<T>, slot: usize, f: impl FnOnce(T) -> T) {
+    if slot < vec.len() {
+        let res = f(std::mem::replace(&mut vec[slot], Default::default()));
+        vec[slot] = res;
+        return;
+    }
+    vec.resize_with(slot, Default::default);
+    let res = f(Default::default());
+    vec.push(res)
 }
 
 impl<'a> Core<'a> {
@@ -63,6 +141,18 @@ impl<'a> Core<'a> {
             current_seed: seed,
             slots: Default::default(),
         }
+    }
+
+    pub fn extract_result(&mut self) -> StageResult {
+        StageResult {
+            slots: mem::replace(&mut self.slots, Default::default()),
+            nr: self.vars.nr,
+        }
+    }
+
+    pub fn combine(&mut self, StageResult { slots, nr }: StageResult) {
+        self.slots.combine(slots);
+        self.vars.nr = self.vars.nr.agg(nr);
     }
 
     pub fn reseed(&mut self, seed: u64) -> u64 /* old seed */ {
