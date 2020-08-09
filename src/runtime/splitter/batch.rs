@@ -19,6 +19,7 @@
 /// We can fix this easily enough by reusing the computed offsets at the end of the buffer into an
 /// auxiliary vector at the cost of 2x steady-state memory usage, or more complex offset management
 /// in the `Offsets` type.
+/// NB the changes to fix this issue will now be in the chunk module.
 use std::borrow::Borrow;
 use std::io::Read;
 use std::mem;
