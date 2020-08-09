@@ -282,8 +282,7 @@ fn main() {
              .about("If set, records output via print are escaped according to the rules of the corresponding format"))
         .arg(Arg::with_name("program")
              .about("The frawk program to execute")
-             .index(1)
-             .conflicts_with("program-file"))
+             .index(1))
         .arg(Arg::with_name("input-files")
              .about("Input files to be read by frawk program")
              .index(2)
@@ -298,9 +297,9 @@ fn main() {
         Some(x) => fail!("invalid input format: {}", x),
         None => None,
     };
-    let mut input_files: Vec<String> = matches
+    let mut input_files: Vec<&str> = matches
         .values_of("input-files")
-        .map(|x| x.map(String::from).collect())
+        .map(|x| x.collect())
         .unwrap_or_else(Vec::new);
     let program_string = {
         if let Some(pfile) = matches.value_of("program-file") {
@@ -308,9 +307,8 @@ fn main() {
                 Ok(p) => {
                     // We specified a file on the command line, so the "program" will be
                     // interpreted as another input file.
-                    // TODO: is this code necessary anymore?
                     if let Some(p) = matches.value_of("program") {
-                        input_files.push(String::from(p));
+                        input_files.push(p);
                     }
                     p
                 }
