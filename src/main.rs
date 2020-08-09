@@ -43,7 +43,7 @@ extern crate smallvec;
 extern crate stable_deref_trait;
 extern crate unicode_xid;
 
-use clap::Clap;
+use clap::{App, Arg};
 
 use arena::Arena;
 use cfg::Escaper;
@@ -63,70 +63,6 @@ use std::io::{self, BufReader, Write};
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-#[derive(Clap, Debug)]
-struct Opts {
-    #[clap(
-        short = 'f',
-        long = "f",
-        about = "a file containing a valid frawk program"
-    )]
-    program_file: Option<String>,
-    #[clap(
-        short = 'O',
-        long = "opt-level",
-        default_value = "3",
-        about = "the optimization level for the program. Levels 0 through 3 are passed \
-to LLVM. To force bytecode interpretation pass level -1. The bytecode interpreter is \
-good for debugging, and it will execute much faster for small scripts."
-    )]
-    opt_level: i32,
-    #[clap(long = "out-file")]
-    out_file: Option<String>,
-    #[clap(long = "dump-llvm", about = "dump llvm-ir for input program")]
-    dump_llvm: bool,
-    #[clap(
-        long = "dump-bytecode",
-        about = "dump typed bytecode for input program"
-    )]
-    dump_bytecode: bool,
-    #[clap(long = "dump-cfg", about = "dump untyped SSA form for input program")]
-    dump_cfg: bool,
-    #[clap(
-        long = "input-format",
-        short = 'i',
-        about = "Legal values are csv, tsv. Input is split according to the rules of (csv|tsv). \
-$0 contains the unescaped line, assigning to any columns including $0 does \
-nothing."
-    )]
-    input_format: Option<String>,
-    #[clap(
-        long = "var",
-        short = 'v',
-        multiple = true,
-        about = "Has the form <identifier> = <expr>"
-    )]
-    var: Vec<String>,
-    #[clap(
-        short = 'F',
-        about = "Field separator for frawk program. This is interpreted as a regular expression"
-    )]
-    field_sep: Option<String>,
-    #[clap(
-        short = 'b',
-        long = "bytecode",
-        about = "Execute the program with the bytecode interpreter."
-    )]
-    bytecode: bool,
-    #[clap(
-        short = 'o',
-        long = "output-format",
-        about = "Legal values are csv, tsv. If set, records output via print \
-are escaped accoring to the rules of the corresponding format"
-    )]
-    output_format: Option<String>,
-    program: Option<String>,
-    input_files: Vec<String>,
-}
 macro_rules! fail {
     ($($t:tt)*) => {{
         eprintln_ignore!($($t)*);
@@ -312,63 +248,114 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
 }
 
 fn main() {
-    let mut opts: Opts = Opts::parse();
-    if opts.input_format.is_some() && !csv_supported() {
+    let matches = App::new("frawk")
+        .version("0.1")
+        .author("Eli R.")
+        .about("frawk is a pattern scanning and (semi-structured) text processing language")
+        .arg("-f, --program-file=[FILE] 'a file containing frawk program'")
+        .arg(Arg::with_name("opt-level")
+             .long("opt-level")
+             .short('O')
+             .about("the optimization level for the program. Positive levels determine the optimization level for LLVM. Level -1 forces bytecode interpretation")
+             .possible_values(&["-1", "0", "1", "2", "3"]))
+        .arg("--out-file=[FILE] 'the output file used in place of standard input'")
+        .arg("--dump-llvm 'print LLVM-IR for the input program'")
+        .arg("--dump-cfg 'print untyped SSA form for input program'")
+        .arg("--dump-bytecode 'print bytecode for input program'")
+        .arg(Arg::with_name("input-format")
+             .long("input-format")
+             .short('i')
+             .possible_values(&["csv", "tsv"])
+             .about("Input is split according to the rules of (csv|tsv|). $0 contains the unescaped line. Assigning to columns does nothing."))
+        .arg(Arg::with_name("var")
+             .long("var")
+             .short('v')
+             .multiple(true)
+             .takes_value(true)
+             .about("Has the form <identifier>=<expr>"))
+        .arg("-F, --field-separator 'Field separator for frawk program.'")
+        .arg("-b, --bytecode 'Execute the program with the bytecode interpreter'")
+        .arg(Arg::with_name("output-format")
+             .long("output-format")
+             .short('o')
+             .possible_values(&["csv", "tsv"])
+             .about("If set, records output via print are escaped according to the rules of the corresponding format"))
+        .arg(Arg::with_name("program")
+             .about("The frawk program to execute")
+             .index(1)
+             .conflicts_with("program-file"))
+        .arg(Arg::with_name("input-files")
+             .about("Input files to be read by frawk program")
+             .index(2)
+             .multiple(true))
+        .get_matches();
+    if matches.is_present("input-format") && !csv_supported() {
         fail!("CSV/TSV requires an x86 processor with SSE2 support");
     }
-    let ifmt = match opts.input_format.as_ref().map(String::as_str) {
+    let ifmt = match matches.value_of("input-format") {
         Some("csv") | Some("CSV") => Some(InputFormat::CSV),
         Some("tsv") | Some("TSV") => Some(InputFormat::TSV),
         Some(x) => fail!("invalid input format: {}", x),
         None => None,
     };
+    let mut input_files: Vec<String> = matches
+        .values_of("input-files")
+        .map(|x| x.map(String::from).collect())
+        .unwrap_or_else(Vec::new);
     let program_string = {
-        if let Some(pfile) = &opts.program_file {
+        if let Some(pfile) = matches.value_of("program-file") {
             match std::fs::read_to_string(pfile) {
                 Ok(p) => {
                     // We specified a file on the command line, so the "program" will be
                     // interpreted as another input file.
-                    if let Some(p) = &opts.program {
-                        opts.input_files.push(p.clone());
+                    // TODO: is this code necessary anymore?
+                    if let Some(p) = matches.value_of("program") {
+                        input_files.push(String::from(p));
                     }
                     p
                 }
                 Err(e) => fail!("failed to read program from {}: {}", pfile, e),
             }
-        } else if let Some(p) = &opts.program {
-            p.clone()
+        } else if let Some(p) = matches.value_of("program") {
+            String::from(p)
         } else {
             fail!("must specify program at command line, or in a file via -f");
         }
     };
-    let (escaper, output_sep, output_record_sep) =
-        match opts.output_format.as_ref().map(String::as_str) {
-            Some("csv") => (Escaper::CSV, Some(","), Some("\r\n")),
-            Some("tsv") => (Escaper::TSV, Some("\t"), Some("\n")),
-            Some(s) => fail!(
-                "invalid output format {:?}; expected csv or tsv (or the empty string)",
-                s
-            ),
-            None => (Escaper::Identity, None, None),
-        };
+    let (escaper, output_sep, output_record_sep) = match matches.value_of("output-format") {
+        Some("csv") => (Escaper::CSV, Some(","), Some("\r\n")),
+        Some("tsv") => (Escaper::TSV, Some("\t"), Some("\n")),
+        Some(s) => fail!(
+            "invalid output format {:?}; expected csv or tsv (or the empty string)",
+            s
+        ),
+        None => (Escaper::Identity, None, None),
+    };
     let raw = RawPrelude {
-        field_sep: opts.field_sep.clone(),
-        var_decs: opts.var.clone(),
+        field_sep: matches.value_of("field-separator").map(String::from),
+        var_decs: matches
+            .values_of("var")
+            .map(|x| x.map(String::from).collect())
+            .unwrap_or_else(Vec::new),
         output_sep,
         escaper,
         output_record_sep,
     };
-    if opts.opt_level > 3 {
-        fail!("opt levels can only be negative, or in the range [0, 3]");
-    }
-    let skip_output = opts.dump_llvm || opts.dump_bytecode || opts.dump_cfg;
-    if opts.dump_llvm {
+    let mut opt_level: i32 = match matches.value_of("opt-level") {
+        None | Some("3") => 3,
+        Some("2") => 2,
+        Some("1") => 1,
+        Some("0") => 0,
+        Some("-1") => -1,
+        Some(x) =>panic!("this case should be covered by clap argument validation: found unexpected opt-level value {}", x),
+    };
+    let opt_dump_llvm = matches.is_present("dump-llvm");
+    let opt_dump_bytecode = matches.is_present("dump-bytecode");
+    let opt_dump_cfg = matches.is_present("dump-cfg");
+    let skip_output = opt_dump_llvm || opt_dump_bytecode || opt_dump_cfg;
+    if opt_dump_llvm {
         let config = llvm::Config {
-            opt_level: if opts.opt_level < 0 {
-                3
-            } else {
-                opts.opt_level as usize
-            },
+            opt_level: if opt_level < 0 { 3 } else { opt_level as usize },
         };
         let _ = write!(
             std::io::stdout(),
@@ -376,14 +363,14 @@ fn main() {
             dump_llvm(program_string.as_str(), config, &raw),
         );
     }
-    if opts.dump_bytecode {
+    if opt_dump_bytecode {
         let _ = write!(
             std::io::stdout(),
             "{}",
             dump_bytecode(program_string.as_str(), &raw),
         );
     }
-    if opts.dump_cfg {
+    if opt_dump_cfg {
         let a = Arena::default();
         let ctx = get_context(program_string.as_str(), &a, get_prelude(&a, &raw));
         let mut stdout = std::io::stdout();
@@ -393,12 +380,17 @@ fn main() {
         return;
     }
 
+    let input_files = matches
+        .values_of("input-files")
+        .map(|x| x.map(String::from).collect())
+        .unwrap_or_else(Vec::new);
+
     // This horrid macro is here because all of the different ways of reading input are different
     // types, making functions hard to write. Still, there must be something to be done to clean
     // this up here.
     macro_rules! with_inp {
         ($analysis:expr, $inp:ident, $body:expr) => {
-            if opts.input_files.len() == 0 {
+            if input_files.len() == 0 {
                 let _reader: Box<dyn io::Read> = Box::new(io::stdin());
                 match (ifmt, $analysis) {
                     (Some(ifmt), _) => {
@@ -444,7 +436,7 @@ fn main() {
                     }
                 }
             } else if let Some(ifmt) = ifmt {
-                let iter = opts.input_files.iter().cloned().map(|file| {
+                let iter = input_files.iter().cloned().map(|file| {
                     let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
                     CSVReader::new(reader, ifmt, CHUNK_SIZE, file)
                 });
@@ -461,7 +453,7 @@ fn main() {
                         if field_sep.len() == 1 && record_sep.len() == 1 {
                             let br_valid = bytereader_supported();
                             if field_sep == " " && record_sep == "\n" {
-                                let iter = opts.input_files.iter().cloned().map(|file| {
+                                let iter = input_files.iter().cloned().map(|file| {
                                     let reader: Box<dyn io::Read> =
                                         Box::new(open_file_read(file.as_str()));
                                     DefaultSplitter::new(reader, CHUNK_SIZE, file)
@@ -469,7 +461,7 @@ fn main() {
                                 let $inp = ChainedReader::new(iter);
                                 $body
                             } else if br_valid {
-                                let iter = opts.input_files.iter().cloned().map(move |file| {
+                                let iter = input_files.iter().cloned().map(move |file| {
                                     let reader: Box<dyn io::Read> =
                                         Box::new(open_file_read(file.as_str()));
                                     ByteReader::new(
@@ -483,7 +475,7 @@ fn main() {
                                 let $inp = ChainedReader::new(iter);
                                 $body
                             } else {
-                                let iter = opts.input_files.iter().cloned().map(|file| {
+                                let iter = input_files.iter().cloned().map(|file| {
                                     let reader: Box<dyn io::Read> =
                                         Box::new(open_file_read(file.as_str()));
                                     RegexSplitter::new(reader, CHUNK_SIZE, file)
@@ -492,7 +484,7 @@ fn main() {
                                 $body
                             }
                         } else {
-                            let iter = opts.input_files.iter().cloned().map(|file| {
+                            let iter = input_files.iter().cloned().map(|file| {
                                 let reader: Box<dyn io::Read> =
                                     Box::new(open_file_read(file.as_str()));
                                 RegexSplitter::new(reader, CHUNK_SIZE, file)
@@ -502,7 +494,7 @@ fn main() {
                         }
                     }
                     cfg::SepAssign::Unsure => {
-                        let iter = opts.input_files.iter().cloned().map(|file| {
+                        let iter = input_files.iter().cloned().map(|file| {
                             let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
                             RegexSplitter::new(reader, CHUNK_SIZE, file)
                         });
@@ -516,12 +508,13 @@ fn main() {
     let a = Arena::default();
     let ctx = get_context(program_string.as_str(), &a, get_prelude(&a, &raw));
     let analysis_result = ctx.analyze_sep_assignments();
+    let out_file = matches.value_of("out-file");
     macro_rules! with_io {
         (|$inp:ident, $out:ident| $body:expr) => {
-            match opts.out_file {
+            match out_file {
                 Some(oup) => {
-                    let $out = runtime::writers::factory_from_file(oup.as_str())
-                        .unwrap_or_else(|e| fail!("failed to open {}: {}", oup.as_str(), e));
+                    let $out = runtime::writers::factory_from_file(oup)
+                        .unwrap_or_else(|e| fail!("failed to open {}: {}", oup, e));
                     with_inp!(analysis_result, $inp, $body);
                 }
                 None => {
@@ -532,11 +525,11 @@ fn main() {
         };
     }
 
-    if opts.bytecode {
-        opts.opt_level = -1;
+    if matches.is_present("bytecode") {
+        opt_level = -1;
     }
 
-    if opts.opt_level < 0 {
+    if opt_level < 0 {
         with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup))
     } else {
         with_io!(|inp, oup| run_llvm_with_context(
@@ -544,7 +537,7 @@ fn main() {
             inp,
             oup,
             llvm::Config {
-                opt_level: opts.opt_level as usize
+                opt_level: opt_level as usize
             },
         ));
     }

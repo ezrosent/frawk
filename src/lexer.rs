@@ -446,7 +446,8 @@ impl<'a> Iterator for Tokenizer<'a> {
                     } else if is_id_start(c) {
                         self.cur += c.len_utf8();
                         let (s, new_start) = self.ident(ix);
-                        if self.text.as_bytes()[new_start] == b'(' {
+                        let bs = self.text.as_bytes();
+                        if new_start < bs.len() && self.text.as_bytes()[new_start] == b'(' {
                             self.cur = new_start + 1;
                             (ix, Tok::CallStart(s), self.cur)
                         } else {

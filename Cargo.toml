@@ -20,7 +20,7 @@ rand = "0.7.3"
 lalrpop-util = "0.17.2"
 unicode-xid = "0.2.0"
 llvm-sys = "90.0.0"
-clap = { git = "https://github.com/clap-rs/clap/" }
+clap = "3.0.0-beta.1"
 crossbeam-channel = "0.4"
 
 [features]
