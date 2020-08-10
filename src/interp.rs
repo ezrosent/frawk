@@ -287,6 +287,7 @@ impl<'a> Core<'a> {
 pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     // index of `instrs` that contains "main"
     main_func: Stage<usize>,
+    num_workers: usize,
     instrs: Vec<Vec<Instr<'a>>>,
     stack: Vec<(usize /*function*/, Label /*instr*/)>,
 
@@ -326,30 +327,16 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     pub(crate) fn new(
         instrs: Vec<Vec<Instr<'a>>>,
         main_func: Stage<usize>,
+        num_workers: usize,
         regs: impl Fn(compile::Ty) -> usize,
         stdin: LR,
         ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
     ) -> Self {
-        Interp::from_readers(
-            instrs,
-            main_func,
-            regs,
-            ff,
-            runtime::FileRead::new(stdin, used_fields),
-        )
-    }
-
-    pub(crate) fn from_readers(
-        instrs: Vec<Vec<Instr<'a>>>,
-        main_func: Stage<usize>,
-        regs: impl Fn(compile::Ty) -> usize,
-        ff: impl runtime::writers::FileFactory,
-        read_files: runtime::FileRead<LR>,
-    ) -> Self {
         use compile::Ty::*;
         Interp {
             main_func,
+            num_workers,
             instrs,
             stack: Default::default(),
             floats: default_of(regs(Float)),
@@ -358,7 +345,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             core: Core::new(ff),
 
             line: Default::default(),
-            read_files,
+            read_files: runtime::FileRead::new(stdin, used_fields),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -391,11 +378,11 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         self.core.vars.filename = self.read_files.stdin_filename().upcast();
     }
 
-    pub(crate) fn run_parallel(&mut self, workers: usize) -> Result<()> {
-        if workers <= 1 {
+    pub(crate) fn run_parallel(&mut self) -> Result<()> {
+        if self.num_workers <= 1 {
             return self.run_serial();
         }
-        let mut handles = self.read_files.try_resize(workers);
+        let mut handles = self.read_files.try_resize(self.num_workers);
         if handles.len() <= 1 {
             return self.run_serial();
         }
@@ -421,7 +408,14 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         let mut initial_fr = handles.pop().unwrap()();
         mem::swap(&mut initial_fr, &mut self.read_files);
         let mut results: Vec<StageResult> = Vec::with_capacity(handles.len() + 1);
-        scope(|s| {
+        fn wrap_error<T, S>(r: std::result::Result<Result<T>, S>) -> Result<T> {
+            match r {
+                Ok(Ok(t)) => Ok(t),
+                Ok(Err(e)) => Err(e),
+                Err(_) => err!("error in executing worker thread"),
+            }
+        }
+        let scope_res = scope(|s| {
             let mut join_handles = Vec::with_capacity(handles.len() + 1);
             let float_size = self.floats.regs.len();
             let ints_size = self.ints.regs.len();
@@ -440,6 +434,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 join_handles.push(s.spawn(move |_| {
                     let mut interp = Interp {
                         main_func: Stage::Main(main_loop),
+                        num_workers: 1,
                         instrs,
                         stack: Default::default(),
                         core: Core::from_writers(writers),
@@ -466,11 +461,11 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 // TODO: see what we can make of any panic errors here. It'd be nice to return something
                 // more sensible.
 
-                results.push(h.join().unwrap()?);
+                results.push(wrap_error(h.join())?);
             }
             Ok(())
-        })
-        .unwrap()?;
+        });
+        wrap_error(scope_res)?;
         for r in results.into_iter() {
             self.core.combine(r);
         }
@@ -490,10 +485,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
 
     pub(crate) fn run(&mut self) -> Result<()> {
         // TODO make this another param.
-        let num_workers = 16;
         match self.main_func {
             Stage::Main(_) => self.run_serial(),
-            Stage::Par { .. } => self.run_parallel(num_workers),
+            Stage::Par { .. } => self.run_parallel(),
         }
     }
 

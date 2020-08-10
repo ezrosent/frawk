@@ -36,6 +36,7 @@ extern crate lalrpop_util;
 extern crate lazy_static;
 extern crate libc;
 extern crate llvm_sys;
+extern crate num_cpus;
 extern crate petgraph;
 extern crate rand;
 extern crate regex;
@@ -48,7 +49,7 @@ use clap::{App, Arg};
 
 use arena::Arena;
 use cfg::Escaper;
-use common::ExecutionStrategy;
+use common::{ExecutionStrategy, Stage};
 use llvm::IntoRuntime;
 use runtime::{
     splitter::{
@@ -78,6 +79,7 @@ struct RawPrelude {
     output_sep: Option<&'static str>,
     output_record_sep: Option<&'static str>,
     escaper: Escaper,
+    stage: Stage<()>,
 }
 
 struct Prelude<'a> {
@@ -86,6 +88,7 @@ struct Prelude<'a> {
     output_sep: Option<&'a str>,
     output_record_sep: Option<&'a str>,
     escaper: Escaper,
+    stage: Stage<()>,
 }
 
 fn open_file_read(f: &str) -> io::BufReader<File> {
@@ -118,7 +121,7 @@ fn get_vars<'a, 'b>(
         let var = a.alloc_str(var);
         let lexer = lexer::Tokenizer::new(var);
         let parser = parsing::syntax::VarDefParser::new();
-        match parser.parse(a, buf, lexer) {
+        match parser.parse(a, buf, &Stage::Main(()), lexer) {
             Ok(stmt) => stmts.push(stmt),
             Err(e) => fail!(
                 "failed to parse var at index {}:\n{}\nerror:{:?}",
@@ -149,6 +152,7 @@ fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
         escaper: raw.escaper,
         output_sep,
         output_record_sep,
+        stage: raw.stage.clone(),
     }
 }
 
@@ -161,7 +165,7 @@ fn get_context<'a>(
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = parsing::syntax::ProgParser::new();
-    let stmt = match parser.parse(a, &mut buf, lexer) {
+    let stmt = match parser.parse(a, &mut buf, &prelude.stage, lexer) {
         Ok(mut program) => {
             program.field_sep = prelude.field_sep;
             program.prelude_vardecs = prelude.var_decs;
@@ -190,8 +194,9 @@ fn run_interp_with_context<'a>(
     mut ctx: cfg::ProgramContext<'a, &'a str>,
     stdin: impl LineReader,
     ff: impl runtime::writers::FileFactory,
+    num_workers: usize,
 ) {
-    let mut interp = match compile::bytecode(&mut ctx, stdin, ff) {
+    let mut interp = match compile::bytecode(&mut ctx, stdin, ff, num_workers) {
         Ok(ctx) => ctx,
         Err(e) => fail!("bytecode compilation failure: {}", e),
     };
@@ -234,6 +239,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
             "unused",
         )),
         runtime::writers::default_factory(),
+        /*num_workers=*/ 1,
     ) {
         Ok(ctx) => ctx,
         Err(e) => fail!("bytecode compilation failure: {}", e),
@@ -354,6 +360,7 @@ fn main() {
         output_sep,
         escaper,
         output_record_sep,
+        stage: exec_strategy.stage(),
     };
     let mut opt_level: i32 = match matches.value_of("opt-level") {
         None | Some("3") => 3,
@@ -519,6 +526,7 @@ fn main() {
             }
         };
     }
+
     let a = Arena::default();
     let ctx = get_context(program_string.as_str(), &a, get_prelude(&a, &raw));
     let analysis_result = ctx.analyze_sep_assignments();
@@ -544,7 +552,7 @@ fn main() {
     }
 
     if opt_level < 0 {
-        with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup))
+        with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup, exec_strategy.num_workers()))
     } else {
         with_io!(|inp, oup| run_llvm_with_context(
             ctx,

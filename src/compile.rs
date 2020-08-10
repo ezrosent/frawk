@@ -112,8 +112,9 @@ pub(crate) fn bytecode<'a, LR: runtime::LineReader>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     reader: LR,
     ff: impl runtime::writers::FileFactory,
+    num_workers: usize,
 ) -> Result<bytecode::Interp<'a, LR>> {
-    Typer::init_from_ctx(ctx)?.to_interp(reader, ff)
+    Typer::init_from_ctx(ctx)?.to_interp(reader, ff, num_workers)
 }
 
 pub(crate) fn dump_llvm<'a>(
@@ -450,11 +451,13 @@ impl<'a> Typer<'a> {
         &mut self,
         reader: LR,
         ff: impl runtime::writers::FileFactory,
+        num_workers: usize,
     ) -> Result<bytecode::Interp<'a, LR>> {
         let instrs = self.to_bytecode()?;
         Ok(bytecode::Interp::new(
             instrs,
             self.stage(),
+            num_workers,
             |ty| self.regs.stats.count(ty) as usize,
             reader,
             ff,

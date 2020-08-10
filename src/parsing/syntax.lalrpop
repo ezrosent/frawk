@@ -10,7 +10,7 @@ use crate::{
   lexer::{self, Tok},
 };
 
-grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>);
+grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>, stage: &Stage<()>);
 
 
 pub VarDef: (&'a str, &'a Expr<'a, 'a, &'a str>) = {
@@ -27,8 +27,7 @@ pub Prog: Prog<'a,'a,&'a str> = {
             decs: fs,
             begin,
             end,
-            stage: Stage::Main(()),
-            // stage: Stage::Par{begin:None,main_loop:None,end:None},
+            stage: stage.clone(),
             pats: {
                 let mut pats = pats;
                 if let Some(sa) = sa {
