@@ -104,6 +104,8 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     }
 }
 
+// TODO: Pass in an ExecutioNStrategy to CSVReader and ByteReader.
+
 impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     // TODO: make a new enum called ParallelStrategy and pass that in here?
     pub fn new(

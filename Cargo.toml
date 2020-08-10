@@ -23,6 +23,7 @@ llvm-sys = "90.0.0"
 clap = "3.0.0-beta.1"
 crossbeam-channel = "0.4"
 crossbeam = "0.7.3"
+num_cpus = "1.13.0"
 
 [features]
 default = ["use_jemalloc"]

@@ -18,6 +18,27 @@ pub enum ExecutionStrategy {
     ShardPerFile,
 }
 
+impl ExecutionStrategy {
+    pub fn num_workers(&self) -> usize {
+        use ExecutionStrategy::*;
+        match self {
+            ShardPerRecord | ShardPerFile => num_cpus::get(),
+            Serial => 1,
+        }
+    }
+    pub fn stage(&self) -> Stage<()> {
+        use ExecutionStrategy::*;
+        match self {
+            ShardPerRecord | ShardPerFile => Stage::Par {
+                begin: None,
+                main_loop: None,
+                end: None,
+            },
+            Serial => Stage::Main(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Stage<T> {
     Main(T),
