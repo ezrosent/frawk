@@ -309,6 +309,7 @@ impl RegexCache {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct FileWrite(writers::Registry);
 
 impl Default for FileWrite {
@@ -359,9 +360,23 @@ pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read>>> {
 }
 
 impl<LR: LineReader> FileRead<LR> {
+    pub(crate) fn try_resize(&self, size: usize) -> Vec<impl FnOnce() -> Self + Send> {
+        self.stdin
+            .request_handles(size)
+            .into_iter()
+            .map(|x| {
+                move || FileRead {
+                    files: Default::default(),
+                    stdin: x(),
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn close(&mut self, path: &Str) {
         self.files.remove(path);
     }
+
     pub(crate) fn new(stdin: LR, used_fields: &FieldSet) -> FileRead<LR> {
         let mut res = FileRead {
             files: Default::default(),
@@ -370,19 +385,24 @@ impl<LR: LineReader> FileRead<LR> {
         res.stdin.set_used_fields(used_fields);
         res
     }
+
     pub(crate) fn stdin_filename(&self) -> Str<'static> {
         self.stdin.filename()
     }
+
     pub(crate) fn read_err_stdin<'a>(&mut self) -> Int {
         self.stdin.read_state()
     }
+
     pub(crate) fn read_err<'a>(&mut self, path: &Str<'a>) -> Result<Int> {
         self.with_file(path, |reader| Ok(reader.read_state()))
     }
+
     pub(crate) fn next_file(&mut self) -> Result<()> {
         let _ = self.stdin.next_file()?;
         Ok(())
     }
+
     fn with_file<'a, R>(
         &mut self,
         path: &Str<'a>,

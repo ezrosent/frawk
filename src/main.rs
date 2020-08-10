@@ -26,6 +26,7 @@ pub mod runtime;
 mod test_string_constants;
 pub mod types;
 extern crate clap;
+extern crate crossbeam;
 extern crate crossbeam_channel;
 extern crate elsa;
 extern crate hashbrown;

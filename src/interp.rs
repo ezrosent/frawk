@@ -5,6 +5,7 @@ use crate::compile::{self, Ty};
 use crate::pushdown::FieldSet;
 use crate::runtime::{self, Float, Int, Line, LineReader, Str, UniqueStr};
 
+use crossbeam::scope;
 use hashbrown::HashMap;
 use rand::{self, rngs::StdRng, Rng, SeedableRng};
 
@@ -131,6 +132,17 @@ pub fn combine_slot<T: Default>(vec: &mut Vec<T>, slot: usize, f: impl FnOnce(T)
 }
 
 impl<'a> Core<'a> {
+    pub fn from_writers(fw: runtime::FileWrite) -> Core<'a> {
+        let seed: u64 = rand::thread_rng().gen();
+        Core {
+            vars: Default::default(),
+            regexes: Default::default(),
+            write_files: fw,
+            rng: rand::rngs::StdRng::seed_from_u64(seed),
+            current_seed: seed,
+            slots: Default::default(),
+        }
+    }
     pub fn new(ff: impl runtime::writers::FileFactory) -> Core<'a> {
         let seed: u64 = rand::thread_rng().gen();
         Core {
@@ -319,6 +331,22 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
     ) -> Self {
+        Interp::from_readers(
+            instrs,
+            main_func,
+            regs,
+            ff,
+            runtime::FileRead::new(stdin, used_fields),
+        )
+    }
+
+    pub(crate) fn from_readers(
+        instrs: Vec<Vec<Instr<'a>>>,
+        main_func: Stage<usize>,
+        regs: impl Fn(compile::Ty) -> usize,
+        ff: impl runtime::writers::FileFactory,
+        read_files: runtime::FileRead<LR>,
+    ) -> Self {
         use compile::Ty::*;
         Interp {
             main_func,
@@ -330,7 +358,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             core: Core::new(ff),
 
             line: Default::default(),
-            read_files: runtime::FileRead::new(stdin, used_fields),
+            read_files,
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -344,12 +372,11 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             iters_str: default_of(regs(IterStr)),
         }
     }
-}
 
-impl<'a, LR: LineReader> Interp<'a, LR> {
     pub(crate) fn instrs(&self) -> &Vec<Vec<Instr<'a>>> {
         &self.instrs
     }
+
     fn format_arg(&self, (reg, ty): (NumTy, Ty)) -> Result<runtime::FormatArg<'a>> {
         Ok(match ty {
             Ty::Str => self.get(Reg::<Str<'a>>::from(reg)).clone().into(),
@@ -364,13 +391,112 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         self.core.vars.filename = self.read_files.stdin_filename().upcast();
     }
 
-    pub(crate) fn run(&mut self) -> Result<()> {
+    pub(crate) fn run_parallel(&mut self, workers: usize) -> Result<()> {
+        if workers <= 1 {
+            return self.run_serial();
+        }
+        let mut handles = self.read_files.try_resize(workers);
+        if handles.len() <= 1 {
+            return self.run_serial();
+        }
+        let (begin, middle, end) = match self.main_func {
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => (begin, main_loop, end),
+            Stage::Main(_) => {
+                return err!("unexpected Main-only configuration for parallel execution")
+            }
+        };
+        let main_loop = if let Some(main_loop) = middle {
+            main_loop
+        } else {
+            return self.run_serial();
+        };
+        if let Some(off) = begin {
+            self.run_at(off)?;
+        }
+
+        let mut initial_fr = handles.pop().unwrap()();
+        mem::swap(&mut initial_fr, &mut self.read_files);
+        let mut results: Vec<StageResult> = Vec::with_capacity(handles.len() + 1);
+        scope(|s| {
+            let mut join_handles = Vec::with_capacity(handles.len() + 1);
+            let float_size = self.floats.regs.len();
+            let ints_size = self.ints.regs.len();
+            let strs_size = self.strs.regs.len();
+            let maps_int_int_size = self.maps_int_int.regs.len();
+            let maps_int_float_size = self.maps_int_float.regs.len();
+            let maps_int_str_size = self.maps_int_str.regs.len();
+            let maps_str_int_size = self.maps_str_int.regs.len();
+            let maps_str_float_size = self.maps_str_float.regs.len();
+            let maps_str_str_size = self.maps_str_str.regs.len();
+            let iters_int_size = self.iters_int.regs.len();
+            let iters_str_size = self.iters_str.regs.len();
+            for handle in handles.into_iter() {
+                let writers = self.core.write_files.clone();
+                let instrs = self.instrs.clone();
+                join_handles.push(s.spawn(move |_| {
+                    let mut interp = Interp {
+                        main_func: Stage::Main(main_loop),
+                        instrs,
+                        stack: Default::default(),
+                        core: Core::from_writers(writers),
+                        line: Default::default(),
+                        read_files: handle(),
+
+                        floats: default_of(float_size),
+                        ints: default_of(ints_size),
+                        strs: default_of(strs_size),
+                        maps_int_int: default_of(maps_int_int_size),
+                        maps_int_float: default_of(maps_int_float_size),
+                        maps_int_str: default_of(maps_int_str_size),
+                        maps_str_int: default_of(maps_str_int_size),
+                        maps_str_float: default_of(maps_str_float_size),
+                        maps_str_str: default_of(maps_str_str_size),
+                        iters_int: default_of(iters_int_size),
+                        iters_str: default_of(iters_str_size),
+                    };
+                    interp.run_at(main_loop)?;
+                    Ok(interp.core.extract_result())
+                }));
+            }
+            for h in join_handles.into_iter() {
+                // TODO: see what we can make of any panic errors here. It'd be nice to return something
+                // more sensible.
+
+                results.push(h.join().unwrap()?);
+            }
+            Ok(())
+        })
+        .unwrap()?;
+        for r in results.into_iter() {
+            self.core.combine(r);
+        }
+        if let Some(end) = end {
+            self.run_at(end)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn run_serial(&mut self) -> Result<()> {
         let offs: crate::smallvec::SmallVec<[usize; 3]> = self.main_func.iter().cloned().collect();
         for off in offs.into_iter() {
             self.run_at(off)?
         }
         Ok(())
     }
+
+    pub(crate) fn run(&mut self) -> Result<()> {
+        // TODO make this another param.
+        let num_workers = 16;
+        match self.main_func {
+            Stage::Main(_) => self.run_serial(),
+            Stage::Par { .. } => self.run_parallel(num_workers),
+        }
+    }
+
     pub(crate) fn run_at(&mut self, mut cur_fn: usize) -> Result<()> {
         use Instr::*;
         let mut scratch: Vec<runtime::FormatArg> = Vec::new();
