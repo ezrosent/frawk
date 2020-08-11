@@ -349,7 +349,9 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
         res
     }
     fn next_file(&mut self) -> Result<bool> {
-        err!("nextfile is not supported in record-oriented parallel mode")
+        // TODO: revert this change once we get rid of ChainedReader in this path.
+        Ok(false)
+        // err!("nextfile is not supported in record-oriented parallel mode")
     }
     fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
         if let Ok(mut new_chunk) = self.incoming.recv() {

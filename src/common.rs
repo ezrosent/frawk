@@ -7,6 +7,7 @@ pub(crate) type NodeIx = petgraph::graph::NodeIndex<NumTy>;
 pub(crate) type Graph<V, E> = petgraph::Graph<V, E, petgraph::Directed, NumTy>;
 pub(crate) type Result<T> = std::result::Result<T, CompileError>;
 
+#[derive(Copy, Clone)]
 pub enum ExecutionStrategy {
     /// Execute the script in a single thread. This is the default.
     Serial,

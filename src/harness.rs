@@ -5,7 +5,7 @@ use crate::{
     ast,
     bytecode::Interp,
     cfg::{self, Escaper},
-    common::Result,
+    common::{ExecutionStrategy, Result},
     compile, lexer, llvm,
     parsing::syntax,
     pushdown::FieldSet,
@@ -28,7 +28,7 @@ const FILE_BREAK: &'static str = "<<<FILE BREAK>>>";
 
 fn simulate_stdin<LR: runtime::LineReader>(
     inp: impl Into<String>,
-    mut f: impl FnMut(Box<dyn io::Read>, String) -> LR,
+    mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
 ) -> ChainedReader<LR>
 where
     ChainedReader<LR>: llvm::IntoRuntime,
@@ -39,7 +39,7 @@ where
         .map(String::from)
         .enumerate()
         .map(|(i, x)| {
-            let reader: Box<dyn io::Read> = Box::new(std::io::Cursor::new(x));
+            let reader: Box<dyn io::Read + Send> = Box::new(std::io::Cursor::new(x));
             f(reader, format!("fake_stdin_{}", i))
         })
         .collect();
@@ -51,7 +51,13 @@ fn simulate_stdin_csv(
     inp: impl Into<String>,
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
     simulate_stdin(inp, |reader, name| {
-        CSVReader::new(reader, ifmt, runtime::CHUNK_SIZE, name)
+        CSVReader::new(
+            reader,
+            ifmt,
+            runtime::CHUNK_SIZE,
+            name,
+            ExecutionStrategy::Serial,
+        )
     })
 }
 
@@ -217,7 +223,7 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = syntax::ProgParser::new();
-    match parser.parse(a, &mut buf, lexer) {
+    match parser.parse(a, &mut buf, &ExecutionStrategy::Serial.stage(), lexer) {
         Ok(mut program) => {
             match esc {
                 Escaper::CSV => program.output_sep = Some(","),
@@ -247,7 +253,12 @@ fn compile_program<'a, 'inp, 'outer>(
     let mut ctx = cfg::ProgramContext::from_prog(a, prog, esc)?;
     let fake_fs = FakeFs::default();
     Ok((
-        compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), fake_fs.clone())?,
+        compile::bytecode(
+            &mut ctx,
+            simulate_stdin_regex(stdin),
+            fake_fs.clone(),
+            ExecutionStrategy::Serial.num_workers(),
+        )?,
         fake_fs,
     ))
 }
@@ -297,11 +308,16 @@ pub(crate) fn run_prog<'a>(
                         &mut ctx,
                         simulate_stdin_csv(ifmt, stdin),
                         fake_fs.clone(),
+                        ExecutionStrategy::Serial.num_workers(),
                     )?;
                     $body
                 } else {
-                    let mut $interp =
-                        compile::bytecode(&mut ctx, simulate_stdin_regex(stdin), fake_fs.clone())?;
+                    let mut $interp = compile::bytecode(
+                        &mut ctx,
+                        simulate_stdin_regex(stdin),
+                        fake_fs.clone(),
+                        ExecutionStrategy::Serial.num_workers(),
+                    )?;
                     $body
                 }
             };

@@ -229,7 +229,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
     use std::io::Cursor;
     let a = Arena::default();
     let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
-    let fake_inp: Box<dyn io::Read> = Box::new(Cursor::new(vec![]));
+    let fake_inp: Box<dyn io::Read + Send> = Box::new(Cursor::new(vec![]));
     let interp = match compile::bytecode(
         &mut ctx,
         chained(CSVReader::new(
@@ -237,6 +237,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
             InputFormat::CSV,
             CHUNK_SIZE,
             "unused",
+            ExecutionStrategy::Serial,
         )),
         runtime::writers::default_factory(),
         /*num_workers=*/ 1,
@@ -300,6 +301,7 @@ fn main() {
              .long("parallel-strategy")
              .short('p')
              .possible_values(&["r", "record", "f", "file"]))
+        .arg("-j, --jobs=[N] 'Number or worker threads to launch when executing in parallel'")
         .get_matches();
     if matches.is_present("input-format") && !csv_supported() {
         fail!("CSV/TSV requires an x86 processor with SSE2 support");
@@ -318,6 +320,13 @@ fn main() {
             "invalid execution strategy (clap arg parsing should handle this): {}",
             x
         ),
+    };
+    let num_workers = match matches.value_of("jobs") {
+        Some(s) => match s.parse::<usize>() {
+            Ok(u) => u,
+            Err(e) => fail!("value of 'jobs' flag must be numeric: {}", e),
+        },
+        None => exec_strategy.num_workers(),
     };
     let mut input_files: Vec<&str> = matches
         .values_of("input-files")
@@ -412,10 +421,16 @@ fn main() {
     macro_rules! with_inp {
         ($analysis:expr, $inp:ident, $body:expr) => {
             if input_files.len() == 0 {
-                let _reader: Box<dyn io::Read> = Box::new(io::stdin());
+                let _reader: Box<dyn io::Read + Send> = Box::new(io::stdin());
                 match (ifmt, $analysis) {
                     (Some(ifmt), _) => {
-                        let $inp = chained(CSVReader::new(_reader, ifmt, CHUNK_SIZE, "-"));
+                        let $inp = chained(CSVReader::new(
+                            _reader,
+                            ifmt,
+                            CHUNK_SIZE,
+                            "-",
+                            exec_strategy,
+                        ));
                         $body
                     }
                     (
@@ -442,7 +457,7 @@ fn main() {
                                 let $inp = chained(br);
                                 $body
                             } else {
-                                let _reader: Box<dyn io::Read> = Box::new(io::stdin());
+                                let _reader: Box<dyn io::Read + Send> = Box::new(io::stdin());
                                 let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
                                 $body
                             }
@@ -458,8 +473,8 @@ fn main() {
                 }
             } else if let Some(ifmt) = ifmt {
                 let iter = input_files.iter().cloned().map(|file| {
-                    let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
-                    CSVReader::new(reader, ifmt, CHUNK_SIZE, file)
+                    let reader: Box<dyn io::Read + Send> = Box::new(open_file_read(file.as_str()));
+                    CSVReader::new(reader, ifmt, CHUNK_SIZE, file, exec_strategy)
                 });
                 let $inp = ChainedReader::new(iter);
                 $body
@@ -475,7 +490,7 @@ fn main() {
                             let br_valid = bytereader_supported();
                             if field_sep == " " && record_sep == "\n" {
                                 let iter = input_files.iter().cloned().map(|file| {
-                                    let reader: Box<dyn io::Read> =
+                                    let reader: Box<dyn io::Read + Send> =
                                         Box::new(open_file_read(file.as_str()));
                                     DefaultSplitter::new(reader, CHUNK_SIZE, file)
                                 });
@@ -483,7 +498,7 @@ fn main() {
                                 $body
                             } else if br_valid {
                                 let iter = input_files.iter().cloned().map(move |file| {
-                                    let reader: Box<dyn io::Read> =
+                                    let reader: Box<dyn io::Read + Send> =
                                         Box::new(open_file_read(file.as_str()));
                                     ByteReader::new(
                                         reader,
@@ -497,7 +512,7 @@ fn main() {
                                 $body
                             } else {
                                 let iter = input_files.iter().cloned().map(|file| {
-                                    let reader: Box<dyn io::Read> =
+                                    let reader: Box<dyn io::Read + Send> =
                                         Box::new(open_file_read(file.as_str()));
                                     RegexSplitter::new(reader, CHUNK_SIZE, file)
                                 });
@@ -506,7 +521,7 @@ fn main() {
                             }
                         } else {
                             let iter = input_files.iter().cloned().map(|file| {
-                                let reader: Box<dyn io::Read> =
+                                let reader: Box<dyn io::Read + Send> =
                                     Box::new(open_file_read(file.as_str()));
                                 RegexSplitter::new(reader, CHUNK_SIZE, file)
                             });
@@ -516,7 +531,8 @@ fn main() {
                     }
                     cfg::SepAssign::Unsure => {
                         let iter = input_files.iter().cloned().map(|file| {
-                            let reader: Box<dyn io::Read> = Box::new(open_file_read(file.as_str()));
+                            let reader: Box<dyn io::Read + Send> =
+                                Box::new(open_file_read(file.as_str()));
                             RegexSplitter::new(reader, CHUNK_SIZE, file)
                         });
                         let $inp = ChainedReader::new(iter);
@@ -552,7 +568,7 @@ fn main() {
     }
 
     if opt_level < 0 {
-        with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup, exec_strategy.num_workers()))
+        with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup, num_workers))
     } else {
         with_io!(|inp, oup| run_llvm_with_context(
             ctx,
