@@ -28,7 +28,7 @@ use std::str;
 use lazy_static::lazy_static;
 use regex::{bytes, Regex};
 
-use crate::common::Result;
+use crate::common::{ExecutionStrategy, Result};
 use crate::pushdown::FieldSet;
 use crate::runtime::{
     str_impl::{Buf, Str, UniqueBuf},
@@ -36,7 +36,7 @@ use crate::runtime::{
 };
 
 use super::{
-    chunk::{self, Chunk, ChunkProducer, OffsetChunk},
+    chunk::{self, Chunk, ChunkProducer, OffsetChunk, ParallelChunkProducer},
     normalize_join_indexes, DefaultLine, LineReader, ReaderState,
 };
 
@@ -109,19 +109,39 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
 impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     // TODO: make a new enum called ParallelStrategy and pass that in here?
     pub fn new(
-        r: impl Read + 'static,
+        r: impl Read + Send + 'static,
         ifmt: InputFormat,
         chunk_size: usize,
         name: impl Borrow<str>,
+        exec_strategy: ExecutionStrategy,
     ) -> Self {
-        CSVReader {
-            prod: Box::new(chunk::new_offset_chunk_producer_csv(
+        let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
+            ExecutionStrategy::Serial => Box::new(chunk::new_offset_chunk_producer_csv(
                 r,
                 chunk_size,
                 name.borrow(),
                 ifmt,
                 /*version=*/ 1,
             )),
+            x @ ExecutionStrategy::ShardPerRecord => {
+                let s = String::from(name.borrow());
+                Box::new(ParallelChunkProducer::new(
+                    move || {
+                        chunk::new_offset_chunk_producer_csv(
+                            r,
+                            chunk_size,
+                            s.as_str(),
+                            ifmt,
+                            /*version=*/ 1,
+                        )
+                    },
+                    x.num_workers() * 2,
+                ))
+            }
+            ExecutionStrategy::ShardPerFile => unimplemented!(),
+        };
+        CSVReader {
+            prod,
             cur_buf: UniqueBuf::new(0).into_buf(),
             buf_len: 0,
             cur_chunk: OffsetChunk::default(),
@@ -1294,6 +1314,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             InputFormat::TSV,
             /*chunk_size=*/ 512,
             "fake-stdin",
+            ExecutionStrategy::Serial,
         );
         loop {
             let (_, line) = reader
