@@ -83,7 +83,14 @@ fn simulate_stdin_singlechar(
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
     // TODO fix this (by checking if it's supported, or returning a Box<dyn IntoRuntime>
     simulate_stdin(inp, |reader, name| {
-        ByteReader::new(reader, field_sep, record_sep, runtime::CHUNK_SIZE, name)
+        ByteReader::new(
+            reader,
+            field_sep,
+            record_sep,
+            runtime::CHUNK_SIZE,
+            name,
+            ExecutionStrategy::Serial,
+        )
     })
 }
 

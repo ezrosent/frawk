@@ -282,7 +282,7 @@ fn main() {
              .multiple(true)
              .takes_value(true)
              .about("Has the form <identifier>=<expr>"))
-        .arg("-F, --field-separator 'Field separator for frawk program.'")
+        .arg("-F, --field-separator=[SEPARATOR] 'Field separator for frawk program.'")
         .arg("-b, --bytecode 'Execute the program with the bytecode interpreter'")
         .arg(Arg::with_name("output-format")
              .long("output-format")
@@ -453,6 +453,7 @@ fn main() {
                                     record_sep.as_bytes()[0],
                                     CHUNK_SIZE,
                                     "-",
+                                    exec_strategy,
                                 );
                                 let $inp = chained(br);
                                 $body
@@ -506,6 +507,7 @@ fn main() {
                                         record_sep.as_bytes()[0],
                                         CHUNK_SIZE,
                                         file,
+                                        exec_strategy,
                                     )
                                 });
                                 let $inp = ChainedReader::new(iter);

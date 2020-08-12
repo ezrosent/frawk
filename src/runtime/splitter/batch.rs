@@ -104,7 +104,7 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     }
 }
 
-// TODO: Pass in an ExecutioNStrategy to CSVReader and ByteReader.
+// TODO: Pass in an ExecutioNStrategy to ByteReader.
 
 impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     // TODO: make a new enum called ParallelStrategy and pass that in here?
@@ -135,7 +135,7 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                             /*version=*/ 1,
                         )
                     },
-                    x.num_workers() * 2,
+                    /*channel_size*/ x.num_workers() * 2,
                 ))
             }
             ExecutionStrategy::ShardPerFile => unimplemented!(),
@@ -158,6 +158,9 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
     fn refresh_buf(&mut self) -> Result<(/*is eof*/ bool, /* file changed */ bool)> {
         let prev_version = self.cur_chunk.version;
         if self.prod.get_chunk(&mut self.cur_chunk)? {
+            // We may have received an EOF without getting any data. Increment the version so this
+            // regsiters as an EOF through the `read_state` interface.
+            self.cur_chunk.version = std::cmp::max(prev_version, 1);
             return Ok((true, false));
         }
         self.cur_buf = self.cur_chunk.buf.take().unwrap().into_buf();
@@ -1066,14 +1069,15 @@ pub struct ByteReader<P> {
 
 impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     pub fn new(
-        r: impl Read + 'static,
+        r: impl Read + Send + 'static,
         field_sep: u8,
         record_sep: u8,
         chunk_size: usize,
         name: impl Borrow<str>,
+        exec_strategy: ExecutionStrategy,
     ) -> Self {
-        ByteReader {
-            prod: Box::new(chunk::new_offset_chunk_producer_bytes(
+        let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
+            ExecutionStrategy::Serial => Box::new(chunk::new_offset_chunk_producer_bytes(
                 r,
                 chunk_size,
                 name.borrow(),
@@ -1081,6 +1085,26 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 record_sep,
                 /*version=*/ 1,
             )),
+            x @ ExecutionStrategy::ShardPerRecord => {
+                let s = String::from(name.borrow());
+                Box::new(ParallelChunkProducer::new(
+                    move || {
+                        chunk::new_offset_chunk_producer_bytes(
+                            r,
+                            chunk_size,
+                            s.as_str(),
+                            field_sep,
+                            record_sep,
+                            /*version=*/ 1,
+                        )
+                    },
+                    /*channel_size*/ x.num_workers() * 2,
+                ))
+            }
+            ExecutionStrategy::ShardPerFile => unimplemented!(),
+        };
+        ByteReader {
+            prod,
             cur_chunk: OffsetChunk::default(),
             cur_buf: UniqueBuf::new(0).into_buf(),
             buf_len: 0,
@@ -1163,6 +1187,8 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReader<P> {
     fn refresh_buf(&mut self) -> Result<(/* eof */ bool, /*file changed*/ bool)> {
         let prev_version = self.cur_chunk.version;
         if self.prod.get_chunk(&mut self.cur_chunk)? {
+            // See comment in the equivalent line in CSVReader.
+            self.cur_chunk.version = std::cmp::max(prev_version, 1);
             return Ok((true, false));
         }
         self.cur_buf = self.cur_chunk.buf.take().unwrap().into_buf();
@@ -1366,7 +1392,14 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             })
             .collect();
         let reader = std::io::Cursor::new(corpus);
-        let mut reader = ByteReader::new(reader, fs, rs, 1024, "fake-stdin");
+        let mut reader = ByteReader::new(
+            reader,
+            fs,
+            rs,
+            1024,
+            "fake-stdin",
+            ExecutionStrategy::Serial,
+        );
         let mut got = Vec::with_capacity(corpus.len());
         loop {
             let (_, line) = reader
