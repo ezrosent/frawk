@@ -6,6 +6,7 @@ use crate::pushdown::FieldSet;
 use crate::runtime::{self, Float, Int, Line, LineReader, Str, UniqueStr};
 
 use crossbeam::scope;
+use crossbeam_channel::bounded;
 use hashbrown::HashMap;
 use rand::{self, rngs::StdRng, Rng, SeedableRng};
 
@@ -405,9 +406,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             self.run_at(off)?;
         }
 
+        // TODO: this doesn't quite work: We want Stdin to follow the workers, but not other files.
+        // That needs to be implemented in read_files.
         let mut initial_fr = handles.pop().unwrap()();
         mem::swap(&mut initial_fr, &mut self.read_files);
-        let mut results: Vec<StageResult> = Vec::with_capacity(handles.len() + 1);
         fn wrap_error<T, S>(r: std::result::Result<Result<T>, S>) -> Result<T> {
             match r {
                 Ok(Ok(t)) => Ok(t),
@@ -416,7 +418,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             }
         }
         let scope_res = scope(|s| {
-            let mut join_handles = Vec::with_capacity(handles.len() + 1);
+            let (sender, receiver) = bounded(handles.len());
             let float_size = self.floats.regs.len();
             let ints_size = self.ints.regs.len();
             let strs_size = self.strs.regs.len();
@@ -429,46 +431,49 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             let iters_int_size = self.iters_int.regs.len();
             let iters_str_size = self.iters_str.regs.len();
             for handle in handles.into_iter() {
+                let sender = sender.clone();
                 let writers = self.core.write_files.clone();
                 let instrs = self.instrs.clone();
-                join_handles.push(s.spawn(move |_| {
-                    let mut interp = Interp {
-                        main_func: Stage::Main(main_loop),
-                        num_workers: 1,
-                        instrs,
-                        stack: Default::default(),
-                        core: Core::from_writers(writers),
-                        line: Default::default(),
-                        read_files: handle(),
+                s.spawn(move |_| {
+                    let inner = || {
+                        let mut interp = Interp {
+                            main_func: Stage::Main(main_loop),
+                            num_workers: 1,
+                            instrs,
+                            stack: Default::default(),
+                            core: Core::from_writers(writers),
+                            line: Default::default(),
+                            read_files: handle(),
 
-                        floats: default_of(float_size),
-                        ints: default_of(ints_size),
-                        strs: default_of(strs_size),
-                        maps_int_int: default_of(maps_int_int_size),
-                        maps_int_float: default_of(maps_int_float_size),
-                        maps_int_str: default_of(maps_int_str_size),
-                        maps_str_int: default_of(maps_str_int_size),
-                        maps_str_float: default_of(maps_str_float_size),
-                        maps_str_str: default_of(maps_str_str_size),
-                        iters_int: default_of(iters_int_size),
-                        iters_str: default_of(iters_str_size),
+                            floats: default_of(float_size),
+                            ints: default_of(ints_size),
+                            strs: default_of(strs_size),
+                            maps_int_int: default_of(maps_int_int_size),
+                            maps_int_float: default_of(maps_int_float_size),
+                            maps_int_str: default_of(maps_int_str_size),
+                            maps_str_int: default_of(maps_str_int_size),
+                            maps_str_float: default_of(maps_str_float_size),
+                            maps_str_str: default_of(maps_str_str_size),
+                            iters_int: default_of(iters_int_size),
+                            iters_str: default_of(iters_str_size),
+                        };
+                        interp.run_at(main_loop)?;
+                        Ok(interp.core.extract_result())
                     };
-                    interp.run_at(main_loop)?;
-                    Ok(interp.core.extract_result())
-                }));
+                    // Ignore errors, as it means another thread executed with an error and we are
+                    // exiting anyway.
+                    let _ = sender.send(inner());
+                });
             }
-            for h in join_handles.into_iter() {
-                // TODO: see what we can make of any panic errors here. It'd be nice to return something
-                // more sensible.
-
-                results.push(wrap_error(h.join())?);
+            mem::drop(sender);
+            self.run_at(main_loop)?;
+            mem::swap(&mut initial_fr, &mut self.read_files);
+            while let Ok(res) = receiver.recv() {
+                self.core.combine(res?);
             }
             Ok(())
         });
         wrap_error(scope_res)?;
-        for r in results.into_iter() {
-            self.core.combine(r);
-        }
         if let Some(end) = end {
             self.run_at(end)?;
         }
@@ -484,7 +489,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     }
 
     pub(crate) fn run(&mut self) -> Result<()> {
-        // TODO make this another param.
         match self.main_func {
             Stage::Main(_) => self.run_serial(),
             Stage::Par { .. } => self.run_parallel(),

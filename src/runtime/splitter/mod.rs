@@ -200,7 +200,7 @@ impl<R> ChainedReader<R> {
     }
 }
 
-impl<R: LineReader> LineReader for ChainedReader<R>
+impl<R: LineReader + 'static> LineReader for ChainedReader<R>
 where
     R::Line: Default,
 {
@@ -210,6 +210,20 @@ where
             .last()
             .map(LineReader::filename)
             .unwrap_or_else(Str::default)
+    }
+    fn request_handles(&self, size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
+        // NB This implementation was added for debugging purposes and makes sense for
+        // completeness, but it probably isn't strictly needed.
+        if self.0.len() != 1 {
+            return vec![];
+        }
+        self.0
+            .last()
+            .unwrap()
+            .request_handles(size)
+            .into_iter()
+            .map(|x| Box::new(move || ChainedReader(vec![x()])) as _)
+            .collect()
     }
     fn read_line(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<(bool, R::Line)> {
         let mut line = R::Line::default();
