@@ -20,7 +20,6 @@
 /// auxiliary vector at the cost of 2x steady-state memory usage, or more complex offset management
 /// in the `Offsets` type.
 /// NB the changes to fix this issue will now be in the chunk module.
-use std::borrow::Borrow;
 use std::io::Read;
 use std::mem;
 use std::str;
@@ -104,37 +103,24 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     }
 }
 
-// TODO: Pass in an ExecutioNStrategy to ByteReader.
-
 impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
-    // TODO: make a new enum called ParallelStrategy and pass that in here?
-    pub fn new(
-        r: impl Read + Send + 'static,
+    pub fn new<I, S>(
+        rs: I,
         ifmt: InputFormat,
         chunk_size: usize,
-        name: impl Borrow<str>,
         exec_strategy: ExecutionStrategy,
-    ) -> Self {
+    ) -> Self
+    where
+        I: Iterator<Item = (S, String)> + 'static + Send,
+        S: Read + 'static,
+    {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
-            ExecutionStrategy::Serial => Box::new(chunk::new_offset_chunk_producer_csv(
-                r,
-                chunk_size,
-                name.borrow(),
-                ifmt,
-                /*version=*/ 1,
+            ExecutionStrategy::Serial => Box::new(chunk::new_chained_offset_chunk_producer_csv(
+                rs, chunk_size, ifmt,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
-                let s = String::from(name.borrow());
                 Box::new(ParallelChunkProducer::new(
-                    move || {
-                        chunk::new_offset_chunk_producer_csv(
-                            r,
-                            chunk_size,
-                            s.as_str(),
-                            ifmt,
-                            /*version=*/ 1,
-                        )
-                    },
+                    move || chunk::new_chained_offset_chunk_producer_csv(rs, chunk_size, ifmt),
                     /*channel_size*/ x.num_workers() * 2,
                 ))
             }
@@ -1068,34 +1054,26 @@ pub struct ByteReader<P> {
 }
 
 impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
-    pub fn new(
-        r: impl Read + Send + 'static,
+    pub fn new<I, S>(
+        rs: I,
         field_sep: u8,
         record_sep: u8,
         chunk_size: usize,
-        name: impl Borrow<str>,
         exec_strategy: ExecutionStrategy,
-    ) -> Self {
+    ) -> Self
+    where
+        I: Iterator<Item = (S, String)> + 'static + Send,
+        S: Read + 'static,
+    {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
-            ExecutionStrategy::Serial => Box::new(chunk::new_offset_chunk_producer_bytes(
-                r,
-                chunk_size,
-                name.borrow(),
-                field_sep,
-                record_sep,
-                /*version=*/ 1,
+            ExecutionStrategy::Serial => Box::new(chunk::new_chained_offset_chunk_producer_bytes(
+                rs, chunk_size, field_sep, record_sep,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
-                let s = String::from(name.borrow());
                 Box::new(ParallelChunkProducer::new(
                     move || {
-                        chunk::new_offset_chunk_producer_bytes(
-                            r,
-                            chunk_size,
-                            s.as_str(),
-                            field_sep,
-                            record_sep,
-                            /*version=*/ 1,
+                        chunk::new_chained_offset_chunk_producer_bytes(
+                            rs, chunk_size, field_sep, record_sep,
                         )
                     },
                     /*channel_size*/ x.num_workers() * 2,
@@ -1270,6 +1248,9 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReader<P> {
 mod tests {
     use super::*;
     use crate::runtime::LazyVec;
+
+    use std::iter::once;
+
     fn smoke_test<V: generic::Vector>() {
         let text: &'static str = r#"This,is,"a line with a quoted, comma",and
 unquoted,commas,"as well, including some long ones", and there we have it."#;
@@ -1336,10 +1317,9 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         let mut got = Vec::with_capacity(corpus.len());
         let reader = std::io::Cursor::new(corpus);
         let mut reader = CSVReader::new(
-            reader,
+            once((reader, String::from("fake-stdin"))),
             InputFormat::TSV,
             /*chunk_size=*/ 512,
-            "fake-stdin",
             ExecutionStrategy::Serial,
         );
         loop {
@@ -1393,11 +1373,10 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             .collect();
         let reader = std::io::Cursor::new(corpus);
         let mut reader = ByteReader::new(
-            reader,
+            once((reader, String::from("fake-stdin"))),
             fs,
             rs,
             1024,
-            "fake-stdin",
             ExecutionStrategy::Serial,
         );
         let mut got = Vec::with_capacity(corpus.len());

@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::io::Read;
 use std::mem;
 use std::sync::Arc;
@@ -102,7 +103,12 @@ pub fn new_offset_chunk_producer_bytes<R: Read>(
     }
 }
 
-pub fn new_chained_offset_chunk_producer_csv<'a, R: Read, I: Iterator<Item = (R, &'a str)>>(
+pub fn new_chained_offset_chunk_producer_csv<
+    'a,
+    R: Read,
+    N: Borrow<str>,
+    I: Iterator<Item = (R, N)>,
+>(
     r: I,
     chunk_size: usize,
     ifmt: InputFormat,
@@ -113,7 +119,7 @@ pub fn new_chained_offset_chunk_producer_csv<'a, R: Read, I: Iterator<Item = (R,
                 new_offset_chunk_producer_csv(
                     r,
                     chunk_size,
-                    name,
+                    name.borrow(),
                     ifmt,
                     /*start_version=*/ (i as u32).wrapping_add(1),
                 )
@@ -122,7 +128,11 @@ pub fn new_chained_offset_chunk_producer_csv<'a, R: Read, I: Iterator<Item = (R,
     )
 }
 
-pub fn new_chained_offset_chunk_producer_bytes<'a, R: Read, I: Iterator<Item = (R, &'a str)>>(
+pub fn new_chained_offset_chunk_producer_bytes<
+    R: Read,
+    N: Borrow<str>,
+    I: Iterator<Item = (R, N)>,
+>(
     r: I,
     chunk_size: usize,
     field_sep: u8,
@@ -134,7 +144,7 @@ pub fn new_chained_offset_chunk_producer_bytes<'a, R: Read, I: Iterator<Item = (
                 new_offset_chunk_producer_bytes(
                     r,
                     chunk_size,
-                    name,
+                    name.borrow(),
                     field_sep,
                     record_sep,
                     /*start_version=*/ (i as u32).wrapping_add(1),
@@ -349,9 +359,7 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
         res
     }
     fn next_file(&mut self) -> Result<bool> {
-        // TODO: revert this change once we get rid of ChainedReader in this path.
-        Ok(false)
-        // err!("nextfile is not supported in record-oriented parallel mode")
+        err!("nextfile is not supported in record-oriented parallel mode")
     }
     fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
         if let Ok(mut new_chunk) = self.incoming.recv() {

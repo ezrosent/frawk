@@ -61,6 +61,7 @@ use runtime::{
 };
 use std::fs::File;
 use std::io::{self, BufReader, Write};
+use std::iter::once;
 
 #[cfg(feature = "use_jemalloc")]
 #[global_allocator]
@@ -233,10 +234,9 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
     let interp = match compile::bytecode(
         &mut ctx,
         chained(CSVReader::new(
-            fake_inp,
+            once((fake_inp, String::from("unused"))),
             InputFormat::CSV,
             CHUNK_SIZE,
-            "unused",
             ExecutionStrategy::Serial,
         )),
         runtime::writers::default_factory(),
@@ -424,13 +424,12 @@ fn main() {
                 let _reader: Box<dyn io::Read + Send> = Box::new(io::stdin());
                 match (ifmt, $analysis) {
                     (Some(ifmt), _) => {
-                        let $inp = chained(CSVReader::new(
-                            _reader,
+                        let $inp = CSVReader::new(
+                            once((_reader, String::from("-"))),
                             ifmt,
                             CHUNK_SIZE,
-                            "-",
                             exec_strategy,
-                        ));
+                        );
                         $body
                     }
                     (
@@ -447,15 +446,13 @@ fn main() {
                                 let $inp = chained(DefaultSplitter::new(_reader, CHUNK_SIZE, "-"));
                                 $body
                             } else if bytereader_supported() {
-                                let br = ByteReader::new(
-                                    _reader,
+                                let $inp = ByteReader::new(
+                                    once((io::stdin(), String::from("-"))),
                                     field_sep.as_bytes()[0],
                                     record_sep.as_bytes()[0],
                                     CHUNK_SIZE,
-                                    "-",
                                     exec_strategy,
                                 );
-                                let $inp = chained(br);
                                 $body
                             } else {
                                 let _reader: Box<dyn io::Read + Send> = Box::new(io::stdin());
@@ -473,11 +470,13 @@ fn main() {
                     }
                 }
             } else if let Some(ifmt) = ifmt {
-                let iter = input_files.iter().cloned().map(|file| {
-                    let reader: Box<dyn io::Read + Send> = Box::new(open_file_read(file.as_str()));
-                    CSVReader::new(reader, ifmt, CHUNK_SIZE, file, exec_strategy)
-                });
-                let $inp = ChainedReader::new(iter);
+                let file_handles: Vec<_> = input_files
+                    .iter()
+                    .cloned()
+                    .map(|file| (open_file_read(file.as_str()), file))
+                    .collect();
+                let $inp =
+                    CSVReader::new(file_handles.into_iter(), ifmt, CHUNK_SIZE, exec_strategy);
                 $body
             } else {
                 match $analysis {
@@ -498,19 +497,18 @@ fn main() {
                                 let $inp = ChainedReader::new(iter);
                                 $body
                             } else if br_valid {
-                                let iter = input_files.iter().cloned().map(move |file| {
-                                    let reader: Box<dyn io::Read + Send> =
-                                        Box::new(open_file_read(file.as_str()));
-                                    ByteReader::new(
-                                        reader,
-                                        field_sep.as_bytes()[0],
-                                        record_sep.as_bytes()[0],
-                                        CHUNK_SIZE,
-                                        file,
-                                        exec_strategy,
-                                    )
-                                });
-                                let $inp = ChainedReader::new(iter);
+                                let file_handles: Vec<_> = input_files
+                                    .iter()
+                                    .cloned()
+                                    .map(move |file| (open_file_read(file.as_str()), file))
+                                    .collect();
+                                let $inp = ByteReader::new(
+                                    file_handles.into_iter(),
+                                    field_sep.as_bytes()[0],
+                                    record_sep.as_bytes()[0],
+                                    CHUNK_SIZE,
+                                    exec_strategy,
+                                );
                                 $body
                             } else {
                                 let iter = input_files.iter().cloned().map(|file| {
