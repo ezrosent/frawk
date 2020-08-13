@@ -383,8 +383,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         if self.num_workers <= 1 {
             return self.run_serial();
         }
-        let mut handles = self.read_files.try_resize(self.num_workers);
-        if handles.len() <= 1 {
+        let handles = self.read_files.try_resize(self.num_workers - 1);
+        if handles.len() == 0 {
             return self.run_serial();
         }
         let (begin, middle, end) = match self.main_func {
@@ -405,11 +405,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         if let Some(off) = begin {
             self.run_at(off)?;
         }
-
-        // TODO: this doesn't quite work: We want Stdin to follow the workers, but not other files.
-        // That needs to be implemented in read_files.
-        let mut initial_fr = handles.pop().unwrap()();
-        mem::swap(&mut initial_fr, &mut self.read_files);
+        // For handling the worker portion, we want to transfer the current stdin progress to a
+        // worker thread, but to withold any progress on other files open for read. We'll swap
+        // these back in when we execute the `end` block, if there is one.
+        let mut old_read_files = mem::replace(&mut self.read_files.files, Default::default());
         fn wrap_error<T, S>(r: std::result::Result<Result<T>, S>) -> Result<T> {
             match r {
                 Ok(Ok(t)) => Ok(t),
@@ -467,7 +466,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             }
             mem::drop(sender);
             self.run_at(main_loop)?;
-            mem::swap(&mut initial_fr, &mut self.read_files);
             while let Ok(res) = receiver.recv() {
                 self.core.combine(res?);
             }
@@ -475,6 +473,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         });
         wrap_error(scope_res)?;
         if let Some(end) = end {
+            mem::swap(&mut self.read_files.files, &mut old_read_files);
             self.run_at(end)?;
         }
         Ok(())

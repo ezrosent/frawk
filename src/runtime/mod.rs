@@ -355,7 +355,7 @@ impl FileWrite {
 pub const CHUNK_SIZE: usize = 8 << 10;
 
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
-    files: Registry<RegexSplitter<File>>,
+    pub(crate) files: Registry<RegexSplitter<File>>,
     stdin: LR,
 }
 
