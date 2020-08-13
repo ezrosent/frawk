@@ -26,6 +26,21 @@ use std::io::Write;
 
 const FILE_BREAK: &'static str = "<<<FILE BREAK>>>";
 
+fn split_stdin(
+    stdin: String,
+) -> impl Iterator<Item = (Box<dyn io::Read + Send>, String)> + 'static {
+    let inputs: Vec<_> = stdin
+        .split(FILE_BREAK)
+        .map(String::from)
+        .enumerate()
+        .map(|(i, x)| {
+            let reader: Box<dyn io::Read + Send> = Box::new(std::io::Cursor::new(x));
+            (reader, format!("fake_stdin_{}", i))
+        })
+        .collect();
+    inputs.into_iter()
+}
+
 fn simulate_stdin<LR: runtime::LineReader>(
     inp: impl Into<String>,
     mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
@@ -33,32 +48,19 @@ fn simulate_stdin<LR: runtime::LineReader>(
 where
     ChainedReader<LR>: llvm::IntoRuntime,
 {
-    let stdin: String = inp.into();
-    let inputs: Vec<_> = stdin
-        .split(FILE_BREAK)
-        .map(String::from)
-        .enumerate()
-        .map(|(i, x)| {
-            let reader: Box<dyn io::Read + Send> = Box::new(std::io::Cursor::new(x));
-            f(reader, format!("fake_stdin_{}", i))
-        })
-        .collect();
-    ChainedReader::new(inputs.into_iter())
+    ChainedReader::new(split_stdin(inp.into()).map(|(r, name)| f(r, name)))
 }
 
 fn simulate_stdin_csv(
     ifmt: InputFormat,
     inp: impl Into<String>,
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
-    simulate_stdin(inp, |reader, name| {
-        CSVReader::new(
-            reader,
-            ifmt,
-            runtime::CHUNK_SIZE,
-            name,
-            ExecutionStrategy::Serial,
-        )
-    })
+    CSVReader::new(
+        split_stdin(inp.into()),
+        ifmt,
+        runtime::CHUNK_SIZE,
+        ExecutionStrategy::Serial,
+    )
 }
 
 fn simulate_stdin_regex(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtime::LineReader {
@@ -81,17 +83,13 @@ fn simulate_stdin_singlechar(
     record_sep: u8,
     inp: impl Into<String>,
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
-    // TODO fix this (by checking if it's supported, or returning a Box<dyn IntoRuntime>
-    simulate_stdin(inp, |reader, name| {
-        ByteReader::new(
-            reader,
-            field_sep,
-            record_sep,
-            runtime::CHUNK_SIZE,
-            name,
-            ExecutionStrategy::Serial,
-        )
-    })
+    ByteReader::new(
+        split_stdin(inp.into()),
+        field_sep,
+        record_sep,
+        runtime::CHUNK_SIZE,
+        ExecutionStrategy::Serial,
+    )
 }
 
 macro_rules! with_reader {

@@ -13,6 +13,7 @@ pub enum ExecutionStrategy {
     Serial,
     /// Attempt to parallelize the script, breaking the input into chunks of records with different
     /// worker threads processing different chunks.
+    // TODO: support multiple readers producing chunks from multiple files, if possible.
     ShardPerRecord,
     /// Attempt to parallelize the script, where multiple worker threads each process a file at a
     /// time.
@@ -23,7 +24,9 @@ impl ExecutionStrategy {
     pub fn num_workers(&self) -> usize {
         use ExecutionStrategy::*;
         match self {
-            ShardPerRecord | ShardPerFile => num_cpus::get(),
+            // Experimentally, adding more than 6 workers with a single input file
+            ShardPerRecord => std::cmp::min(num_cpus::get(), 6),
+            ShardPerFile => num_cpus::get(),
             Serial => 1,
         }
     }
