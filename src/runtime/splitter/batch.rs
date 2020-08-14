@@ -35,7 +35,7 @@ use crate::runtime::{
 };
 
 use super::{
-    chunk::{self, Chunk, ChunkProducer, OffsetChunk, ParallelChunkProducer},
+    chunk::{self, Chunk, ChunkProducer, OffsetChunk, ParallelChunkProducer, ShardedChunkProducer},
     normalize_join_indexes, DefaultLine, LineReader, ReaderState,
 };
 
@@ -111,8 +111,8 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         exec_strategy: ExecutionStrategy,
     ) -> Self
     where
-        I: Iterator<Item = (S, String)> + 'static + Send,
-        S: Read + 'static,
+        I: Iterator<Item = (S, String)> + Send + 'static,
+        S: Read + Send + 'static,
     {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
             ExecutionStrategy::Serial => Box::new(chunk::new_chained_offset_chunk_producer_csv(
@@ -124,7 +124,20 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                     /*channel_size*/ x.num_workers() * 2,
                 ))
             }
-            ExecutionStrategy::ShardPerFile => unimplemented!(),
+            ExecutionStrategy::ShardPerFile => {
+                let iter = rs.enumerate().map(move |(i, (r, name))| {
+                    move || {
+                        chunk::new_offset_chunk_producer_csv(
+                            r,
+                            chunk_size,
+                            name.as_str(),
+                            ifmt,
+                            i as u32 + 1,
+                        )
+                    }
+                });
+                Box::new(ShardedChunkProducer::new(iter))
+            }
         };
         CSVReader {
             prod,
@@ -1063,7 +1076,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
-        S: Read + 'static,
+        S: Read + Send + 'static,
     {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
             ExecutionStrategy::Serial => Box::new(chunk::new_chained_offset_chunk_producer_bytes(
@@ -1079,7 +1092,21 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                     /*channel_size*/ x.num_workers() * 2,
                 ))
             }
-            ExecutionStrategy::ShardPerFile => unimplemented!(),
+            ExecutionStrategy::ShardPerFile => {
+                let iter = rs.enumerate().map(move |(i, (r, name))| {
+                    move || {
+                        chunk::new_offset_chunk_producer_bytes(
+                            r,
+                            chunk_size,
+                            name.as_str(),
+                            field_sep,
+                            record_sep,
+                            i as u32 + 1,
+                        )
+                    }
+                });
+                Box::new(ShardedChunkProducer::new(iter))
+            }
         };
         ByteReader {
             prod,
