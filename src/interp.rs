@@ -133,15 +133,38 @@ pub fn combine_slot<T: Default>(vec: &mut Vec<T>, slot: usize, f: impl FnOnce(T)
 }
 
 impl<'a> Core<'a> {
-    pub fn from_writers(fw: runtime::FileWrite) -> Core<'a> {
+    pub fn shuttle(&self) -> impl FnOnce() -> Core<'a> + Send {
+        use crate::builtins::Variables;
         let seed: u64 = rand::thread_rng().gen();
-        Core {
-            vars: Default::default(),
-            regexes: Default::default(),
-            write_files: fw,
-            rng: rand::rngs::StdRng::seed_from_u64(seed),
-            current_seed: seed,
-            slots: Default::default(),
+        let fw = self.write_files.clone();
+        let fs: UniqueStr<'a> = self.vars.fs.clone().into();
+        let ofs: UniqueStr<'a> = self.vars.ofs.clone().into();
+        let rs: UniqueStr<'a> = self.vars.rs.clone().into();
+        let ors: UniqueStr<'a> = self.vars.ors.clone().into();
+        let filename: UniqueStr<'a> = self.vars.filename.clone().into();
+        move || {
+            let vars = Variables {
+                fs: fs.into_str(),
+                ofs: ofs.into_str(),
+                ors: ors.into_str(),
+                rs: rs.into_str(),
+                filename: filename.into_str(),
+                nf: 0,
+                nr: 0,
+                fnr: 0,
+                rstart: 0,
+                rlength: 0,
+                argc: 0,
+                argv: Default::default(),
+            };
+            Core {
+                vars,
+                regexes: Default::default(),
+                write_files: fw,
+                rng: rand::rngs::StdRng::seed_from_u64(seed),
+                current_seed: seed,
+                slots: Default::default(),
+            }
         }
     }
     pub fn new(ff: impl runtime::writers::FileFactory) -> Core<'a> {
@@ -431,7 +454,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             let iters_str_size = self.iters_str.regs.len();
             for handle in handles.into_iter() {
                 let sender = sender.clone();
-                let writers = self.core.write_files.clone();
+                let core_shuttle = self.core.shuttle();
                 let instrs = self.instrs.clone();
                 s.spawn(move |_| {
                     let inner = || {
@@ -440,7 +463,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             num_workers: 1,
                             instrs,
                             stack: Default::default(),
-                            core: Core::from_writers(writers),
+                            core: core_shuttle(),
                             line: Default::default(),
                             read_files: handle(),
 
