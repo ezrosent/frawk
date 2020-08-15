@@ -76,16 +76,16 @@ macro_rules! exit {
 macro_rules! with_input {
     ($inp:expr, |$p:pat| $body:expr) => {
         match $inp {
-            InputData::V1($p) => $body,
-            InputData::V2($p) => $body,
-            InputData::V3($p) => $body,
-            InputData::V4($p) => $body,
+            $crate::llvm::intrinsics::InputData::V1($p) => $body,
+            $crate::llvm::intrinsics::InputData::V2($p) => $body,
+            $crate::llvm::intrinsics::InputData::V3($p) => $body,
+            $crate::llvm::intrinsics::InputData::V4($p) => $body,
         }
     };
 }
 
-type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
-enum InputData {
+pub(crate) type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
+pub(crate) enum InputData {
     V1(InputTuple<CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>),
     V2(InputTuple<ChainedReader<DefaultSplitter<Box<dyn io::Read + Send>>>>),
     V3(InputTuple<ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>),
@@ -117,6 +117,12 @@ macro_rules! impl_into_runtime {
                 }
             }
         }
+
+        impl From<FileRead<$ty>> for InputData {
+            fn from(v: FileRead<$ty>) -> InputData {
+                InputData::$var((Default::default(), v))
+            }
+        }
     };
 }
 
@@ -126,8 +132,8 @@ impl_into_runtime!(ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V3);
 impl_into_runtime!(ChainedReader<RegexSplitter<Box<dyn io::Read + Send>>>, V4);
 
 pub(crate) struct Runtime<'a> {
-    core: crate::interp::Core<'a>,
-    input_data: InputData,
+    pub(crate) core: crate::interp::Core<'a>,
+    pub(crate) input_data: InputData,
 }
 
 impl<'a> Runtime<'a> {

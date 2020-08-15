@@ -158,7 +158,7 @@ pub(crate) fn run_llvm<'a>(
     let used_fields = typer.used_fields.clone();
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main(reader, ff, &used_fields)
+        gen.run_main(reader, ff, &used_fields, cfg.num_workers)
     }
 }
 
