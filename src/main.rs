@@ -386,6 +386,7 @@ fn main() {
     if opt_dump_llvm {
         let config = llvm::Config {
             opt_level: if opt_level < 0 { 3 } else { opt_level as usize },
+            num_workers,
         };
         let _ = write!(
             std::io::stdout(),
@@ -575,7 +576,8 @@ fn main() {
             inp,
             oup,
             llvm::Config {
-                opt_level: opt_level as usize
+                opt_level: opt_level as usize,
+                num_workers,
             },
         ));
     }

@@ -1,18 +1,21 @@
 mod attr;
 pub(crate) mod builtin_functions;
+#[macro_use]
 mod intrinsics;
 
-pub(crate) use intrinsics::IntoRuntime;
+pub(crate) use intrinsics::{IntoRuntime, Runtime};
 
 use crate::builtins::Variable;
 use crate::bytecode::{self, Accum};
-use crate::common::{Either, NodeIx, NumTy, Result};
+use crate::common::{Either, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
 use crate::pushdown::FieldSet;
 use crate::runtime;
 
 use crate::smallvec::{self, smallvec};
+use crossbeam::scope;
+use crossbeam_channel::bounded;
 use hashbrown::{HashMap, HashSet};
 use llvm_sys::{
     analysis::{LLVMVerifierFailureAction, LLVMVerifyModule},
@@ -139,6 +142,7 @@ enum PrintfKind {
 #[derive(Copy, Clone)]
 pub(crate) struct Config {
     pub opt_level: usize,
+    pub num_workers: usize,
 }
 
 pub(crate) struct Generator<'a, 'b> {
@@ -206,7 +210,7 @@ unsafe fn alloc_local(
 }
 
 impl<'a, 'b> Generator<'a, 'b> {
-    pub unsafe fn optimize(&mut self, main: LLVMValueRef) -> Result<()> {
+    pub unsafe fn optimize(&mut self, mains: impl Iterator<Item = LLVMValueRef>) -> Result<()> {
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
         use llvm_sys::transforms::pass_manager_builder::*;
         let mpm = LLVMCreatePassManager();
@@ -237,7 +241,9 @@ impl<'a, 'b> Generator<'a, 'b> {
         for fv in self.printfs.values() {
             LLVMRunFunctionPassManager(fpm, *fv);
         }
-        LLVMRunFunctionPassManager(fpm, main);
+        for main in mains {
+            LLVMRunFunctionPassManager(fpm, main);
+        }
 
         LLVMFinalizeFunctionPassManager(fpm);
         LLVMRunPassManager(mpm, self.module);
@@ -301,7 +307,8 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     pub unsafe fn dump_module(&mut self) -> Result<String> {
-        self.gen_main()?;
+        let mains = self.gen_main()?;
+        self.optimize(mains.iter().map(|(_, x)| x).cloned())?;
         self.verify()?;
         Ok(self.dump_module_inner())
     }
@@ -309,25 +316,96 @@ impl<'a, 'b> Generator<'a, 'b> {
     // For benchmarking.
     #[cfg(test)]
     pub unsafe fn compile_main(&mut self) -> Result<()> {
-        self.gen_main()?;
+        let mains = self.gen_main()?;
+        self.optimize(mains.iter().map(|(_, x)| x).cloned())?;
         self.verify()?;
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
         ptr::read_volatile(&addr);
         Ok(())
     }
+
+    unsafe fn run_function(&self, rt: &mut Runtime, name: *const libc::c_char) {
+        let addr = LLVMGetFunctionAddress(self.engine, name);
+        let func = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
+        func(rt as *mut _ as *mut libc::c_void);
+    }
+
     pub unsafe fn run_main(
         &mut self,
         stdin: impl IntoRuntime,
         ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
+        num_workers: usize,
     ) -> Result<()> {
         let mut rt = stdin.into_runtime(ff, used_fields);
-        self.gen_main()?;
+        let main = self.gen_main()?;
+        self.optimize(main.iter().map(|(_, x)| x).cloned())?;
         self.verify()?;
-        let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
-        let main_fn = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
-        main_fn((&mut rt) as *mut _ as *mut libc::c_void);
-        Ok(())
+        match main {
+            Stage::Main((main_name, _)) => Ok(self.run_function(&mut rt, main_name)),
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => {
+                // This triply-nested macro is here to allow mutable access to a "runtime" struct
+                // as well as mutable access to the same "read_files" value. The generated code is
+                // pretty awful; It may be worth a RefCell just to clean up.
+                with_input!(&mut rt.input_data, |(_, read_files)| {
+                    let reads = read_files.try_resize(num_workers.saturating_sub(1));
+                    if num_workers <= 1 || reads.len() == 0 || main_loop.is_none() {
+                        // execute serially.
+                        for name in begin.into_iter().chain(main_loop).chain(end) {
+                            self.run_function(&mut rt, name.0);
+                        }
+                        return Ok(());
+                    }
+                    let (sender, receiver) = bounded(reads.len());
+                    let launch_data: Vec<_> = reads
+                        .into_iter()
+                        .map(|reader| (reader, sender.clone(), rt.core.shuttle()))
+                        .collect();
+                    if let Some((begin_name, _)) = begin {
+                        self.run_function(&mut rt, begin_name);
+                    }
+                    with_input!(&mut rt.input_data, |(_, read_files)| {
+                        let old_read_files =
+                            mem::replace(&mut read_files.files, Default::default());
+                        let main_addr = LLVMGetFunctionAddress(self.engine, main_loop.unwrap().0);
+                        let main_func =
+                            mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(main_addr);
+                        let scope_res = scope(|s| {
+                            for (reader, sender, shuttle) in launch_data.into_iter() {
+                                s.spawn(move |_| {
+                                    let mut runtime = Runtime {
+                                        core: shuttle(),
+                                        input_data: reader().into(),
+                                    };
+                                    main_func(&mut runtime as *mut _ as *mut libc::c_void);
+                                    sender.send(runtime.core.extract_result()).unwrap();
+                                });
+                            }
+                            main_func(&mut rt as *mut _ as *mut libc::c_void);
+                            mem::drop(sender);
+                            with_input!(&mut rt.input_data, |(_, read_files)| {
+                                if let Some((end_name, _)) = end {
+                                    read_files.files = old_read_files;
+                                    while let Ok(res) = receiver.recv() {
+                                        rt.core.combine(res);
+                                    }
+                                    // mem::swap(&mut read_files.files, &mut old_read_files);
+                                    self.run_function(&mut rt, end_name);
+                                }
+                            });
+                        });
+                        if let Err(_) = scope_res {
+                            return err!("failed to execute parallel script");
+                        }
+                    });
+                });
+                Ok(())
+            }
+        }
     }
 
     unsafe fn build_map(&mut self) {
@@ -447,51 +525,89 @@ impl<'a, 'b> Generator<'a, 'b> {
         alloc_local(builder, ty, &self.type_map, &self.intrinsics)
     }
 
-    unsafe fn gen_main(&mut self) -> Result<()> {
+    unsafe fn gen_main_function(
+        &mut self,
+        main_offset: usize,
+        name: *const libc::c_char,
+    ) -> Result<(*const libc::c_char, LLVMValueRef)> {
+        // TODO: return a Stage<LLVMValueRef>, where we _always_ synthesize BEGIN with the
+        // allocation code for globals.
+        //
+        // hmmm wait how would that work?
+        //
+        // No. we need global allocation code for each stage that is populated.
+        // Optimize all decls. and then do the aggregation "out of band". See what can be done
+        // about factoring out the core logic here.
         let ty = LLVMFunctionType(
             LLVMVoidTypeInContext(self.ctx),
             &mut self.type_map.runtime_ty,
             1,
             /*IsVarArg=*/ 0,
         );
-        let decl = LLVMAddFunction(self.module, c_str!("__frawk_main"), ty);
+        let decl = LLVMAddFunction(self.module, name, ty);
         let builder = LLVMCreateBuilderInContext(self.ctx);
         let bb = LLVMAppendBasicBlockInContext(self.ctx, decl, c_str!(""));
         LLVMPositionBuilderAtEnd(builder, bb);
 
         // For now, iterate over each element of the stage and call each component in sequence.
-        for sub_main in self.types.stage().iter().cloned() {
-            // We need to allocate all of the global variables that our main function uses, and then
-            // pass them as arguments, along with the runtime.
-            let main_info = &self.decls[sub_main];
-            let mut args: SmallVec<_> = smallvec![ptr::null_mut(); main_info.num_args];
-            for ((_reg, ty), arg_ix) in main_info.globals.iter() {
-                let local = self.alloc_local(builder, *ty)?;
-                let param = if let Ty::Str = ty {
-                    // Already a pointer; we're good to go!
-                    local
-                } else {
-                    let loc = LLVMBuildAlloca(builder, self.llvm_ty(*ty), c_str!(""));
-                    LLVMBuildStore(builder, local, loc);
-                    loc
-                };
-                args[*arg_ix] = param;
-            }
-            // Pass the runtime last.
-            args[main_info.num_args - 1] = LLVMGetParam(decl, 0);
-            LLVMBuildCall(
-                builder,
-                main_info.val,
-                args.as_mut_ptr(),
-                args.len() as libc::c_uint,
-                c_str!(""),
-            );
+        // We need to allocate all of the global variables that our main function uses, and then
+        // pass them as arguments, along with the runtime.
+        let main_info = &self.decls[main_offset];
+        let mut args: SmallVec<_> = smallvec![ptr::null_mut(); main_info.num_args];
+        for ((_reg, ty), arg_ix) in main_info.globals.iter() {
+            let local = self.alloc_local(builder, *ty)?;
+            let param = if let Ty::Str = ty {
+                // Already a pointer; we're good to go!
+                local
+            } else {
+                let loc = LLVMBuildAlloca(builder, self.llvm_ty(*ty), c_str!(""));
+                LLVMBuildStore(builder, local, loc);
+                loc
+            };
+            args[*arg_ix] = param;
         }
+        // Pass the runtime last.
+        args[main_info.num_args - 1] = LLVMGetParam(decl, 0);
+        LLVMBuildCall(
+            builder,
+            main_info.val,
+            args.as_mut_ptr(),
+            args.len() as libc::c_uint,
+            c_str!(""),
+        );
 
         LLVMBuildRetVoid(builder);
         LLVMDisposeBuilder(builder);
-        self.optimize(decl)?;
-        Ok(())
+        Ok((name, decl))
+    }
+
+    unsafe fn gen_main(&mut self) -> Result<Stage<(*const libc::c_char, LLVMValueRef)>> {
+        fn traverse<T>(o: Option<Result<T>>) -> Result<Option<T>> {
+            match o {
+                Some(e) => Ok(Some(e?)),
+                None => Ok(None),
+            }
+        }
+        match self.types.stage() {
+            Stage::Main(main) => Ok(Stage::Main(
+                self.gen_main_function(main, c_str!("__frawk_main"))?,
+            )),
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => Ok(Stage::Par {
+                begin: traverse(
+                    begin.map(|off| self.gen_main_function(off, c_str!("__frawk_begin"))),
+                )?,
+                main_loop: traverse(
+                    main_loop.map(|off| self.gen_main_function(off, c_str!("__frawk_main_loop"))),
+                )?,
+                end: traverse(
+                    end.map(|off| self.gen_main_function(off, c_str!("__frawk_end_loop"))),
+                )?,
+            }),
+        }
     }
 
     unsafe fn verify(&mut self) -> Result<()> {
