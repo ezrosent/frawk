@@ -49,6 +49,8 @@ pub struct CSVReader<P> {
     // Used to trigger updating FILENAME on the first read.
     ifmt: InputFormat,
     field_set: FieldSet,
+
+    empty_buf: Buf,
 }
 
 impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
@@ -62,15 +64,20 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         let ifmt = self.ifmt;
         for p_factory in producers.into_iter() {
             let field_set = self.field_set.clone();
-            res.push(Box::new(move || CSVReader {
-                prod: p_factory(),
-                cur_chunk: OffsetChunk::default(),
-                cur_buf: UniqueBuf::new(0).into_buf(),
-                buf_len: 0,
-                prev_ix: 0,
-                last_len: 0,
-                ifmt,
-                field_set,
+            res.push(Box::new(move || {
+                let empty_buf = UniqueBuf::new(0).into_buf();
+                let cur_buf = empty_buf.clone();
+                CSVReader {
+                    prod: p_factory(),
+                    cur_chunk: OffsetChunk::default(),
+                    cur_buf,
+                    empty_buf,
+                    buf_len: 0,
+                    prev_ix: 0,
+                    last_len: 0,
+                    ifmt,
+                    field_set,
+                }
             }) as _)
         }
         res
@@ -139,15 +146,18 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 Box::new(ShardedChunkProducer::new(iter))
             }
         };
+        let empty_buf = UniqueBuf::new(0).into_buf();
+        let cur_buf = empty_buf.clone();
         CSVReader {
             prod,
-            cur_buf: UniqueBuf::new(0).into_buf(),
+            cur_buf,
             buf_len: 0,
             cur_chunk: OffsetChunk::default(),
             prev_ix: 0,
             last_len: 0,
             field_set: FieldSet::all(),
             ifmt,
+            empty_buf,
         }
     }
 }
@@ -156,6 +166,12 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
 impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
     fn refresh_buf(&mut self) -> Result<(/*is eof*/ bool, /* file changed */ bool)> {
         let prev_version = self.cur_chunk.version;
+        let placeholder = self.empty_buf.clone();
+        let old_buf = mem::replace(&mut self.cur_buf, placeholder);
+        self.buf_len = 0;
+
+        // Send the chunks back, if possible, so they get freed in the same thread.
+        self.cur_chunk.buf = old_buf.try_unique().ok();
         if self.prod.get_chunk(&mut self.cur_chunk)? {
             // We may have received an EOF without getting any data. Increment the version so this
             // regsiters as an EOF through the `read_state` interface.

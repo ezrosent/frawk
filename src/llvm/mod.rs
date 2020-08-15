@@ -348,6 +348,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                 main_loop,
                 end,
             } => {
+                rt.concurrent = true;
                 // This triply-nested macro is here to allow mutable access to a "runtime" struct
                 // as well as mutable access to the same "read_files" value. The generated code is
                 // pretty awful; It may be worth a RefCell just to clean up.
@@ -360,6 +361,13 @@ impl<'a, 'b> Generator<'a, 'b> {
                         }
                         return Ok(());
                     }
+                    std::panic::set_hook(Box::new(|pi| {
+                        if let Some(s) = pi.payload().downcast_ref::<&str>() {
+                            if s.len() > 0 {
+                                eprintln_ignore!("{}", s);
+                            }
+                        }
+                    }));
                     let (sender, receiver) = bounded(reads.len());
                     let launch_data: Vec<_> = reads
                         .into_iter()
@@ -378,6 +386,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                             for (reader, sender, shuttle) in launch_data.into_iter() {
                                 s.spawn(move |_| {
                                     let mut runtime = Runtime {
+                                        concurrent: true,
                                         core: shuttle(),
                                         input_data: reader().into(),
                                     };
@@ -391,6 +400,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                                 while let Ok(res) = receiver.recv() {
                                     rt.core.combine(res);
                                 }
+                                rt.concurrent = false;
                                 if let Some((end_name, _)) = end {
                                     read_files.files = old_read_files;
                                     self.run_function(&mut rt, end_name);
@@ -1640,6 +1650,7 @@ impl<'a> View<'a> {
                 let arg_tys: SmallVec<_> = args.iter().map(|x| x.1).collect();
                 let sprintf_fn = self.wrapped_printf((arg_tys, PrintfKind::Sprintf));
                 let mut arg_vs = SmallVec::with_capacity(args.len() + 1);
+                arg_vs.push(self.runtime_val());
                 arg_vs.push(self.get_local(fmt.reflect())?);
                 for a in args.iter().cloned() {
                     arg_vs.push(self.get_local(a)?);
@@ -2011,12 +2022,7 @@ impl<'a> View<'a> {
         // The var-arg portion + runtime + format spec
         //  (+ output + append, if named_output)
         let mut arg_lltys = smallvec::SmallVec::<[_; 8]>::with_capacity(args.len() + 4);
-        match kind {
-            File | Stdout => {
-                arg_lltys.push(self.tmap.runtime_ty);
-            }
-            Sprintf => {}
-        };
+        arg_lltys.push(self.tmap.runtime_ty);
         arg_lltys.push(self.tmap.get_ptr_ty(Ty::Str)); // spec
         arg_lltys.extend(args.iter().cloned().map(|ty| {
             if ty == Ty::Str {
@@ -2061,12 +2067,7 @@ impl<'a> View<'a> {
 
             let arg_ptr = LLVMBuildGEP(builder, args_array, index.as_mut_ptr(), 2, c_str!(""));
             // Translate `i` to the param of the generated function.
-            let offset = match kind {
-                // Format spec, runtime
-                File | Stdout => 2,
-                // Just the format spec
-                Sprintf => 1,
-            };
+            let offset = 2;
             let argval = LLVMGetParam(f, i as libc::c_uint + offset);
             // Cast the value to void*, then store it into the array.
             let cast_val = if let Ty::Str = t {
@@ -2133,7 +2134,13 @@ impl<'a> View<'a> {
             }
             Sprintf => {
                 let intrinsic = self.intrinsics.get("sprintf_impl");
-                let mut args = [LLVMGetParam(f, 0), args_ptr, tys_ptr, len_v];
+                let mut args = [
+                    LLVMGetParam(f, 0),
+                    LLVMGetParam(f, 1),
+                    args_ptr,
+                    tys_ptr,
+                    len_v,
+                ];
                 let resv = LLVMBuildCall(
                     builder,
                     intrinsic,

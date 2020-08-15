@@ -40,7 +40,7 @@ use std::mem;
 use std::slice;
 
 macro_rules! fail {
-    ($($es:expr),+) => {{
+    ($rt:expr, $($es:expr),+) => {{
         #[cfg(test)]
         {
             panic!("failure in runtime {}. Halting execution", format!($($es),*))
@@ -48,28 +48,37 @@ macro_rules! fail {
         #[cfg(not(test))]
         {
             eprintln_ignore!("failure in runtime {}. Halting execution", format!($($es),*));
-            std::process::abort()
+            exit!($rt, 1, format!($($es),*))
         }
     }}
 }
 
 macro_rules! try_abort {
-    ($e:expr, $msg:expr) => {
+    ($rt:expr, $e:expr, $msg:expr) => {
         match $e {
             Ok(res) => res,
-            Err(e) => fail!(concat!($msg, " {}"), e),
+            Err(e) => fail!($rt, concat!($msg, " {}"), e),
         }
     };
-    ($e:expr) => {
-        try_abort!($e, "")
+    ($rt:expr, $e:expr) => {
+        try_abort!($rt, $e, "")
     };
 }
 
 macro_rules! exit {
-    ($runtime:expr) => {{
-        let rt = $runtime as *mut Runtime;
-        std::ptr::drop_in_place(rt);
-        std::process::exit(0)
+    ($runtime:expr) => {
+        exit!($runtime, 0, "")
+    };
+    ($runtime:expr, $code:expr, $msg:expr) => {{
+        let rt = $runtime as *const _ as *mut Runtime;
+        let concurrent = (*rt).concurrent;
+        if concurrent {
+            // Use panic to allow 'graceful' shutdown of other worker threads.
+            panic!($msg)
+        } else {
+            std::ptr::drop_in_place(rt);
+            std::process::exit($code)
+        }
     }};
 }
 
@@ -109,6 +118,7 @@ macro_rules! impl_into_runtime {
                 used_fields: &FieldSet,
             ) -> Runtime<'a> {
                 Runtime {
+                    concurrent: false,
                     input_data: InputData::$var((
                         Default::default(),
                         FileRead::new(self, used_fields),
@@ -134,6 +144,8 @@ impl_into_runtime!(ChainedReader<RegexSplitter<Box<dyn io::Read + Send>>>, V4);
 pub(crate) struct Runtime<'a> {
     pub(crate) core: crate::interp::Core<'a>,
     pub(crate) input_data: InputData,
+    #[allow(unused)]
+    pub(crate) concurrent: bool,
 }
 
 impl<'a> Runtime<'a> {
@@ -283,7 +295,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
 
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
-        sprintf_impl(str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
+        sprintf_impl(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
         printf_impl_file(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty, str_ref_ty, int_ty);
         printf_impl_stdout(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty);
         close_file(rt_ty, str_ref_ty);
@@ -412,6 +424,7 @@ pub unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
 pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
+        runtime,
         with_input!(&mut runtime.input_data, |(_, read_files)| {
             read_files.read_err(&*(file as *mut Str))
         }),
@@ -431,6 +444,7 @@ pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
 pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let changed = try_abort!(
+        runtime,
         with_input!(&mut runtime.input_data, |(line, read_files)| {
             runtime
                 .core
@@ -447,15 +461,19 @@ pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn next_file(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
-    try_abort!(with_input!(&mut runtime.input_data, |(_, read_files)| {
-        read_files.next_file()
-    }));
+    try_abort!(
+        runtime,
+        with_input!(&mut runtime.input_data, |(_, read_files)| {
+            read_files.next_file()
+        })
+    );
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let (changed, res) = try_abort!(
+        runtime,
         with_input!(&mut runtime.input_data, |(_, read_files)| {
             runtime
                 .core
@@ -532,7 +550,7 @@ pub unsafe extern "C" fn split_str(
         .regexes
         .split_regex_strmap(&pat, &to_split, &into_arr)
     {
-        fail!("failed to split string: {}", e);
+        fail!(runtime, "failed to split string: {}", e);
     }
     let res = (into_arr.len() - old_len) as Int;
     mem::forget((into_arr, to_split, pat));
@@ -556,7 +574,7 @@ pub unsafe extern "C" fn split_int(
         .regexes
         .split_regex_intmap(&pat, &to_split, &into_arr)
     {
-        fail!("failed to split string: {}", e);
+        fail!(runtime, "failed to split string: {}", e);
     }
     let res = (into_arr.len() - old_len) as Int;
     mem::forget((into_arr, to_split, pat));
@@ -576,7 +594,7 @@ pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
     });
     let res = match col_str {
         Ok(s) => s,
-        Err(e) => fail!("get_col: {}", e),
+        Err(e) => fail!(runtime, "get_col: {}", e),
     };
     mem::transmute::<Str, U128>(res)
 }
@@ -586,8 +604,10 @@ pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) ->
     let sep: Str<'static> = ",".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
+        runtime,
         with_input!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(
+                runtime,
                 line.nf(&runtime.core.vars.fs, &mut runtime.core.regexes),
                 "nf:"
             );
@@ -603,8 +623,10 @@ pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) ->
     let sep: Str<'static> = "\t".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
+        runtime,
         with_input!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(
+                runtime,
                 line.nf(&runtime.core.vars.fs, &mut runtime.core.regexes),
                 "nf:"
             );
@@ -624,8 +646,10 @@ pub unsafe extern "C" fn join_cols(
 ) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
+        runtime,
         with_input!(&mut runtime.input_data, |(line, _)| {
             let nf = try_abort!(
+                runtime,
                 line.nf(&runtime.core.vars.fs, &mut runtime.core.regexes),
                 "nf:"
             );
@@ -646,7 +670,7 @@ pub unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void)
         &runtime.core.vars.ofs,
         &mut runtime.core.regexes,
     )) {
-        fail!("set_col: {}", e);
+        fail!(runtime, "set_col: {}", e);
     }
 }
 
@@ -671,7 +695,11 @@ pub unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *m
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
-    let res = try_abort!((*runtime).core.is_match_regex(s, pat), "match_pat:");
+    let res = try_abort!(
+        runtime,
+        (*runtime).core.is_match_regex(s, pat),
+        "match_pat:"
+    );
     mem::forget((s, pat));
     res as Int
 }
@@ -685,7 +713,11 @@ pub unsafe extern "C" fn match_pat_loc(
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
-    let res = try_abort!((*runtime).core.match_regex(s, pat), "match_pat_loc:");
+    let res = try_abort!(
+        runtime,
+        (*runtime).core.match_regex(s, pat),
+        "match_pat_loc:"
+    );
     mem::forget((s, pat));
     res as Int
 }
@@ -708,10 +740,13 @@ pub unsafe extern "C" fn subst_first(
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
     let in_s = &mut *(in_s as *mut Str);
-    let (subbed, new) = try_abort!(runtime
-        .core
-        .regexes
-        .with_regex(pat, |re| in_s.subst_first(re, s)));
+    let (subbed, new) = try_abort!(
+        runtime,
+        runtime
+            .core
+            .regexes
+            .with_regex(pat, |re| in_s.subst_first(re, s))
+    );
     *in_s = subbed;
     new as Int
 }
@@ -727,10 +762,13 @@ pub unsafe extern "C" fn subst_all(
     let s = &mut *(s as *mut Str);
     let pat = &*(pat as *mut Str);
     let in_s = &mut *(in_s as *mut Str);
-    let (subbed, nsubs) = try_abort!(runtime
-        .core
-        .regexes
-        .with_regex(pat, |re| in_s.subst_all(re, s)));
+    let (subbed, nsubs) = try_abort!(
+        runtime,
+        runtime
+            .core
+            .regexes
+            .with_regex(pat, |re| in_s.subst_all(re, s))
+    );
     *in_s = subbed;
     nsubs
 }
@@ -820,10 +858,10 @@ pub unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
 pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        let res = try_abort!(runtime.core.vars.load_str(var));
+        let res = try_abort!(runtime, runtime.core.vars.load_str(var));
         mem::transmute::<Str, U128>(res)
     } else {
-        fail!("invalid variable code={}", var)
+        fail!(runtime, "invalid variable code={}", var)
     }
 }
 
@@ -832,9 +870,9 @@ pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_vo
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let s = (&*(s as *mut Str)).clone();
-        try_abort!(runtime.core.vars.store_str(var, s))
+        try_abort!(runtime, runtime.core.vars.store_str(var, s))
     } else {
-        fail!("invalid variable code={}", var)
+        fail!(runtime, "invalid variable code={}", var)
     }
 }
 
@@ -847,12 +885,12 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
                 .nf(&runtime.core.vars.fs, &mut runtime.core.regexes))
             {
                 Ok(nf) => nf as Int,
-                Err(e) => fail!("nf: {}", e),
+                Err(e) => fail!(runtime, "nf: {}", e),
             };
         }
-        try_abort!(runtime.core.vars.load_int(var))
+        try_abort!(runtime, runtime.core.vars.load_int(var))
     } else {
-        fail!("invalid variable code={}", var)
+        fail!(runtime, "invalid variable code={}", var)
     }
 }
 
@@ -860,9 +898,9 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
 pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        try_abort!(runtime.core.vars.store_int(var, i));
+        try_abort!(runtime, runtime.core.vars.store_int(var, i));
     } else {
-        fail!("invalid variable code={}", var)
+        fail!(runtime, "invalid variable code={}", var)
     }
 }
 
@@ -870,10 +908,10 @@ pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
 pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        let res = try_abort!(runtime.core.vars.load_intmap(var));
+        let res = try_abort!(runtime, runtime.core.vars.load_intmap(var));
         mem::transmute::<IntMap<_>, *mut c_void>(res)
     } else {
-        fail!("invalid variable code={}", var)
+        fail!(runtime, "invalid variable code={}", var)
     }
 }
 
@@ -882,10 +920,10 @@ pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
-        try_abort!(runtime.core.vars.store_intmap(var, map.clone()));
+        try_abort!(runtime, runtime.core.vars.store_intmap(var, map.clone()));
         mem::forget(map);
     } else {
-        fail!("invalid variable code={}", var)
+        fail!(runtime, "invalid variable code={}", var)
     }
 }
 
@@ -920,7 +958,12 @@ pub unsafe extern "C" fn drop_iter_str(iter: *mut U128, len: usize) {
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
 }
 
-unsafe fn wrap_args<'a>(args: *mut usize, tys: *mut u32, num_args: Int) -> SmallVec<FormatArg<'a>> {
+unsafe fn wrap_args<'a>(
+    _rt: &mut Runtime<'a>,
+    args: *mut usize,
+    tys: *mut u32,
+    num_args: Int,
+) -> SmallVec<FormatArg<'a>> {
     let mut format_args = SmallVec::with_capacity(num_args as usize);
     for i in 0..num_args {
         let ty_code = *tys.offset(i as isize);
@@ -928,13 +971,18 @@ unsafe fn wrap_args<'a>(args: *mut usize, tys: *mut u32, num_args: Int) -> Small
         let ty = if let Ok(ty) = Ty::try_from(ty_code) {
             ty
         } else {
-            fail!("invalid type code passed to printf_impl_file: {}", ty_code)
+            fail!(
+                _rt,
+                "invalid type code passed to printf_impl_file: {}",
+                ty_code
+            )
         };
         let typed_arg: FormatArg = match ty {
             Ty::Int => mem::transmute::<usize, Int>(arg).into(),
             Ty::Float => mem::transmute::<usize, Float>(arg).into(),
             Ty::Str => mem::transmute::<usize, &Str>(arg).clone().into(),
             _ => fail!(
+                _rt,
                 "invalid format arg {:?} (this should have been caught earlier)",
                 ty
             ),
@@ -955,7 +1003,7 @@ pub unsafe extern "C" fn printf_impl_file(
     append: Int,
 ) {
     let output_wrapped = Some((&*(output as *mut Str), append != 0));
-    let format_args = wrap_args(args, tys, num_args);
+    let format_args = wrap_args(&mut *(rt as *mut _), args, tys, num_args);
     let res = (*(rt as *mut Runtime)).core.write_files.printf(
         output_wrapped,
         &*(spec as *mut Str),
@@ -968,6 +1016,7 @@ pub unsafe extern "C" fn printf_impl_file(
 
 #[no_mangle]
 pub unsafe extern "C" fn sprintf_impl(
+    rt: *mut c_void,
     spec: *mut U128,
     args: *mut usize,
     tys: *mut u32,
@@ -975,10 +1024,11 @@ pub unsafe extern "C" fn sprintf_impl(
 ) -> U128 {
     use runtime::str_impl::DynamicBuf;
     let mut buf = DynamicBuf::new(0);
-    let format_args = wrap_args(args, tys, num_args);
+    let rt = &mut *(rt as *mut _);
+    let format_args = wrap_args(rt, args, tys, num_args);
     let spec = &*(spec as *mut Str);
     if let Err(e) = spec.with_str(|s| printf(&mut buf, s, &format_args[..])) {
-        fail!("unexpected failure during sprintf: {}", e);
+        fail!(rt, "unexpected failure during sprintf: {}", e);
     }
     mem::transmute::<Str, U128>(buf.into_str())
 }
@@ -991,7 +1041,7 @@ pub unsafe extern "C" fn printf_impl_stdout(
     tys: *mut u32,
     num_args: Int,
 ) {
-    let format_args = wrap_args(args, tys, num_args);
+    let format_args = wrap_args(&mut *(rt as *mut _), args, tys, num_args);
     let res = (*(rt as *mut Runtime)).core.write_files.printf(
         None,
         &*(spec as *mut Str),
@@ -1007,7 +1057,7 @@ pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
     with_input!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
-    try_abort!(rt.core.write_files.close(file));
+    try_abort!(rt, rt.core.write_files.close(file));
 }
 
 #[no_mangle]
