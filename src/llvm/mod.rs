@@ -388,12 +388,11 @@ impl<'a, 'b> Generator<'a, 'b> {
                             main_func(&mut rt as *mut _ as *mut libc::c_void);
                             mem::drop(sender);
                             with_input!(&mut rt.input_data, |(_, read_files)| {
+                                while let Ok(res) = receiver.recv() {
+                                    rt.core.combine(res);
+                                }
                                 if let Some((end_name, _)) = end {
                                     read_files.files = old_read_files;
-                                    while let Ok(res) = receiver.recv() {
-                                        rt.core.combine(res);
-                                    }
-                                    // mem::swap(&mut read_files.files, &mut old_read_files);
                                     self.run_function(&mut rt, end_name);
                                 }
                             });
