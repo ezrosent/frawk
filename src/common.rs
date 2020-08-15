@@ -2,6 +2,11 @@
 use hashbrown::HashSet;
 use std::collections::VecDeque;
 use std::hash::Hash;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Condvar, Mutex,
+};
+
 pub(crate) type NumTy = u32;
 pub(crate) type NodeIx = petgraph::graph::NodeIndex<NumTy>;
 pub(crate) type Graph<V, E> = petgraph::Graph<V, E, petgraph::Directed, NumTy>;
@@ -247,6 +252,56 @@ impl<T: Clone + Hash + Eq> WorkList<T> {
         let _was_there = self.set.remove(&next);
         debug_assert!(_was_there);
         Some(next)
+    }
+}
+
+/// Notification is a simple object used to synchronize multiple threads around a single event
+/// occuring.
+///
+/// Notifications are "one-shot": they only transition from "not notified" to "notified" once.
+/// Based on the absl object of the same name.
+pub struct Notification {
+    notified: AtomicBool,
+    mu: Mutex<()>,
+    cv: Condvar,
+}
+
+impl Default for Notification {
+    fn default() -> Notification {
+        Notification {
+            notified: AtomicBool::new(false),
+            mu: Mutex::new(()),
+            cv: Condvar::new(),
+        }
+    }
+}
+
+impl Notification {
+    pub fn has_been_notified(&self) -> bool {
+        self.notified.load(Ordering::Acquire)
+    }
+    pub fn notify(&self) {
+        if self.has_been_notified() {
+            return;
+        }
+        let _guard = self.mu.lock().unwrap();
+        self.notified.store(true, Ordering::Release);
+        self.cv.notify_all();
+    }
+    pub fn wait(&self) {
+        loop {
+            // Fast path: check if the notification has already happened.
+            if self.has_been_notified() {
+                return;
+            }
+            // Slow path: grab the lock, and check notification state again before waiting on the
+            // condition variable.
+            let mut _guard = self.mu.lock().unwrap();
+            if self.has_been_notified() {
+                return;
+            }
+            _guard = self.cv.wait(_guard).unwrap();
+        }
     }
 }
 

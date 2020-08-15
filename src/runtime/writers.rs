@@ -39,7 +39,7 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Condvar, Mutex,
+    Arc, Mutex,
 };
 
 // NB we only require mpsc semantics, but at time of writing there are a few open bugs on
@@ -47,7 +47,7 @@ use std::sync::{
 use crossbeam_channel::{bounded, Receiver, Sender};
 use hashbrown::HashMap;
 
-use crate::common::{CompileError, Result};
+use crate::common::{CompileError, Notification, Result};
 use crate::runtime::Str;
 
 /// The maximum number of pending requests in the per-file channels.
@@ -620,56 +620,6 @@ fn receive_loop<W: io::Write>(
         }
     }
     Ok(())
-}
-
-/// Notification is a simple object used to synchronize multiple threads around a single event
-/// occuring.
-///
-/// Notifications are "one-shot": they only transition from "not notified" to "notified" once.
-/// Based on the absl object of the same name.
-struct Notification {
-    notified: AtomicBool,
-    mu: Mutex<()>,
-    cv: Condvar,
-}
-
-impl Default for Notification {
-    fn default() -> Notification {
-        Notification {
-            notified: AtomicBool::new(false),
-            mu: Mutex::new(()),
-            cv: Condvar::new(),
-        }
-    }
-}
-
-impl Notification {
-    fn has_been_notified(&self) -> bool {
-        self.notified.load(Ordering::Acquire)
-    }
-    fn notify(&self) {
-        if self.has_been_notified() {
-            return;
-        }
-        let _guard = self.mu.lock().unwrap();
-        self.notified.store(true, Ordering::Release);
-        self.cv.notify_all();
-    }
-    fn wait(&self) {
-        loop {
-            // Fast path: check if the notification has already happened.
-            if self.has_been_notified() {
-                return;
-            }
-            // Slow path: grab the lock, and check notification state again before waiting on the
-            // condition variable.
-            let mut _guard = self.mu.lock().unwrap();
-            if self.has_been_notified() {
-                return;
-            }
-            _guard = self.cv.wait(_guard).unwrap();
-        }
-    }
 }
 
 pub mod testing {
