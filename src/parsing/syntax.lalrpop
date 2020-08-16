@@ -18,7 +18,7 @@ pub VarDef: (&'a str, &'a Expr<'a, 'a, &'a str>) = {
 }
 
 pub Prog: Prog<'a,'a,&'a str> = {
-    <fs:(NL <Function>)*> NL <begin:Begin?> <pats:PatAction*> <sa:Expr?> <end:End?> =>
+    <fs:(NL <Function>)*> NL <begin:Begin?> <pats:PatAction*> <sa:Expr?> <prepare:Prepare?> <end:End?> =>
         Prog {
             field_sep: None,
             output_sep: None,
@@ -27,6 +27,7 @@ pub Prog: Prog<'a,'a,&'a str> = {
             decs: fs,
             begin,
             end,
+            prepare,
             stage: stage.clone(),
             pats: {
                 let mut pats = pats;
@@ -57,6 +58,10 @@ FormalParams: Vec<&'a str> = {
 
 Begin: &'a Stmt<'a,'a,&'a str> = {
     "BEGIN" NL <Block> NL => <>
+}
+
+Prepare: &'a Stmt<'a,'a,&'a str> = {
+    "PREPARE" NL <Block> NL => <>
 }
 
 End: &'a Stmt<'a,'a,&'a str> = {
@@ -345,6 +350,7 @@ extern {
       "PATLIT" => Tok::PatLit(<&'a str>),
       "CALLSTART" => Tok::CallStart(<&'a str>),
       "BEGIN" =>  Tok::Begin,
+      "PREPARE" => Tok::Prepare,
       "END" =>  Tok::End,
       "break" =>  Tok::Break,
       "continue" =>  Tok::Continue,

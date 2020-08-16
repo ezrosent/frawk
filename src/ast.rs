@@ -61,6 +61,7 @@ pub struct Prog<'a, 'b, I> {
     pub output_record_sep: Option<&'b str>,
     pub decs: Vec<FunDec<'a, 'b, I>>,
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
+    pub prepare: Option<&'a Stmt<'a, 'b, I>>,
     pub end: Option<&'a Stmt<'a, 'b, I>>,
     pub pats: Vec<(Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
     pub stage: Stage<()>,
@@ -195,15 +196,19 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             }
         }
 
-        if self.end.is_some() || inner.len() > init_len {
+        if self.end.is_some() || self.prepare.is_some() || inner.len() > init_len {
             // Wrap the whole thing in a while((getline) > 0) { } statement.
-            main_loop = Some(arena.alloc_v(While(
+            let main_portion = arena.alloc_v(While(
                 /*is_toplevel=*/ true,
                 arena.alloc(|| Binop(GT, arena.alloc(|| ReadStdin), arena.alloc(|| ILit(0)))),
                 arena.alloc(move || Block(inner)),
-            )));
+            ));
+            main_loop = Some(if let Some(prepare_block) = self.prepare {
+                arena.alloc_v(Stmt::Block(vec![main_portion, prepare_block]))
+            } else {
+                main_portion
+            });
         }
-
         if let Some(end_block) = self.end {
             end = Some(end_block);
         }
