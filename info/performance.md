@@ -375,7 +375,8 @@ _Print the mean of field 2 grouped by the value in field 6 for TREE_GRM_ESTN_
 
 The tsv-utils command was `tsv-summarize -H  --group-by 6 --mean 2`. The Awk
 script, with the usual settings for gawk, mawk, and frawk, reads:
-```
+
+```awk
 NR > 1 { N[$6]++; SUM[$6]+=$2; }
 END {
     OFS="\t"
