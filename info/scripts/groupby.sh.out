@@ -1,0 +1,255 @@
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+FORESTLAND	29.7952
+TIMBERLAND	29.1807
+
+real	0m43.698s
+user	0m42.152s
+sys	0m1.540s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.1807
+FORESTLAND	29.7952
+
+real	0m28.949s
+user	0m27.579s
+sys	0m1.363s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m16.465s
+user	0m15.460s
+sys	0m1.000s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m19.549s
+user	0m18.410s
+sys	0m1.136s
++ frawk -itsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m3.825s
+user	0m17.904s
+sys	0m1.062s
++ frawk -icsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m5.165s
+user	0m24.373s
+sys	0m1.290s
++ ../bin/tsv-summarize -H --group-by 6 --mean 2 ../TREE_GRM_ESTN.tsv
+LAND_BASIS	STATECD_mean
+TIMBERLAND	29.1807099973
+FORESTLAND	29.795231198
+
+real	0m4.895s
+user	0m4.251s
+sys	0m0.636s
++ set +x
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+FORESTLAND	29.7952
+TIMBERLAND	29.1807
+
+real	0m43.623s
+user	0m42.107s
+sys	0m1.512s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.1807
+FORESTLAND	29.7952
+
+real	0m28.819s
+user	0m27.478s
+sys	0m1.335s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m16.387s
+user	0m15.378s
+sys	0m1.005s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m19.416s
+user	0m18.279s
+sys	0m1.134s
++ frawk -itsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m3.830s
+user	0m17.943s
+sys	0m1.051s
++ frawk -icsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m4.972s
+user	0m23.412s
+sys	0m1.256s
++ ../bin/tsv-summarize -H --group-by 6 --mean 2 ../TREE_GRM_ESTN.tsv
+LAND_BASIS	STATECD_mean
+TIMBERLAND	29.1807099973
+FORESTLAND	29.795231198
+
+real	0m4.872s
+user	0m4.238s
+sys	0m0.635s
++ set +x
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+FORESTLAND	29.7952
+TIMBERLAND	29.1807
+
+real	0m51.093s
+user	0m49.576s
+sys	0m1.513s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.1807
+FORESTLAND	29.7952
+
+real	0m28.810s
+user	0m27.477s
+sys	0m1.328s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m16.364s
+user	0m15.362s
+sys	0m0.997s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m19.633s
+user	0m18.465s
+sys	0m1.164s
++ frawk -itsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m3.916s
+user	0m18.340s
+sys	0m1.068s
++ frawk -icsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m5.034s
+user	0m23.714s
+sys	0m1.266s
++ ../bin/tsv-summarize -H --group-by 6 --mean 2 ../TREE_GRM_ESTN.tsv
+LAND_BASIS	STATECD_mean
+TIMBERLAND	29.1807099973
+FORESTLAND	29.795231198
+
+real	0m4.898s
+user	0m4.257s
+sys	0m0.641s
++ set +x
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+FORESTLAND	29.7952
+TIMBERLAND	29.1807
+
+real	0m43.697s
+user	0m42.183s
+sys	0m1.509s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.1807
+FORESTLAND	29.7952
+
+real	0m28.824s
+user	0m27.493s
+sys	0m1.325s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m16.346s
+user	0m15.346s
+sys	0m0.995s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m19.410s
+user	0m18.270s
+sys	0m1.137s
++ frawk -itsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m3.752s
+user	0m17.555s
+sys	0m1.047s
++ frawk -icsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m4.977s
+user	0m23.452s
+sys	0m1.248s
++ ../bin/tsv-summarize -H --group-by 6 --mean 2 ../TREE_GRM_ESTN.tsv
+LAND_BASIS	STATECD_mean
+TIMBERLAND	29.1807099973
+FORESTLAND	29.795231198
+
+real	0m4.901s
+user	0m4.257s
+sys	0m0.645s
++ set +x
++ mawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+FORESTLAND	29.7952
+TIMBERLAND	29.1807
+
+real	0m43.531s
+user	0m42.019s
+sys	0m1.507s
++ gawk '-F\t' -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.1807
+FORESTLAND	29.7952
+
+real	0m28.923s
+user	0m27.569s
+sys	0m1.348s
++ frawk -itsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m16.381s
+user	0m15.376s
+sys	0m0.999s
++ frawk -icsv -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180709997271897
+FORESTLAND	29.795231197974125
+
+real	0m19.410s
+user	0m18.275s
+sys	0m1.132s
++ frawk -itsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.tsv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m3.800s
+user	0m17.730s
+sys	0m1.083s
++ frawk -icsv -pr -j4 -f /var/folders/lk/z180jcy521q16mmx05sxfwh00000gn/T/tmp.cEJxsYDc ../TREE_GRM_ESTN.csv
+TIMBERLAND	29.180714100452494
+FORESTLAND	29.795231197974125
+
+real	0m4.939s
+user	0m23.316s
+sys	0m1.218s
++ ../bin/tsv-summarize -H --group-by 6 --mean 2 ../TREE_GRM_ESTN.tsv
+LAND_BASIS	STATECD_mean
+TIMBERLAND	29.1807099973
+FORESTLAND	29.795231198
+
+real	0m5.035s
+user	0m4.365s
+sys	0m0.666s
++ set +x
