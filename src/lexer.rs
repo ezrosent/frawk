@@ -57,6 +57,7 @@ pub enum Tok<'a> {
     NotMatch,
 
     EQ,
+    NEQ,
     LT,
     GT,
     LTE,
@@ -132,6 +133,7 @@ static_map!(
     ["~", Tok::Match],
     ["!~", Tok::NotMatch],
     ["==", Tok::EQ],
+    ["!=", Tok::NEQ],
     ["<", Tok::LT],
     ["<=", Tok::LTE],
     [">", Tok::GT],
