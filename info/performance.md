@@ -3,7 +3,7 @@
 ## Disclaimer
 
 One of frawk's goals is to be efficient. The abundance of such claims
-nonwithstanding, I've found it is very hard to precisely state the degree to
+notwithstanding, I've found it is very hard to precisely state the degree to
 which an entire _programming language implementation_ is or is not efficient. I
 have no doubt that there are programs in frawk that are slower than equivalent
 programs in Rust or C, or even mawk or gawk. In some cases this will be due to
@@ -22,9 +22,13 @@ larger files are usually in CSV, TSV, or some similar standardized format).
 
 ## Benchmark Setup
 
-All benchmark numbers report the minimum wall time across 5 iterations. None of
-these utilities make a noticeable use of multi-core parallelism in single
-invocations.
+All benchmark numbers report the minimum wall time across 5 iterations, along
+with the composite system and user times for that invocation as reported by the
+`time` command.
+
+In benchmarks that are embarrassingly parallel, this doc includes measurements
+for both parallel and serial invocations of frawk. The parallel invocations
+launch 4 workers.
 
 ### Test Data
 These benchmarks run on CSV and TSV versions of two data-sets:
@@ -99,7 +103,7 @@ complex expressions as well. Suppose I wanted to take the scaled, weighted sum
 of the first column, and the maximum of column 4 and column 5, when column 8 had
 a particular value. In Awk this is a pretty simple script:
 
-```
+```awk
 function max(x,y) { return x<y?y:x; }
 "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 }
 END { print accum; }
@@ -113,7 +117,7 @@ END { print accum; }
 But I have to preprocess the data to run Awk on it, as Awk doesn't properly
 support quoted CSV fields by default. Supposing I didn't want to do that, the
 next thing I'd reach for is a short script in Python:
-```
+```python
 import csv
 import sys
 
@@ -139,7 +143,7 @@ the script in Rust instead rather than spending time trying to optimize the
 Python.  Here's one I came up with quickly using the
 [`csv`](https://github.com/BurntSushi/rust-csv) crate:
 
-```
+```rust
 extern crate csv;
 
 use std::fs::File;
@@ -187,14 +191,16 @@ program.
 
 | Program | Running Time (TREE_GRM_ESTN.csv) |
 | -- | -- |
-| Python | 2m47.6s |
-| Rust | 28.2s |
-| frawk | 19.4s |
+| Python | 2m47.3s (2m45.9s + 1.4s)|
+| Rust | 28.8s (27.7s + 1.1s) |
+| frawk | 19.6s (18.4s + 1.1s) |
+| frawk (parallel) | 4.8s (22.6s + 1.2s) |
 
-frawk is a good deal faster than the other options. Now, the Rust script could
-of course be optimized substantially (frawk is implemented in Rust, after all).
-But if you need to do exploratory, ad-hoc computations like this, a frawk script
-is probably going to be faster than the first few Rust programs you write.
+frawk is a good deal faster than the other options, particularly when run in
+parallel. Now, the Rust script could of course be optimized substantially (frawk
+is implemented in Rust, after all).  But if you need to do exploratory, ad-hoc
+computations like this, a frawk script is probably going to be faster than the
+first few Rust programs you write.
 
 With that said, for many tasks you do not need a full programming language,
 and there are purpose-built tools for computing the particular value or
@@ -213,18 +219,21 @@ Awk was only run on the TSV version of TREE_GRM_ESTN, as it has quote-escaped
 columns, tsv-utils was only run on TSV versions of both files, and xsv was not
 included because there is no way to persuade it to _just_ compute a sum.
 
-As can be seen below, frawk was slower than tsv-utils at this task but faster
-than mawk and gawk:
+As can be seen below, frawk in parallel mode was the fastest utility in terms of
+wall-time, and on a per-core basis frawk was faster than mawk and gawk but
+slower than tsv-utils.
 
 | Program | Format | Running Time (TREE_GRM_ESTN) | Running Time (all_train) |
 | -- | -- | -- | -- |
-| mawk | TSV | 42.5s | 10.9s |
-| mawk | CSV | NA | 10.9s |
-| gawk | TSV | 25.8s | 24.1s |
-| gawk | CSV | NA | 25.8s |
-| tsv-utils | TSV | 6.0s | 2.7s |
-| frawk | TSV | 14.1s | 7.3s |
-| frawk | CSV | 17.2s | 7.5s |
+| mawk | TSV | 42.5s (41.0s + 1.5s) | 10.9s (9.9s + 1.1s) |
+| mawk | CSV | NA | 11.0s (10.0s + 1.1s) |
+| gawk | TSV | 24.0s (22.7s + 1.3s) | 25.9s (25.0s + 0.9s) |
+| gawk | CSV | NA | 25.8s (24.9s + 0.9s) |
+| tsv-utils | TSV | 5.9s (5.3s + 0.6s) | 2.6s (2.2s + 0.4s) |
+| frawk | TSV | 13.8s (12.8s + 1.0s) | 7.5s (6.8s + 0.7s) |
+| frawk | CSV | 17.3s (16.2s + 1.1s) | 7.6s (7.0s + 0.7s) |
+| frawk (parallel) | TSV | 3.5s (16.5s + 1.1s) | 1.8s (8.2s + 0.7s) |
+| frawk (parallel) | CSV | 4.8s (22.6s + 1.3s) | 2.0s (9.0s + 0.7s) |
 
 
 ## Statistics
@@ -237,7 +246,7 @@ using the `icsv` and `itsv` options. This benchmark is meant to mirror `xsv`'s
 `summarize` command. The xsv invocation is `xsv summarize -s5,6 [-d\t]`. The
 Awk program is more involved:
 
-```
+```awk
 function min(x,y) { return x<y?x:y; }
 function max(x,y) { return x<y?y:x; }
 function step_sum(x) { SUM += x; }
@@ -286,13 +295,12 @@ other benchmark programs:
 
 | Program | Format | Running Time |
 | -- | -- | -- |
-| mawk | TSV | 1m13.5s |
-| gawk | TSV | 1m34.9s |
-| xsv | TSV | 32.9s |
-| xsv | CSV | 34.4s |
-| frawk | TSV | 16.9s |
-| frawk | CSV | 20.1s |
-
+| mawk | TSV | 1m14.1s (1m12.5s + 1.6s) |
+| gawk | TSV | 1m36.3s (1m34.8s + 1.5s) |
+| xsv | TSV | 33.4s (32.4s + 1.0s) |
+| xsv | CSV | 35.3s (34.2s + 1.1s) |
+| frawk | TSV | 15.8s (14.8s + 1.0s) |
+| frawk | CSV | 19.4s (18.3s + 1.1s) |
 
 ## Select
 _Select 3 fields from the all_train dataset._
@@ -306,20 +314,29 @@ The xsv invocation looks like `xsv select [-d'\t'] 1,8,19`, and the tsv-utils
 invocation is `tsv-select -f1,8,19`. All output is written to `/dev/null`, so
 all times surely underestimate the true running time of such an operation.
 
-As with the sum task explored above, frawk performs this task slower than
-tsv-utils and faster than the other benchmark programs: 
+> Note: We report parallel numbers for frawk here, but running the `select`
+> script in parallel mode does not preserve the original ordering of the rows in
+> the input file. While the ordering of some data-sets are not meaningful, the
+> comparison is not apples-to-apples.
+
+frawk performs this task slower than tsv-utils and faster than the other
+benchmark programs. While the gap between frawk in parallel mode and tsv-utils
+is probably in the noise, tsv-utils unquestionably performs better per core than
+frawk, while preserving the input's row ordering.
 
 | Program | Format | Running Time |
 | -- | -- | -- |
-| mawk | TSV | 8.4s |
-| mawk | CSV | 8.5s |
-| gawk | TSV | 24.2s |
-| gawk | CSV | 24.1s |
-| xsv | TSV | 5.3s |
-| xsv | CSV | 5.3s |
-| tsv-utils | TSV | 1.9s |
-| frawk | TSV | 3.6s |
-| frawk | CSV | 3.8s |
+| mawk | TSV | 8.5s (7.5s + 1.0s) |
+| mawk | CSV | 8.6s (7.5s + 1.0s) |
+| gawk | TSV | 24.3s (23.4s + 0.9s) |
+| gawk | CSV | 24.3s (23.4s + 0.9s) |
+| xsv | TSV | 5.4s (4.8s + 0.6s) |
+| xsv | CSV | 5.6s (4.9s + 0.7s) |
+| tsv-utils | TSV | 2.0s (1.6s + 0.5s)  |
+| frawk | TSV | 3.8s (3.9s + 0.9s) |
+| frawk | CSV | 3.9s (4.0s + 0.9s) |
+| frawk (parallel) | TSV | 2.1s (10.1s + 1.1s) |
+| frawk (parallel) | CSV | 2.3s (11.0s + 1.1s) |
 
 ## Filter
 _Print out all records from the `all_train` dataset matching a simple numeric
@@ -332,17 +349,26 @@ options. The tsv-utils invocation is `tsv-filter -H --gt 4:0.000025 --gt 16:0.3
 ./all_train.tsv` (taken from the same benchmark on the tsv-utils repo).  xsv
 does not support numeric filters, so it was omitted from this benchmark.
 
-Again, frawk is slower than tsv-utils and faster than everything else:
+> Note: We report parallel numbers for frawk here, but the same caveat
+> highlighted in the `select` benchmark holds here. The comparison is not
+> apples-to-apples because frawk will not preserve the input's ordering of the
+> rows when run in parallel mode.
+
+Again, frawk is slower than tsv-utils and faster than everything else when
+running serially. In parallel, frawk is slightly faster than tsv-utils in terms
+of wall time.
 
 | Program | Format | Running Time |
 | -- | -- | -- |
-| mawk | TSV | 10.1s |
-| mawk | CSV | 10.2s |
-| gawk | TSV | 17.5s |
-| gawk | CSV | 17.2s |
-| tsv-utils | TSV | 2.4s |
-| frawk | TSV | 6.6s |
-| frawk | CSV | 7.0s |
+| mawk | TSV | 10.3s (9.2s + 1.1s) |
+| mawk | CSV | 10.4s (9.2s + 1.1s) |
+| gawk | TSV | 17.0s (16.2s + 0.9s) |
+| gawk | CSV | 17.1s (16.2s + 0.9s) |
+| tsv-utils | TSV | 2.4s (1.9s + 0.4s) |
+| frawk | TSV | 6.9s (7.5s + 1.0s) |
+| frawk | CSV | 7.1s (7.7s + 1.0s) |
+| frawk (parallel) | TSV | 2.4s (12.0s + 1.2s) |
+| frawk (parallel) | CSV | 2.2s (10.8s + 1.1s) |
 
 ## Group By Key
 _Print the mean of field 2 grouped by the value in field 6 for TREE_GRM_ESTN_
@@ -359,13 +385,16 @@ END {
 }
 ```
 
-Again, the faster tsv-utils serves as a useful comparison, while frawk
-outperforms the remaining benchmark programs.
+Once again, tsv-utils is substantially faster than a single-threaded frawk, but
+is slower than frawk in parallel mode. frawk, in either configuration, is faster
+at this task than mawk or gawk.
 
 | Program | Format | Running Time |
 | -- | -- | -- |
-| mawk | TSV | 43.8s |
-| gawk | TSV | 29.1s |
-| tsv-utils | TSV| 4.9s |
-| frawk | TSV | 16.8s |
-| frawk | CSV | 19.4s |
+| mawk | TSV | 43.5s (42.0s + 1.5s) |
+| gawk | TSV | 28.8s (27.5s + 1.3s) |
+| tsv-utils | TSV| 4.9s (4.2s + 0.6s) |
+| frawk | TSV | 16.4s (15.4s + 1.0s) |
+| frawk | CSV | 19.4s (18.3s + 1.1s) |
+| frawk (parallel) | TSV | 3.8s (17.6s + 1.1s) |
+| frawk (parallel) | CSV | 4.9s (23.3s + 1.2s) |
