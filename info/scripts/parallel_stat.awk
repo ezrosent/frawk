@@ -5,7 +5,7 @@ BEGIN {
     getline;
     h2 = $5; h1 = $6;
 }
-{ 
+{
     # f2 is numeric, f1 is a string
     f2=$5+0; f2Len = length($5);
     f1=$6; f1Len = length($6);
@@ -20,7 +20,7 @@ BEGIN {
         max2L = max(max2L, f2Len)
     } else {
         min1=max1=f1;
-        min2=max2=f2; 
+        min2=max2=f2;
         min1L=max1L=f1Len;
         min2L=max2L=f2Len;
     }
@@ -43,7 +43,7 @@ PREPARE {
     sums[PID] = SUM
     m2s[PID] = Q
 
-    if (!(PID == 1)) {
+    if (PID != 1) {
         min1 = min2 = min1L = min2L = max1 = max2 = max1L = max2L = 0;
     }
 }
@@ -70,7 +70,7 @@ END {
             ma = (sa + sb) / (na + nb)
             sa += sums[k]
             m2a = m2a + m2s[k] + (delta*delta) * ((na*nb)/(na+nb))
-            na += nb           
+            na += nb
         }
 
     }

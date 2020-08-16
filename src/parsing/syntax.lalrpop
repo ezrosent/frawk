@@ -259,6 +259,7 @@ PrecCmp: &'a Expr<'a,'a,&'a str> = {
     <l: PrecAdd> ">" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::GT, l, r)),
     <l: PrecAdd> ">=" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::GTE, l, r)),
     <l: PrecAdd> "==" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::EQ, l, r)),
+    <l: PrecAdd> "!=" <r: PrecCmp> => arena.alloc_v(Expr::Unop(Unop::Not, arena.alloc_v(Expr::Binop(Binop::EQ, l, r)))),
     PrecAdd
 }
 
@@ -388,6 +389,7 @@ extern {
       "~" =>  Tok::Match,
       "!~" =>  Tok::NotMatch,
       "==" =>  Tok::EQ,
+      "!=" =>  Tok::NEQ,
       "<" =>  Tok::LT,
       "<=" =>  Tok::LTE,
       ">" =>  Tok::GT,
