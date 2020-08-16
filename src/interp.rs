@@ -133,7 +133,7 @@ pub fn combine_slot<T: Default>(vec: &mut Vec<T>, slot: usize, f: impl FnOnce(T)
 }
 
 impl<'a> Core<'a> {
-    pub fn shuttle(&self) -> impl FnOnce() -> Core<'a> + Send {
+    pub fn shuttle(&self, pid: Int) -> impl FnOnce() -> Core<'a> + Send {
         use crate::builtins::Variables;
         let seed: u64 = rand::thread_rng().gen();
         let fw = self.write_files.clone();
@@ -149,6 +149,7 @@ impl<'a> Core<'a> {
                 ors: ors.into_str(),
                 rs: rs.into_str(),
                 filename: filename.into_str(),
+                pid,
                 nf: 0,
                 nr: 0,
                 fnr: 0,
@@ -452,9 +453,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             let maps_str_str_size = self.maps_str_str.regs.len();
             let iters_int_size = self.iters_int.regs.len();
             let iters_str_size = self.iters_str.regs.len();
-            for handle in handles.into_iter() {
+            for (i, handle) in handles.into_iter().enumerate() {
                 let sender = sender.clone();
-                let core_shuttle = self.core.shuttle();
+                let core_shuttle = self.core.shuttle(i as Int + 2);
                 let instrs = self.instrs.clone();
                 s.spawn(move |_| {
                     let inner = || {
@@ -488,7 +489,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 });
             }
             mem::drop(sender);
+            self.core.vars.pid = 1;
             self.run_at(main_loop)?;
+            self.core.vars.pid = 0;
             while let Ok(res) = receiver.recv() {
                 self.core.combine(res?);
             }

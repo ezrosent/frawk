@@ -35,8 +35,8 @@ allow_avx2 = []
 
 [profile.release]
 lto = "fat"
-debug = true
-# codegen-units=1
+# debug = true
+# codegen-units = 1
 
 [build-dependencies]
 lalrpop = "0.17.2"
