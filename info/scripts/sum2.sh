@@ -2,14 +2,14 @@
 
 MAWK=mawk
 GAWK=gawk
-TSV_UTILS_BIN=./bin
+TSV_UTILS_BIN=../bin
 XSV=xsv
 FRAWK=frawk
 
-CSV1=./all_train.csv
-CSV2=./TREE_GRM_ESTN.csv
-TSV1=./all_train.tsv
-TSV2=./TREE_GRM_ESTN.tsv
+CSV1=../all_train.csv
+CSV2=../TREE_GRM_ESTN.csv
+TSV1=../all_train.tsv
+TSV2=../TREE_GRM_ESTN.tsv
 
 for i in {1..5}; do
 	set -x
@@ -32,6 +32,12 @@ for i in {1..5}; do
 	time $FRAWK -icsv '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${CSV2}
 	time $FRAWK -itsv '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
 	time $FRAWK -itsv '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
+
+	time $FRAWK -icsv -pr -j4 '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${CSV1}
+	time $FRAWK -icsv -pr -j4 '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${CSV2}
+	time $FRAWK -itsv -pr -j4 '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
+	time $FRAWK -itsv -pr -j4 '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
+
 	set +x
 done
 

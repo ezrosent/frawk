@@ -328,9 +328,9 @@ fn main() {
         },
         None => exec_strategy.num_workers(),
     };
-    let mut input_files: Vec<&str> = matches
+    let mut input_files: Vec<String> = matches
         .values_of("input-files")
-        .map(|x| x.collect())
+        .map(|x| x.map(String::from).collect())
         .unwrap_or_else(Vec::new);
     let program_string = {
         if let Some(pfile) = matches.value_of("program-file") {
@@ -339,7 +339,7 @@ fn main() {
                     // We specified a file on the command line, so the "program" will be
                     // interpreted as another input file.
                     if let Some(p) = matches.value_of("program") {
-                        input_files.push(p);
+                        input_files.push(p.into());
                     }
                     p
                 }
@@ -410,11 +410,6 @@ fn main() {
     if skip_output {
         return;
     }
-
-    let input_files = matches
-        .values_of("input-files")
-        .map(|x| x.map(String::from).collect())
-        .unwrap_or_else(Vec::new);
 
     // This horrid macro is here because all of the different ways of reading input are different
     // types, making functions hard to write. Still, there must be something to be done to clean

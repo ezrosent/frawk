@@ -4,12 +4,14 @@ PYTHON="python3 ./complex_sum.py"
 FRAWK=frawk
 
 CSV=../TREE_GRM_ESTN.csv
+FRAWK_SCRIPT='function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }'
 
 for i in {1..5}; do
 	set -x
 	time $RUST "$CSV"
 	time $PYTHON "$CSV"
-	time $FRAWK -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' "$CSV"
+	time $FRAWK -icsv  "$FRAWK_SCRIPT" "$CSV"
+	time $FRAWK -icsv -pr -j4 "$FRAWK_SCRIPT" "$CSV"
 	set +x
 done
 

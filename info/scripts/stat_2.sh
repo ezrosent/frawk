@@ -1,14 +1,14 @@
 # Compute the statistics computed by XSV on a string column and numeric column
 MAWK=mawk
 GAWK=gawk
-TSV_UTILS_BIN=./bin
+TSV_UTILS_BIN=../bin
 XSV=xsv
 FRAWK=frawk
 
-CSV1=./all_train.csv
-CSV2=./TREE_GRM_ESTN.csv
-TSV1=./all_train.tsv
-TSV2=./TREE_GRM_ESTN.tsv
+CSV1=../all_train.csv
+CSV2=../TREE_GRM_ESTN.csv
+TSV1=../all_train.tsv
+TSV2=../TREE_GRM_ESTN.tsv
 
 AWK_SCRIPT='function min(x,y) { return x<y?x:y; }
 function max(x,y) { return x<y?y:x; }
