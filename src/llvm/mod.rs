@@ -371,7 +371,14 @@ impl<'a, 'b> Generator<'a, 'b> {
                     let (sender, receiver) = bounded(reads.len());
                     let launch_data: Vec<_> = reads
                         .into_iter()
-                        .map(|reader| (reader, sender.clone(), rt.core.shuttle()))
+                        .enumerate()
+                        .map(|(i, reader)| {
+                            (
+                                reader,
+                                sender.clone(),
+                                rt.core.shuttle(i as runtime::Int + 2),
+                            )
+                        })
                         .collect();
                     if let Some((begin_name, _)) = begin {
                         self.run_function(&mut rt, begin_name);
@@ -394,7 +401,9 @@ impl<'a, 'b> Generator<'a, 'b> {
                                     sender.send(runtime.core.extract_result()).unwrap();
                                 });
                             }
+                            rt.core.vars.pid = 1;
                             main_func(&mut rt as *mut _ as *mut libc::c_void);
+                            rt.core.vars.pid = 0;
                             mem::drop(sender);
                             with_input!(&mut rt.input_data, |(_, read_files)| {
                                 while let Ok(res) = receiver.recv() {

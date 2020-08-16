@@ -370,9 +370,11 @@ impl Function {
             }
             Rand | Binop(Div) | Binop(Pow) => Ok(Scalar(BaseTy::Float).abs()),
             Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
-            SubstrIndex | Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT) | Binop(GT) | Binop(LTE)
-            | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr | ReadErrStdin | Contains
-            | Delete | Match | Sub | GSub | ToInt | HexToInt => Ok(Scalar(BaseTy::Int).abs()),
+            SubstrIndex | Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT)
+            | Binop(GT) | Binop(LTE) | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr
+            | ReadErrStdin | Contains | Delete | Match | Sub | GSub | ToInt | HexToInt => {
+                Ok(Scalar(BaseTy::Int).abs())
+            }
             JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column)
             | Binop(Concat) | Nextline | NextlineStdin => Ok(Scalar(BaseTy::Str).abs()),
             NextFile | ReadLineStdinFused | Close => Ok(None),
@@ -394,6 +396,7 @@ pub(crate) enum Variable {
     RLENGTH = 9,
     ORS = 10,
     FNR = 11,
+    PID = 12,
 }
 
 impl From<Variable> for compile::Ty {
@@ -401,7 +404,7 @@ impl From<Variable> for compile::Ty {
         use Variable::*;
         match v {
             FS | OFS | ORS | RS | FILENAME => compile::Ty::Str,
-            ARGC | NF | NR | FNR | RSTART | RLENGTH => compile::Ty::Int,
+            PID | ARGC | NF | NR | FNR | RSTART | RLENGTH => compile::Ty::Int,
             ARGV => compile::Ty::MapIntStr,
         }
     }
@@ -420,6 +423,7 @@ pub(crate) struct Variables<'a> {
     pub filename: Str<'a>,
     pub rstart: Int,
     pub rlength: Int,
+    pub pid: Int,
 }
 
 impl<'a> Default for Variables<'a> {
@@ -436,6 +440,7 @@ impl<'a> Default for Variables<'a> {
             nf: 0,
             filename: Default::default(),
             rstart: 0,
+            pid: 0,
             rlength: -1,
         }
     }
@@ -450,6 +455,7 @@ impl<'a> Variables<'a> {
             FNR => self.fnr,
             RSTART => self.rstart,
             RLENGTH => self.rlength,
+            PID => self.pid,
             ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
         })
     }
@@ -463,6 +469,7 @@ impl<'a> Variables<'a> {
             FNR => self.fnr = i,
             RSTART => self.rstart = i,
             RLENGTH => self.rlength = i,
+            PID => self.pid = i,
             ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
         })
     }
@@ -475,7 +482,7 @@ impl<'a> Variables<'a> {
             ORS => self.ors.clone(),
             RS => self.rs.clone(),
             FILENAME => self.filename.clone(),
-            ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+            PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
                 return err!("var {} not a string", var)
             }
         })
@@ -489,7 +496,7 @@ impl<'a> Variables<'a> {
             ORS => self.ors = s,
             RS => self.rs = s,
             FILENAME => self.filename = s,
-            ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+            PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
                 return err!("var {} not a string", var)
             }
         })
@@ -499,7 +506,7 @@ impl<'a> Variables<'a> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv.clone()),
-            ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
+            PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
                 err!("var {} is not a map", var)
             }
         }
@@ -509,7 +516,7 @@ impl<'a> Variables<'a> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv = m),
-            ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
+            PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
                 err!("var {} is not a map", var)
             }
         }
@@ -519,7 +526,9 @@ impl Variable {
     pub(crate) fn ty(&self) -> types::TVar<types::BaseTy> {
         use Variable::*;
         match self {
-            ARGC | NF | FNR | NR | RSTART | RLENGTH => types::TVar::Scalar(types::BaseTy::Int),
+            PID | ARGC | NF | FNR | NR | RSTART | RLENGTH => {
+                types::TVar::Scalar(types::BaseTy::Int)
+            }
             // TODO(ezr): For full compliance, this may have to be Str -> Str
             //  If we had
             //  m["x"] = 1;
@@ -578,6 +587,7 @@ impl<'a> TryFrom<usize> for Variable {
             9 => Ok(RLENGTH),
             10 => Ok(ORS),
             11 => Ok(FNR),
+            12 => Ok(PID),
             _ => Err(()),
         }
     }
@@ -596,5 +606,6 @@ static_map!(
     ["FNR", Variable::FNR],
     ["FILENAME", Variable::FILENAME],
     ["RSTART", Variable::RSTART],
-    ["RLENGTH", Variable::RLENGTH]
+    ["RLENGTH", Variable::RLENGTH],
+    ["PID", Variable::PID]
 );

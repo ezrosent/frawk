@@ -175,6 +175,7 @@ impl Display for Variable {
                 FILENAME => "FILENAME",
                 RSTART => "RSTART",
                 RLENGTH => "RLENGTH",
+                PID => "PID",
             }
         )
     }
