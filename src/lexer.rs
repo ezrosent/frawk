@@ -12,6 +12,7 @@ pub type Spanned<T> = (usize, T, usize);
 #[derive(Debug, PartialEq, Clone)]
 pub enum Tok<'a> {
     Begin,
+    Prepare,
     End,
     Break,
     Continue,
@@ -92,6 +93,7 @@ pub enum Tok<'a> {
 
 static_map!(
     KEYWORDS<&'static str, Tok<'static>>,
+    ["PREPARE", Tok::Prepare],
     ["BEGIN", Tok::Begin],
     ["END", Tok::End],
     ["break", Tok::Break],
