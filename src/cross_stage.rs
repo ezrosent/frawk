@@ -55,11 +55,13 @@ fn compute_par(
     loop_refs: &HashSet<(NumTy, Ty)>,
     end_refs: &HashSet<(NumTy, Ty)>,
 ) -> SlotOps {
-    let res = SlotOps {
-        begin_stores: begin_refs.intersection(loop_refs).cloned().collect(),
-        loop_stores: loop_refs.intersection(end_refs).cloned().collect(),
-    };
-    res
+    let begin_loop = begin_refs.intersection(loop_refs);
+    let loop_end = loop_refs.intersection(end_refs);
+    let begin_end = || begin_refs.intersection(end_refs);
+    SlotOps {
+        begin_stores: begin_loop.chain(begin_end()).cloned().collect(),
+        loop_stores: loop_end.chain(begin_end()).cloned().collect(),
+    }
 }
 
 /// Called from compile::Typer::add_slots().

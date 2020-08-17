@@ -202,7 +202,9 @@ macro_rules! err {
 macro_rules! eprintln_ignore {
     ($($t:tt)*) => {{
         use std::io::Write;
-        let _ = writeln!(&mut std::io::stderr(), $($t)*);
+        let mut err = std::io::stderr();
+        let _ = writeln!(&mut err, $($t)*);
+        let _ = err.flush();
         ()
     }};
 }

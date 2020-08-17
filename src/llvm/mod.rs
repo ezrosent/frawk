@@ -361,13 +361,19 @@ impl<'a, 'b> Generator<'a, 'b> {
                         }
                         return Ok(());
                     }
-                    std::panic::set_hook(Box::new(|pi| {
-                        if let Some(s) = pi.payload().downcast_ref::<&str>() {
-                            if s.len() > 0 {
-                                eprintln_ignore!("{}", s);
+                    #[cfg(not(debug_assertions))]
+                    {
+                        std::panic::set_hook(Box::new(|pi| {
+                            if let Some(s) = pi.payload().downcast_ref::<&str>() {
+                                if s.len() > 0 {
+                                    eprintln_ignore!("{}", s);
+                                }
                             }
-                        }
-                    }));
+                        }));
+                    }
+                    if let Some((begin_name, _)) = begin {
+                        self.run_function(&mut rt, begin_name);
+                    }
                     let (sender, receiver) = bounded(reads.len());
                     let launch_data: Vec<_> = reads
                         .into_iter()
@@ -380,9 +386,6 @@ impl<'a, 'b> Generator<'a, 'b> {
                             )
                         })
                         .collect();
-                    if let Some((begin_name, _)) = begin {
-                        self.run_function(&mut rt, begin_name);
-                    }
                     with_input!(&mut rt.input_data, |(_, read_files)| {
                         let old_read_files =
                             mem::replace(&mut read_files.files, Default::default());
