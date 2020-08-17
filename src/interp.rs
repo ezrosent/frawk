@@ -32,7 +32,7 @@ pub(crate) struct Core<'a> {
     pub slots: Slots,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Slots {
     pub int: Vec<Int>,
     pub float: Vec<Float>,
@@ -60,10 +60,9 @@ impl Agg for Float {
     }
 }
 impl<'a> Agg for UniqueStr<'a> {
-    fn agg(self, other: UniqueStr<'a>) -> UniqueStr<'a> {
-        let slf = self.into_str();
-        let otr = other.into_str();
-        UniqueStr::from(Str::concat(slf, otr))
+    fn agg(self, _: UniqueStr<'a>) -> UniqueStr<'a> {
+        // Strings are not aggregated explicitly.
+        self
     }
 }
 impl<K: std::hash::Hash + Eq, V: Agg + Default> Agg for HashMap<K, V> {
@@ -142,6 +141,7 @@ impl<'a> Core<'a> {
         let rs: UniqueStr<'a> = self.vars.rs.clone().into();
         let ors: UniqueStr<'a> = self.vars.ors.clone().into();
         let filename: UniqueStr<'a> = self.vars.filename.clone().into();
+        let slots = self.slots.clone();
         move || {
             let vars = Variables {
                 fs: fs.into_str(),
@@ -164,7 +164,7 @@ impl<'a> Core<'a> {
                 write_files: fw,
                 rng: rand::rngs::StdRng::seed_from_u64(seed),
                 current_seed: seed,
-                slots: Default::default(),
+                slots,
             }
         }
     }

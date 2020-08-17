@@ -1154,6 +1154,7 @@ macro_rules! convert_out {
         mem::transmute::<_, *mut c_void>(map)
     }};
 }
+
 macro_rules! map_impl_inner {
     ($alloc:ident, $iter:ident, $lookup:ident, $len:ident,
      $insert:ident, $delete:ident, $contains:ident, $drop:ident, $k:tt, $v:tt) => {
