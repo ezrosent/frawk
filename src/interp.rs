@@ -60,9 +60,9 @@ impl Agg for Float {
     }
 }
 impl<'a> Agg for UniqueStr<'a> {
-    fn agg(self, _: UniqueStr<'a>) -> UniqueStr<'a> {
+    fn agg(self, other: UniqueStr<'a>) -> UniqueStr<'a> {
         // Strings are not aggregated explicitly.
-        self
+        other
     }
 }
 impl<K: std::hash::Hash + Eq, V: Agg + Default> Agg for HashMap<K, V> {
