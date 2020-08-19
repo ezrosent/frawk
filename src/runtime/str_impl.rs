@@ -307,6 +307,9 @@ impl<'a> UniqueStr<'a> {
     pub fn into_str(self) -> Str<'a> {
         self.0
     }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
     pub fn clone_str(&self) -> Str<'a> {
         let rep = unsafe { self.0.rep_mut() };
         match rep.get_tag() {

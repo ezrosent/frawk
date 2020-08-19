@@ -62,7 +62,11 @@ impl Agg for Float {
 impl<'a> Agg for UniqueStr<'a> {
     fn agg(self, other: UniqueStr<'a>) -> UniqueStr<'a> {
         // Strings are not aggregated explicitly.
-        other
+        if other.is_empty() {
+            self
+        } else {
+            other
+        }
     }
 }
 impl<K: std::hash::Hash + Eq, V: Agg + Default> Agg for HashMap<K, V> {
@@ -85,7 +89,6 @@ pub(crate) struct StageResult {
 }
 
 impl Slots {
-    // TODO: Concatenation of UniqueStr could be faster if we implemented N-way combine.
     fn combine(&mut self, mut other: Slots) {
         macro_rules! for_each_slot_pair {
             ($s1:ident, $s2:ident, $body:expr) => {

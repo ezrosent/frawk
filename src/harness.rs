@@ -54,13 +54,9 @@ where
 fn simulate_stdin_csv(
     ifmt: InputFormat,
     inp: impl Into<String>,
+    strat: ExecutionStrategy,
 ) -> impl llvm::IntoRuntime + runtime::LineReader {
-    CSVReader::new(
-        split_stdin(inp.into()),
-        ifmt,
-        runtime::CHUNK_SIZE,
-        ExecutionStrategy::Serial,
-    )
+    CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, strat)
 }
 
 fn simulate_stdin_regex(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtime::LineReader {
@@ -150,21 +146,22 @@ pub(crate) fn run_program<'a>(
     stdin: impl Into<String>,
     esc: Escaper,
     ifmt: Option<InputFormat>,
+    strat: ExecutionStrategy,
 ) -> ProgResult<'a> {
-    let stmt = parse_program(prog, a, esc)?;
-    run_prog(a, stmt, stdin, esc, ifmt)
+    let stmt = parse_program(prog, a, esc, strat)?;
+    run_prog(a, stmt, stdin, esc, ifmt, strat)
 }
 
 pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
     let a = Arena::default();
-    let stmt = parse_program(prog, &a, esc)?;
+    let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     compile::dump_llvm(&mut ctx, LLVM_CONFIG)
 }
 
 pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
     let a = Arena::default();
-    let stmt = parse_program(prog, &a, esc)?;
+    let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     compile::compile_llvm(&mut ctx, LLVM_CONFIG)
 }
@@ -177,9 +174,10 @@ pub(crate) fn run_llvm(
     stdin: impl Into<String>,
     esc: Escaper,
     ifmt: Option<InputFormat>,
+    strat: ExecutionStrategy,
 ) -> Result<String> {
     let a = Arena::default();
-    let stmt = parse_program(prog, &a, esc)?;
+    let stmt = parse_program(prog, &a, esc, strat)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     let sep_analysis = ctx.analyze_sep_assignments();
     if _PRINT_DEBUG_INFO {
@@ -191,9 +189,12 @@ pub(crate) fn run_llvm(
     if let Some(ifmt) = ifmt {
         compile::run_llvm(
             &mut ctx,
-            simulate_stdin_csv(ifmt, stdin),
+            simulate_stdin_csv(ifmt, stdin, strat),
             fake_fs.clone(),
-            LLVM_CONFIG,
+            llvm::Config {
+                opt_level: LLVM_CONFIG.opt_level,
+                num_workers: strat.num_workers(),
+            },
         )?;
     } else {
         with_reader!(sep_analysis, stdin, |reader| {
@@ -207,17 +208,22 @@ pub(crate) fn run_llvm(
     }
 }
 
-pub(crate) fn bench_program(prog: &str, stdin: impl Into<String>, esc: Escaper) -> Result<String> {
+pub(crate) fn bench_program(
+    prog: &str,
+    stdin: impl Into<String>,
+    esc: Escaper,
+    strat: ExecutionStrategy,
+) -> Result<String> {
     let a = Arena::default();
-    let stmt = parse_program(prog, &a, esc)?;
-    let (mut interp, stdout) = compile_program(&a, stmt, stdin, esc)?;
+    let stmt = parse_program(prog, &a, esc, strat)?;
+    let (mut interp, stdout) = compile_program(&a, stmt, stdin, esc, strat)?;
     run_prog_nodebug(&mut interp, stdout)
 }
 
 pub(crate) fn used_fields(prog: &str) -> Result<FieldSet> {
     let a = Arena::default();
     let esc = Escaper::Identity;
-    let stmt = parse_program(prog, &a, esc)?;
+    let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
     let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
     compile::used_fields(&mut ctx)
 }
@@ -226,12 +232,13 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     prog: &'inp str,
     a: &'a Arena<'outer>,
     esc: Escaper,
+    strat: ExecutionStrategy,
 ) -> Result<Prog<'a>> {
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = syntax::ProgParser::new();
-    match parser.parse(a, &mut buf, &ExecutionStrategy::Serial.stage(), lexer) {
+    match parser.parse(a, &mut buf, &strat.stage(), lexer) {
         Ok(mut program) => {
             match esc {
                 Escaper::CSV => program.output_sep = Some(","),
@@ -257,6 +264,7 @@ fn compile_program<'a, 'inp, 'outer>(
     prog: Prog<'a>,
     stdin: impl Into<String>,
     esc: Escaper,
+    strat: ExecutionStrategy,
 ) -> Result<(Interp<'a, impl runtime::LineReader>, FakeFs)> {
     let mut ctx = cfg::ProgramContext::from_prog(a, prog, esc)?;
     let fake_fs = FakeFs::default();
@@ -265,7 +273,7 @@ fn compile_program<'a, 'inp, 'outer>(
             &mut ctx,
             simulate_stdin_regex(stdin),
             fake_fs.clone(),
-            ExecutionStrategy::Serial.num_workers(),
+            strat.num_workers(),
         )?,
         fake_fs,
     ))
@@ -289,6 +297,7 @@ pub(crate) fn run_prog<'a>(
     stdin: impl Into<String>,
     esc: Escaper,
     ifmt: Option<InputFormat>,
+    strat: ExecutionStrategy,
 ) -> ProgResult<'a> {
     let mut ctx = cfg::ProgramContext::from_prog(arena, prog, esc)?;
     // NB the invert_ident machinery only works for global identifiers. We could get it to work in
@@ -314,9 +323,9 @@ pub(crate) fn run_prog<'a>(
                 if let Some(ifmt) = ifmt {
                     let mut $interp = compile::bytecode(
                         &mut ctx,
-                        simulate_stdin_csv(ifmt, stdin),
+                        simulate_stdin_csv(ifmt, stdin, strat),
                         fake_fs.clone(),
-                        ExecutionStrategy::Serial.num_workers(),
+                        strat.num_workers(),
                     )?;
                     $body
                 } else {
@@ -324,7 +333,7 @@ pub(crate) fn run_prog<'a>(
                         &mut ctx,
                         simulate_stdin_regex(stdin),
                         fake_fs.clone(),
-                        ExecutionStrategy::Serial.num_workers(),
+                        strat.num_workers(),
                     )?;
                     $body
                 }
@@ -363,6 +372,53 @@ mod tests {
     use super::*;
     use test::{black_box, Bencher};
 
+    macro_rules! test_program_parallel {
+        ($desc:ident, $strat:tt, $e:expr, $in:expr, $out:expr) => {
+            mod $desc {
+                use super::*;
+
+                #[test]
+                fn bytecode() {
+                    let a = Arena::default();
+                    let out = run_program(
+                        &a,
+                        $e,
+                        $in,
+                        Escaper::Identity,
+                        Some(InputFormat::CSV),
+                        ExecutionStrategy::$strat,
+                    );
+                    match out {
+                        Ok((out, instrs, ts)) => {
+                            let expected = $out;
+                            assert_eq!(out, expected, "{}\nTypes:\n{:?}", instrs, ts);
+                        }
+                        Err(e) => panic!("failed to run program: {}", e),
+                    }
+                }
+
+                #[test]
+                fn llvm() {
+                    match run_llvm(
+                        $e,
+                        $in,
+                        Escaper::Identity,
+                        Some(InputFormat::CSV),
+                        ExecutionStrategy::$strat,
+                    ) {
+                        Ok(out) => assert_eq!(
+                            out,
+                            $out,
+                            "llvm=\n{}",
+                            dump_llvm($e, Escaper::Identity).expect("failed to dump llvm")
+                        ),
+                        Err(e) => panic!("{}", e),
+                    }
+                }
+            }
+        };
+    }
+
     // TODO our unprincipled way of parsing arguments for this macro is making it pretty unwieldy.
     macro_rules! test_program {
         ($desc:ident, $e:expr, $out:expr) => {
@@ -391,7 +447,7 @@ mod tests {
                 #[test]
                 fn bytecode() {
                     let a = Arena::default();
-                    let out = run_program(&a, $e, $inp, $esc, $csv);
+                    let out = run_program(&a, $e, $inp, $esc, $csv, ExecutionStrategy::Serial);
                     match out {
                         Ok((out, instrs, ts)) => {
                             let expected = $out;
@@ -414,7 +470,7 @@ mod tests {
                 }
                 #[test]
                 fn llvm() {
-                    match run_llvm($e, $inp, $esc, $csv) {
+                    match run_llvm($e, $inp, $esc, $csv, ExecutionStrategy::Serial) {
                         Ok(out) => assert_eq!(
                             out, $out,
                             "llvm=\n{}", dump_llvm($e, $esc).expect("failed to dump llvm")),
@@ -468,6 +524,15 @@ mod tests {
         s1.set(8);
         assert_eq!(s1, used_fields(p1).unwrap());
     }
+
+    test_program_parallel!(
+        parallel_aggs,
+        ShardPerFile,
+        r#"{ x += $1; y="hello"; m[1]++; p=PID;} END {print x, y, m[1], length(m), (p>0); }"#,
+        r#"1,2<<<FILE BREAK>>>3,4<<<FILE BREAK>>>5,6<<<FILE BREAK>>>7,8
+9,10"#,
+        "25.0 hello 5 1 1\n"
+    );
 
     test_program!(
         map_default_args,
@@ -1096,15 +1161,16 @@ this as well"#
                     #[bench]
                     fn end_to_end(b: &mut Bencher) {
                         b.iter(|| {
-                            black_box(bench_program($e, $inp, Escaper::Identity).unwrap());
+                            black_box(bench_program($e, $inp, Escaper::Identity, ExecutionStrategy::Serial).unwrap());
                         });
                     }
                     #[bench]
                     fn program_only(b: &mut Bencher) {
+                        let strat = ExecutionStrategy::Serial;
                         let a = Arena::default();
-                        let prog = parse_program($e, &a, Escaper::Identity).unwrap();
+                        let prog = parse_program($e, &a, Escaper::Identity, strat).unwrap();
                         let (mut interp, fake_fs) =
-                            compile_program(&a, prog, $inp, Escaper::Identity).unwrap();
+                            compile_program(&a, prog, $inp, Escaper::Identity, strat).unwrap();
                         b.iter(|| {
                             black_box(
                                 run_prog_nodebug(
@@ -1122,7 +1188,7 @@ this as well"#
                     #[bench]
                     fn end_to_end(b: &mut Bencher) {
                         b.iter(|| {
-                            black_box(run_llvm($e, $inp, Escaper::Identity, None).unwrap());
+                            black_box(run_llvm($e, $inp, Escaper::Identity, None, ExecutionStrategy::Serial).unwrap());
                         });
                     }
                     #[bench]
