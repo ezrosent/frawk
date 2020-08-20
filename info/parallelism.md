@@ -70,9 +70,9 @@ way, as well as comparisons to other tools performing the same task.
 ## The Meaning of Parallel frawk Programs
 
 frawk supports a limited notion of parallelism suitable for performing simple
-aggregations or transformations on textual data. The goal is frawk's parallelism
+aggregations or transformations on textual data. The goal of frawk's parallelism
 in its current form is to facilitate parallelizing frawk scripts that are
-_already_ embarrassingly parallel. While there are many possible directions to
+already embarrassingly parallel. While there are many possible directions to
 go from here, this strikes me as a modest but useful first step.
 
 Like Awk, frawk executes programs as a sequence of "patterns" and "actions."
@@ -82,14 +82,15 @@ the `BEGIN` and `END` patterns whose corresponding actions are executed before
 and after any input is read, respectively.
 
 > To be precise, Awk scripts that only have a `BEGIN` pattern never read any
-> input.
+> input outside of explicit `getline` calls.
 
-When frawk is passed the `pr` or `pf` command-line options, it is compiled in
-_parallel mode_. In this mode, the frawk program is broken into three "stages":
+When frawk is passed the `pr` or `pf` command-line options, it compiles the program
+in _parallel mode_. In this mode, the frawk program is broken into three "stages":
 
 1. The `BEGIN` block is executed by a single thread.
 2. The main loop (i.e. pattern/action pairs aside from `BEGIN` and `END`) is
-   executed independently in parallel by a configurable number of worker
+   executed independently in parallel by a configurable (via the `-j` flag) 
+   number of worker
    threads. Variables mentioned in both the `BEGIN` block and the main loop are
    copied to the worker threads.
 3. The `END` block is executed by a single thread after all worker threads
@@ -126,12 +127,12 @@ shall see you always have the option of performing the aggregation explicitly.
   pairs, with overlapping values being aggregated according to the corresponding
   scalar rule.
 
-This, among other things, means that simple aggregations like "sum"
+This, among other things, means that simple aggregations like sums:
 ```awk
 { SUM += $1 }
 END { print SUM }
 ```
-Or group-by:
+Or group-by's:
 ```awk
 { HIST[$1}++ }
 END {
@@ -163,9 +164,9 @@ END {
 
 This script is no longer correct if it is run in parallel. In parallel, the
 aggregation rules dictate that it will simply return _a_ maximum value observed
-by a particular worker thread. To aggregate explicitly, worker threads are
-provided with a `PID` control variable which takes on a positive integer value
-in a contiguous numeric range, with each thread receiving a unique `PID` value.
+by one of the worker threads. To aggregate explicitly, worker threads are
+provided with a `PID` variable which takes on a positive integer value
+consecutively counting up from 1, with each thread receiving a unique `PID`.
 This, combined with the implicit aggregation for maps, lets us write an
 _explicit_ max aggregation.
 
