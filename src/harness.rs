@@ -528,10 +528,22 @@ mod tests {
     test_program_parallel!(
         parallel_aggs,
         ShardPerFile,
-        r#"{ x += $1; y="hello"; m[1]++; p=PID;} END {print x, y, m[1], length(m), (p>0); }"#,
+        r#"BEGIN { y="hello"; }
+        { x += $1; y= y " there"; m[1]++; p=PID;}
+        PREPARE {
+            if (y == "hello") {
+                y = "hello there";
+            }
+            if (PID == 1) {
+                print "worker done";
+            }
+        }
+        END {
+            print x, y, m[1], length(m), (p>0);
+        }"#,
         r#"1,2<<<FILE BREAK>>>3,4<<<FILE BREAK>>>5,6<<<FILE BREAK>>>7,8
 9,10"#,
-        "25.0 hello 5 1 1\n"
+        "worker done\n25.0 hello there 5 1 1\n"
     );
 
     test_program!(
