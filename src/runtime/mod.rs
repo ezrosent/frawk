@@ -319,6 +319,9 @@ impl Default for FileWrite {
 }
 
 impl FileWrite {
+    pub(crate) fn flush_stdout(&mut self) -> Result<()> {
+        self.0.get_handle(None).flush()
+    }
     pub(crate) fn close(&mut self, path: &Str) -> Result<()> {
         self.0.get_handle(Some(path)).close()
     }

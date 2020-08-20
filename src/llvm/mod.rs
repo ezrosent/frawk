@@ -374,6 +374,9 @@ impl<'a, 'b> Generator<'a, 'b> {
                     if let Some((begin_name, _)) = begin {
                         self.run_function(&mut rt, begin_name);
                     }
+                    if let Err(_) = rt.core.write_files.flush_stdout() {
+                        return Ok(());
+                    }
                     let (sender, receiver) = bounded(reads.len());
                     let launch_data: Vec<_> = reads
                         .into_iter()

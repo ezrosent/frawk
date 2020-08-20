@@ -432,6 +432,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         if let Some(off) = begin {
             self.run_at(off)?;
         }
+        if let Err(_) = self.core.write_files.flush_stdout() {
+            return Ok(());
+        }
         // For handling the worker portion, we want to transfer the current stdin progress to a
         // worker thread, but to withold any progress on other files open for read. We'll swap
         // these back in when we execute the `end` block, if there is one.

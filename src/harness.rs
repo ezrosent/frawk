@@ -546,6 +546,17 @@ mod tests {
         "worker done\n25.0 hello there 5 1 1\n"
     );
 
+    test_program_parallel!(
+        header_first,
+        ShardPerFile,
+        r#"BEGIN { getline; print $1,$2; }
+        { x += $1;}
+        END { print x; }"#,
+        r#"1,2<<<FILE BREAK>>>3,4<<<FILE BREAK>>>5,6<<<FILE BREAK>>>7,8
+9,10"#,
+        "1 2\n24.0\n"
+    );
+
     test_program!(
         map_default_args,
         r#"
