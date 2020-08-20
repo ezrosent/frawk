@@ -13,6 +13,8 @@ The info subdirectory has more in-depth information on frawk:
   what frawk is all about, how it differs from Awk.
 * [Types](https://github.com/ezrosent/frawk/blob/master/info/types.md): A
   quick gloss on frawk's approach to types and type inference.
+* [Parallelism](https://github.com/ezrozent/frawk/blob/master/info/parallelism.md):
+  An overview of frawk's parallelism support.
 * [Benchmarks](https://github.com/ezrosent/frawk/blob/master/info/performance.md):
   A sense of the relative performance of frawk and other tools when processing
   large CSV or TSV files.
