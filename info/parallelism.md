@@ -1,21 +1,71 @@
 # Parallelism in frawk
 
 frawk provides a simple model allowing for many simple scripts to be run in
-parallel. Only a small amount of syntax was added to frawk to support parallel
-programming, but running a script in parallel can change the meaning of a
-script. The first portion of this document provides an overview of the semantics
-of a frawk script when it is run in parallel.
-
-One relatively aspect of frawk's implementation is that it can achieve
+parallel. One relatively aspect of frawk's implementation is that it can achieve
 nontrivial speedups even when the input is only a single input file or stream.
-The second part of this doc explains the architecture that frawk uses to read
-formats like CSV in a parallel-friendly manner.
+The first part of this doc explains the architecture that frawk uses to read
+formats like CSV in a parallel-friendly manner. Only a small amount of syntax
+was added to frawk to support parallel programming, but running a script in
+parallel can change the meaning of a script.The second portion provides an
+overview of the semantics of a frawk script when it is run in parallel.
 
 > Note: frawk only supports parallel execution for CSV, TSV, and scripts that
 > only use a unique, single-byte field separator and single-byte record
 > separator. In time, this limitation will be relaxed, but those formats are
 > unlikely to support the same level of performance with record-level
 > parallelism.
+
+## Reading Input In Parallel
+
+Why expand the language in this way in the first place? After all, existing
+tools like [GNU Parallel](https://www.gnu.org/software/parallel/) already
+provide a succinct means of performing shell commands in parallel. I have 2
+reasons for this, with reason 2 being more important than reason 1.
+
+1. While existing solutions are quite succinct, some simple aggregations can be
+   even easier to write in a single frawk program.
+2. While it is relatively straightforward to run a command in parallel across
+   multiple input files, existing tools have a hard time achieving parallelism
+   _within a single input file_.
+
+frawk supports a file-per-worker model of parallelism using the `-pf` option,
+but I think its support for record-level parallelism (under the `-pr` option) is
+more interesting.
+
+Consider the CSV format. Parallelizing CSV parsing is a difficult task because a
+parser must take a different action based on whether characters like commas
+occur inside a quoted field. Most
+[existing](https://github.com/BurntSushi/rust-csv/blob/master/csv-core/src/reader.rs)
+solutions I have come across construct a state machine that a parser steps
+through on a byte-by-byte basis.
+
+Recent approaches to parsing [JSON](https://arxiv.org/abs/1902.08318) and
+[CSV](https://github.com/geofflangdale/simdcsv) instead perform a first pass to
+write out a sequence locations of _structural characters_ within the input:
+Relevant structural characters in CSV are `,`s that are not inside a quoted
+field, `"` characters, `\n` and `\r\n` sequences. The remaining parsing task may
+still need to step through a state machine of some kind, but this state machine
+only executes once per structural character, not once per byte in the input.
+Because this first phase can be implemented _extremely_ cheaply using SIMD
+instructions, this approach achieves substantial end-to-end performance gains on
+recent CPUs.
+
+frawk implements this approach for scripts with CSV, TSV and
+single-byte-separator inputs. Not only does this approach provide high
+performance for all scripts that consume input in this form, the separation of
+parsing into two phases provides a great opportunity to parallelize the reading
+of a single CSV file. A single worker thread performs an initial pass on a chunk
+of input data to discover structural characters, it then locates a relevant
+record separator and sends that chunk off to a worker thread. That worker thread
+can then finish the parsing task at its own pace.
+
+This architecture doesn't scale perfectly --- I've seen diminishing marginal
+returns after 4-6 workers depending on the machine --- but it scales fast enough
+to process CSV files at >2GB/s on my laptop, which is much faster than I have
+been able to process CSV otherwise. The [performance
+doc](https://github.com/ezrosent/frawk/blob/master/info/performance.md) provides
+measurements of the speedups that different frawk scripts achieve when run this
+way, as well as comparisons to other tools performing the same task.
 
 ## The Meaning of Parallel frawk Programs
 
@@ -35,7 +85,7 @@ and after any input is read, respectively.
 > input.
 
 When frawk is passed the `pr` or `pf` command-line options, it is compiled in
-_parallel mode_. In this mode, the frawk program is broken into three stages:
+_parallel mode_. In this mode, the frawk program is broken into three "stages":
 
 1. The `BEGIN` block is executed by a single thread.
 2. The main loop (i.e. pattern/action pairs aside from `BEGIN` and `END`) is
@@ -59,7 +109,7 @@ script in parallel. A similar benchmark in the [performance
 doc](https://github.com/ezrosent/frawk/blob/master/info/performance.md) gets
 close to a 2x speedup in record-oriented parallel mode, despite the fact that
 writes to output files are all serialized, and all input records come from a
-single input file.
+single file.
 
 ### Aggregations
 
@@ -94,12 +144,12 @@ Produce the same output when run in serial and parallel modes, with the usual
 caveats about map iteration ordering (undefined) and floating point addition
 (it is not associative).
 
-_Other Aggregations_ While very useful, the aggregations that happen by default
+_Other Aggregations_ While useful, the aggregations that happen by default
 are not universally applicable. Consider the embarrassingly parallel task of
 finding the maximum (lexicographic) value of a particular column:
 
 ```awk
-{ 
+{
     if (NR==1) {
         max=$2;
     } else {
@@ -111,14 +161,16 @@ END {
 }
 ```
 
-Will simply return _a_ maximum value observed by a particular worker thread. To
-aggregate explicitly, worker threads are provided with a `PID` control variable
-which takes on a positive integer value in a contiguous numeric range, with each
-thread receiving a unique `PID` value. This, combined with the implicit
-aggregation for maps, lets us write an _explicit_ max aggregation.
+This script is no longer correct if it is run in parallel. In parallel, the
+aggregation rules dictate that it will simply return _a_ maximum value observed
+by a particular worker thread. To aggregate explicitly, worker threads are
+provided with a `PID` control variable which takes on a positive integer value
+in a contiguous numeric range, with each thread receiving a unique `PID` value.
+This, combined with the implicit aggregation for maps, lets us write an
+_explicit_ max aggregation.
 
 ```awk
-{ 
+{
     if (NR==1) {
         max[PID]=$2;
     } else {
@@ -142,7 +194,7 @@ to execute, frawk has a `PREPARE` block which executes in the worker threads at
 the end of its input:
 
 ```awk
-{ 
+{
     if (NR==1) {
         max=$2;
     } else {
@@ -162,6 +214,3 @@ END {
 For a more involved example of an explicit aggregation, see the "Statistics"
 benchmark in the [performance
 doc](https://github.com/ezrosent/frawk/blob/master/info/performance.md).
-
-## Reading Input In Parallel
-<!-- TODO -->
