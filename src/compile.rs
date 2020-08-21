@@ -3,6 +3,7 @@ use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
+#[cfg(feature = "llvm_backend")]
 use crate::llvm;
 use crate::pushdown::{self, FieldSet};
 use crate::runtime::{self, Str};
@@ -117,6 +118,12 @@ pub(crate) fn bytecode<'a, LR: runtime::LineReader>(
     Typer::init_from_ctx(ctx)?.to_interp(reader, ff, num_workers)
 }
 
+#[cfg(test)]
+pub(crate) fn used_fields<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<FieldSet> {
+    Ok(Typer::init_from_ctx(ctx)?.used_fields)
+}
+
+#[cfg(feature = "llvm_backend")]
 pub(crate) fn dump_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     cfg: llvm::Config,
@@ -129,7 +136,7 @@ pub(crate) fn dump_llvm<'a>(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "llvm_backend"))]
 pub(crate) fn compile_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     cfg: llvm::Config,
@@ -142,11 +149,7 @@ pub(crate) fn compile_llvm<'a>(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn used_fields<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<FieldSet> {
-    Ok(Typer::init_from_ctx(ctx)?.used_fields)
-}
-
+#[cfg(feature = "llvm_backend")]
 pub(crate) fn run_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     reader: impl llvm::IntoRuntime,

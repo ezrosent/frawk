@@ -17,6 +17,7 @@ pub mod dom;
 pub mod harness;
 pub mod interp;
 pub mod lexer;
+#[cfg(feature = "llvm_backend")]
 pub mod llvm;
 #[allow(unused_parens)] // Warnings appear in generated code
 pub mod parsing;
@@ -25,6 +26,7 @@ pub mod runtime;
 #[cfg(test)]
 mod test_string_constants;
 pub mod types;
+extern crate cfg_if;
 extern crate clap;
 extern crate crossbeam;
 extern crate crossbeam_channel;
@@ -35,6 +37,7 @@ extern crate jemallocator;
 extern crate lalrpop_util;
 extern crate lazy_static;
 extern crate libc;
+#[cfg(feature = "llvm_backend")]
 extern crate llvm_sys;
 extern crate num_cpus;
 extern crate petgraph;
@@ -50,6 +53,7 @@ use clap::{App, Arg};
 use arena::Arena;
 use cfg::Escaper;
 use common::{ExecutionStrategy, Stage};
+#[cfg(feature = "llvm_backend")]
 use llvm::IntoRuntime;
 use runtime::{
     splitter::{
@@ -206,23 +210,31 @@ fn run_interp_with_context<'a>(
     }
 }
 
-fn run_llvm_with_context<'a>(
-    mut ctx: cfg::ProgramContext<'a, &'a str>,
-    stdin: impl IntoRuntime,
-    ff: impl runtime::writers::FileFactory,
-    cfg: llvm::Config,
-) {
-    if let Err(e) = compile::run_llvm(&mut ctx, stdin, ff, cfg) {
-        fail!("error compiling llvm: {}", e)
-    }
-}
+cfg_if::cfg_if! {
+    if #[cfg(feature = "llvm_backend")] {
+        fn run_llvm_with_context<'a>(
+            mut ctx: cfg::ProgramContext<'a, &'a str>,
+            stdin: impl IntoRuntime,
+            ff: impl runtime::writers::FileFactory,
+            cfg: llvm::Config,
+        ) {
+            if let Err(e) = compile::run_llvm(&mut ctx, stdin, ff, cfg) {
+                fail!("error compiling llvm: {}", e)
+            }
+        }
 
-fn dump_llvm(prog: &str, cfg: llvm::Config, raw: &RawPrelude) -> String {
-    let a = Arena::default();
-    let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
-    match compile::dump_llvm(&mut ctx, cfg) {
-        Ok(s) => s,
-        Err(e) => fail!("error compiling llvm: {}", e),
+        fn dump_llvm(prog: &str, cfg: llvm::Config, raw: &RawPrelude) -> String {
+            let a = Arena::default();
+            let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
+            match compile::dump_llvm(&mut ctx, cfg) {
+                Ok(s) => s,
+                Err(e) => fail!("error compiling llvm: {}", e),
+            }
+        }
+
+        const DEFAULT_OPT_LEVEL: i32 = 3;
+    } else {
+        const DEFAULT_OPT_LEVEL: i32 = -1;
     }
 }
 
@@ -257,7 +269,8 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
 }
 
 fn main() {
-    let matches = App::new("frawk")
+    #[allow(unused_mut)]
+    let mut app = App::new("frawk")
         .version("0.1")
         .author("Eli R.")
         .about("frawk is a pattern scanning and (semi-structured) text processing language")
@@ -301,8 +314,13 @@ fn main() {
              .long("parallel-strategy")
              .short('p')
              .possible_values(&["r", "record", "f", "file"]))
-        .arg("-j, --jobs=[N] 'Number or worker threads to launch when executing in parallel'")
-        .get_matches();
+        .arg("-j, --jobs=[N] 'Number or worker threads to launch when executing in parallel'");
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "llvm_backend")] {
+            app = app.arg("--dump-llvm 'print LLVM-IR for the input program'");
+        }
+    }
+    let matches = app.get_matches();
     if matches.is_present("input-format") && !csv_supported() {
         fail!("CSV/TSV requires an x86 processor with SSE2 support");
     }
@@ -372,28 +390,35 @@ fn main() {
         stage: exec_strategy.stage(),
     };
     let mut opt_level: i32 = match matches.value_of("opt-level") {
-        None | Some("3") => 3,
+        Some("3") => 3,
         Some("2") => 2,
         Some("1") => 1,
         Some("0") => 0,
         Some("-1") => -1,
+        None => DEFAULT_OPT_LEVEL,
         Some(x) =>panic!("this case should be covered by clap argument validation: found unexpected opt-level value {}", x),
     };
-    let opt_dump_llvm = matches.is_present("dump-llvm");
     let opt_dump_bytecode = matches.is_present("dump-bytecode");
     let opt_dump_cfg = matches.is_present("dump-cfg");
-    let skip_output = opt_dump_llvm || opt_dump_bytecode || opt_dump_cfg;
-    if opt_dump_llvm {
-        let config = llvm::Config {
-            opt_level: if opt_level < 0 { 3 } else { opt_level as usize },
-            num_workers,
-        };
-        let _ = write!(
-            std::io::stdout(),
-            "{}",
-            dump_llvm(program_string.as_str(), config, &raw),
-        );
+    cfg_if::cfg_if! {
+        if #[cfg(feature="llvm_backend")] {
+            let opt_dump_llvm = matches.is_present("dump-llvm");
+            if opt_dump_llvm {
+                let config = llvm::Config {
+                    opt_level: if opt_level < 0 { 3 } else { opt_level as usize },
+                    num_workers,
+                };
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    dump_llvm(program_string.as_str(), config, &raw),
+                );
+            }
+        } else {
+            let opt_dump_llvm = false;
+        }
     }
+    let skip_output = opt_dump_llvm || opt_dump_bytecode || opt_dump_cfg;
     if opt_dump_bytecode {
         let _ = write!(
             std::io::stdout(),
@@ -566,14 +591,20 @@ fn main() {
     if opt_level < 0 {
         with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup, num_workers))
     } else {
-        with_io!(|inp, oup| run_llvm_with_context(
-            ctx,
-            inp,
-            oup,
-            llvm::Config {
-                opt_level: opt_level as usize,
-                num_workers,
-            },
-        ));
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "llvm_backend")] {
+                with_io!(|inp, oup| run_llvm_with_context(
+                        ctx,
+                        inp,
+                        oup,
+                        llvm::Config {
+                            opt_level: opt_level as usize,
+                            num_workers,
+                        },
+                ));
+            } else {
+                fail!("opt level is {} but compiled without LLVM support", opt_level);
+            }
+        }
     }
 }

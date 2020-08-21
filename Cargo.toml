@@ -19,19 +19,21 @@ jemallocator = { version = "0.3", optional = true }
 rand = "0.7.3"
 lalrpop-util = "0.17.2"
 unicode-xid = "0.2.0"
-llvm-sys = "90.0.0"
+llvm-sys = {version = "90.0.0", optional = true }
 clap = "3.0.0-beta.1"
 crossbeam-channel = "0.4"
 crossbeam = "0.7.3"
 num_cpus = "1.13.0"
+cfg-if = "0.1"
 
 [features]
-default = ["use_jemalloc"]
+default = ["use_jemalloc", "allow_avx2", "llvm_backend"]
 use_jemalloc = ["jemallocator"]
 # Certain features leverage the AVX2 instruction set, but AVX2 can often make
 # the entire application slightly slower, even on chips that support it. As a
 # result, we default to SSE2 implementations unless this feature is enabled.
 allow_avx2 = []
+llvm_backend = ["llvm-sys"]
 
 [profile.release]
 lto = "fat"

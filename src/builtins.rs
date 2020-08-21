@@ -1,8 +1,9 @@
 //! This module contains definitions and metadata for builtin functions and builtin variables.
 use crate::ast;
-use crate::common::{Either, NodeIx, Result};
+#[allow(unused_imports)]
+use crate::common::Either;
+use crate::common::{NodeIx, Result};
 use crate::compile;
-use crate::llvm;
 use crate::runtime::{Int, IntMap, Str};
 use crate::types::{self, SmallVec};
 use smallvec::smallvec;
@@ -100,9 +101,12 @@ impl FloatFunc {
         }
     }
 
-    pub fn intrinsic_name(&self) -> Either<&'static str, llvm::builtin_functions::Function> {
+    #[cfg(feature = "llvm_backend")]
+    pub fn intrinsic_name(
+        &self,
+    ) -> crate::common::Either<&'static str, crate::llvm::builtin_functions::Function> {
         use FloatFunc::*;
-        type LLVMFunc = llvm::builtin_functions::Function;
+        type LLVMFunc = crate::llvm::builtin_functions::Function;
         // NB these must match the corresponding function name in llvm/intrinsics. New functions
         // added here must also be stubbed out there with semantics matching the `eval` methods.
         match self {

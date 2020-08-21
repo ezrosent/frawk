@@ -6,13 +6,13 @@ use crate::{
     bytecode::Interp,
     cfg::{self, Escaper},
     common::{ExecutionStrategy, Result},
-    compile, lexer, llvm,
+    compile, lexer,
     parsing::syntax,
     pushdown::FieldSet,
     runtime::{
         self,
         splitter::{
-            batch::{bytereader_supported, ByteReader, CSVReader, InputFormat},
+            batch::{CSVReader, InputFormat},
             regex::RegexSplitter,
         },
         writers::testing::FakeFs,
@@ -20,6 +20,13 @@ use crate::{
     },
     types::{self, get_types},
 };
+#[cfg(feature = "llvm_backend")]
+use crate::{
+    llvm,
+    runtime::splitter::batch::{bytereader_supported, ByteReader},
+};
+
+use cfg_if::cfg_if;
 use hashbrown::HashMap;
 use std::io;
 use std::io::Write;
@@ -41,88 +48,116 @@ fn split_stdin(
     inputs.into_iter()
 }
 
-fn simulate_stdin<LR: runtime::LineReader>(
-    inp: impl Into<String>,
-    mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
-) -> ChainedReader<LR>
-where
-    ChainedReader<LR>: llvm::IntoRuntime,
-{
-    ChainedReader::new(split_stdin(inp.into()).map(|(r, name)| f(r, name)))
-}
+cfg_if! {
+    if #[cfg(feature="llvm_backend")] {
+        fn simulate_stdin<LR: runtime::LineReader>(
+            inp: impl Into<String>,
+            mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
+        ) -> ChainedReader<LR>
+        where
+            ChainedReader<LR>: llvm::IntoRuntime,
+        {
+            ChainedReader::new(split_stdin(inp.into()).map(|(r, name)| f(r, name)))
+        }
 
-fn simulate_stdin_csv(
-    ifmt: InputFormat,
-    inp: impl Into<String>,
-    strat: ExecutionStrategy,
-) -> impl llvm::IntoRuntime + runtime::LineReader {
-    CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, strat)
-}
+        fn simulate_stdin_csv(
+            ifmt: InputFormat,
+            inp: impl Into<String>,
+            strat: ExecutionStrategy,
+        ) -> impl llvm::IntoRuntime + runtime::LineReader {
+            CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, strat)
+        }
 
-fn simulate_stdin_regex(inp: impl Into<String>) -> impl llvm::IntoRuntime + runtime::LineReader {
-    simulate_stdin(inp, |reader, name| {
-        RegexSplitter::new(reader, runtime::CHUNK_SIZE, name)
-    })
-}
+        fn simulate_stdin_regex(
+            inp: impl Into<String>
+        ) -> impl llvm::IntoRuntime + runtime::LineReader {
+            simulate_stdin(inp, |reader, name| {
+                RegexSplitter::new(reader, runtime::CHUNK_SIZE, name)
+            })
+        }
 
-fn simulate_stdin_whitespace(
-    inp: impl Into<String>,
-) -> impl llvm::IntoRuntime + runtime::LineReader {
-    simulate_stdin(inp, |reader, name| {
-        use runtime::splitter::DefaultSplitter;
-        DefaultSplitter::new(reader, runtime::CHUNK_SIZE, name)
-    })
-}
+        fn simulate_stdin_whitespace(
+            inp: impl Into<String>,
+        ) -> impl llvm::IntoRuntime + runtime::LineReader {
+            simulate_stdin(inp, |reader, name| {
+                use runtime::splitter::DefaultSplitter;
+                DefaultSplitter::new(reader, runtime::CHUNK_SIZE, name)
+            })
+        }
 
-fn simulate_stdin_singlechar(
-    field_sep: u8,
-    record_sep: u8,
-    inp: impl Into<String>,
-) -> impl llvm::IntoRuntime + runtime::LineReader {
-    ByteReader::new(
-        split_stdin(inp.into()),
-        field_sep,
-        record_sep,
-        runtime::CHUNK_SIZE,
-        ExecutionStrategy::Serial,
-    )
-}
-
-macro_rules! with_reader {
-    ($report:expr, $inp:expr, |$id:ident| $body:expr) => {
-        match $report {
-            cfg::SepAssign::Unsure => {
-                let $id = simulate_stdin_regex($inp);
-                $body
-            }
-            cfg::SepAssign::Potential {
+        fn simulate_stdin_singlechar(
+            field_sep: u8,
+            record_sep: u8,
+            inp: impl Into<String>,
+        ) -> impl llvm::IntoRuntime + runtime::LineReader {
+            ByteReader::new(
+                split_stdin(inp.into()),
                 field_sep,
                 record_sep,
-            } => {
-                let field_sep = field_sep.unwrap_or(" ");
-                let record_sep = record_sep.unwrap_or("\n");
-                if field_sep.len() == 1 && record_sep.len() == 1 {
-                    if field_sep == " " && record_sep == "\n" {
-                        let $id = simulate_stdin_whitespace($inp);
-                        $body
-                    } else if bytereader_supported() {
-                        let $id = simulate_stdin_singlechar(
-                            field_sep.as_bytes()[0],
-                            record_sep.as_bytes()[0],
-                            $inp,
-                        );
-                        $body
-                    } else {
+                runtime::CHUNK_SIZE,
+                ExecutionStrategy::Serial,
+            )
+        }
+        macro_rules! with_reader {
+            ($report:expr, $inp:expr, |$id:ident| $body:expr) => {
+                match $report {
+                    cfg::SepAssign::Unsure => {
                         let $id = simulate_stdin_regex($inp);
                         $body
                     }
-                } else {
-                    let $id = simulate_stdin_regex($inp);
-                    $body
+                    cfg::SepAssign::Potential {
+                        field_sep,
+                        record_sep,
+                    } => {
+                        let field_sep = field_sep.unwrap_or(" ");
+                        let record_sep = record_sep.unwrap_or("\n");
+                        if field_sep.len() == 1 && record_sep.len() == 1 {
+                            if field_sep == " " && record_sep == "\n" {
+                                let $id = simulate_stdin_whitespace($inp);
+                                $body
+                            } else if bytereader_supported() {
+                                let $id = simulate_stdin_singlechar(
+                                    field_sep.as_bytes()[0],
+                                    record_sep.as_bytes()[0],
+                                    $inp,
+                                );
+                                $body
+                            } else {
+                                let $id = simulate_stdin_regex($inp);
+                                $body
+                            }
+                        } else {
+                            let $id = simulate_stdin_regex($inp);
+                            $body
+                        }
+                    }
                 }
-            }
+            };
         }
-    };
+} else {
+        fn simulate_stdin<LR: runtime::LineReader>(
+            inp: impl Into<String>,
+            mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
+        ) -> ChainedReader<LR> {
+            ChainedReader::new(split_stdin(inp.into()).map(|(r, name)| f(r, name)))
+        }
+
+        fn simulate_stdin_csv(
+            ifmt: InputFormat,
+            inp: impl Into<String>,
+            strat: ExecutionStrategy,
+        ) -> impl runtime::LineReader {
+            CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, strat)
+        }
+
+        fn simulate_stdin_regex(
+            inp: impl Into<String>
+        ) -> impl runtime::LineReader {
+            simulate_stdin(inp, |reader, name| {
+                RegexSplitter::new(reader, runtime::CHUNK_SIZE, name)
+            })
+        }
+    }
 }
 
 const _PRINT_DEBUG_INFO: bool = false;
@@ -135,6 +170,7 @@ type ProgResult<'a> = Result<(
     HashMap<&'a str, compile::Ty>, /* type info */
 )>;
 
+#[cfg(feature = "llvm_backend")]
 const LLVM_CONFIG: llvm::Config = llvm::Config {
     opt_level: 3,
     num_workers: 1,
@@ -152,59 +188,64 @@ pub(crate) fn run_program<'a>(
     run_prog(a, stmt, stdin, esc, ifmt, strat)
 }
 
-pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
-    let a = Arena::default();
-    let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
-    compile::dump_llvm(&mut ctx, LLVM_CONFIG)
-}
+cfg_if! {
+    if #[cfg(feature="llvm_backend")] {
+        pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
+            let a = Arena::default();
+            let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
+            let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+            compile::dump_llvm(&mut ctx, LLVM_CONFIG)
+        }
 
-pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
-    let a = Arena::default();
-    let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
-    compile::compile_llvm(&mut ctx, LLVM_CONFIG)
-}
+        pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
+            let a = Arena::default();
+            let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
+            let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+            compile::compile_llvm(&mut ctx, LLVM_CONFIG)
+        }
 
-// The run_llvm path implements a subset of the logic in main that specializes the input readers
-// for whitespace, or single-byte-separator splitter implementations. The bytecode path does not,
-// because we want to ensure that the logic works when using the more general regex-based splitter.
-pub(crate) fn run_llvm(
-    prog: &str,
-    stdin: impl Into<String>,
-    esc: Escaper,
-    ifmt: Option<InputFormat>,
-    strat: ExecutionStrategy,
-) -> Result<String> {
-    let a = Arena::default();
-    let stmt = parse_program(prog, &a, esc, strat)?;
-    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
-    let sep_analysis = ctx.analyze_sep_assignments();
-    if _PRINT_DEBUG_INFO {
-        let mut buf = Vec::<u8>::new();
-        ctx.dbg_print(&mut buf).unwrap();
-        eprintln!("{}", String::from_utf8(buf).unwrap());
-    }
-    let fake_fs = FakeFs::default();
-    if let Some(ifmt) = ifmt {
-        compile::run_llvm(
-            &mut ctx,
-            simulate_stdin_csv(ifmt, stdin, strat),
-            fake_fs.clone(),
-            llvm::Config {
-                opt_level: LLVM_CONFIG.opt_level,
-                num_workers: strat.num_workers(),
-            },
-        )?;
-    } else {
-        with_reader!(sep_analysis, stdin, |reader| {
-            compile::run_llvm(&mut ctx, reader, fake_fs.clone(), LLVM_CONFIG)?;
-        });
-    }
-    let v = fake_fs.stdout.read_data();
-    match String::from_utf8(v) {
-        Ok(s) => Ok(s),
-        Err(e) => err!("program produced invalid unicode: {}", e),
+        // The run_llvm path implements a subset of the logic in main that specializes the input
+        // readers for whitespace, or single-byte-separator splitter implementations. The bytecode
+        // path does not, because we want to ensure that the logic works when using the more
+        // general regex-based splitter.
+        pub(crate) fn run_llvm(
+            prog: &str,
+            stdin: impl Into<String>,
+            esc: Escaper,
+            ifmt: Option<InputFormat>,
+            strat: ExecutionStrategy,
+        ) -> Result<String> {
+            let a = Arena::default();
+            let stmt = parse_program(prog, &a, esc, strat)?;
+            let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+            let sep_analysis = ctx.analyze_sep_assignments();
+            if _PRINT_DEBUG_INFO {
+                let mut buf = Vec::<u8>::new();
+                ctx.dbg_print(&mut buf).unwrap();
+                eprintln!("{}", String::from_utf8(buf).unwrap());
+            }
+            let fake_fs = FakeFs::default();
+            if let Some(ifmt) = ifmt {
+                compile::run_llvm(
+                    &mut ctx,
+                    simulate_stdin_csv(ifmt, stdin, strat),
+                    fake_fs.clone(),
+                    llvm::Config {
+                        opt_level: LLVM_CONFIG.opt_level,
+                        num_workers: strat.num_workers(),
+                    },
+                )?;
+            } else {
+                with_reader!(sep_analysis, stdin, |reader| {
+                    compile::run_llvm(&mut ctx, reader, fake_fs.clone(), LLVM_CONFIG)?;
+                });
+            }
+            let v = fake_fs.stdout.read_data();
+            match String::from_utf8(v) {
+                Ok(s) => Ok(s),
+                Err(e) => err!("program produced invalid unicode: {}", e),
+            }
+        }
     }
 }
 
@@ -396,7 +437,7 @@ mod tests {
                         Err(e) => panic!("failed to run program: {}", e),
                     }
                 }
-
+                #[cfg(feature = "llvm_backend")]
                 #[test]
                 fn llvm() {
                     match run_llvm(
@@ -468,6 +509,7 @@ mod tests {
                         Err(e) => panic!("failed to run program: {}", e),
                     }
                 }
+                #[cfg(feature = "llvm_backend")]
                 #[test]
                 fn llvm() {
                     match run_llvm($e, $inp, $esc, $csv, ExecutionStrategy::Serial) {
@@ -1206,6 +1248,8 @@ this as well"#
                         });
                     }
                 }
+
+                #[cfg(feature = "llvm_backend")]
                 mod llvm {
                     use super::*;
                     #[bench]
