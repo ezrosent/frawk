@@ -1,8 +1,16 @@
 [package]
 name = "frawk"
 version = "0.1.0"
-authors = ["Eli Rosenthal <ezrosenthal@gmail.com>"]
+authors = ["Eli Rosenthal <ezr@cs.brown.edu>"]
 edition = "2018"
+description = "an efficient Awk-like language"
+homepage = "https://github.com/ezrosent/frawk"
+repository = "https://github.com/ezrosent/frawk"
+readme = "README.md"
+keywords = ["awk", "csv", "tsv"]
+categories = ["command-line-utilities", "text-processing"]
+license = "MIT OR  Apache-2.0"
+build = "build.rs"
 
 
 [dependencies]
