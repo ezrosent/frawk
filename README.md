@@ -36,7 +36,7 @@ add to your `PATH` if you so choose:
 
 ```
 $ cd <frawk repo path>
-# With LLVM 
+# With LLVM
 $ cargo install --path .
 # Without LLVM, but with other recommended defaults
 $ cargo install --path . --no-default-features --features use_jemalloc,allow_avx2 

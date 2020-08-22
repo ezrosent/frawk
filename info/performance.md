@@ -26,6 +26,8 @@ All benchmark numbers report the minimum wall time across 5 iterations, along
 with the composite system and user times for that invocation as reported by the
 `time` command. A computation running with wall time of 2.5 seconds, and CPU
 time of 10.2s for user and 3.4s for system is reported as "2.5s (10.2s + 3.4s)".
+We also report throughput numbers, which are computed as wall time divided by
+input file size.
 
 This doc includes measurements for both parallel and serial invocations of
 frawk. The parallel invocations launch 4 workers. XSV supports parallelism but I
@@ -195,12 +197,12 @@ this either is or isn't important. We'll leave it out for now, but keep in mind
 that frawk's and python's runtimes include the time it takes to compile a
 program.
 
-| Program | Running Time (TREE_GRM_ESTN.csv) |
-| -- | -- |
-| Python | 2m47.3s (2m45.9s + 1.4s)|
-| Rust | 28.8s (27.7s + 1.1s) |
-| frawk | 19.6s (18.4s + 1.1s) |
-| frawk (parallel) | 4.8s (22.6s + 1.2s) |
+| Program | Running Time (TREE_GRM_ESTN.csv) | Throughput |
+| -- | -- | -- |
+| Python | 2m47.3s (2m45.9s + 1.4s) | 53.5 MB/s |
+| Rust | 28.8s (27.7s + 1.1s) | 310.6 MB/s |
+| frawk | 19.6s (18.4s + 1.1s) | 456.4 MB/s |
+| frawk (parallel) | 4.8s (22.6s + 1.2s) | 1863.6 MB/s |
 
 frawk is a good deal faster than the other options, particularly when run in
 parallel. Now, the Rust script could of course be optimized substantially (frawk
@@ -229,17 +231,17 @@ As can be seen below, frawk in parallel mode was the fastest utility in terms of
 wall-time, and on a per-core basis frawk was faster than mawk and gawk but
 slower than tsv-utils.
 
-| Program | Format | Running Time (TREE_GRM_ESTN) | Running Time (all_train) |
-| -- | -- | -- | -- |
-| mawk | TSV | 42.5s (41.0s + 1.5s) | 10.9s (9.9s + 1.1s) |
-| mawk | CSV | NA | 11.0s (10.0s + 1.1s) |
-| gawk | TSV | 24.0s (22.7s + 1.3s) | 25.9s (25.0s + 0.9s) |
-| gawk | CSV | NA | 25.8s (24.9s + 0.9s) |
-| tsv-utils | TSV | 5.9s (5.3s + 0.6s) | 2.6s (2.2s + 0.4s) |
-| frawk | TSV | 13.8s (12.8s + 1.0s) | 7.5s (6.8s + 0.7s) |
-| frawk | CSV | 17.3s (16.2s + 1.1s) | 7.6s (7.0s + 0.7s) |
-| frawk (parallel) | TSV | 3.5s (16.5s + 1.1s) | 1.8s (8.2s + 0.7s) |
-| frawk (parallel) | CSV | 4.8s (22.6s + 1.3s) | 2.0s (9.0s + 0.7s) |
+| Program | Format | Running Time (TREE_GRM_ESTN) | Throughput (TREE_GRM_ESTN) | Running Time (all_train) | Throughput (all_train) |
+| -- | -- | -- | -- | -- | -- |
+| mawk | TSV | 42.5s (41.0s + 1.5s) | 185.7 MB/s | 10.9s (9.9s + 1.1s) | 477.1 MB/s |
+| mawk | CSV | NA | NA | 11.0s (10.0s + 1.1s) | 472.7 MB/s |
+| gawk | TSV | 24.0s (22.7s + 1.3s) | 328.8 MB/s | 25.9s (25.0s + 0.9s) | 200.8 MB/s |
+| gawk | CSV | NA | NA | 25.8s (24.9s + 0.9s) | 201.6 MB/s |
+| tsv-utils | TSV | 5.9s (5.3s + 0.6s) | 1610.5 MB/s | 2.6s (2.2s + 0.4s) | 20000 MB/s |
+| frawk | TSV | 13.8s (12.8s + 1.0s) | 571.9 MB/s | 7.5s (6.8s + 0.7s) | 693.3 MB/s |
+| frawk | CSV | 17.3s (16.2s + 1.1s) | 517.1 MB/s | 7.6s (7.0s + 0.7s) | 684.2 MB/s |
+| frawk (parallel) | TSV | 3.5s (16.5s + 1.1s) | 2254.8 MB/s | 1.8s (8.2s + 0.7s) | 2888.9 MB/s |
+| frawk (parallel) | CSV | 4.8s (22.6s + 1.3s) | 1863.6 MB/s | 2.0s (9.0s + 0.7s) | 2600.0 MB/s |
 
 
 ## Statistics
@@ -393,16 +395,16 @@ TREE_GRM_ESTN.
 As can be seen below, frawk performed this task more quickly than any of the
 other benchmark programs:
 
-| Program | Format | Running Time |
-| -- | -- | -- |
-| mawk | TSV | 1m12.9s (1m11.4s + 1.5s) |
-| gawk | TSV | 1m36.9s (1m33.5s + 1.4s) |
-| xsv | TSV | 32.9s (32.0s + 0.9s) |
-| xsv | CSV | 34.7s (33.6s + 1.1s) |
-| frawk | TSV | 17.4s (16.4s + 1.0s) |
-| frawk | CSV | 19.2s (18.1s + 1.1s) |
-| frawk (parallel) | TSV | 4.0s (18.4s + 1.0s) |
-| frawk (parallel) | CSV | 4.9s (22.8s + 1.2s) |
+| Program | Format | Running Time | Throughput |
+| -- | -- | -- | -- |
+| mawk | TSV | 1m12.9s (1m11.4s + 1.5s) | 108.3 MB/s |
+| gawk | TSV | 1m36.9s (1m33.5s + 1.4s) | 81.4 MB/s |
+| xsv | TSV | 32.9s (32.0s + 0.9s) | 239.9 MB/s |
+| xsv | CSV | 34.7s (33.6s + 1.1s) | 257.8 MB/s |
+| frawk | TSV | 17.4s (16.4s + 1.0s) | 453.5 MB/s |
+| frawk | CSV | 19.2s (18.1s + 1.1s) | 465.9 MB/s |
+| frawk (parallel) | TSV | 4.0s (18.4s + 1.0s) | 1972.9 MB/s |
+| frawk (parallel) | CSV | 4.9s (22.8s + 1.2s) | 1825.6 MB/s |
 
 ## Select
 _Select 3 fields from the all_train dataset._
@@ -426,19 +428,19 @@ benchmark programs. While the gap between frawk in parallel mode and tsv-utils
 is probably in the noise, tsv-utils unquestionably performs better per core than
 frawk, while preserving the input's row ordering.
 
-| Program | Format | Running Time |
-| -- | -- | -- |
-| mawk | TSV | 8.5s (7.5s + 1.0s) |
-| mawk | CSV | 8.6s (7.5s + 1.0s) |
-| gawk | TSV | 24.3s (23.4s + 0.9s) |
-| gawk | CSV | 24.3s (23.4s + 0.9s) |
-| xsv | TSV | 5.4s (4.8s + 0.6s) |
-| xsv | CSV | 5.6s (4.9s + 0.7s) |
-| tsv-utils | TSV | 2.0s (1.6s + 0.5s)  |
-| frawk | TSV | 3.8s (3.9s + 0.9s) |
-| frawk | CSV | 3.9s (4.0s + 0.9s) |
-| frawk (parallel) | TSV | 2.1s (10.1s + 1.1s) |
-| frawk (parallel) | CSV | 2.3s (11.0s + 1.1s) |
+| Program | Format | Running Time | Throughput |
+| -- | -- | -- | -- |
+| mawk | TSV | 8.5s (7.5s + 1.0s) | 611.8 MB/s |
+| mawk | CSV | 8.6s (7.5s + 1.0s) | 604.7 MB/s |
+| gawk | TSV | 24.3s (23.4s + 0.9s) | 214.0 MB/s |
+| gawk | CSV | 24.3s (23.4s + 0.9s) | 214.0 MB/s |
+| xsv | TSV | 5.4s (4.8s + 0.6s) | 963.0 MB/s |
+| xsv | CSV | 5.6s (4.9s + 0.7s) | 928.6 MB/s |
+| tsv-utils | TSV | 2.0s (1.6s + 0.5s) | 2600.0 MB/s |
+| frawk | TSV | 3.8s (3.9s + 0.9s) | 1368.4 MB/s |
+| frawk | CSV | 3.9s (4.0s + 0.9s) | 1333.3 MB/s |
+| frawk (parallel) | TSV | 2.1s (10.1s + 1.1s) | 2476.2 MB/s |
+| frawk (parallel) | CSV | 2.3s (11.0s + 1.1s) | 2260.9 MB/s |
 
 ## Filter
 _Print out all records from the `all_train` dataset matching a simple numeric
@@ -460,17 +462,17 @@ Again, frawk is slower than tsv-utils and faster than everything else when
 running serially. In parallel, frawk is slightly faster than tsv-utils in terms
 of wall time.
 
-| Program | Format | Running Time |
-| -- | -- | -- |
-| mawk | TSV | 10.3s (9.2s + 1.1s) |
-| mawk | CSV | 10.4s (9.2s + 1.1s) |
-| gawk | TSV | 17.0s (16.2s + 0.9s) |
-| gawk | CSV | 17.1s (16.2s + 0.9s) |
-| tsv-utils | TSV | 2.4s (1.9s + 0.4s) |
-| frawk | TSV | 6.9s (7.5s + 1.0s) |
-| frawk | CSV | 7.1s (7.7s + 1.0s) |
-| frawk (parallel) | TSV | 2.4s (12.0s + 1.2s) |
-| frawk (parallel) | CSV | 2.2s (10.8s + 1.1s) |
+| Program | Format | Running Time | Thoughput |
+| -- | -- | -- | -- |
+| mawk | TSV | 10.3s (9.2s + 1.1s) | 504.9 MB/s |
+| mawk | CSV | 10.4s (9.2s + 1.1s) | 500.0 MB/s |
+| gawk | TSV | 17.0s (16.2s + 0.9s) | 305.9 MB/s |
+| gawk | CSV | 17.1s (16.2s + 0.9s) | 304.1 MB/s |
+| tsv-utils | TSV | 2.4s (1.9s + 0.4s) | 2166.7 MB/s |
+| frawk | TSV | 6.9s (7.5s + 1.0s) | 753.6 MB/s |
+| frawk | CSV | 7.1s (7.7s + 1.0s) | 732.4 MB/s |
+| frawk (parallel) | TSV | 2.4s (12.0s + 1.2s) | 2166.7 MB/s |
+| frawk (parallel) | CSV | 2.2s (10.8s + 1.1s) | 2363.6 MB/s |
 
 ## Group By Key
 _Print the mean of field 2 grouped by the value in field 6 for TREE_GRM_ESTN_
@@ -492,12 +494,12 @@ Once again, tsv-utils is substantially faster than a single-threaded frawk, but
 is slower than frawk in parallel mode. frawk, in either configuration, is faster
 at this task than mawk or gawk.
 
-| Program | Format | Running Time |
-| -- | -- | -- |
-| mawk | TSV | 43.5s (42.0s + 1.5s) |
-| gawk | TSV | 28.8s (27.5s + 1.3s) |
-| tsv-utils | TSV| 4.9s (4.2s + 0.6s) |
-| frawk | TSV | 16.4s (15.4s + 1.0s) |
-| frawk | CSV | 19.4s (18.3s + 1.1s) |
-| frawk (parallel) | TSV | 3.8s (17.6s + 1.1s) |
-| frawk (parallel) | CSV | 4.9s (23.3s + 1.2s) |
+| Program | Format | Running Time | Throughput |
+| -- | -- | -- | -- |
+| mawk | TSV | 43.5s (42.0s + 1.5s) | 181.4 MB/s |
+| gawk | TSV | 28.8s (27.5s + 1.3s) | 274.0 MB/s |
+| tsv-utils | TSV| 4.9s (4.2s + 0.6s) | 1610.5 MB/s |
+| frawk | TSV | 16.4s (15.4s + 1.0s) | 481.2 MB/s |
+| frawk | CSV | 19.4s (18.3s + 1.1s) | 461.1 MB/s |
+| frawk (parallel) | TSV | 3.8s (17.6s + 1.1s) | 2076.7 MB/s |
+| frawk (parallel) | CSV | 4.9s (23.3s + 1.2s) | 1825.6 MB/s |
