@@ -41,7 +41,7 @@ through on a byte-by-byte basis.
 
 Recent approaches to parsing [JSON](https://arxiv.org/abs/1902.08318) and
 [CSV](https://github.com/geofflangdale/simdcsv) instead perform a first pass to
-write out a sequence locations of _structural characters_ within the input:
+write out a sequence of locations of _structural characters_ within the input:
 Relevant structural characters in CSV are `,`s that are not inside a quoted
 field, `"` characters, `\n` and `\r\n` sequences. The remaining parsing task may
 still need to step through a state machine of some kind, but this state machine
@@ -53,7 +53,7 @@ recent CPUs.
 frawk implements this approach for scripts with CSV, TSV and
 single-byte-separator inputs. Not only does this approach provide high
 performance for all scripts that consume input in this form, the separation of
-parsing into two phases provides a great opportunity to parallelize the reading
+parsing into two phases provides us with an opportunity to parallelize the reading
 of a single CSV file. A single worker thread performs an initial pass on a chunk
 of input data to discover structural characters, it then locates a relevant
 record separator and sends that chunk off to a worker thread. That worker thread
