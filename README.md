@@ -42,11 +42,14 @@ $ cargo install --path .
 $ cargo install --path . --no-default-features --features use_jemalloc,allow_avx2 
 ```
 
+frawk is now on [crates.io](https://crates.io/crates/frawk), so running 
+`cargo install frawk` with the desired features should also work.
+
 While there are no _deliberate_ unix-isms in frawk, I have not tested it on Windows.
 
 ## Bugs and Feature Requests
 
-frawk has bugs. If you notice a bug in frawk, filing a bug with an explanation
-of how to reproduce the error would be very helpful. There are no guarantees on
-response time or latency for a fix. No one works on frawk full-time. The same
-policy holds for feature requests.
+frawk has bugs, and many rough edges. If you notice a bug in frawk, filing an issue
+with an explanation of how to reproduce the error would be very helpful. There are
+no guarantees on response time or latency for a fix. No one works on frawk full-time.
+The same policy holds for feature requests.
