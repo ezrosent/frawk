@@ -1,12 +1,12 @@
 # Parallelism in frawk
 
 frawk provides a simple model allowing for many simple scripts to be run in
-parallel. One relatively aspect of frawk's implementation is that it can achieve
+parallel. One relatively unque aspect of frawk's implementation is that it can achieve
 nontrivial speedups even when the input is only a single input file or stream.
 The first part of this doc explains the architecture that frawk uses to read
 formats like CSV in a parallel-friendly manner. Only a small amount of syntax
 was added to frawk to support parallel programming, but running a script in
-parallel can change the meaning of a script.The second portion provides an
+parallel can change the meaning of a script. The second portion provides an
 overview of the semantics of a frawk script when it is run in parallel.
 
 > Note: frawk only supports parallel execution for CSV, TSV, and scripts that
