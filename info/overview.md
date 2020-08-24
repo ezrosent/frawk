@@ -262,7 +262,7 @@ surprised to discover there were bugs in frawk's parser.
   also supports hexadecimal numeric literals.
 * For scripts run with either of the `icsv`, `itsv`, or that only use one
   single-byte record and field separator, frawk supports executing the script
-  [in parallel](https://github.com/ezrozent/frawk/blob/master/info/parallelism.md). I
+  [in parallel](https://github.com/ezrosent/frawk/blob/master/info/parallelism.md). I
   hope to allow parallelism with more formats in the future.
 
 ### What is different
