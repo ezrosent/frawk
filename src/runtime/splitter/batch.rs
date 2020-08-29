@@ -551,8 +551,8 @@ pub enum InputFormat {
 impl InputFormat {
     fn sep(self) -> u8 {
         match self {
-            InputFormat::CSV => ',' as u8,
-            InputFormat::TSV => '\t' as u8,
+            InputFormat::CSV => b',',
+            InputFormat::TSV => b'\t',
         }
     }
 }
