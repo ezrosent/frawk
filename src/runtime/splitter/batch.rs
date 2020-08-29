@@ -715,6 +715,59 @@ mod generic {
         ) -> (/*inside quotes*/ u64, /*quote locations*/ u64);
     }
 
+    pub unsafe fn find_whitespace_sep<V: Vector>(inp: V::Input, start_ws: u64) -> (u64, u64) {
+        // How to handle newlines? Two separate Offsets?
+        let space = V::cmp_mask_against_input(inp, b' ');
+        let tab = V::cmp_mask_against_input(inp, b'\t');
+        let nl = V::cmp_mask_against_input(inp, b'\n');
+        let ws1 = space | tab | nl;
+        let ws2 = ws1.wrapping_shl(1) | start_ws;
+        (ws1 ^ ws2, ws1.wrapping_shr(63))
+    }
+
+    mod ws_tests {
+        use super::super::sse2;
+        use super::*;
+        fn test_ws_1<V: Vector>() {
+            fn to_vec(x: u64) -> Vec<u32> {
+                (0u32..64u32)
+                    .flat_map(|ix| {
+                        if x & 1u64.wrapping_shl(ix) != 0 {
+                            Some(ix)
+                        } else {
+                            None
+                        }
+                        .into_iter()
+                    })
+                    .collect()
+            }
+            let s = r#"   hi there
+   person    who is over there  and also there"#;
+            let inp = unsafe { V::fill_input(s.as_bytes().as_ptr()) };
+            let (res, next) = unsafe { find_whitespace_sep::<V>(inp, 1) };
+            eprintln!("res={:?}, next={}", to_vec(res), next);
+            let mut i = to_vec(res).into_iter();
+            while let Some(start) = i.next() {
+                if let Some(end) = i.next() {
+                    let start = start as usize;
+                    let end = end as usize;
+                    if s.as_bytes()[end] == b'\n' {
+                        eprintln!("[{}]!", &s[start..end]);
+                    } else {
+                        eprintln!("[{}]", &s[start..end]);
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+
+        #[test]
+        fn test_ws_sse2() {
+            test_ws_1::<sse2::Impl>();
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     pub unsafe fn default_x86_find_quote_mask<V: Vector>(
         inp: V::Input,
