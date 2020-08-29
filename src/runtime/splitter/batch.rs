@@ -697,43 +697,41 @@ mod generic {
     use super::Offsets;
     const MAX_INPUT_SIZE: usize = 64;
 
-    // TODO: use method syntax?
-    pub trait Vector {
+    pub trait Vector: Copy {
         const VEC_BYTES: usize;
         const INPUT_SIZE: usize = Self::VEC_BYTES * 2;
         const _ASSERT_LTE_MAX: usize = MAX_INPUT_SIZE - Self::INPUT_SIZE;
-        type Input: Copy;
 
         // Precondition: bptr points to at least INPUT_SIZE bytes.
-        unsafe fn fill_input(btr: *const u8) -> Self::Input;
+        unsafe fn fill_input(btr: *const u8) -> Self;
 
-        unsafe fn or_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input;
-        unsafe fn and_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input;
+        unsafe fn or(self, rhs: Self) -> Self;
+        unsafe fn and(self, rhs: Self) -> Self;
 
-        unsafe fn mask(inp: Self::Input) -> u64;
+        unsafe fn mask(self) -> u64;
 
         // Compute a mask of which bits in input match (bytewise) `m`.
-        unsafe fn cmp_against_input(inp: Self::Input, m: u8) -> Self::Input;
+        unsafe fn cmp_against_input(self, m: u8) -> Self;
 
         #[inline(always)]
-        unsafe fn cmp_mask_against_input(inp: Self::Input, m: u8) -> u64 {
-            Self::mask(Self::cmp_against_input(inp, m))
+        unsafe fn cmp_mask_against_input(self, m: u8) -> u64 {
+            self.cmp_against_input(m).mask()
         }
 
         unsafe fn find_quote_mask(
-            inp: Self::Input,
+            self,
             prev_iter_inside_quote: &mut u64,
         ) -> (/*inside quotes*/ u64, /*quote locations*/ u64);
     }
 
     // TODO(ezr): remove these
 
-    pub unsafe fn find_whitespace_sep<V: Vector>(inp: V::Input, start_ws: u64) -> (u64, u64) {
+    pub unsafe fn find_whitespace_sep<V: Vector>(inp: V, start_ws: u64) -> (u64, u64) {
         // How to handle newlines? Two separate Offsets?
-        let space = V::cmp_mask_against_input(inp, b' ');
-        let tab = V::cmp_mask_against_input(inp, b'\t');
-        let nl = V::cmp_mask_against_input(inp, b'\n');
-        let ws1 = space | tab | nl;
+        let space = inp.cmp_against_input(b' ');
+        let tab = inp.cmp_against_input(b'\t');
+        let nl = inp.cmp_against_input(b'\n');
+        let ws1 = space.or(tab).or(nl).mask();
         let ws2 = ws1.wrapping_shl(1) | start_ws;
         (ws1 ^ ws2, ws1.wrapping_shr(63))
     }
@@ -783,7 +781,7 @@ mod generic {
 
     #[cfg(target_arch = "x86_64")]
     pub unsafe fn default_x86_find_quote_mask<V: Vector>(
-        inp: V::Input,
+        inp: V,
         prev_iter_inside_quote: &mut u64,
     ) -> (/*inside quotes*/ u64, /*quote locations*/ u64) {
         use std::arch::x86_64::*;
@@ -794,7 +792,7 @@ mod generic {
         // [000000000000001111111111110]
         // We will use this mask to avoid splitting on commas that are inside a quoted field. We
         // start by generating a mask for all the quote characters appearing in the string.
-        let quote_bits = V::cmp_mask_against_input(inp, '"' as u8);
+        let quote_bits = inp.cmp_mask_against_input(b'"');
         // Then we pull this trick from the simdjson paper. Lets use the example from the comments
         // above:
         // [unquoted text "quoted text"]
@@ -894,13 +892,13 @@ mod generic {
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 // find commas not inside quotes
                 let inp = V::fill_input($buf);
-                let (quote_mask, quote_locs) = V::find_quote_mask(inp, &mut prev_iter_inside_quote);
-                let sep = V::cmp_mask_against_input(inp, ',' as u8);
-                let esc = V::cmp_mask_against_input(inp, '\\' as u8);
+                let (quote_mask, quote_locs) = inp.find_quote_mask(&mut prev_iter_inside_quote);
+                let sep = inp.cmp_mask_against_input(b',');
+                let esc = inp.cmp_mask_against_input(b'\\');
 
-                let cr = V::cmp_mask_against_input(inp, 0x0d);
+                let cr = inp.cmp_mask_against_input(0x0d);
                 let cr_adjusted = cr.wrapping_shl(1) | prev_iter_cr_end;
-                let lf = V::cmp_mask_against_input(inp, 0x0a);
+                let lf = inp.cmp_mask_against_input(0x0a);
                 // Allow for either \r\n or \n.
                 let end = (lf & cr_adjusted) | lf;
                 prev_iter_cr_end = cr.wrapping_shr(63);
@@ -1019,10 +1017,10 @@ mod generic {
     ) -> (u64, u64) {
         find_indexes_unquoted::<V, _>(buf, offsets, |ptr| {
             let inp = V::fill_input(ptr);
-            let sep = V::cmp_against_input(inp, '\t' as u8);
-            let esc = V::cmp_against_input(inp, '\\' as u8);
-            let lf = V::cmp_against_input(inp, '\n' as u8);
-            V::mask(V::or_inputs(V::or_inputs(sep, esc), lf))
+            let sep = inp.cmp_against_input(b'\t');
+            let esc = inp.cmp_against_input(b'\\');
+            let lf = inp.cmp_against_input(b'\n');
+            sep.or(esc).or(lf).mask()
         });
         (0, 0)
     }
@@ -1035,9 +1033,9 @@ mod generic {
     ) {
         find_indexes_unquoted::<V, _>(buf, offsets, |ptr| {
             let inp = V::fill_input(ptr);
-            let fs = V::cmp_against_input(inp, field_sep);
-            let rs = V::cmp_against_input(inp, record_sep);
-            V::mask(V::or_inputs(fs, rs))
+            let fs = inp.cmp_against_input(field_sep);
+            let rs = inp.cmp_against_input(record_sep);
+            fs.or(rs).mask()
         });
     }
 }
@@ -1048,59 +1046,57 @@ mod sse2 {
     // This is in a large part based on geofflangdale/simdcsv, which is an adaptation of some of
     // the techniques from the simdjson paper (by that paper's authors, it appears) to CSV parsing.
     use std::arch::x86_64::*;
-    pub struct Impl;
     #[derive(Copy, Clone)]
-    pub struct Input {
+    pub struct Impl {
         lo: __m128i,
         hi: __m128i,
     }
 
     impl Vector for Impl {
         const VEC_BYTES: usize = 16;
-        type Input = Input;
         #[inline(always)]
-        unsafe fn fill_input(bptr: *const u8) -> Input {
-            Input {
+        unsafe fn fill_input(bptr: *const u8) -> Self {
+            Impl {
                 lo: _mm_loadu_si128(bptr as *const _),
                 hi: _mm_loadu_si128(bptr.offset(Self::VEC_BYTES as isize) as *const _),
             }
         }
 
         #[inline(always)]
-        unsafe fn mask(inp: Self::Input) -> u64 {
-            let lo = _mm_movemask_epi8(inp.lo) as u32 as u64;
-            let hi = _mm_movemask_epi8(inp.hi) as u32 as u64;
+        unsafe fn mask(self) -> u64 {
+            let lo = _mm_movemask_epi8(self.lo) as u32 as u64;
+            let hi = _mm_movemask_epi8(self.hi) as u32 as u64;
             lo | hi << Self::VEC_BYTES
         }
 
         #[inline(always)]
-        unsafe fn or_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input {
-            let lo = _mm_or_si128(i1.lo, i2.lo);
-            let hi = _mm_or_si128(i1.hi, i2.hi);
-            Input { lo, hi }
+        unsafe fn or(self, rhs: Self) -> Self {
+            let lo = _mm_or_si128(self.lo, rhs.lo);
+            let hi = _mm_or_si128(self.hi, rhs.hi);
+            Impl { lo, hi }
         }
 
         #[inline(always)]
-        unsafe fn and_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input {
-            let lo = _mm_and_si128(i1.lo, i2.lo);
-            let hi = _mm_and_si128(i1.hi, i2.hi);
-            Input { lo, hi }
+        unsafe fn and(self, rhs: Self) -> Self {
+            let lo = _mm_and_si128(self.lo, rhs.lo);
+            let hi = _mm_and_si128(self.hi, rhs.hi);
+            Impl { lo, hi }
         }
 
         #[inline(always)]
-        unsafe fn cmp_against_input(inp: Input, m: u8) -> Input {
+        unsafe fn cmp_against_input(self, m: u8) -> Self {
             // Load the mask into all lanes.
             let mask = _mm_set1_epi8(m as i8);
-            let lo = _mm_cmpeq_epi8(inp.lo, mask);
-            let hi = _mm_cmpeq_epi8(inp.hi, mask);
-            Input { lo, hi }
+            let lo = _mm_cmpeq_epi8(self.lo, mask);
+            let hi = _mm_cmpeq_epi8(self.hi, mask);
+            Impl { lo, hi }
         }
 
         unsafe fn find_quote_mask(
-            inp: Self::Input,
+            self,
             prev_iter_inside_quote: &mut u64,
         ) -> (/*inside quotes*/ u64, /*quote locations*/ u64) {
-            default_x86_find_quote_mask::<Self>(inp, prev_iter_inside_quote)
+            default_x86_find_quote_mask::<Self>(self, prev_iter_inside_quote)
         }
     }
 }
@@ -1111,59 +1107,57 @@ mod avx2 {
     // This is in a large part based on geofflangdale/simdcsv, which is an adaptation of some of
     // the techniques from the simdjson paper (by that paper's authors, it appears) to CSV parsing.
     use std::arch::x86_64::*;
-    pub struct Impl;
     #[derive(Copy, Clone)]
-    pub struct Input {
+    pub struct Impl {
         lo: __m256i,
         hi: __m256i,
     }
 
     impl Vector for Impl {
         const VEC_BYTES: usize = 32;
-        type Input = Input;
         #[inline(always)]
-        unsafe fn fill_input(bptr: *const u8) -> Input {
-            Input {
+        unsafe fn fill_input(bptr: *const u8) -> Self {
+            Impl {
                 lo: _mm256_loadu_si256(bptr as *const _),
                 hi: _mm256_loadu_si256(bptr.offset(Self::VEC_BYTES as isize) as *const _),
             }
         }
 
         #[inline(always)]
-        unsafe fn mask(inp: Self::Input) -> u64 {
-            let lo = _mm256_movemask_epi8(inp.lo) as u32 as u64;
-            let hi = _mm256_movemask_epi8(inp.hi) as u32 as u64;
+        unsafe fn mask(self) -> u64 {
+            let lo = _mm256_movemask_epi8(self.lo) as u32 as u64;
+            let hi = _mm256_movemask_epi8(self.hi) as u32 as u64;
             lo | hi << Self::VEC_BYTES
         }
 
         #[inline(always)]
-        unsafe fn or_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input {
-            let lo = _mm256_or_si256(i1.lo, i2.lo);
-            let hi = _mm256_or_si256(i1.hi, i2.hi);
-            Input { lo, hi }
+        unsafe fn or(self, rhs: Self) -> Self {
+            let lo = _mm256_or_si256(self.lo, rhs.lo);
+            let hi = _mm256_or_si256(self.hi, rhs.hi);
+            Impl { lo, hi }
         }
 
         #[inline(always)]
-        unsafe fn and_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input {
-            let lo = _mm256_and_si256(i1.lo, i2.lo);
-            let hi = _mm256_and_si256(i1.hi, i2.hi);
-            Input { lo, hi }
+        unsafe fn and(self, rhs: Self) -> Self {
+            let lo = _mm256_and_si256(self.lo, rhs.lo);
+            let hi = _mm256_and_si256(self.hi, rhs.hi);
+            Impl { lo, hi }
         }
 
         #[inline(always)]
-        unsafe fn cmp_against_input(inp: Input, m: u8) -> Input {
+        unsafe fn cmp_against_input(self, m: u8) -> Self {
             // Load the mask into all lanes.
             let mask = _mm256_set1_epi8(m as i8);
-            let lo = _mm256_cmpeq_epi8(inp.lo, mask);
-            let hi = _mm256_cmpeq_epi8(inp.hi, mask);
-            Input { lo, hi }
+            let lo = _mm256_cmpeq_epi8(self.lo, mask);
+            let hi = _mm256_cmpeq_epi8(self.hi, mask);
+            Impl { lo, hi }
         }
 
         unsafe fn find_quote_mask(
-            inp: Self::Input,
+            self,
             prev_iter_inside_quote: &mut u64,
         ) -> (/*inside quotes*/ u64, /*quote locations*/ u64) {
-            default_x86_find_quote_mask::<Self>(inp, prev_iter_inside_quote)
+            default_x86_find_quote_mask::<Self>(self, prev_iter_inside_quote)
         }
     }
 }
