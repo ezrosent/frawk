@@ -697,6 +697,7 @@ mod generic {
     use super::Offsets;
     const MAX_INPUT_SIZE: usize = 64;
 
+    // TODO: use method syntax?
     pub trait Vector {
         const VEC_BYTES: usize;
         const INPUT_SIZE: usize = Self::VEC_BYTES * 2;
@@ -706,14 +707,26 @@ mod generic {
         // Precondition: bptr points to at least INPUT_SIZE bytes.
         unsafe fn fill_input(btr: *const u8) -> Self::Input;
 
+        unsafe fn or_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input;
+        unsafe fn and_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input;
+
+        unsafe fn mask(inp: Self::Input) -> u64;
+
         // Compute a mask of which bits in input match (bytewise) `m`.
-        unsafe fn cmp_mask_against_input(inp: Self::Input, m: u8) -> u64;
+        unsafe fn cmp_against_input(inp: Self::Input, m: u8) -> Self::Input;
+
+        #[inline(always)]
+        unsafe fn cmp_mask_against_input(inp: Self::Input, m: u8) -> u64 {
+            Self::mask(Self::cmp_against_input(inp, m))
+        }
 
         unsafe fn find_quote_mask(
             inp: Self::Input,
             prev_iter_inside_quote: &mut u64,
         ) -> (/*inside quotes*/ u64, /*quote locations*/ u64);
     }
+
+    // TODO(ezr): remove these
 
     pub unsafe fn find_whitespace_sep<V: Vector>(inp: V::Input, start_ws: u64) -> (u64, u64) {
         // How to handle newlines? Two separate Offsets?
@@ -1006,10 +1019,10 @@ mod generic {
     ) -> (u64, u64) {
         find_indexes_unquoted::<V, _>(buf, offsets, |ptr| {
             let inp = V::fill_input(ptr);
-            let sep = V::cmp_mask_against_input(inp, '\t' as u8);
-            let esc = V::cmp_mask_against_input(inp, '\\' as u8);
-            let lf = V::cmp_mask_against_input(inp, '\n' as u8);
-            sep | esc | lf
+            let sep = V::cmp_against_input(inp, '\t' as u8);
+            let esc = V::cmp_against_input(inp, '\\' as u8);
+            let lf = V::cmp_against_input(inp, '\n' as u8);
+            V::mask(V::or_inputs(V::or_inputs(sep, esc), lf))
         });
         (0, 0)
     }
@@ -1022,9 +1035,9 @@ mod generic {
     ) {
         find_indexes_unquoted::<V, _>(buf, offsets, |ptr| {
             let inp = V::fill_input(ptr);
-            let fs = V::cmp_mask_against_input(inp, field_sep);
-            let rs = V::cmp_mask_against_input(inp, record_sep);
-            fs | rs
+            let fs = V::cmp_against_input(inp, field_sep);
+            let rs = V::cmp_against_input(inp, record_sep);
+            V::mask(V::or_inputs(fs, rs))
         });
     }
 }
@@ -1054,15 +1067,33 @@ mod sse2 {
         }
 
         #[inline(always)]
-        unsafe fn cmp_mask_against_input(inp: Input, m: u8) -> u64 {
+        unsafe fn mask(inp: Self::Input) -> u64 {
+            let lo = _mm_movemask_epi8(inp.lo) as u32 as u64;
+            let hi = _mm_movemask_epi8(inp.hi) as u32 as u64;
+            lo | hi << Self::VEC_BYTES
+        }
+
+        #[inline(always)]
+        unsafe fn or_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input {
+            let lo = _mm_or_si128(i1.lo, i2.lo);
+            let hi = _mm_or_si128(i1.hi, i2.hi);
+            Input { lo, hi }
+        }
+
+        #[inline(always)]
+        unsafe fn and_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input {
+            let lo = _mm_and_si128(i1.lo, i2.lo);
+            let hi = _mm_and_si128(i1.hi, i2.hi);
+            Input { lo, hi }
+        }
+
+        #[inline(always)]
+        unsafe fn cmp_against_input(inp: Input, m: u8) -> Input {
             // Load the mask into all lanes.
             let mask = _mm_set1_epi8(m as i8);
-            // Compare against lo and hi. Store them in a single u64.
-            let cmp_res_0 = _mm_cmpeq_epi8(inp.lo, mask);
-            let res_0 = _mm_movemask_epi8(cmp_res_0) as u32 as u64;
-            let cmp_res_1 = _mm_cmpeq_epi8(inp.hi, mask);
-            let res_1 = _mm_movemask_epi8(cmp_res_1) as u64;
-            res_0 | (res_1 << Self::VEC_BYTES)
+            let lo = _mm_cmpeq_epi8(inp.lo, mask);
+            let hi = _mm_cmpeq_epi8(inp.hi, mask);
+            Input { lo, hi }
         }
 
         unsafe fn find_quote_mask(
@@ -1099,16 +1130,35 @@ mod avx2 {
         }
 
         #[inline(always)]
-        unsafe fn cmp_mask_against_input(inp: Input, m: u8) -> u64 {
+        unsafe fn mask(inp: Self::Input) -> u64 {
+            let lo = _mm256_movemask_epi8(inp.lo) as u32 as u64;
+            let hi = _mm256_movemask_epi8(inp.hi) as u32 as u64;
+            lo | hi << Self::VEC_BYTES
+        }
+
+        #[inline(always)]
+        unsafe fn or_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input {
+            let lo = _mm256_or_si256(i1.lo, i2.lo);
+            let hi = _mm256_or_si256(i1.hi, i2.hi);
+            Input { lo, hi }
+        }
+
+        #[inline(always)]
+        unsafe fn and_inputs(i1: Self::Input, i2: Self::Input) -> Self::Input {
+            let lo = _mm256_and_si256(i1.lo, i2.lo);
+            let hi = _mm256_and_si256(i1.hi, i2.hi);
+            Input { lo, hi }
+        }
+
+        #[inline(always)]
+        unsafe fn cmp_against_input(inp: Input, m: u8) -> Input {
             // Load the mask into all lanes.
             let mask = _mm256_set1_epi8(m as i8);
-            // Compare against lo and hi. Store them in a single u64.
-            let cmp_res_0 = _mm256_cmpeq_epi8(inp.lo, mask);
-            let res_0 = _mm256_movemask_epi8(cmp_res_0) as u32 as u64;
-            let cmp_res_1 = _mm256_cmpeq_epi8(inp.hi, mask);
-            let res_1 = _mm256_movemask_epi8(cmp_res_1) as u64;
-            res_0 | (res_1 << Self::VEC_BYTES)
+            let lo = _mm256_cmpeq_epi8(inp.lo, mask);
+            let hi = _mm256_cmpeq_epi8(inp.hi, mask);
+            Input { lo, hi }
         }
+
         unsafe fn find_quote_mask(
             inp: Self::Input,
             prev_iter_inside_quote: &mut u64,
