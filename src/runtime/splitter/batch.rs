@@ -704,12 +704,9 @@ mod generic {
 
         // Precondition: bptr points to at least INPUT_SIZE bytes.
         unsafe fn fill_input(btr: *const u8) -> Self;
-
         unsafe fn or(self, rhs: Self) -> Self;
         unsafe fn and(self, rhs: Self) -> Self;
-
         unsafe fn mask(self) -> u64;
-
         // Compute a mask of which bits in input match (bytewise) `m`.
         unsafe fn cmp_against_input(self, m: u8) -> Self;
 
@@ -722,60 +719,97 @@ mod generic {
             self,
             prev_iter_inside_quote: &mut u64,
         ) -> (/*inside quotes*/ u64, /*quote locations*/ u64);
+
+        #[inline(always)]
+        unsafe fn whitespace_masks(
+            self,
+            start_ws: u64,
+        ) -> (
+            /* whitespace runs */ u64,
+            /* newlines */ u64,
+            /* next start_ws */ u64,
+        ) {
+            let space = self.cmp_against_input(b' ');
+            let tab = self.cmp_against_input(b'\t');
+            let nl = self.cmp_against_input(b'\n');
+            let cr = self.cmp_against_input(b'\r');
+            let ws1 = space.or(tab).or(nl).or(cr).mask();
+            let ws2 = ws1.wrapping_shl(1) | start_ws;
+            let ws_res = ws1 ^ ws2;
+            let next_start_ws = ws1.wrapping_shr(63);
+            (ws_res, nl.mask(), next_start_ws)
+        }
     }
 
-    // TODO(ezr): remove these
+    #[derive(Copy, Clone)]
+    pub struct Impl([u8; 32]);
 
-    pub unsafe fn find_whitespace_sep<V: Vector>(inp: V, start_ws: u64) -> (u64, u64) {
-        // How to handle newlines? Two separate Offsets?
-        let space = inp.cmp_against_input(b' ');
-        let tab = inp.cmp_against_input(b'\t');
-        let nl = inp.cmp_against_input(b'\n');
-        let ws1 = space.or(tab).or(nl).mask();
-        let ws2 = ws1.wrapping_shl(1) | start_ws;
-        (ws1 ^ ws2, ws1.wrapping_shr(63))
+    macro_rules! foreach_impl_inner {
+        ($ix: ident, $body:expr, [$($ixv:expr),*] ) => {{
+            Impl([ $( foreach_impl_inner!($ix, $body, $ixv) ),* ])
+        }};
+        ($ix: ident, $body:expr, $ixv:expr) => {{
+            let $ix = $ixv;
+            $body
+        }};
     }
 
-    mod ws_tests {
-        use super::super::sse2;
-        use super::*;
-        fn test_ws_1<V: Vector>() {
-            fn to_vec(x: u64) -> Vec<u32> {
-                (0u32..64u32)
-                    .flat_map(|ix| {
-                        if x & 1u64.wrapping_shl(ix) != 0 {
-                            Some(ix)
-                        } else {
-                            None
-                        }
-                        .into_iter()
-                    })
-                    .collect()
-            }
-            let s = r#"   hi there
-   person    who is over there  and also there"#;
-            let inp = unsafe { V::fill_input(s.as_bytes().as_ptr()) };
-            let (res, next) = unsafe { find_whitespace_sep::<V>(inp, 1) };
-            eprintln!("res={:?}, next={}", to_vec(res), next);
-            let mut i = to_vec(res).into_iter();
-            while let Some(start) = i.next() {
-                if let Some(end) = i.next() {
-                    let start = start as usize;
-                    let end = end as usize;
-                    if s.as_bytes()[end] == b'\n' {
-                        eprintln!("[{}]!", &s[start..end]);
-                    } else {
-                        eprintln!("[{}]", &s[start..end]);
-                    }
-                } else {
-                    break;
-                }
-            }
+    macro_rules! foreach_impl {
+        ($ix:ident, $body:expr) => {
+            foreach_impl_inner!(
+                $ix,
+                $body,
+                [
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+                    22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+                ]
+            )
+        };
+    }
+
+    impl Vector for Impl {
+        const VEC_BYTES: usize = 32;
+        const INPUT_SIZE: usize = Self::VEC_BYTES;
+
+        unsafe fn fill_input(btr: *const u8) -> Self {
+            use std::ptr::copy;
+            let mut i = Impl([0; 32]);
+            copy(btr, i.0.as_mut_ptr(), Self::VEC_BYTES);
+            i
         }
 
-        #[test]
-        fn test_ws_sse2() {
-            test_ws_1::<sse2::Impl>();
+        unsafe fn or(self, rhs: Self) -> Self {
+            foreach_impl!(ix, self.0[ix] | rhs.0[ix])
+        }
+
+        unsafe fn and(self, rhs: Self) -> Self {
+            foreach_impl!(ix, self.0[ix] & rhs.0[ix])
+        }
+
+        unsafe fn mask(self) -> u64 {
+            let mut res = 0u64;
+            for i in 0..Self::VEC_BYTES {
+                res |= (self.0[i] as u64 & 1) << i
+            }
+            res
+        }
+
+        unsafe fn cmp_against_input(self, m: u8) -> Self {
+            foreach_impl!(ix, if self.0[ix] == m { 1u8 } else { 0u8 })
+        }
+
+        unsafe fn find_quote_mask(self, prev_iter_inside_quote: &mut u64) -> (u64, u64) {
+            let quote_mask = self.cmp_against_input(b'"');
+            let mut in_quote = false;
+            let mut in_quotes = Impl([0; 32]);
+            for ix in 0..Self::VEC_BYTES {
+                let cmp = quote_mask.0[ix];
+                in_quote = (cmp == 1 && !in_quote) || (in_quote && cmp == 0);
+                in_quotes.0[ix] = if in_quote { 1 } else { 0 };
+            }
+            let in_quotes_mask = in_quotes.mask() ^ *prev_iter_inside_quote;
+            *prev_iter_inside_quote = (in_quotes_mask as i64).wrapping_shr(63) as u64;
+            (in_quotes_mask, quote_mask.mask())
         }
     }
 
