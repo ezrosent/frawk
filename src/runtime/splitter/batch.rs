@@ -568,15 +568,10 @@ impl InputFormat {
 pub fn get_find_indexes(
     ifmt: InputFormat,
 ) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
-    #[cfg(target_arch = "x86_64")]
-    const IS_X64: bool = true;
-    #[cfg(not(target_arch = "x86_64"))]
-    const IS_X64: bool = false;
     #[cfg(feature = "allow_avx2")]
     const ALLOW_AVX2: bool = true;
     #[cfg(not(feature = "allow_avx2"))]
     const ALLOW_AVX2: bool = false;
-    assert!(IS_X64, "CSV is only supported on x86_64 machines");
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("pclmulqdq") {
         match ifmt {
@@ -589,29 +584,25 @@ pub fn get_find_indexes(
             InputFormat::TSV => generic::find_indexes_tsv::<sse2::Impl>,
         }
     } else {
-        // TODO write a simple fallback implementation of Vector for non-x86
-        panic!("CSV requires at least SSE2 and PCLMULQDQ support");
+        match ifmt {
+            InputFormat::CSV => generic::find_indexes_csv::<generic::Impl>,
+            InputFormat::TSV => generic::find_indexes_tsv::<generic::Impl>,
+        }
     }
 }
 
-pub fn get_find_indexes_bytes() -> Option<unsafe fn(&[u8], &mut Offsets, u8, u8)> {
-    #[cfg(target_arch = "x86_64")]
-    const IS_X64: bool = true;
-    #[cfg(not(target_arch = "x86_64"))]
-    const IS_X64: bool = false;
+pub fn get_find_indexes_bytes() -> unsafe fn(&[u8], &mut Offsets, u8, u8) {
     #[cfg(feature = "allow_avx2")]
     const ALLOW_AVX2: bool = true;
     #[cfg(not(feature = "allow_avx2"))]
     const ALLOW_AVX2: bool = false;
-    assert!(IS_X64, "CSV is only supported on x86_64 machines");
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        Some(generic::find_indexes_byte::<avx2::Impl>)
+        generic::find_indexes_byte::<avx2::Impl>
     } else if is_x86_feature_detected!("sse2") {
-        Some(generic::find_indexes_byte::<sse2::Impl>)
+        generic::find_indexes_byte::<sse2::Impl>
     } else {
-        // TODO writing a fallback implementation of this function would be pretty easy.
-        None
+        generic::find_indexes_byte::<generic::Impl>
     }
 }
 
@@ -767,6 +758,8 @@ mod generic {
         };
     }
 
+    // A generic implementation of the `Vector` trait. No explicit simd, and relatively few unsafe
+    // constructs aside from the explicitly unsafe `fill_input`.
     impl Vector for Impl {
         const VEC_BYTES: usize = 32;
         const INPUT_SIZE: usize = Self::VEC_BYTES;
@@ -1196,10 +1189,6 @@ mod avx2 {
     }
 }
 
-pub fn bytereader_supported() -> bool {
-    get_find_indexes_bytes().is_some()
-}
-
 pub struct ByteReader<P> {
     prod: P,
     cur_chunk: OffsetChunk,
@@ -1527,9 +1516,6 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
 
     #[test]
     fn tsv_splitter_basic() {
-        if !bytereader_supported() {
-            return;
-        }
         tsv_split(crate::test_string_constants::VIRGIL);
         tsv_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
     }
@@ -1585,9 +1571,6 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
 
     #[test]
     fn bytes_splitter_basic() {
-        if !bytereader_supported() {
-            return;
-        }
         bytes_split(b' ', b'\n', crate::test_string_constants::VIRGIL);
         bytes_split(
             b' ',

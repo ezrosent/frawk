@@ -57,7 +57,7 @@ use common::{ExecutionStrategy, Stage};
 use llvm::IntoRuntime;
 use runtime::{
     splitter::{
-        batch::{bytereader_supported, ByteReader, CSVReader, InputFormat},
+        batch::{ByteReader, CSVReader, InputFormat},
         regex::RegexSplitter,
         DefaultSplitter,
     },
@@ -105,14 +105,6 @@ fn open_file_read(f: &str) -> io::BufReader<File> {
 
 fn chained<LR: LineReader>(lr: LR) -> ChainedReader<LR> {
     ChainedReader::new(std::iter::once(lr))
-}
-
-fn csv_supported() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    const IS_X64: bool = true;
-    #[cfg(not(target_arch = "x86_64"))]
-    const IS_X64: bool = false;
-    IS_X64 && is_x86_feature_detected!("sse2")
 }
 
 fn get_vars<'a, 'b>(
@@ -321,9 +313,6 @@ fn main() {
         }
     }
     let matches = app.get_matches();
-    if matches.is_present("input-format") && !csv_supported() {
-        fail!("CSV/TSV requires an x86 processor with SSE2 support");
-    }
     let ifmt = match matches.value_of("input-format") {
         Some("csv") => Some(InputFormat::CSV),
         Some("tsv") => Some(InputFormat::TSV),
@@ -466,7 +455,7 @@ fn main() {
                             if field_sep == " " && record_sep == "\n" {
                                 let $inp = chained(DefaultSplitter::new(_reader, CHUNK_SIZE, "-"));
                                 $body
-                            } else if bytereader_supported() {
+                            } else {
                                 let $inp = ByteReader::new(
                                     once((io::stdin(), String::from("-"))),
                                     field_sep.as_bytes()[0],
@@ -474,10 +463,6 @@ fn main() {
                                     CHUNK_SIZE,
                                     exec_strategy,
                                 );
-                                $body
-                            } else {
-                                let _reader: Box<dyn io::Read + Send> = Box::new(io::stdin());
-                                let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
                                 $body
                             }
                         } else {
@@ -508,7 +493,6 @@ fn main() {
                         let field_sep = field_sep.unwrap_or(" ");
                         let record_sep = record_sep.unwrap_or("\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
-                            let br_valid = bytereader_supported();
                             if field_sep == " " && record_sep == "\n" {
                                 let iter = input_files.iter().cloned().map(|file| {
                                     let reader: Box<dyn io::Read + Send> =
@@ -517,7 +501,7 @@ fn main() {
                                 });
                                 let $inp = ChainedReader::new(iter);
                                 $body
-                            } else if br_valid {
+                            } else {
                                 let file_handles: Vec<_> = input_files
                                     .iter()
                                     .cloned()
@@ -530,14 +514,6 @@ fn main() {
                                     CHUNK_SIZE,
                                     exec_strategy,
                                 );
-                                $body
-                            } else {
-                                let iter = input_files.iter().cloned().map(|file| {
-                                    let reader: Box<dyn io::Read + Send> =
-                                        Box::new(open_file_read(file.as_str()));
-                                    RegexSplitter::new(reader, CHUNK_SIZE, file)
-                                });
-                                let $inp = ChainedReader::new(iter);
                                 $body
                             }
                         } else {
