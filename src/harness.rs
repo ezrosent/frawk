@@ -21,10 +21,7 @@ use crate::{
     types::{self, get_types},
 };
 #[cfg(feature = "llvm_backend")]
-use crate::{
-    llvm,
-    runtime::splitter::batch::{bytereader_supported, ByteReader},
-};
+use crate::{llvm, runtime::splitter::batch::ByteReader};
 
 use cfg_if::cfg_if;
 use hashbrown::HashMap;
@@ -115,15 +112,12 @@ cfg_if! {
                             if field_sep == " " && record_sep == "\n" {
                                 let $id = simulate_stdin_whitespace($inp);
                                 $body
-                            } else if bytereader_supported() {
+                            } else  {
                                 let $id = simulate_stdin_singlechar(
                                     field_sep.as_bytes()[0],
                                     record_sep.as_bytes()[0],
                                     $inp,
                                 );
-                                $body
-                            } else {
-                                let $id = simulate_stdin_regex($inp);
                                 $body
                             }
                         } else {
