@@ -8,7 +8,10 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use crate::common::Result;
 use crate::runtime::{
     splitter::{
-        batch::{get_find_indexes, get_find_indexes_bytes, InputFormat, Offsets},
+        batch::{
+            get_find_indexes, get_find_indexes_ascii_whitespace, get_find_indexes_bytes,
+            InputFormat, Offsets, WhitespaceOffsets,
+        },
         Reader,
     },
     str_impl::UniqueBuf,
@@ -103,6 +106,28 @@ pub fn new_offset_chunk_producer_bytes<R: Read>(
     }
 }
 
+pub fn new_offset_chunk_producer_ascii_whitespace<R: Read>(
+    r: R,
+    chunk_size: usize,
+    name: &str,
+    start_version: u32,
+) -> WhitespaceChunkProducer<R, impl FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> {
+    let find_indexes = get_find_indexes_ascii_whitespace();
+    WhitespaceChunkProducer(
+        OffsetChunkProducer {
+            name: name.into(),
+            inner: Reader::new(r, chunk_size, /*padding=*/ 128),
+            find_indexes: move |bs: &[u8], offs: &mut WhitespaceOffsets, start: u64| unsafe {
+                find_indexes(bs, offs, start)
+            },
+            cur_file_version: start_version,
+            record_sep: 0u8, // unused
+            state: ChunkState::Init,
+        },
+        1,
+    )
+}
+
 pub fn new_chained_offset_chunk_producer_csv<
     'a,
     R: Read,
@@ -154,31 +179,30 @@ pub fn new_chained_offset_chunk_producer_bytes<
     )
 }
 
-pub struct OffsetChunk {
-    pub version: u32,
-    pub name: Arc<str>,
-    pub buf: Option<UniqueBuf>,
-    pub len: usize,
-    pub off: Offsets,
+pub fn new_chained_offset_chunk_producer_ascii_whitespace<
+    R: Read,
+    N: Borrow<str>,
+    I: Iterator<Item = (R, N)>,
+>(
+    r: I,
+    chunk_size: usize,
+) -> ChainedChunkProducer<
+    WhitespaceChunkProducer<R, impl FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64>,
+> {
+    ChainedChunkProducer(
+        r.enumerate()
+            .map(|(i, (r, name))| {
+                new_offset_chunk_producer_ascii_whitespace(
+                    r,
+                    chunk_size,
+                    name.borrow(),
+                    /*start_version=*/ (i as u32).wrapping_add(1),
+                )
+            })
+            .collect(),
+    )
 }
 
-impl Default for OffsetChunk {
-    fn default() -> OffsetChunk {
-        OffsetChunk {
-            version: 0,
-            name: "".into(),
-            buf: None,
-            len: 0,
-            off: Offsets::default(),
-        }
-    }
-}
-
-impl Chunk for OffsetChunk {
-    fn get_name(&self) -> &str {
-        &*self.name
-    }
-}
 impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
     type Chunk = C;
     fn try_dyn_resize(
@@ -192,6 +216,34 @@ impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
     }
     fn get_chunk(&mut self, chunk: &mut C) -> Result<bool> {
         (&mut **self).get_chunk(chunk)
+    }
+}
+
+// TODO: WhitepsaceOffsetChunk{,Producer}
+
+pub struct OffsetChunk<Off = Offsets> {
+    pub version: u32,
+    pub name: Arc<str>,
+    pub buf: Option<UniqueBuf>,
+    pub len: usize,
+    pub off: Off,
+}
+
+impl<Off: Default> Default for OffsetChunk<Off> {
+    fn default() -> OffsetChunk<Off> {
+        OffsetChunk {
+            version: 0,
+            name: "".into(),
+            buf: None,
+            len: 0,
+            off: Default::default(),
+        }
+    }
+}
+
+impl<Off: Default + Send> Chunk for OffsetChunk<Off> {
+    fn get_name(&self) -> &str {
+        &*self.name
     }
 }
 
@@ -257,6 +309,77 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                             chunk.buf = Some(buf.try_unique().unwrap());
                             chunk.off.fields.truncate(always_truncate);
                             self.state = ChunkState::Done;
+                            Ok(false)
+                        }
+                        // We read an entire chunk, but we didn't find a full record. Try again
+                        // (note that the call to reset read in a larger chunk and would have kept
+                        // a prefix)
+                        (true, false) => continue,
+                    };
+                }
+                ChunkState::Done => return Ok(true),
+            }
+        }
+    }
+}
+
+pub struct WhitespaceChunkProducer<R, F>(OffsetChunkProducer<R, F>, u64);
+
+impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
+    for WhitespaceChunkProducer<R, F>
+{
+    type Chunk = OffsetChunk<WhitespaceOffsets>;
+    fn next_file(&mut self) -> Result<bool> {
+        self.0.state = ChunkState::Done;
+        self.0.inner.force_eof();
+        Ok(false)
+    }
+    fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool> {
+        loop {
+            match self.0.state {
+                ChunkState::Init => {
+                    self.0.state = if self.0.inner.reset()? {
+                        ChunkState::Done
+                    } else {
+                        ChunkState::Main
+                    };
+                }
+                ChunkState::Main => {
+                    chunk.version = self.0.cur_file_version;
+                    chunk.name = self.0.name.clone();
+                    let buf = self.0.inner.buf.clone();
+                    let bs = buf.as_bytes();
+                    self.1 = (self.0.find_indexes)(bs, &mut chunk.off, self.1);
+                    // Find the last newline in the buffer, if there is one.
+                    let (is_partial, truncate_to) =
+                        if let Some(nl_off) = chunk.off.nl.fields.last().cloned() {
+                            self.0.inner.start = nl_off as usize + 1;
+                            let mut start = chunk.off.ws.fields.len() as isize - 1;
+                            while start > 0 {
+                                if chunk.off.ws.fields[start as usize] > nl_off as u64 {
+                                    start -= 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                            (false, start as usize)
+                        } else {
+                            (true, 0)
+                        };
+                    chunk.len = self.0.inner.end;
+                    let is_eof = self.0.inner.reset()?;
+                    return match (is_partial, is_eof) {
+                        (false, false) => {
+                            // Yield buffer, stay in main.
+                            chunk.buf = Some(buf.try_unique().unwrap());
+                            chunk.off.ws.fields.truncate(truncate_to);
+                            Ok(false)
+                        }
+                        (false, true) | (true, true) => {
+                            // Yield the entire buffer, this was the last piece of data.
+                            self.0.inner.clear_buf();
+                            chunk.buf = Some(buf.try_unique().unwrap());
+                            self.0.state = ChunkState::Done;
                             Ok(false)
                         }
                         // We read an entire chunk, but we didn't find a full record. Try again
