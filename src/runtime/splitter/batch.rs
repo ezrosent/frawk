@@ -229,6 +229,15 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
     }
 }
 
+// Offsets for the "split by ASCII whitespace" mode. Because newlines do not always coincide with
+// the end of a field (think of the string "f1 f2 f3   \n"), we have a separate stream of offsets
+// for field boundaries and for newlines.
+#[derive(Default, Debug)]
+pub struct WhitespaceOffsets {
+    pub ws: Offsets,
+    pub nl: Offsets,
+}
+
 #[derive(Default, Debug)]
 pub struct Offsets {
     pub start: usize,
@@ -557,7 +566,7 @@ impl InputFormat {
     }
 }
 
-// get_find_indexes{_bytes}, what's that all about?
+// get_find_indexes{_bytes,_ascii_whitespace}, what's that all about?
 //
 // These functions use vector instructions that, while commonly supported on x86, are occasionally
 // missing. The safest way to handle this fact is to query _at runtime_ whether or not a given
@@ -603,6 +612,21 @@ pub fn get_find_indexes_bytes() -> unsafe fn(&[u8], &mut Offsets, u8, u8) {
         generic::find_indexes_byte::<sse2::Impl>
     } else {
         generic::find_indexes_byte::<generic::Impl>
+    }
+}
+
+pub fn get_find_indexes_ascii_whitespace() -> unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64 {
+    #[cfg(feature = "allow_avx2")]
+    const ALLOW_AVX2: bool = true;
+    #[cfg(not(feature = "allow_avx2"))]
+    const ALLOW_AVX2: bool = false;
+
+    if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
+        generic::find_indexes_ascii_whitespace::<avx2::Impl>
+    } else if is_x86_feature_detected!("sse2") {
+        generic::find_indexes_ascii_whitespace::<sse2::Impl>
+    } else {
+        generic::find_indexes_ascii_whitespace::<generic::Impl>
     }
 }
 
@@ -685,7 +709,7 @@ mod escape_tests {
 }
 
 mod generic {
-    use super::Offsets;
+    use super::{Offsets, WhitespaceOffsets};
     const MAX_INPUT_SIZE: usize = 64;
 
     pub trait Vector: Copy {
@@ -1035,6 +1059,95 @@ mod generic {
         (0, 0)
     }
 
+    pub unsafe fn find_indexes_ascii_whitespace<V: Vector>(
+        buf: &[u8],
+        offsets: &mut WhitespaceOffsets,
+        mut start_ws: u64, /*start at 1*/
+    ) -> u64 /*next start ws*/ {
+        let field_offsets = &mut offsets.ws;
+        let newline_offsets = &mut offsets.nl;
+        field_offsets.fields.clear();
+        field_offsets.fields.reserve(buf.len());
+        field_offsets.start = 0;
+        newline_offsets.fields.clear();
+        newline_offsets.fields.reserve(buf.len());
+        newline_offsets.start = 0;
+
+        // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
+        // reuse this across different chunks.
+        let buf_ptr = buf.as_ptr();
+        let len = buf.len();
+        let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
+        let mut ix = 0;
+        let field_base_ptr: *mut u64 = field_offsets.fields.get_unchecked_mut(0);
+        let newline_base_ptr: *mut u64 = newline_offsets.fields.get_unchecked_mut(0);
+        let mut field_base = 0;
+        let mut newline_base = 0;
+
+        // For ... reasons (better pipelining? better cache behavior?) we decode in blocks.
+        const BUFFER_SIZE: usize = 4;
+        macro_rules! iterate {
+            ($buf:expr) => {{
+                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
+                let inp = V::fill_input($buf);
+                let (ws, nl, next_start) = inp.whitespace_masks(start_ws);
+                start_ws = next_start;
+                (ws, nl)
+            }};
+        }
+        if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
+            let mut fields = [0u64; BUFFER_SIZE];
+            let mut nls = [0u64; BUFFER_SIZE];
+            while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
+                for b in 0..BUFFER_SIZE {
+                    let (ws, nl) = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
+                    fields[b] = ws;
+                    nls[b] = nl;
+                }
+                for b in 0..BUFFER_SIZE {
+                    let internal_ix = V::INPUT_SIZE * b + ix;
+                    flatten_bits(
+                        field_base_ptr,
+                        &mut field_base,
+                        internal_ix as u64,
+                        fields[b],
+                    );
+                    flatten_bits(
+                        newline_base_ptr,
+                        &mut newline_base,
+                        internal_ix as u64,
+                        nls[b],
+                    );
+                }
+                ix += V::INPUT_SIZE * BUFFER_SIZE;
+            }
+        }
+        // Do an unbuffered version for the remaining data
+        while ix < len_minus_64 {
+            let (fields, nl) = iterate!(buf_ptr.offset(ix as isize));
+            flatten_bits(field_base_ptr, &mut field_base, ix as u64, fields);
+            flatten_bits(newline_base_ptr, &mut newline_base, ix as u64, nl);
+            ix += V::INPUT_SIZE;
+        }
+        // For any text that remains, just copy the results to the stack with some padding and do
+        // one more iteration.
+        let remaining = len - ix;
+        if remaining > 0 {
+            let mut rest = [0u8; MAX_INPUT_SIZE];
+            std::ptr::copy_nonoverlapping(
+                buf_ptr.offset(ix as isize),
+                rest.as_mut_ptr(),
+                remaining,
+            );
+            let (fields, nl) = iterate!(rest.as_mut_ptr());
+            flatten_bits(field_base_ptr, &mut field_base, ix as u64, fields);
+            flatten_bits(newline_base_ptr, &mut newline_base, ix as u64, nl);
+        }
+        field_offsets.fields.set_len(field_base as usize);
+        newline_offsets.fields.set_len(newline_base as usize);
+        start_ws
+    }
+
     pub unsafe fn find_indexes_tsv<V: Vector>(
         buf: &[u8],
         offsets: &mut Offsets,
@@ -1189,9 +1302,9 @@ mod avx2 {
     }
 }
 
-pub struct ByteReader<P> {
+pub struct ByteReader<P: ChunkProducer> {
     prod: P,
-    cur_chunk: OffsetChunk,
+    cur_chunk: P::Chunk,
     cur_buf: Buf,
     buf_len: usize,
     used_fields: FieldSet,
@@ -1246,7 +1359,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         };
         ByteReader {
             prod,
-            cur_chunk: OffsetChunk::default(),
+            cur_chunk: Default::default(),
             cur_buf: UniqueBuf::new(0).into_buf(),
             buf_len: 0,
             progress: 0,
@@ -1257,7 +1370,58 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     }
 }
 
-impl LineReader for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
+impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> {
+    pub fn new_whitespace<I, S>(rs: I, chunk_size: usize, exec_strategy: ExecutionStrategy) -> Self
+    where
+        I: Iterator<Item = (S, String)> + 'static + Send,
+        S: Read + Send + 'static,
+    {
+        let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>> =
+            match exec_strategy {
+                ExecutionStrategy::Serial => Box::new(
+                    chunk::new_chained_offset_chunk_producer_ascii_whitespace(rs, chunk_size),
+                ),
+                x @ ExecutionStrategy::ShardPerRecord => {
+                    Box::new(ParallelChunkProducer::new(
+                        move || {
+                            chunk::new_chained_offset_chunk_producer_ascii_whitespace(
+                                rs, chunk_size,
+                            )
+                        },
+                        /*channel_size*/ x.num_workers() * 2,
+                    ))
+                }
+                ExecutionStrategy::ShardPerFile => {
+                    let iter = rs.enumerate().map(move |(i, (r, name))| {
+                        move || {
+                            chunk::new_offset_chunk_producer_ascii_whitespace(
+                                r,
+                                chunk_size,
+                                name.as_str(),
+                                i as u32 + 1,
+                            )
+                        }
+                    });
+                    Box::new(ShardedChunkProducer::new(iter))
+                }
+            };
+        ByteReader {
+            prod,
+            cur_chunk: Default::default(),
+            cur_buf: UniqueBuf::new(0).into_buf(),
+            buf_len: 0,
+            progress: 0,
+            record_sep: 0, // unused
+            used_fields: FieldSet::all(),
+            last_len: usize::max_value(),
+        }
+    }
+}
+
+impl<C: Chunk + 'static> LineReader for ByteReader<Box<dyn ChunkProducer<Chunk = C>>>
+where
+    Self: ByteReaderBase,
+{
     type Line = DefaultLine;
     fn filename(&self) -> Str<'static> {
         Str::from(self.cur_chunk.get_name()).unmoor()
@@ -1270,7 +1434,7 @@ impl LineReader for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             let record_sep = self.record_sep;
             res.push(Box::new(move || ByteReader {
                 prod: p_factory(),
-                cur_chunk: OffsetChunk::default(),
+                cur_chunk: Default::default(),
                 cur_buf: UniqueBuf::new(0).into_buf(),
                 buf_len: 0,
                 progress: 0,
@@ -1292,7 +1456,7 @@ impl LineReader for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         _rc: &mut RegexCache,
         old: &'a mut DefaultLine,
     ) -> Result<bool> {
-        let start = self.cur_chunk.version == 0;
+        let start = self.cur_chunk_version() == 0;
         old.diverged = false;
         // We use the same protocol as DefaultSplitter, RegexSplitter. See comments for more info.
         if start {
@@ -1306,7 +1470,7 @@ impl LineReader for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         Ok(changed)
     }
     fn read_state(&self) -> i64 {
-        if self.cur_chunk.version != 0 && self.last_len == 0 {
+        if self.cur_chunk_version() != 0 && self.last_len == 0 {
             ReaderState::EOF as i64
         } else {
             ReaderState::OK as i64
@@ -1322,54 +1486,93 @@ impl LineReader for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     }
 }
 
-impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReader<P> {
-    // This will panic if the current architecture does not support SIMD, etc. bytereader_supported
-    // does this check.
-    fn refresh_buf(&mut self) -> Result<(/* eof */ bool, /*file changed*/ bool)> {
-        let prev_version = self.cur_chunk.version;
-        if self.prod.get_chunk(&mut self.cur_chunk)? {
-            // See comment in the equivalent line in CSVReader.
-            self.cur_chunk.version = std::cmp::max(prev_version, 1);
-            return Ok((true, false));
-        }
-        self.cur_buf = self.cur_chunk.buf.take().unwrap().into_buf();
-        self.buf_len = self.cur_chunk.len;
-        self.progress = 0;
-        Ok((false, prev_version != self.cur_chunk.version))
-    }
-
+pub trait ByteReaderBase {
     fn read_line_inner<'a, 'b: 'a>(
         &'b mut self,
         line: &'a mut Str<'static>,
         fields: &'a mut Vec<Str<'static>>,
-    ) -> Result</* file changed */ bool> {
-        let mut changed = false;
-        if self.cur_chunk.off.start == self.cur_chunk.off.fields.len() {
-            // What's going on with this second test? self.refresh_buf() returns Ok(true) if we
-            // were unable to fetch more data due to an EOF. The last execution consumed buffer up
-            // to the last record separator in the input, but there may be remaining data filling
-            // up the rest of the buffer with no more record or field separators. In that case, we
-            // want to return the rest of the input as a single-field record, which one more
-            // `consume_line` will indeed accomplish.
-            let (is_eof, has_changed) = self.refresh_buf()?;
-            changed = has_changed;
-            if is_eof && self.progress == self.buf_len {
-                *line = Str::default();
-                self.last_len = 0;
-                debug_assert!(!changed);
-                return Ok(false);
-            }
-        }
-        let (next_line, consumed) = unsafe { self.consume_line(fields) };
-        *line = next_line;
-        self.last_len = consumed;
-        Ok(changed)
-    }
+    ) -> Result</*file changed*/ bool>;
 
+    fn maybe_done(&self) -> bool;
+    fn refresh_buf(&mut self) -> Result<(/*eof*/ bool, /*file changed*/ bool)>;
     unsafe fn consume_line<'a, 'b: 'a>(
         &'b mut self,
         fields: &'a mut Vec<Str<'static>>,
-    ) -> (Str<'static>, /*bytes consumed */ usize) {
+    ) -> (Str<'static>, /*bytes consumed*/ usize);
+    fn cur_chunk_version(&self) -> u32;
+}
+
+fn refresh_buf_impl<T, P: ChunkProducer<Chunk = OffsetChunk<T>>>(
+    br: &mut ByteReader<P>,
+) -> Result<(bool, bool)>
+where
+    OffsetChunk<T>: Chunk,
+{
+    let prev_version = br.cur_chunk.version;
+    if br.prod.get_chunk(&mut br.cur_chunk)? {
+        // See comment in the equivalent line in CSVReader.
+        br.cur_chunk.version = std::cmp::max(prev_version, 1);
+        return Ok((true, false));
+    }
+    br.cur_buf = br.cur_chunk.buf.take().unwrap().into_buf();
+    br.buf_len = br.cur_chunk.len;
+    br.progress = 0;
+    Ok((false, prev_version != br.cur_chunk.version))
+}
+
+fn read_line_inner_impl<'a, 'b: 'a, T, P: ChunkProducer<Chunk = OffsetChunk<T>>>(
+    br: &'b mut ByteReader<P>,
+    line: &'a mut Str<'static>,
+    fields: &'a mut Vec<Str<'static>>,
+) -> Result<bool>
+where
+    OffsetChunk<T>: Chunk,
+    ByteReader<P>: ByteReaderBase,
+{
+    let mut changed = false;
+    if br.maybe_done() {
+        // What's going on with this second test? br.refresh_buf() returns Ok(true) if we
+        // were unable to fetch more data due to an EOF. The last execution consumed buffer up
+        // to the last record separator in the input, but there may be remaining data filling
+        // up the rest of the buffer with no more record or field separators. In that case, we
+        // want to return the rest of the input as a single-field record, which one more
+        // `consume_line` will indeed accomplish.
+        let (is_eof, has_changed) = br.refresh_buf()?;
+        changed = has_changed;
+        if is_eof && br.progress == br.buf_len {
+            *line = Str::default();
+            br.last_len = 0;
+            debug_assert!(!changed);
+            return Ok(false);
+        }
+    }
+    let (next_line, consumed) = unsafe { br.consume_line(fields) };
+    *line = next_line;
+    br.last_len = consumed;
+    Ok(changed)
+}
+
+impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
+    fn cur_chunk_version(&self) -> u32 {
+        self.cur_chunk.version
+    }
+    fn refresh_buf(&mut self) -> Result<(bool, bool)> {
+        refresh_buf_impl(self)
+    }
+    fn maybe_done(&self) -> bool {
+        self.cur_chunk.off.start == self.cur_chunk.off.fields.len()
+    }
+    fn read_line_inner<'a, 'b: 'a>(
+        &'b mut self,
+        line: &'a mut Str<'static>,
+        fields: &'a mut Vec<Str<'static>>,
+    ) -> Result<bool> {
+        read_line_inner_impl(self, line, fields)
+    }
+    unsafe fn consume_line<'a, 'b: 'a>(
+        &'b mut self,
+        fields: &'a mut Vec<Str<'static>>,
+    ) -> (Str<'static>, usize) {
         let buf = &self.cur_buf;
         macro_rules! get_field {
             ($fld:expr, $start:expr, $end:expr) => {
@@ -1404,6 +1607,80 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReader<P> {
         self.progress = self.buf_len;
         let line = get_field!(0, line_start, self.buf_len);
         (line, self.buf_len - line_start)
+    }
+}
+
+impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> {
+    fn cur_chunk_version(&self) -> u32 {
+        self.cur_chunk.version
+    }
+    fn refresh_buf(&mut self) -> Result<(bool, bool)> {
+        refresh_buf_impl(self)
+    }
+    fn maybe_done(&self) -> bool {
+        self.cur_chunk.off.nl.start == self.cur_chunk.off.nl.fields.len()
+            && self.cur_chunk.off.ws.start == self.cur_chunk.off.ws.fields.len()
+    }
+    fn read_line_inner<'a, 'b: 'a>(
+        &'b mut self,
+        line: &'a mut Str<'static>,
+        fields: &'a mut Vec<Str<'static>>,
+    ) -> Result<bool> {
+        read_line_inner_impl(self, line, fields)
+    }
+    unsafe fn consume_line<'a, 'b: 'a>(
+        &'b mut self,
+        fields: &'a mut Vec<Str<'static>>,
+    ) -> (Str<'static>, usize) {
+        let buf = &self.cur_buf;
+        macro_rules! get_field {
+            ($fld:expr, $start:expr, $end:expr) => {
+                if self.used_fields.get($fld) {
+                    buf.slice_to_str($start, $end)
+                } else {
+                    Str::default()
+                }
+            };
+            ($index:expr) => {
+                get_field!(fields.len() + 1, self.progress, $index)
+            };
+        }
+
+        let line_start = self.progress;
+        macro_rules! build_record {
+            ($end:expr) => {{
+                let record_end = $end as usize;
+                let mut iter = self.cur_chunk.off.ws.fields[self.progress..]
+                    .iter()
+                    .cloned()
+                    .map(|x| x as usize)
+                    .take_while(|x| x <= &record_end);
+                while let Some(field_start) = iter.next() {
+                    self.progress = field_start;
+                    self.cur_chunk.off.ws.start += 1;
+                    if let Some(field_end) = iter.next() {
+                        fields.push(get_field!(field_end));
+                        self.progress = field_end;
+                        self.cur_chunk.off.ws.start += 1;
+                    } else {
+                        fields.push(get_field!(record_end));
+                        self.progress = record_end;
+                    }
+                }
+            }};
+        }
+        let offs_nl = &mut self.cur_chunk.off.nl;
+        if offs_nl.start == offs_nl.fields.len() {
+            build_record!(self.buf_len);
+        } else {
+            let record_end = offs_nl.fields[offs_nl.start];
+            offs_nl.start += 1;
+            build_record!(record_end);
+        }
+        (
+            buf.slice_to_str(line_start, self.progress),
+            self.progress - line_start,
+        )
     }
 }
 
