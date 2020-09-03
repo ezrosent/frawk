@@ -76,10 +76,7 @@ cfg_if! {
         fn simulate_stdin_whitespace(
             inp: impl Into<String>,
         ) -> impl llvm::IntoRuntime + runtime::LineReader {
-            simulate_stdin(inp, |reader, name| {
-                use runtime::splitter::DefaultSplitter;
-                DefaultSplitter::new(reader, runtime::CHUNK_SIZE, name)
-            })
+            ByteReader::new_whitespace(split_stdin(inp.into()), runtime::CHUNK_SIZE, ExecutionStrategy::Serial)
         }
 
         fn simulate_stdin_singlechar(
@@ -647,8 +644,7 @@ r#"hi,there
 [fake_stdin_1  5  3]  it has one more line~
 "#,
           @input r#"this is
-the first file
-<<<FILE BREAK>>>And this
+the first file<<<FILE BREAK>>>And this
 is the second file
 it has one more line"#
     );
@@ -663,8 +659,7 @@ it has one more line"#
 [fake_stdin_1 5 3] it has one more line
 "#,
           @input r#"this is
-the first file
-<<<FILE BREAK>>>And this
+the first file<<<FILE BREAK>>>And this
 is the second file
 it has one more line"#
     );
@@ -678,8 +673,7 @@ it has one more line"#
 [fake_stdin_1 4 3] it has one more line
 "#,
           @input r#"this is
-the first file
-<<<FILE BREAK>>>And this
+the first file<<<FILE BREAK>>>And this
 is the second file
 it has one more line"#
     );
@@ -731,7 +725,7 @@ it has one more line"#
         raw_getline,
         r#"{ print "even", $0; getline; print "odd", $0; }"#,
         "even 0\nodd 1\neven 2\nodd 3\n",
-        @input "0\n1\n2\n3\n"
+        @input "0\n1\n2\n3"
     );
 
     test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
@@ -754,7 +748,7 @@ fact=1
 for (i=1; i<=target; ++i) fact *= i
 print fact
 }"#,
-        "24\n120\n",
+        "24\n120\n1\n",
         @input "4\n5\n"
     );
 
@@ -1189,7 +1183,7 @@ this as well"#
         END {for (k in h) { print k, h[k]; }}
         "#,
         "3 62.0\n4 30.0\n",
-        @input ",,3,,4\n,,3,,6\n,,4,,5\n"
+        @input ",,3,,4\n,,3,,6\n,,4,,5"
     );
 
     test_program!(

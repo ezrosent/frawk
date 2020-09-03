@@ -138,7 +138,7 @@ pub fn new_chained_offset_chunk_producer_csv<
     chunk_size: usize,
     ifmt: InputFormat,
 ) -> ChainedChunkProducer<OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)>> {
-    ChainedChunkProducer(
+    ChainedChunkProducer::new(
         r.enumerate()
             .map(|(i, (r, name))| {
                 new_offset_chunk_producer_csv(
@@ -163,7 +163,7 @@ pub fn new_chained_offset_chunk_producer_bytes<
     field_sep: u8,
     record_sep: u8,
 ) -> ChainedChunkProducer<OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)>> {
-    ChainedChunkProducer(
+    ChainedChunkProducer::new(
         r.enumerate()
             .map(|(i, (r, name))| {
                 new_offset_chunk_producer_bytes(
@@ -189,7 +189,7 @@ pub fn new_chained_offset_chunk_producer_ascii_whitespace<
 ) -> ChainedChunkProducer<
     WhitespaceChunkProducer<R, impl FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64>,
 > {
-    ChainedChunkProducer(
+    ChainedChunkProducer::new(
         r.enumerate()
             .map(|(i, (r, name))| {
                 new_offset_chunk_producer_ascii_whitespace(
@@ -218,8 +218,6 @@ impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
         (&mut **self).get_chunk(chunk)
     }
 }
-
-// TODO: WhitepsaceOffsetChunk{,Producer}
 
 pub struct OffsetChunk<Off = Offsets> {
     pub version: u32,
@@ -396,6 +394,14 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
 }
 
 pub struct ChainedChunkProducer<P>(Vec<P>);
+
+impl<P> ChainedChunkProducer<P> {
+    fn new(mut v: Vec<P>) -> ChainedChunkProducer<P> {
+        v.reverse();
+        ChainedChunkProducer(v)
+    }
+}
+
 impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
     type Chunk = P::Chunk;
 

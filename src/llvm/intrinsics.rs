@@ -8,10 +8,9 @@ use crate::runtime::{
     self,
     printf::{printf, FormatArg},
     splitter::{
-        batch::{ByteReader, CSVReader},
+        batch::{ByteReader, CSVReader, WhitespaceOffsets},
         chunk::{ChunkProducer, OffsetChunk},
         regex::RegexSplitter,
-        DefaultSplitter,
     },
     ChainedReader, FileRead, Float, Int, IntMap, Line, LineReader, Str, StrMap,
 };
@@ -96,7 +95,7 @@ macro_rules! with_input {
 pub(crate) type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
 pub(crate) enum InputData {
     V1(InputTuple<CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>),
-    V2(InputTuple<ChainedReader<DefaultSplitter<Box<dyn io::Read + Send>>>>),
+    V2(InputTuple<ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>>>),
     V3(InputTuple<ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>),
     V4(InputTuple<ChainedReader<RegexSplitter<Box<dyn io::Read + Send>>>>),
 }
@@ -137,7 +136,10 @@ macro_rules! impl_into_runtime {
 }
 
 impl_into_runtime!(CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V1);
-impl_into_runtime!(ChainedReader<DefaultSplitter<Box<dyn io::Read + Send>>>, V2);
+impl_into_runtime!(
+    ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>>,
+    V2
+);
 impl_into_runtime!(ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V3);
 impl_into_runtime!(ChainedReader<RegexSplitter<Box<dyn io::Read + Send>>>, V4);
 

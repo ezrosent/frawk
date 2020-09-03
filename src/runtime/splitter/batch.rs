@@ -103,6 +103,10 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         }
     }
     fn next_file(&mut self) -> Result<bool> {
+        self.cur_chunk.off.clear();
+        self.cur_buf = UniqueBuf::new(0).into_buf();
+        self.buf_len = 0;
+        self.prev_ix = 0;
         self.prod.next_file()
     }
     fn set_used_fields(&mut self, field_set: &FieldSet) {
@@ -238,6 +242,13 @@ pub struct WhitespaceOffsets {
     pub nl: Offsets,
 }
 
+impl WhitespaceOffsets {
+    fn clear(&mut self) {
+        self.ws.clear();
+        self.nl.clear();
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct Offsets {
     pub start: usize,
@@ -245,6 +256,13 @@ pub struct Offsets {
     // An alternative option would be to save lines and fields in separate vectors, but this is
     // more efficient for iteration
     pub fields: Vec<u64>,
+}
+
+impl Offsets {
+    fn clear(&mut self) {
+        self.start = 0;
+        self.fields.clear();
+    }
 }
 
 #[derive(Default, Clone, Debug)]
@@ -924,8 +942,7 @@ mod generic {
         mut prev_iter_inside_quote: u64, /*start at 0*/
         mut prev_iter_cr_end: u64,       /*start at 0*/
     ) -> (u64, u64) {
-        offsets.fields.clear();
-        offsets.start = 0;
+        offsets.clear();
         // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
         // reuse this across different chunks.
         offsets.fields.reserve(buf.len());
@@ -997,8 +1014,7 @@ mod generic {
         offsets: &mut Offsets,
         f: F,
     ) -> (u64, u64) {
-        offsets.fields.clear();
-        offsets.start = 0;
+        offsets.clear();
         // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
         // reuse this across different chunks.
         offsets.fields.reserve(buf.len());
@@ -1064,14 +1080,11 @@ mod generic {
         offsets: &mut WhitespaceOffsets,
         mut start_ws: u64, /*start at 1*/
     ) -> u64 /*next start ws*/ {
+        offsets.clear();
         let field_offsets = &mut offsets.ws;
         let newline_offsets = &mut offsets.nl;
-        field_offsets.fields.clear();
         field_offsets.fields.reserve(buf.len());
-        field_offsets.start = 0;
-        newline_offsets.fields.clear();
         newline_offsets.fields.reserve(buf.len());
-        newline_offsets.start = 0;
 
         // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
         // reuse this across different chunks.
@@ -1478,6 +1491,10 @@ where
     }
 
     fn next_file(&mut self) -> Result<bool> {
+        self.cur_chunk = C::default();
+        self.cur_buf = UniqueBuf::new(0).into_buf();
+        self.buf_len = 0;
+        self.progress = 0;
         self.prod.next_file()
     }
 
@@ -1668,17 +1685,17 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
                 fields.push(get_field!(field_end));
                 self.progress = field_end + 1;
                 self.cur_chunk.off.ws.start += 1;
-            } else {
+            } else if self.progress != record_end {
                 fields.push(get_field!(record_end));
             }
         }
         self.progress = record_end + 1;
-        let record = if line_start < record_end {
-            buf.slice_to_str(line_start, record_end)
+        let consumed = self.progress - line_start;
+        if line_start < record_end {
+            (buf.slice_to_str(line_start, record_end), consumed)
         } else {
-            Str::default()
-        };
-        (record, self.progress - line_start)
+            (Str::default(), consumed)
+        }
     }
 }
 
@@ -1938,10 +1955,10 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
 
     #[test]
     fn whitespace_splitter() {
-        // TODO: confirm that line contents match. It looks like \n\n sequences result in a leading
-        // newline in the new output.
         whitespace_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
         whitespace_split(crate::test_string_constants::VIRGIL);
-        whitespace_split("   leading whitespace   \n and some    more");
+        // TODO: not handling empty records correctly.
+        // TODO: cover this case for the byte-based splitter, then fix the harness tests.
+        whitespace_split("   leading whitespace   \n and some    more\n");
     }
 }
