@@ -914,9 +914,9 @@ mod generic {
         *start_offset = next_start;
     }
 
-    // The find_indexes functions are progressively simple takes on "do a vectorized comparison
-    // against a byte sequence, write the indexes of matching indexes into Offsets." The first is
-    // very close to the simd-csv variant; simpler formats do a bit less.
+    // The find_indexes functions are variations on "do a vectorized comparison against a byte
+    // sequence, write the indexes of matching indexes into Offsets." The first is very close to
+    // the simd-csv variant; simpler formats do a bit less.
 
     pub unsafe fn find_indexes_csv<V: Vector>(
         buf: &[u8],
@@ -1647,40 +1647,38 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
         }
 
         let line_start = self.progress;
-        macro_rules! build_record {
-            ($end:expr) => {{
-                let record_end = $end as usize;
-                let mut iter = self.cur_chunk.off.ws.fields[self.progress..]
-                    .iter()
-                    .cloned()
-                    .map(|x| x as usize)
-                    .take_while(|x| x <= &record_end);
-                while let Some(field_start) = iter.next() {
-                    self.progress = field_start;
-                    self.cur_chunk.off.ws.start += 1;
-                    if let Some(field_end) = iter.next() {
-                        fields.push(get_field!(field_end));
-                        self.progress = field_end;
-                        self.cur_chunk.off.ws.start += 1;
-                    } else {
-                        fields.push(get_field!(record_end));
-                        self.progress = record_end;
-                    }
-                }
-            }};
-        }
         let offs_nl = &mut self.cur_chunk.off.nl;
-        if offs_nl.start == offs_nl.fields.len() {
-            build_record!(self.buf_len);
+        let record_end = if offs_nl.start == offs_nl.fields.len() {
+            self.buf_len
         } else {
             let record_end = offs_nl.fields[offs_nl.start];
             offs_nl.start += 1;
-            build_record!(record_end);
+            record_end as usize
+        };
+
+        let mut iter = self.cur_chunk.off.ws.fields[self.cur_chunk.off.ws.start..]
+            .iter()
+            .cloned()
+            .map(|x| x as usize)
+            .take_while(|x| x <= &record_end);
+        while let Some(field_start) = iter.next() {
+            self.progress = field_start;
+            self.cur_chunk.off.ws.start += 1;
+            if let Some(field_end) = iter.next() {
+                fields.push(get_field!(field_end));
+                self.progress = field_end + 1;
+                self.cur_chunk.off.ws.start += 1;
+            } else {
+                fields.push(get_field!(record_end));
+            }
         }
-        (
-            buf.slice_to_str(line_start, self.progress),
-            self.progress - line_start,
-        )
+        self.progress = record_end + 1;
+        let record = if line_start < record_end {
+            buf.slice_to_str(line_start, record_end)
+        } else {
+            Str::default()
+        };
+        (record, self.progress - line_start)
     }
 }
 
@@ -1876,5 +1874,74 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
     fn bytes_splitter_no_sep() {
         // One line, One field
         bytes_split(0u8, 0u8, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+    }
+
+    fn whitespace_split(corpus: &'static str) {
+        let mut _cache = RegexCache::default();
+        let _pat = Str::default();
+        let mut expected_lines: Vec<Str<'static>> = Vec::new();
+        let expected: Vec<Vec<Str<'static>>> = corpus
+            .split('\n')
+            .map(|line| {
+                expected_lines.push(line.into());
+                line.split(|c: char| c.is_ascii_whitespace())
+                    // trim of leading and trailing whitespace.
+                    .filter(|x| *x != "")
+                    .map(|x| Str::from(x).unmoor())
+                    .collect()
+            })
+            .collect();
+        let reader = std::io::Cursor::new(corpus);
+        let mut reader = ByteReader::new_whitespace(
+            std::iter::once((reader, String::from("fake-stdin"))),
+            1024,
+            ExecutionStrategy::Serial,
+        );
+        let mut got_lines = Vec::new();
+        let mut got = Vec::new();
+        loop {
+            let (_, line) = reader
+                .read_line(&_pat, &mut _cache)
+                .expect("failed to read line");
+            if reader.read_state() != 1 {
+                break;
+            }
+            got_lines.push(line.line.clone());
+            got.push(read_to_vec(&line.fields));
+        }
+        if got != expected || got_lines != expected_lines {
+            eprintln!(
+                "test failed! got vector of length {} and {}, expected {} lines",
+                got.len(),
+                got_lines.len(),
+                expected.len()
+            );
+            for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+                if g != e {
+                    eprintln!("===============");
+                    eprintln!("line {} has a mismatch (fields)", i);
+                    eprintln!("got:  {}", disp_vec(g));
+                    eprintln!("want: {}", disp_vec(e));
+                }
+            }
+            for (i, (g, e)) in got_lines.iter().zip(expected_lines.iter()).enumerate() {
+                if g != e {
+                    eprintln!("===============");
+                    eprintln!("line {} has a mismatch ($0)", i);
+                    eprintln!("got:  {:?}", format!("{}", g));
+                    eprintln!("want: {:?}", format!("{}", e));
+                }
+            }
+            panic!("test failed. See debug output");
+        }
+    }
+
+    #[test]
+    fn whitespace_splitter() {
+        // TODO: confirm that line contents match. It looks like \n\n sequences result in a leading
+        // newline in the new output.
+        whitespace_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+        whitespace_split(crate::test_string_constants::VIRGIL);
+        whitespace_split("   leading whitespace   \n and some    more");
     }
 }

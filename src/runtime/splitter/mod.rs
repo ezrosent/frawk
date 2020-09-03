@@ -592,6 +592,7 @@ impl<R: Read> Reader<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn read_to_vec<T: Clone + Default>(lv: &LazyVec<T>) -> Vec<T> {
         let mut res = Vec::with_capacity(lv.len());
         for i in 0..lv.len() {
@@ -599,12 +600,14 @@ mod tests {
         }
         res
     }
+
     fn disp_vec(v: &Vec<Str>) -> String {
         format!(
             "{:?}",
             v.iter().map(|s| format!("{}", s)).collect::<Vec<String>>()
         )
     }
+
     fn whitespace_split(corpus: &str) {
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
