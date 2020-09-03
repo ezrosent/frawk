@@ -59,7 +59,6 @@ use runtime::{
     splitter::{
         batch::{ByteReader, CSVReader, InputFormat},
         regex::RegexSplitter,
-        DefaultSplitter,
     },
     ChainedReader, LineReader, CHUNK_SIZE,
 };
@@ -453,7 +452,11 @@ fn main() {
                         let record_sep = record_sep.unwrap_or("\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
                             if field_sep == " " && record_sep == "\n" {
-                                let $inp = chained(DefaultSplitter::new(_reader, CHUNK_SIZE, "-"));
+                                let $inp = ByteReader::new_whitespace(
+                                    once((_reader, String::from("-"))),
+                                    CHUNK_SIZE,
+                                    exec_strategy,
+                                );
                                 $body
                             } else {
                                 let $inp = ByteReader::new(
@@ -493,20 +496,19 @@ fn main() {
                         let field_sep = field_sep.unwrap_or(" ");
                         let record_sep = record_sep.unwrap_or("\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
+                            let file_handles: Vec<_> = input_files
+                                .iter()
+                                .cloned()
+                                .map(move |file| (open_file_read(file.as_str()), file))
+                                .collect();
                             if field_sep == " " && record_sep == "\n" {
-                                let iter = input_files.iter().cloned().map(|file| {
-                                    let reader: Box<dyn io::Read + Send> =
-                                        Box::new(open_file_read(file.as_str()));
-                                    DefaultSplitter::new(reader, CHUNK_SIZE, file)
-                                });
-                                let $inp = ChainedReader::new(iter);
+                                let $inp = ByteReader::new_whitespace(
+                                    file_handles.into_iter(),
+                                    CHUNK_SIZE,
+                                    exec_strategy,
+                                );
                                 $body
                             } else {
-                                let file_handles: Vec<_> = input_files
-                                    .iter()
-                                    .cloned()
-                                    .map(move |file| (open_file_read(file.as_str()), file))
-                                    .collect();
                                 let $inp = ByteReader::new(
                                     file_handles.into_iter(),
                                     field_sep.as_bytes()[0],
