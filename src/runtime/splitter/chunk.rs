@@ -355,6 +355,9 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                             let mut start = chunk.off.ws.fields.len() as isize - 1;
                             while start > 0 {
                                 if chunk.off.ws.fields[start as usize] > nl_off as u64 {
+                                    // We are removing trailing fields from the input, but we know
+                                    // that newlines are whitespace, so we reset the start_ws
+                                    // variable to 1.
                                     self.1 = 1;
                                     start -= 1;
                                 } else {
