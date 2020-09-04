@@ -1326,6 +1326,7 @@ pub struct ByteReader<P: ChunkProducer> {
     record_sep: u8,
 
     last_len: usize,
+    yield_empty: bool,
 }
 
 impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
@@ -1379,6 +1380,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             record_sep,
             used_fields: FieldSet::all(),
             last_len: usize::max_value(),
+            yield_empty: false,
         }
     }
 }
@@ -1427,6 +1429,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
             record_sep: 0, // unused
             used_fields: FieldSet::all(),
             last_len: usize::max_value(),
+            yield_empty: false,
         }
     }
 }
@@ -1453,6 +1456,7 @@ where
                 progress: 0,
                 record_sep,
                 last_len: usize::max_value(),
+                yield_empty: false,
                 used_fields,
             }) as _)
         }
@@ -1554,11 +1558,13 @@ where
         // up the rest of the buffer with no more record or field separators. In that case, we
         // want to return the rest of the input as a single-field record, which one more
         // `consume_line` will indeed accomplish.
+        let yield_empty = br.yield_empty;
+        br.yield_empty = false;
         let (is_eof, has_changed) = br.refresh_buf()?;
         changed = has_changed;
         if is_eof && br.progress == br.buf_len {
             *line = Str::default();
-            br.last_len = 0;
+            br.last_len = if yield_empty { 1 } else { 0 };
             debug_assert!(!changed);
             return Ok(false);
         }
@@ -1607,17 +1613,25 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
         let line_start = self.progress;
         let bytes = &buf.as_bytes()[0..self.buf_len];
         let offs = &mut self.cur_chunk.off;
-        // TODO: figure out blank trailing lines.
         for index in &offs.fields[offs.start..] {
             let index = *index as usize;
             debug_assert!(index < self.buf_len);
 
             offs.start += 1;
             let is_record_sep = *bytes.get_unchecked(index) == self.record_sep;
-            fields.push(get_field!(index));
+            if !(is_record_sep && fields.len() == 0 && self.progress == index) {
+                // If we have a field of length 0, NF should be zero. This check fires when
+                // record_sep is the first offset we see for this line, and it occurs as the first
+                // character in the line.
+                fields.push(get_field!(index));
+            }
             self.progress = index + 1;
             if is_record_sep {
                 let line = get_field!(0, line_start, index);
+                // If the entire input stream ends on a record separator, Awk adds an additional
+                // empty line after the current line. yield_empty signals to insert this empty line
+                // if we have reached an EOF.
+                self.yield_empty = self.progress == self.buf_len;
                 return (line, self.progress - line_start);
             }
         }
@@ -1693,7 +1707,7 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
         self.progress = record_end + 1;
         let consumed = self.progress - line_start;
         if line_start < record_end {
-            (buf.slice_to_str(line_start, record_end), consumed)
+            (get_field!(0, line_start, record_end), consumed)
         } else {
             (Str::default(), consumed)
         }
@@ -1821,9 +1835,14 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             .split(rs as char)
             .map(|line| {
                 expected_lines.push(Str::from(line));
-                line.split(fs as char)
-                    .map(|x| Str::from(x).unmoor())
-                    .collect()
+                if line.len() == 0 {
+                    // For an empty line, Awk semantics are to have 0 fields.
+                    Vec::new()
+                } else {
+                    line.split(fs as char)
+                        .map(|x| Str::from(x).unmoor())
+                        .collect()
+                }
             })
             .collect();
         let reader = std::io::Cursor::new(corpus);
