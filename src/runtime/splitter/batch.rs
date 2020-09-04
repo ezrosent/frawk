@@ -1607,6 +1607,7 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
         let line_start = self.progress;
         let bytes = &buf.as_bytes()[0..self.buf_len];
         let offs = &mut self.cur_chunk.off;
+        // TODO: figure out blank trailing lines.
         for index in &offs.fields[offs.start..] {
             let index = *index as usize;
             debug_assert!(index < self.buf_len);
@@ -1815,9 +1816,11 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
     fn bytes_split(fs: u8, rs: u8, corpus: &'static str) {
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
+        let mut expected_lines: Vec<Str<'static>> = Vec::new();
         let expected: Vec<Vec<Str<'static>>> = corpus
             .split(rs as char)
             .map(|line| {
+                expected_lines.push(Str::from(line));
                 line.split(fs as char)
                     .map(|x| Str::from(x).unmoor())
                     .collect()
@@ -1831,7 +1834,8 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             1024,
             ExecutionStrategy::Serial,
         );
-        let mut got = Vec::with_capacity(corpus.len());
+        let mut got_lines = Vec::new();
+        let mut got = Vec::new();
         loop {
             let (_, line) = reader
                 .read_line(&_pat, &mut _cache)
@@ -1839,22 +1843,30 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             if reader.read_state() != 1 {
                 break;
             }
+            got_lines.push(line.line.clone());
             got.push(read_to_vec(&line.fields));
         }
-        if got != expected {
+        if got != expected || got_lines != expected_lines {
             eprintln!(
-                "test failed! got vector of length {}, expected {} lines",
+                "test failed! got vector of length {} and {} , expected {} lines",
                 got.len(),
+                got_lines.len(),
                 expected.len()
             );
             for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
-                eprintln!("===============");
-                if g == e {
-                    eprintln!("line {} matches", i);
-                } else {
+                if g != e {
+                    eprintln!("===============");
                     eprintln!("line {} has a mismatch", i);
                     eprintln!("got:  {}", disp_vec(g));
                     eprintln!("want: {}", disp_vec(e));
+                }
+            }
+            for (i, (g, e)) in got_lines.iter().zip(expected_lines.iter()).enumerate() {
+                if g != e {
+                    eprintln!("===============");
+                    eprintln!("line {} has a mismatch ($0)", i);
+                    eprintln!("got:  {:?}", format!("{}", g));
+                    eprintln!("want: {:?}", format!("{}", e));
                 }
             }
             panic!("test failed. See debug output");
@@ -1891,6 +1903,11 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
     fn bytes_splitter_no_sep() {
         // One line, One field
         bytes_split(0u8, 0u8, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+    }
+
+    #[test]
+    fn bytes_splitter_trailing() {
+        bytes_split(b' ', b'\n', "   leading whitespace   \n and some    more\n");
     }
 
     fn whitespace_split(corpus: &'static str) {
@@ -1957,8 +1974,6 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
     fn whitespace_splitter() {
         whitespace_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
         whitespace_split(crate::test_string_constants::VIRGIL);
-        // TODO: not handling empty records correctly.
-        // TODO: cover this case for the byte-based splitter, then fix the harness tests.
         whitespace_split("   leading whitespace   \n and some    more\n");
     }
 }
