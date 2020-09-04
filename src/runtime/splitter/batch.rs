@@ -753,6 +753,35 @@ mod generic {
             prev_iter_inside_quote: &mut u64,
         ) -> (/*inside quotes*/ u64, /*quote locations*/ u64);
 
+        // SIMD splitting by whitespace.
+        //
+        // whitespace_masks outputs (a) the position of newlines in the input and (b) the location
+        // of field delimiters. Unlike, say, byte-based splitting, the end of one field is not
+        // necessarily the start of the next field. To allow for this, the returned whitespace mask
+        // contains both the start and end offsets for individual fields. For example,
+        //
+        // [the raven  caws]
+        //  ^  ^^    ^ ^
+        // should have the offsets [0, 3, 4, 9, 11]. These are read off the offsets stream in
+        // pairs, with special handling for the end of the stream, and for newlines that land in
+        // the middle of a run of whitespace.
+        //
+        // We find these whitespace runs by computing masks for the presence of whitespace
+        // characters, then shifting by 1 and computing an XOR. In our above example
+        //
+        // Input:            [the raven  caws]
+        // Whitespace Mask:  [000100000110000]
+        // Shifted by 1:     [100010000011000]
+        //
+        // Where the extra 1 bit is governed by the start_ws variable. This is initialized to 1
+        // and otherwise takes on the value that is "shifted off" of the previous input (0, in this
+        // case).
+        //
+        // Xor of the two:   [100110000101000]
+        //
+        // Which provides us with the offsets that we need. This sequence is straightforward
+        // to implement with no branches, and using SIMD instructions that are fairly cheap on
+        // recent x86 hardware.
         #[inline(always)]
         unsafe fn whitespace_masks(
             self,
@@ -762,6 +791,7 @@ mod generic {
             /* newlines */ u64,
             /* next start_ws */ u64,
         ) {
+            // TODO: we could probably use a shuffle to do this faster.
             let space = self.cmp_against_input(b' ');
             let tab = self.cmp_against_input(b'\t');
             let nl = self.cmp_against_input(b'\n');
@@ -1025,16 +1055,9 @@ mod generic {
         let base_ptr: *mut u64 = offsets.fields.get_unchecked_mut(0);
         let mut base = 0;
 
-        // For ... reasons (better pipelining? better cache behavior?) we decode in blocks.
         const BUFFER_SIZE: usize = 4;
         macro_rules! iterate {
             ($buf:expr) => {{
-                // TODO/XXX Padding is only going to be 32 bytes ... what happens when you prefetch
-                // an invalid address? It may slow things down, not to mention we may be giving the
-                // compiler the wrong idea.
-                //
-                // Either increase padding, or decrease the prefetch interval.
-                // find commas not inside quotes
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 f($buf)
             }};
@@ -1075,6 +1098,9 @@ mod generic {
         (0, 0)
     }
 
+    // Unlike the other find_indexes methods, splitting by ASCII whitespace involves emitting two
+    // streams of offsets: once for newlines and one for field boundaries (encapsulated in
+    // WhitespaceOffsets). Other than that, the basic structure is the same.
     pub unsafe fn find_indexes_ascii_whitespace<V: Vector>(
         buf: &[u8],
         offsets: &mut WhitespaceOffsets,
@@ -1097,7 +1123,6 @@ mod generic {
         let mut field_base = 0;
         let mut newline_base = 0;
 
-        // For ... reasons (better pipelining? better cache behavior?) we decode in blocks.
         const BUFFER_SIZE: usize = 4;
         macro_rules! iterate {
             ($buf:expr) => {{
@@ -1507,6 +1532,10 @@ where
     }
 }
 
+// Most of the implementation for splitting by whitespace and splitting by a single byte are
+// shared. ByteReaderBase encapsulates the portions of the implementation that are different. This
+// isn't the cleanest abstraction, but given that it doesn't tend to "leak" into the rest of the
+// code-base, the win in code deduplication seems to justify its existence.
 pub trait ByteReaderBase {
     fn read_line_inner<'a, 'b: 'a>(
         &'b mut self,
@@ -1688,6 +1717,18 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             record_end as usize
         };
 
+        // See the comments for Vector::whitespace_masks for more info on the format of the offsets
+        // here.
+        //
+        // The goal is to parse the available whitespace runs that appear before the next newline.
+        // If a field is ended by the newline, it will appear in ws.fields, so the only case in
+        // which we will not have an even number of offsets is when we are at the end of the entire
+        // input stream. That leaves us two cases:
+        //
+        // 1. We have a pair of start and end offsets for each field, these are appended to the
+        //    `fields` vector if they're present in used_fields.
+        // 2. We are at the end of the input, in which case we take from the start offset to the
+        //    end of the buffer.
         let mut iter = self.cur_chunk.off.ws.fields[self.cur_chunk.off.ws.start..]
             .iter()
             .cloned()
