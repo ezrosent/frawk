@@ -9,11 +9,11 @@ was added to frawk to support parallel programming, but running a script in
 parallel can change the meaning of a script. The second portion provides an
 overview of the semantics of a frawk script when it is run in parallel.
 
-> Note: frawk only supports parallel execution for CSV, TSV, and scripts that
-> only use a unique, single-byte field separator and single-byte record
-> separator. In time, this limitation will be relaxed, but those formats are
-> unlikely to support the same level of performance with record-level
-> parallelism.
+> Note: frawk only supports parallel execution for CSV, TSV, scripts that only
+> split by whitespace, and scripts that only use a unique, single-byte field
+> separator and single-byte record separator. In time, this limitation may be
+> relaxed, but those formats are unlikely to support the same level of
+> performance with record-level parallelism.
 
 ## Reading Input In Parallel
 
