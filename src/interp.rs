@@ -705,6 +705,17 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let dst = *dst;
                         *self.get_mut(dst) = ff.eval2(fx, fy);
                     }
+                    Int1(bw, dst, src) => {
+                        let i = *index(&self.ints, src);
+                        let dst = *dst;
+                        *self.get_mut(dst) = bw.eval1(i);
+                    }
+                    Int2(bw, dst, x, y) => {
+                        let ix = *index(&self.ints, x);
+                        let iy = *index(&self.ints, y);
+                        let dst = *dst;
+                        *self.get_mut(dst) = bw.eval2(ix, iy);
+                    }
                     Rand(dst) => {
                         let res: f64 = self.core.rng.gen_range(0.0, 1.0);
                         *index_mut(&mut self.floats, dst) = res;

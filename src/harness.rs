@@ -1127,6 +1127,20 @@ this as well"#
     );
 
     test_program!(
+        bitwise_operators,
+        r#"BEGIN {
+        print xor(1,3);
+        print or(1, 3);
+        print compl(-2);
+        print lshift(1, 8);
+        print rshift(256, 8);
+        print rshift(-1, 62);
+        print rshiftl(-1, 62);
+        }"#,
+        "2\n3\n1\n256\n1\n-1\n3\n"
+    );
+
+    test_program!(
         column_substitutions,
         r#"{
         yr=gsub(/l/,"na")

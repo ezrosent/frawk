@@ -123,6 +123,7 @@ impl Display for Function {
             Unop(u) => write!(f, "{}", u),
             Binop(b) => write!(f, "{}", b),
             FloatFunc(ff) => write!(f, "{}", ff.func_name()),
+            IntFunc(bw) => write!(f, "{}", bw.func_name()),
             Print => write!(f, "print"),
             PrintStdout => write!(f, "print(stdout)"),
             ReadErr => write!(f, "hasline"),

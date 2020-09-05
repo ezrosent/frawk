@@ -1262,6 +1262,15 @@ impl<'a, 'b> View<'a, 'b> {
                     }
                 }
             }
+            IntFunc(bw) => {
+                if res_reg != UNUSED {
+                    match bw.arity() {
+                        1 => self.pushl(LL::Int1(*bw, res_reg.into(), conv_regs[0].into())),
+                        2 => self.pushl(LL::Int2(*bw, res_reg.into(), conv_regs[0].into(), conv_regs[1].into())),
+                        a => return err!("only known float functions have arity 1 and 2, but this one has arity {}", a),
+                    }
+                }
+            }
             Match => gen_op!(Match, [Str, Match]),
             SubstrIndex => gen_op!(SubstrIndex, [Str, SubstrIndex]),
             Contains => gen_op!(

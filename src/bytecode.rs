@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
-use crate::builtins::{FloatFunc, Variable};
+use crate::builtins::{Bitwise, FloatFunc, Variable};
 use crate::common::NumTy;
 use crate::compile::{self, Ty};
 use crate::interp::{index, index_mut, pop, push, Storage};
@@ -120,6 +120,8 @@ pub(crate) enum Instr<'a> {
     NegFloat(Reg<Float>, Reg<Float>),
     Float1(FloatFunc, Reg<Float>, Reg<Float>),
     Float2(FloatFunc, Reg<Float>, Reg<Float>, Reg<Float>),
+    Int1(Bitwise, Reg<Int>, Reg<Int>),
+    Int2(Bitwise, Reg<Int>, Reg<Int>, Reg<Int>),
     Rand(Reg<Float>),
     Srand(
         /* previous seed */ Reg<Int>,
@@ -552,6 +554,15 @@ impl<'a> Instr<'a> {
                 src.accum(&mut f);
             }
             Float2(_, dst, x, y) => {
+                dst.accum(&mut f);
+                x.accum(&mut f);
+                y.accum(&mut f);
+            }
+            Int1(_, dst, src) => {
+                dst.accum(&mut f);
+                src.accum(&mut f);
+            }
+            Int2(_, dst, x, y) => {
                 dst.accum(&mut f);
                 x.accum(&mut f);
                 y.accum(&mut f);

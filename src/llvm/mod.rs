@@ -1446,6 +1446,17 @@ impl<'a> View<'a> {
                 };
                 self.bind_reg(dst, resv);
             }
+            Int1(bw, dst, src) => {
+                let opx = self.get_local(src.reflect())?;
+                let resv = bw.llvm1(self.f.builder, opx, self.tmap.get_ty(Ty::Int));
+                self.bind_reg(dst, resv);
+            }
+            Int2(bw, dst, x, y) => {
+                let opx = self.get_local(x.reflect())?;
+                let opy = self.get_local(y.reflect())?;
+                let resv = bw.llvm2(self.f.builder, opx, opy);
+                self.bind_reg(dst, resv);
+            }
             Rand(res) => {
                 let resv = self.call("rand_float", &mut [self.runtime_val()]);
                 self.bind_reg(res, resv);

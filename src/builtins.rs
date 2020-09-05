@@ -6,6 +6,8 @@ use crate::common::{NodeIx, Result};
 use crate::compile;
 use crate::runtime::{Int, IntMap, Str};
 use crate::types::{self, SmallVec};
+#[cfg(feature = "llvm_backend")]
+use llvm_sys::{core::*, prelude::*};
 use smallvec::smallvec;
 
 use std::convert::TryFrom;
@@ -15,6 +17,7 @@ pub enum Function {
     Unop(ast::Unop),
     Binop(ast::Binop),
     FloatFunc(FloatFunc),
+    IntFunc(Bitwise),
     Print,
     PrintStdout,
     Close,
@@ -47,6 +50,106 @@ pub enum Function {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Bitwise {
+    Complement,
+    And,
+    Or,
+    LogicalRightShift,
+    ArithmeticRightShift,
+    LeftShift,
+    Xor,
+}
+
+impl Bitwise {
+    pub fn func_name(&self) -> &'static str {
+        use Bitwise::*;
+        match self {
+            Complement => "compl",
+            And => "and",
+            Or => "or",
+            LogicalRightShift => "rshiftl",
+            ArithmeticRightShift => "rshift",
+            LeftShift => "lshift",
+            Xor => "xor",
+        }
+    }
+    pub fn eval1(&self, op: i64) -> i64 {
+        use Bitwise::*;
+        match self {
+            Complement => !op,
+            And | Or | LogicalRightShift | ArithmeticRightShift | LeftShift | Xor => {
+                panic!("bitwise: mismatched arity!")
+            }
+        }
+    }
+    pub fn eval2(&self, lhs: i64, rhs: i64) -> i64 {
+        use Bitwise::*;
+        match self {
+            And => lhs & rhs,
+            Or => lhs | rhs,
+            LogicalRightShift => (lhs as usize).wrapping_shr(rhs as u32) as i64,
+            ArithmeticRightShift => lhs.wrapping_shr(rhs as u32),
+            LeftShift => lhs.wrapping_shl(rhs as u32),
+            Xor => lhs ^ rhs,
+            Complement => panic!("bitwise: mismatched arity!"),
+        }
+    }
+    #[cfg(feature = "llvm_backend")]
+    pub unsafe fn llvm1(
+        &self,
+        builder: LLVMBuilderRef,
+        x: LLVMValueRef,
+        int_ty: LLVMTypeRef,
+    ) -> LLVMValueRef {
+        use Bitwise::*;
+        match self {
+            // LLVM does not have a bitwise complement instruction. We use xor with all 1s.
+            Complement => LLVMBuildXor(
+                builder,
+                x,
+                LLVMConstInt(int_ty, !0, /*sign_extend=*/ 1),
+                c_str!(""),
+            ),
+            And | Or | LogicalRightShift | ArithmeticRightShift | LeftShift | Xor => {
+                panic!("bitwise: mismatched arity!")
+            }
+        }
+    }
+    #[cfg(feature = "llvm_backend")]
+    pub unsafe fn llvm2(
+        &self,
+        builder: LLVMBuilderRef,
+        lhs: LLVMValueRef,
+        rhs: LLVMValueRef,
+    ) -> LLVMValueRef {
+        use Bitwise::*;
+        match self {
+            And => LLVMBuildAnd(builder, lhs, rhs, c_str!("")),
+            Or => LLVMBuildOr(builder, lhs, rhs, c_str!("")),
+            LogicalRightShift => LLVMBuildLShr(builder, lhs, rhs, c_str!("")),
+            ArithmeticRightShift => LLVMBuildAShr(builder, lhs, rhs, c_str!("")),
+            LeftShift => LLVMBuildShl(builder, lhs, rhs, c_str!("")),
+            Xor => LLVMBuildXor(builder, lhs, rhs, c_str!("")),
+            Complement => panic!("bitwise: mismatched arity!"),
+        }
+    }
+    pub fn arity(&self) -> usize {
+        use Bitwise::*;
+        match self {
+            Complement => 1,
+            And | Or | LogicalRightShift | ArithmeticRightShift | LeftShift | Xor => 2,
+        }
+    }
+    fn sig(&self) -> (SmallVec<compile::Ty>, compile::Ty) {
+        use compile::Ty;
+        (smallvec![Ty::Int; self.arity()], Ty::Int)
+    }
+    fn ret_state(&self) -> types::State {
+        types::TVar::Scalar(types::BaseTy::Int).abs()
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum FloatFunc {
     Cos,
     Sin,
@@ -75,14 +178,16 @@ impl FloatFunc {
             Log10 => op.log10(),
             Sqrt => op.sqrt(),
             Exp => op.exp(),
-            Atan2 => unreachable!(),
+            Atan2 => panic!("float: mismatched arity!"),
         }
     }
     pub fn eval2(&self, x: f64, y: f64) -> f64 {
         use FloatFunc::*;
         match self {
             Atan2 => x.atan2(y),
-            Sqrt | Cos | Sin | Atan | Log | Log2 | Log10 | Exp => unreachable!(),
+            Sqrt | Cos | Sin | Atan | Log | Log2 | Log10 | Exp => {
+                panic!("float: mismatched arity!")
+            }
         }
     }
 
@@ -162,6 +267,13 @@ static_map!(
     ["log10", Function::FloatFunc(FloatFunc::Log10)],
     ["sqrt", Function::FloatFunc(FloatFunc::Sqrt)],
     ["atan2", Function::FloatFunc(FloatFunc::Atan2)],
+    ["and", Function::IntFunc(Bitwise::And)],
+    ["or", Function::IntFunc(Bitwise::Or)],
+    ["compl", Function::IntFunc(Bitwise::Complement)],
+    ["lshift", Function::IntFunc(Bitwise::LeftShift)],
+    ["rshift", Function::IntFunc(Bitwise::ArithmeticRightShift)],
+    ["rshiftl", Function::IntFunc(Bitwise::LogicalRightShift)],
+    ["xor", Function::IntFunc(Bitwise::Xor)],
     ["join_fields", Function::JoinCols],
     ["join_csv", Function::JoinCSV],
     ["join_tsv", Function::JoinTSV],
@@ -246,6 +358,7 @@ impl Function {
         }
         Ok(match self {
             FloatFunc(ff) => ff.sig(),
+            IntFunc(bw) => bw.sig(),
             Unop(Neg) | Unop(Pos) => match &incoming[0] {
                 Str | Float => (smallvec![Float], Float),
                 _ => (smallvec![Int], Int),
@@ -338,6 +451,7 @@ impl Function {
         use Function::*;
         Some(match self {
             FloatFunc(ff) => ff.arity(),
+            IntFunc(bw) => bw.arity(),
             Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
             Srand | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length | ReadErr
             | Nextline | PrintStdout | Unop(_) => 1,
@@ -355,6 +469,7 @@ impl Function {
             Function::*,
         };
         match self {
+            IntFunc(bw) => Ok(bw.ret_state()),
             FloatFunc(ff) => Ok(ff.ret_state()),
             Unop(Neg) | Unop(Pos) => match &args[0] {
                 Some(Scalar(Some(BaseTy::Str))) | Some(Scalar(Some(BaseTy::Float))) => {

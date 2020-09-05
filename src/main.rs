@@ -272,7 +272,6 @@ fn main() {
              .about("the optimization level for the program. Positive levels determine the optimization level for LLVM. Level -1 forces bytecode interpretation")
              .possible_values(&["-1", "0", "1", "2", "3"]))
         .arg("--out-file=[FILE] 'the output file used in place of standard input'")
-        .arg("--dump-llvm 'print LLVM-IR for the input program'")
         .arg("--dump-cfg 'print untyped SSA form for input program'")
         .arg("--dump-bytecode 'print bytecode for input program'")
         .arg(Arg::with_name("input-format")
