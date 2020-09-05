@@ -264,6 +264,10 @@ surprised to discover there were bugs in frawk's parser.
   split by whitespace, or scripts that only use one single-byte record and
   field separator, frawk supports executing the script [in
   parallel](https://github.com/ezrosent/frawk/blob/master/info/parallelism.md).
+* Following `gawk`, bitwise operators are supported via the `and`, `or`, `compl`,
+  `lshift`, `rshift`, and  `xor` builtins. `frawk` also supports `rshiftl` for
+  logical right shift. Unlike `gawk`, the `and`, `or` and `xor` functions are 
+  not variadic.
 
 ### What is different
 
