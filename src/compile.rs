@@ -406,23 +406,13 @@ fn mov<'a>(dst_reg: u32, src_reg: u32, ty: Ty) -> Result<Option<LL<'a>>> {
     if dst_reg == UNUSED || src_reg == UNUSED {
         return Ok(None);
     }
-
     let res = match ty {
         Null => return Ok(None),
-        Int => LL::MovInt(dst_reg.into(), src_reg.into()),
-        Float => LL::MovFloat(dst_reg.into(), src_reg.into()),
-        Str => LL::MovStr(dst_reg.into(), src_reg.into()),
-
-        MapIntInt => LL::MovMapIntInt(dst_reg.into(), src_reg.into()),
-        MapIntFloat => LL::MovMapIntFloat(dst_reg.into(), src_reg.into()),
-        MapIntStr => LL::MovMapIntStr(dst_reg.into(), src_reg.into()),
-
-        MapStrInt => LL::MovMapStrInt(dst_reg.into(), src_reg.into()),
-        MapStrFloat => LL::MovMapStrFloat(dst_reg.into(), src_reg.into()),
-        MapStrStr => LL::MovMapStrStr(dst_reg.into(), src_reg.into()),
-
         IterInt | IterStr => return err!("attempt to move values of type {:?}", ty),
+        Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+        | MapStrStr => LL::Mov(ty, dst_reg, src_reg),
     };
+
     Ok(Some(res))
 }
 
@@ -729,8 +719,11 @@ impl<'a> Typer<'a> {
                         Either::Left(LL::StoreConstInt(dst, i)) if *i >= 0 => {
                             ufa.add_field(*dst, *i as usize)
                         }
-                        Either::Left(LL::MovInt(dst, src)) => {
-                            ufa.add_dep(/*from_reg=*/ *src, /*to_reg=*/ *dst);
+                        Either::Left(LL::Mov(Ty::Int, dst, src)) => {
+                            ufa.add_dep(
+                                /*from_reg=*/ (*src).into(),
+                                /*to_reg=*/ (*dst).into(),
+                            );
                         }
                         Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
                         Either::Left(LL::JoinCSV(_, start, end))
@@ -1050,12 +1043,6 @@ impl<'a, 'b> View<'a, 'b> {
 
             (Int, Str) => LL::StrToInt(dst_reg.into(), src_reg.into()),
             (Float, Str) => LL::StrToFloat(dst_reg.into(), src_reg.into()),
-
-            (MapIntFloat, MapIntFloat) => LL::MovMapIntFloat(dst_reg.into(), src_reg.into()),
-            (MapIntStr, MapIntStr) => LL::MovMapIntStr(dst_reg.into(), src_reg.into()),
-
-            (MapStrFloat, MapStrFloat) => LL::MovMapStrFloat(dst_reg.into(), src_reg.into()),
-            (MapStrStr, MapStrStr) => LL::MovMapStrStr(dst_reg.into(), src_reg.into()),
             (dst, src) => {
                 if dst == src {
                     return self.mov(dst_reg, src_reg, dst);

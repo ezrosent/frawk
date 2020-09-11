@@ -1885,20 +1885,16 @@ impl<'a> View<'a> {
             StoreSlotStrFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
             StoreSlotStrStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
 
-            MovInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovStr(dst, src) => {
-                let sv = self.get_local(src.reflect())?;
-                self.call("ref_str", &mut [sv]);
-                let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
-                self.bind_reg(dst, loaded);
+            Mov(ty, dst, src) => {
+                if let Ty::Str = ty {
+                    let sv = self.get_local((*src, Ty::Str))?;
+                    self.call("ref_str", &mut [sv]);
+                    let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
+                    self.bind_val((*dst, Ty::Str), loaded);
+                } else {
+                    self.bind_val((*dst, *ty), self.get_local((*src, *ty))?)
+                }
             }
-            MovMapIntInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapIntFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapIntStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapStrInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapStrFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapStrStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
             IterBeginIntInt(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
             IterBeginIntFloat(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
             IterBeginIntStr(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,

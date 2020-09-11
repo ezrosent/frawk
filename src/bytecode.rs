@@ -76,23 +76,7 @@ pub(crate) enum Instr<'a> {
     StrToFloat(Reg<Float>, Reg<Str<'a>>),
 
     // Assignment
-    MovInt(Reg<Int>, Reg<Int>),
-    MovFloat(Reg<Float>, Reg<Float>),
-    MovStr(Reg<Str<'a>>, Reg<Str<'a>>),
-
-    MovMapIntInt(Reg<runtime::IntMap<Int>>, Reg<runtime::IntMap<Int>>),
-    MovMapIntFloat(Reg<runtime::IntMap<Float>>, Reg<runtime::IntMap<Float>>),
-    MovMapIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<runtime::IntMap<Str<'a>>>),
-
-    MovMapStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<runtime::StrMap<'a, Int>>),
-    MovMapStrFloat(
-        Reg<runtime::StrMap<'a, Float>>,
-        Reg<runtime::StrMap<'a, Float>>,
-    ),
-    MovMapStrStr(
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-    ),
+    Mov(Ty, NumTy, NumTy),
 
     AllocMapIntInt(Reg<runtime::IntMap<Int>>),
     AllocMapIntFloat(Reg<runtime::IntMap<Float>>),
@@ -946,41 +930,9 @@ impl<'a> Instr<'a> {
                 dst.accum(&mut f);
                 iter.accum(&mut f)
             }
-            MovInt(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovFloat(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovStr(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapIntInt(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapIntFloat(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapIntStr(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapStrInt(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapStrFloat(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapStrStr(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
+            Mov(ty, dst, src) => {
+                f(*dst, *ty);
+                f(*src, *ty);
             }
             AllocMapIntInt(dst) => dst.accum(f),
             AllocMapIntFloat(dst) => dst.accum(f),

@@ -1293,60 +1293,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let dst = *dst;
                         *self.get_mut(dst) = res;
                     }
-                    MovInt(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovFloat(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovStr(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapIntInt(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapIntFloat(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapIntStr(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapStrInt(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapStrFloat(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapStrStr(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
+                    Mov(ty, dst, src) => self.mov(*ty, *dst, *src),
                     AllocMapIntInt(dst) => {
                         let dst = *dst;
                         *self.get_mut(dst) = Default::default();
@@ -1521,6 +1468,49 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 };
                 break cur + 1;
             };
+        }
+    }
+    fn mov(&mut self, ty: Ty, dst: NumTy, src: NumTy) {
+        match ty {
+            Ty::Int => {
+                let src = *index(&self.ints, &src.into());
+                *index_mut(&mut self.ints, &dst.into()) = src;
+            }
+            Ty::Float => {
+                let src = *index(&self.floats, &src.into());
+                *index_mut(&mut self.floats, &dst.into()) = src;
+            }
+            Ty::Str => {
+                let src = index(&self.strs, &src.into()).clone();
+                *index_mut(&mut self.strs, &dst.into()) = src;
+            }
+            Ty::MapIntInt => {
+                let src = index(&self.maps_int_int, &src.into()).clone();
+                *index_mut(&mut self.maps_int_int, &dst.into()) = src;
+            }
+            Ty::MapIntFloat => {
+                let src = index(&self.maps_int_float, &src.into()).clone();
+                *index_mut(&mut self.maps_int_float, &dst.into()) = src;
+            }
+            Ty::MapIntStr => {
+                let src = index(&self.maps_int_str, &src.into()).clone();
+                *index_mut(&mut self.maps_int_str, &dst.into()) = src;
+            }
+            Ty::MapStrInt => {
+                let src = index(&self.maps_str_int, &src.into()).clone();
+                *index_mut(&mut self.maps_str_int, &dst.into()) = src;
+            }
+            Ty::MapStrFloat => {
+                let src = index(&self.maps_str_float, &src.into()).clone();
+                *index_mut(&mut self.maps_str_float, &dst.into()) = src;
+            }
+            Ty::MapStrStr => {
+                let src = index(&self.maps_str_str, &src.into()).clone();
+                *index_mut(&mut self.maps_str_str, &dst.into()) = src;
+            }
+            Ty::Null | Ty::IterInt | Ty::IterStr => {
+                panic!("invalid type for move operation: {:?}", ty)
+            }
         }
     }
 }
