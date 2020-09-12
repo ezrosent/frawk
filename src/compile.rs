@@ -1258,15 +1258,26 @@ impl<'a, 'b> View<'a, 'b> {
             }
             Match => gen_op!(Match, [Str, Match]),
             SubstrIndex => gen_op!(SubstrIndex, [Str, SubstrIndex]),
-            Contains => gen_op!(
-                Contains,
-                [MapIntInt, ContainsIntInt],
-                [MapIntStr, ContainsIntStr],
-                [MapIntFloat, ContainsIntFloat],
-                [MapStrInt, ContainsStrInt],
-                [MapStrStr, ContainsStrStr],
-                [MapStrFloat, ContainsStrFloat]
-            ),
+            Contains => {
+                if res_reg != UNUSED {
+                    match conv_tys[0] {
+                        Ty::MapIntInt
+                        | Ty::MapIntStr
+                        | Ty::MapIntFloat
+                        | Ty::MapStrInt
+                        | Ty::MapStrStr
+                        | Ty::MapStrFloat => self.pushl(LL::Contains {
+                            map_ty: conv_tys[0],
+                            dst: res_reg,
+                            map: conv_regs[0],
+                            key: conv_regs[1],
+                        }),
+                        Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
+                            return err!("unexpected non-map type for Contains: {:?}", conv_tys[0]);
+                        }
+                    }
+                }
+            }
             ReadErr => {
                 if res_reg != UNUSED {
                     self.pushl(LL::ReadErr(res_reg.into(), conv_regs[0].into()))

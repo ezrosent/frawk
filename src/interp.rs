@@ -313,6 +313,11 @@ impl<'a> Core<'a> {
 }
 
 macro_rules! map_regs {
+    ($map_ty:expr, $map_reg:ident, $body:expr) => {{
+        let _placeholder_k = 0u32;
+        let _placeholder_v = 0u32;
+        map_regs!($map_ty, $map_reg, _placeholder_k, _placeholder_v, $body)
+    }};
     ($map_ty:expr, $map_reg:ident, $key_reg:ident, $val_reg:ident, $body:expr) => {{
         let map_ty = $map_ty;
         match map_ty {
@@ -1078,48 +1083,12 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         map,
                         key,
                     } => self.lookup(*map_ty, *dst, *map, *key),
-                    ContainsIntInt(res, arr, k) => {
-                        let arr = index(&self.maps_int_int, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsIntStr(res, arr, k) => {
-                        let arr = index(&self.maps_int_str, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsIntFloat(res, arr, k) => {
-                        let arr = index(&self.maps_int_float, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsStrInt(res, arr, k) => {
-                        let arr = index(&self.maps_str_int, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsStrStr(res, arr, k) => {
-                        let arr = index(&self.maps_str_str, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsStrFloat(res, arr, k) => {
-                        let arr = index(&self.maps_str_float, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
+                    Contains {
+                        map_ty,
+                        dst,
+                        map,
+                        key,
+                    } => self.contains(*map_ty, *dst, *map, *key),
                     DeleteIntInt(arr, k) => {
                         let arr = index(&self.maps_int_int, arr);
                         let k = index(&self.ints, k);
@@ -1504,21 +1473,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         }
     }
     fn alloc_map(&mut self, ty: Ty, reg: NumTy) {
-        match ty {
-            Ty::MapIntInt => *index_mut(&mut self.maps_int_int, &reg.into()) = Default::default(),
-            Ty::MapIntFloat => {
-                *index_mut(&mut self.maps_int_float, &reg.into()) = Default::default()
-            }
-            Ty::MapIntStr => *index_mut(&mut self.maps_int_str, &reg.into()) = Default::default(),
-            Ty::MapStrInt => *index_mut(&mut self.maps_str_int, &reg.into()) = Default::default(),
-            Ty::MapStrFloat => {
-                *index_mut(&mut self.maps_str_float, &reg.into()) = Default::default()
-            }
-            Ty::MapStrStr => *index_mut(&mut self.maps_str_str, &reg.into()) = Default::default(),
-            Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
-                panic!("non-map type for alloc operation: {:?}", ty)
-            }
-        }
+        map_regs!(ty, reg, *self.get_mut(reg) = Default::default())
     }
     fn lookup(&mut self, map_ty: Ty, dst: NumTy, map: NumTy, key: NumTy) {
         map_regs!(map_ty, map, key, dst, {
@@ -1526,6 +1481,14 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 .get(map)
                 .get(self.get(key))
                 .unwrap_or_else(Default::default);
+            *self.get_mut(dst) = res;
+        });
+    }
+    fn contains(&mut self, map_ty: Ty, dst: NumTy, map: NumTy, key: NumTy) {
+        let _v = 0u32;
+        let dst: Reg<Int> = dst.into();
+        map_regs!(map_ty, map, key, _v, {
+            let res = self.get(map).get(self.get(key)).is_some() as Int;
             *self.get_mut(dst) = res;
         });
     }

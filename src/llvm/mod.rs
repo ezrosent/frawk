@@ -1775,24 +1775,12 @@ impl<'a> View<'a> {
                 (*key, map_ty.key()?),
                 (*dst, map_ty.val()?),
             )?,
-            ContainsIntInt(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsIntStr(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsIntFloat(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsStrInt(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsStrStr(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsStrFloat(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
+            Contains {
+                map_ty,
+                dst,
+                map,
+                key,
+            } => self.contains_map((*map, *map_ty), (*key, map_ty.key()?), (*dst, Ty::Int))?,
             DeleteIntInt(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
             DeleteIntFloat(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
             DeleteIntStr(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,

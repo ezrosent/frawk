@@ -216,12 +216,13 @@ pub(crate) enum Instr<'a> {
         map: NumTy,
         key: NumTy,
     },
-    ContainsIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>, Reg<Int>),
-    ContainsIntStr(Reg<Int>, Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
-    ContainsIntFloat(Reg<Int>, Reg<runtime::IntMap<Float>>, Reg<Int>),
-    ContainsStrInt(Reg<Int>, Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
-    ContainsStrStr(Reg<Int>, Reg<runtime::StrMap<'a, Str<'a>>>, Reg<Str<'a>>),
-    ContainsStrFloat(Reg<Int>, Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
+    Contains {
+        map_ty: Ty,
+        dst: NumTy,
+        map: NumTy,
+        key: NumTy,
+    },
+
     DeleteIntInt(Reg<runtime::IntMap<Int>>, Reg<Int>),
     DeleteIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
     DeleteIntFloat(Reg<runtime::IntMap<Float>>, Reg<Int>),
@@ -727,35 +728,16 @@ impl<'a> Instr<'a> {
                 f(*key, k);
                 f(*map, *map_ty);
             }
-            ContainsIntInt(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsIntStr(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsIntFloat(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsStrInt(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsStrStr(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsStrFloat(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
+            Contains {
+                map_ty,
+                dst,
+                map,
+                key,
+            } => {
+                let k = map_ty.key().unwrap();
+                f(*dst, Ty::Int);
+                f(*key, k);
+                f(*map, *map_ty);
             }
             DeleteIntInt(arr, k) => {
                 arr.accum(&mut f);
