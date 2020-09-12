@@ -1124,17 +1124,18 @@ impl<'a, 'b> View<'a, 'b> {
 
         // Emit the corresponding instruction.
         use Ty::*;
-        self.pushl(match arr_ty {
-            MapIntInt => LL::LookupIntInt(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapIntFloat => LL::LookupIntFloat(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapIntStr => LL::LookupIntStr(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapStrInt => LL::LookupStrInt(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapStrFloat => LL::LookupStrFloat(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapStrStr => LL::LookupStrStr(load_reg.into(), arr_reg.into(), key_reg.into()),
+        match arr_ty {
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => self
+                .pushl(LL::Lookup {
+                    map_ty: arr_ty,
+                    dst: load_reg,
+                    map: arr_reg,
+                    key: key_reg,
+                }),
             Null | Int | Float | Str | IterInt | IterStr => {
                 return err!("[load_map] expected map type, found {:?}", arr_ty)
             }
-        });
+        };
         // Convert the result: note that if we had load_reg == dst_reg, then this is a noop.
         self.convert(dst_reg, dst_ty, load_reg, arr_val_ty)
     }

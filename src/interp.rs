@@ -1024,48 +1024,12 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.core.write_files.close(file)?;
                         self.read_files.close(file);
                     }
-                    LookupIntInt(res, arr, k) => {
-                        let arr = index(&self.maps_int_int, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).unwrap_or(0);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupIntStr(res, arr, k) => {
-                        let arr = index(&self.maps_int_str, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).unwrap_or_else(Default::default);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupIntFloat(res, arr, k) => {
-                        let arr = index(&self.maps_int_float, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).unwrap_or(0.0);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupStrInt(res, arr, k) => {
-                        let arr = index(&self.maps_str_int, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).unwrap_or(0);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupStrStr(res, arr, k) => {
-                        let arr = index(&self.maps_str_str, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).unwrap_or_else(Default::default);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupStrFloat(res, arr, k) => {
-                        let arr = index(&self.maps_str_float, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).unwrap_or(0.0);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
+                    Lookup {
+                        map_ty,
+                        dst,
+                        map,
+                        key,
+                    } => self.lookup(*map_ty, *dst, *map, *key),
                     ContainsIntInt(res, arr, k) => {
                         let arr = index(&self.maps_int_int, arr);
                         let k = index(&self.ints, k);
@@ -1505,6 +1469,61 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             Ty::MapStrStr => *index_mut(&mut self.maps_str_str, &reg.into()) = Default::default(),
             Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
                 panic!("non-map type for alloc operation: {:?}", ty)
+            }
+        }
+    }
+    fn lookup(&mut self, map_ty: Ty, dst: NumTy, map: NumTy, key: NumTy) {
+        match map_ty {
+            Ty::MapIntInt => {
+                let res = {
+                    let arr = index(&mut self.maps_int_int, &map.into());
+                    let k = index(&mut self.ints, &key.into());
+                    arr.get(k).unwrap_or_else(Default::default)
+                };
+                *index_mut(&mut self.ints, &dst.into()) = res;
+            }
+            Ty::MapIntFloat => {
+                let res = {
+                    let arr = index(&mut self.maps_int_float, &map.into());
+                    let k = index(&mut self.ints, &key.into());
+                    arr.get(k).unwrap_or_else(Default::default)
+                };
+                *index_mut(&mut self.floats, &dst.into()) = res;
+            }
+            Ty::MapIntStr => {
+                let res = {
+                    let arr = index(&mut self.maps_int_str, &map.into());
+                    let k = index(&mut self.ints, &key.into());
+                    arr.get(k).unwrap_or_else(Default::default)
+                };
+                *index_mut(&mut self.strs, &dst.into()) = res;
+            }
+            Ty::MapStrInt => {
+                let res = {
+                    let arr = index(&mut self.maps_str_int, &map.into());
+                    let k = index(&mut self.strs, &key.into());
+                    arr.get(k).unwrap_or_else(Default::default)
+                };
+                *index_mut(&mut self.ints, &dst.into()) = res;
+            }
+            Ty::MapStrFloat => {
+                let res = {
+                    let arr = index(&mut self.maps_str_float, &map.into());
+                    let k = index(&mut self.strs, &key.into());
+                    arr.get(k).unwrap_or_else(Default::default)
+                };
+                *index_mut(&mut self.floats, &dst.into()) = res;
+            }
+            Ty::MapStrStr => {
+                let res = {
+                    let arr = index(&mut self.maps_str_str, &map.into());
+                    let k = index(&mut self.strs, &key.into());
+                    arr.get(k).unwrap_or_else(Default::default)
+                };
+                *index_mut(&mut self.strs, &dst.into()) = res;
+            }
+            Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
+                panic!("non-map type for lookup operation: {:?}", map_ty)
             }
         }
     }

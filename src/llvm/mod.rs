@@ -1765,24 +1765,16 @@ impl<'a> View<'a> {
             NextFile() => {
                 self.call("next_file", &mut [self.runtime_val()]);
             }
-            LookupIntInt(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupIntStr(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupIntFloat(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupStrInt(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupStrStr(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupStrFloat(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
+            Lookup {
+                map_ty,
+                dst,
+                map,
+                key,
+            } => self.lookup_map(
+                (*map, *map_ty),
+                (*key, map_ty.key()?),
+                (*dst, map_ty.val()?),
+            )?,
             ContainsIntInt(res, arr, k) => {
                 self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
             }

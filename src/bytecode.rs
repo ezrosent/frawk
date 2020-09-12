@@ -210,16 +210,12 @@ pub(crate) enum Instr<'a> {
     Close(Reg<Str<'a>>),
 
     // Map operations
-    LookupIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>, Reg<Int>),
-    LookupIntStr(Reg<Str<'a>>, Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
-    LookupIntFloat(Reg<Float>, Reg<runtime::IntMap<Float>>, Reg<Int>),
-    LookupStrInt(Reg<Int>, Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
-    LookupStrStr(
-        Reg<Str<'a>>,
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-        Reg<Str<'a>>,
-    ),
-    LookupStrFloat(Reg<Float>, Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
+    Lookup {
+        map_ty: Ty,
+        dst: NumTy,
+        map: NumTy,
+        key: NumTy,
+    },
     ContainsIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>, Reg<Int>),
     ContainsIntStr(Reg<Int>, Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
     ContainsIntFloat(Reg<Int>, Reg<runtime::IntMap<Float>>, Reg<Int>),
@@ -720,35 +716,16 @@ impl<'a> Instr<'a> {
                 out.accum(&mut f)
             }
             Close(file) => file.accum(&mut f),
-            LookupIntInt(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            LookupIntStr(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            LookupIntFloat(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            LookupStrInt(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            LookupStrStr(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            LookupStrFloat(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
+            Lookup {
+                map_ty,
+                dst,
+                map,
+                key,
+            } => {
+                let (k, v) = (map_ty.key().unwrap(), map_ty.val().unwrap());
+                f(*dst, v);
+                f(*key, k);
+                f(*map, *map_ty);
             }
             ContainsIntInt(res, arr, k) => {
                 res.accum(&mut f);
