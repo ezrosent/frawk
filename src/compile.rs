@@ -391,12 +391,9 @@ fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
 fn alloc_local<'a>(dst_reg: NumTy, dst_ty: Ty) -> Option<LL<'a>> {
     use Ty::*;
     match dst_ty {
-        MapIntInt => Some(LL::AllocMapIntInt(dst_reg.into())),
-        MapIntFloat => Some(LL::AllocMapIntFloat(dst_reg.into())),
-        MapIntStr => Some(LL::AllocMapIntStr(dst_reg.into())),
-        MapStrInt => Some(LL::AllocMapStrInt(dst_reg.into())),
-        MapStrFloat => Some(LL::AllocMapStrFloat(dst_reg.into())),
-        MapStrStr => Some(LL::AllocMapStrStr(dst_reg.into())),
+        MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+            Some(LL::AllocMap(dst_ty, dst_reg))
+        }
         _ => None,
     }
 }

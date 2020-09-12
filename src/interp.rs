@@ -1294,30 +1294,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         *self.get_mut(dst) = res;
                     }
                     Mov(ty, dst, src) => self.mov(*ty, *dst, *src),
-                    AllocMapIntInt(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapIntFloat(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapIntStr(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapStrInt(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapStrFloat(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapStrStr(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
+                    AllocMap(ty, reg) => self.alloc_map(*ty, *reg),
+
                     // TODO add error logging for these errors perhaps?
                     ReadErr(dst, file) => {
                         let dst = *dst;
@@ -1510,6 +1488,23 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             }
             Ty::Null | Ty::IterInt | Ty::IterStr => {
                 panic!("invalid type for move operation: {:?}", ty)
+            }
+        }
+    }
+    fn alloc_map(&mut self, ty: Ty, reg: NumTy) {
+        match ty {
+            Ty::MapIntInt => *index_mut(&mut self.maps_int_int, &reg.into()) = Default::default(),
+            Ty::MapIntFloat => {
+                *index_mut(&mut self.maps_int_float, &reg.into()) = Default::default()
+            }
+            Ty::MapIntStr => *index_mut(&mut self.maps_int_str, &reg.into()) = Default::default(),
+            Ty::MapStrInt => *index_mut(&mut self.maps_str_int, &reg.into()) = Default::default(),
+            Ty::MapStrFloat => {
+                *index_mut(&mut self.maps_str_float, &reg.into()) = Default::default()
+            }
+            Ty::MapStrStr => *index_mut(&mut self.maps_str_str, &reg.into()) = Default::default(),
+            Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
+                panic!("non-map type for alloc operation: {:?}", ty)
             }
         }
     }

@@ -76,16 +76,11 @@ pub(crate) enum Instr<'a> {
     StrToFloat(Reg<Float>, Reg<Str<'a>>),
 
     // Assignment
-    Mov(Ty, NumTy, NumTy),
-
-    AllocMapIntInt(Reg<runtime::IntMap<Int>>),
-    AllocMapIntFloat(Reg<runtime::IntMap<Float>>),
-    AllocMapIntStr(Reg<runtime::IntMap<Str<'a>>>),
-    AllocMapStrInt(Reg<runtime::StrMap<'a, Int>>),
-    AllocMapStrFloat(Reg<runtime::StrMap<'a, Float>>),
-    AllocMapStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
     // Note, for now we do not support iterator moves. Iterators own their own copy of an array,
     // and there is no reason we should be emitting movs for them.
+    Mov(Ty, NumTy, NumTy),
+
+    AllocMap(Ty, NumTy),
 
     // Math
     AddInt(Reg<Int>, Reg<Int>, Reg<Int>),
@@ -934,12 +929,7 @@ impl<'a> Instr<'a> {
                 f(*dst, *ty);
                 f(*src, *ty);
             }
-            AllocMapIntInt(dst) => dst.accum(f),
-            AllocMapIntFloat(dst) => dst.accum(f),
-            AllocMapIntStr(dst) => dst.accum(f),
-            AllocMapStrInt(dst) => dst.accum(f),
-            AllocMapStrFloat(dst) => dst.accum(f),
-            AllocMapStrStr(dst) => dst.accum(f),
+            AllocMap(ty, reg) => f(*reg, *ty),
             ReadErr(dst, file) => {
                 dst.accum(&mut f);
                 file.accum(&mut f)
