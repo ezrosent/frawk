@@ -312,6 +312,54 @@ impl<'a> Core<'a> {
     }
 }
 
+macro_rules! map_regs {
+    ($map_ty:expr, $map_reg:ident, $key_reg:ident, $val_reg:ident, $body:expr) => {{
+        let map_ty = $map_ty;
+        match map_ty {
+            Ty::MapIntInt => {
+                let $map_reg: Reg<runtime::IntMap<Int>> = $map_reg.into();
+                let $key_reg: Reg<Int> = $key_reg.into();
+                let $val_reg: Reg<Int> = $val_reg.into();
+                $body
+            }
+            Ty::MapIntFloat => {
+                let $map_reg: Reg<runtime::IntMap<Float>> = $map_reg.into();
+                let $key_reg: Reg<Int> = $key_reg.into();
+                let $val_reg: Reg<Float> = $val_reg.into();
+                $body
+            }
+            Ty::MapIntStr => {
+                let $map_reg: Reg<runtime::IntMap<Str<'a>>> = $map_reg.into();
+                let $key_reg: Reg<Int> = $key_reg.into();
+                let $val_reg: Reg<Str<'a>> = $val_reg.into();
+                $body
+            }
+            Ty::MapStrInt => {
+                let $map_reg: Reg<runtime::StrMap<'a, Int>> = $map_reg.into();
+                let $key_reg: Reg<Str<'a>> = $key_reg.into();
+                let $val_reg: Reg<Int> = $val_reg.into();
+                $body
+            }
+            Ty::MapStrFloat => {
+                let $map_reg: Reg<runtime::StrMap<'a, Float>> = $map_reg.into();
+                let $key_reg: Reg<Str<'a>> = $key_reg.into();
+                let $val_reg: Reg<Float> = $val_reg.into();
+                $body
+            }
+            Ty::MapStrStr => {
+                let $map_reg: Reg<runtime::StrMap<'a, Str<'a>>> = $map_reg.into();
+                let $key_reg: Reg<Str<'a>> = $key_reg.into();
+                let $val_reg: Reg<Str<'a>> = $val_reg.into();
+                $body
+            }
+            Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => panic!(
+                "attempting to perform map operations on non-map type: {:?}",
+                map_ty
+            ),
+        }
+    }};
+}
+
 pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     // index of `instrs` that contains "main"
     main_func: Stage<usize>,
@@ -1473,59 +1521,13 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         }
     }
     fn lookup(&mut self, map_ty: Ty, dst: NumTy, map: NumTy, key: NumTy) {
-        match map_ty {
-            Ty::MapIntInt => {
-                let res = {
-                    let arr = index(&mut self.maps_int_int, &map.into());
-                    let k = index(&mut self.ints, &key.into());
-                    arr.get(k).unwrap_or_else(Default::default)
-                };
-                *index_mut(&mut self.ints, &dst.into()) = res;
-            }
-            Ty::MapIntFloat => {
-                let res = {
-                    let arr = index(&mut self.maps_int_float, &map.into());
-                    let k = index(&mut self.ints, &key.into());
-                    arr.get(k).unwrap_or_else(Default::default)
-                };
-                *index_mut(&mut self.floats, &dst.into()) = res;
-            }
-            Ty::MapIntStr => {
-                let res = {
-                    let arr = index(&mut self.maps_int_str, &map.into());
-                    let k = index(&mut self.ints, &key.into());
-                    arr.get(k).unwrap_or_else(Default::default)
-                };
-                *index_mut(&mut self.strs, &dst.into()) = res;
-            }
-            Ty::MapStrInt => {
-                let res = {
-                    let arr = index(&mut self.maps_str_int, &map.into());
-                    let k = index(&mut self.strs, &key.into());
-                    arr.get(k).unwrap_or_else(Default::default)
-                };
-                *index_mut(&mut self.ints, &dst.into()) = res;
-            }
-            Ty::MapStrFloat => {
-                let res = {
-                    let arr = index(&mut self.maps_str_float, &map.into());
-                    let k = index(&mut self.strs, &key.into());
-                    arr.get(k).unwrap_or_else(Default::default)
-                };
-                *index_mut(&mut self.floats, &dst.into()) = res;
-            }
-            Ty::MapStrStr => {
-                let res = {
-                    let arr = index(&mut self.maps_str_str, &map.into());
-                    let k = index(&mut self.strs, &key.into());
-                    arr.get(k).unwrap_or_else(Default::default)
-                };
-                *index_mut(&mut self.strs, &dst.into()) = res;
-            }
-            Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
-                panic!("non-map type for lookup operation: {:?}", map_ty)
-            }
-        }
+        map_regs!(map_ty, map, key, dst, {
+            let res = self
+                .get(map)
+                .get(self.get(key))
+                .unwrap_or_else(Default::default);
+            *self.get_mut(dst) = res;
+        });
     }
 }
 
