@@ -1410,25 +1410,18 @@ impl<'a, 'b> View<'a, 'b> {
                 self.pushl(LL::PrintStdout(conv_regs[0].into()));
                 return Ok(());
             }
+
             Delete => match &conv_tys[0] {
-                Ty::MapIntInt => {
-                    self.pushl(LL::DeleteIntInt(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapIntStr => {
-                    self.pushl(LL::DeleteIntStr(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapIntFloat => {
-                    self.pushl(LL::DeleteIntFloat(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapStrInt => {
-                    self.pushl(LL::DeleteStrInt(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapStrStr => {
-                    self.pushl(LL::DeleteStrStr(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapStrFloat => {
-                    self.pushl(LL::DeleteStrFloat(conv_regs[0].into(), conv_regs[1].into()))
-                }
+                Ty::MapIntInt
+                | Ty::MapIntStr
+                | Ty::MapIntFloat
+                | Ty::MapStrInt
+                | Ty::MapStrStr
+                | Ty::MapStrFloat => self.pushl(LL::Delete {
+                    map_ty: conv_tys[0],
+                    map: conv_regs[0],
+                    key: conv_regs[1],
+                }),
                 _ => return err!("incorrect parameter types for Delete: {:?}", &conv_tys[..]),
             },
             Close => {

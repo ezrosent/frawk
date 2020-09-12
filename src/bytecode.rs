@@ -222,13 +222,11 @@ pub(crate) enum Instr<'a> {
         map: NumTy,
         key: NumTy,
     },
-
-    DeleteIntInt(Reg<runtime::IntMap<Int>>, Reg<Int>),
-    DeleteIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
-    DeleteIntFloat(Reg<runtime::IntMap<Float>>, Reg<Int>),
-    DeleteStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
-    DeleteStrStr(Reg<runtime::StrMap<'a, Str<'a>>>, Reg<Str<'a>>),
-    DeleteStrFloat(Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
+    Delete {
+        map_ty: Ty,
+        map: NumTy,
+        key: NumTy,
+    },
     LenIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>),
     LenIntFloat(Reg<Int>, Reg<runtime::IntMap<Float>>),
     LenIntStr(Reg<Int>, Reg<runtime::IntMap<Str<'a>>>),
@@ -739,29 +737,10 @@ impl<'a> Instr<'a> {
                 f(*key, k);
                 f(*map, *map_ty);
             }
-            DeleteIntInt(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteIntFloat(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteIntStr(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteStrInt(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteStrFloat(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteStrStr(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
+            Delete { map_ty, map, key } => {
+                let k = map_ty.key().unwrap();
+                f(*key, k);
+                f(*map, *map_ty);
             }
             LenIntInt(res, arr) => {
                 res.accum(&mut f);

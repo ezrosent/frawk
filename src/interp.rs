@@ -1089,36 +1089,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         map,
                         key,
                     } => self.contains(*map_ty, *dst, *map, *key),
-                    DeleteIntInt(arr, k) => {
-                        let arr = index(&self.maps_int_int, arr);
-                        let k = index(&self.ints, k);
-                        arr.delete(k);
-                    }
-                    DeleteIntFloat(arr, k) => {
-                        let arr = index(&self.maps_int_float, arr);
-                        let k = index(&self.ints, k);
-                        arr.delete(k);
-                    }
-                    DeleteIntStr(arr, k) => {
-                        let arr = index(&self.maps_int_str, arr);
-                        let k = index(&self.ints, k);
-                        arr.delete(k);
-                    }
-                    DeleteStrInt(arr, k) => {
-                        let arr = index(&self.maps_str_int, arr);
-                        let k = index(&self.strs, k);
-                        arr.delete(k);
-                    }
-                    DeleteStrFloat(arr, k) => {
-                        let arr = index(&self.maps_str_float, arr);
-                        let k = index(&self.strs, k);
-                        arr.delete(k);
-                    }
-                    DeleteStrStr(arr, k) => {
-                        let arr = index(&self.maps_str_str, arr);
-                        let k = index(&self.strs, k);
-                        arr.delete(k);
-                    }
+                    Delete { map_ty, map, key } => self.delete(*map_ty, *map, *key),
                     LenIntInt(res, arr) => {
                         let arr = *arr;
                         let len = self.get(arr).len();
@@ -1490,6 +1461,12 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         map_regs!(map_ty, map, key, _v, {
             let res = self.get(map).get(self.get(key)).is_some() as Int;
             *self.get_mut(dst) = res;
+        });
+    }
+    fn delete(&mut self, map_ty: Ty, map: NumTy, key: NumTy) {
+        let _v = 0u32;
+        map_regs!(map_ty, map, key, _v, {
+            self.get(map).delete(self.get(key))
         });
     }
 }
