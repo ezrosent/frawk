@@ -227,12 +227,11 @@ pub(crate) enum Instr<'a> {
         map: NumTy,
         key: NumTy,
     },
-    LenIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>),
-    LenIntFloat(Reg<Int>, Reg<runtime::IntMap<Float>>),
-    LenIntStr(Reg<Int>, Reg<runtime::IntMap<Str<'a>>>),
-    LenStrInt(Reg<Int>, Reg<runtime::StrMap<'a, Int>>),
-    LenStrFloat(Reg<Int>, Reg<runtime::StrMap<'a, Float>>),
-    LenStrStr(Reg<Int>, Reg<runtime::StrMap<'a, Str<'a>>>),
+    Len {
+        map_ty: Ty,
+        dst: NumTy,
+        map: NumTy,
+    },
 
     IterBeginIntInt(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Int>>),
     IterBeginIntStr(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Str<'a>>>),
@@ -742,29 +741,9 @@ impl<'a> Instr<'a> {
                 f(*key, k);
                 f(*map, *map_ty);
             }
-            LenIntInt(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenIntFloat(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenIntStr(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenStrInt(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenStrFloat(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenStrStr(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
+            Len { map_ty, map, dst } => {
+                f(*dst, Ty::Int);
+                f(*map, *map_ty);
             }
             StoreIntInt(arr, k, v) => {
                 arr.accum(&mut f);

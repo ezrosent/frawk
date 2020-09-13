@@ -1784,12 +1784,7 @@ impl<'a> View<'a> {
             Delete { map_ty, map, key } => {
                 self.delete_map((*map, *map_ty), (*key, map_ty.key()?))?
             }
-            LenIntInt(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenIntFloat(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenIntStr(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenStrInt(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenStrFloat(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenStrStr(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
+            Len { map_ty, map, dst } => self.len_map((*map, *map_ty), (*dst, Ty::Int))?,
             StoreIntInt(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
             StoreIntFloat(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
             StoreIntStr(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,

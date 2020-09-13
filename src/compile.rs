@@ -1385,12 +1385,16 @@ impl<'a, 'b> View<'a, 'b> {
                 if res_reg != UNUSED {
                     self.pushl(match conv_tys[0] {
                         Ty::Null => LL::StoreConstInt(res_reg.into(), 0),
-                        Ty::MapIntInt => LL::LenIntInt(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapIntStr => LL::LenIntStr(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapIntFloat => LL::LenIntFloat(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapStrInt => LL::LenStrInt(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapStrStr => LL::LenStrStr(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapStrFloat => LL::LenStrFloat(res_reg.into(), conv_regs[0].into()),
+                        Ty::MapIntInt
+                        | Ty::MapIntStr
+                        | Ty::MapIntFloat
+                        | Ty::MapStrInt
+                        | Ty::MapStrStr
+                        | Ty::MapStrFloat => LL::Len {
+                            map_ty: conv_tys[0],
+                            map: conv_regs[0],
+                            dst: res_reg.into(),
+                        },
                         Ty::Str => LL::LenStr(res_reg.into(), conv_regs[0].into()),
                         _ => return err!("invalid input type for length: {:?}", &conv_tys[..]),
                     })

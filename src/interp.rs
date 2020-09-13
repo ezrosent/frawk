@@ -1090,42 +1090,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         key,
                     } => self.contains(*map_ty, *dst, *map, *key),
                     Delete { map_ty, map, key } => self.delete(*map_ty, *map, *key),
-                    LenIntInt(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenIntFloat(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenIntStr(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenStrInt(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenStrFloat(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenStrStr(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
+                    Len { map_ty, map, dst } => self.len(*map_ty, *map, *dst),
                     StoreIntInt(arr, k, v) => {
                         let arr = index(&self.maps_int_int, arr);
                         let k = index(&self.ints, k).clone();
@@ -1468,6 +1433,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         map_regs!(map_ty, map, key, _v, {
             self.get(map).delete(self.get(key))
         });
+    }
+    fn len(&mut self, map_ty: Ty, map: NumTy, dst: NumTy) {
+        let len = map_regs!(map_ty, map, self.get(map).len() as Int);
+        *index_mut(&mut self.ints, &dst.into()) = len;
     }
 }
 
