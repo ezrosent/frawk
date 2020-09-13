@@ -1765,60 +1765,36 @@ impl<'a> View<'a> {
             NextFile() => {
                 self.call("next_file", &mut [self.runtime_val()]);
             }
-            LookupIntInt(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
+            Lookup {
+                map_ty,
+                dst,
+                map,
+                key,
+            } => self.lookup_map(
+                (*map, *map_ty),
+                (*key, map_ty.key()?),
+                (*dst, map_ty.val()?),
+            )?,
+            Contains {
+                map_ty,
+                dst,
+                map,
+                key,
+            } => self.contains_map((*map, *map_ty), (*key, map_ty.key()?), (*dst, Ty::Int))?,
+            Delete { map_ty, map, key } => {
+                self.delete_map((*map, *map_ty), (*key, map_ty.key()?))?
             }
-            LookupIntStr(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupIntFloat(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupStrInt(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupStrStr(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            LookupStrFloat(res, arr, k) => {
-                self.lookup_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsIntInt(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsIntStr(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsIntFloat(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsStrInt(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsStrStr(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            ContainsStrFloat(res, arr, k) => {
-                self.contains_map(arr.reflect(), k.reflect(), res.reflect())?
-            }
-            DeleteIntInt(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
-            DeleteIntFloat(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
-            DeleteIntStr(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
-            DeleteStrInt(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
-            DeleteStrFloat(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
-            DeleteStrStr(arr, k) => self.delete_map(arr.reflect(), k.reflect())?,
-            LenIntInt(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenIntFloat(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenIntStr(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenStrInt(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenStrFloat(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            LenStrStr(res, arr) => self.len_map(arr.reflect(), res.reflect())?,
-            StoreIntInt(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreIntFloat(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreIntStr(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreStrInt(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreStrFloat(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreStrStr(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
+            Len { map_ty, map, dst } => self.len_map((*map, *map_ty), (*dst, Ty::Int))?,
+            Store {
+                map_ty,
+                map,
+                key,
+                val,
+            } => self.store_map(
+                (*map, *map_ty),
+                (*key, map_ty.key()?),
+                (*val, map_ty.val()?),
+            )?,
             LoadVarStr(dst, var) => {
                 let v = self.var_val(var);
                 let res = self.call("load_var_str", &mut [self.runtime_val(), v]);
@@ -1865,59 +1841,29 @@ impl<'a> View<'a> {
                 self.call("store_var_intmap", &mut [self.runtime_val(), v, sv]);
             }
 
-            LoadSlotInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotIntInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotIntFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotIntStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotStrInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotStrFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotStrStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
-
-            StoreSlotInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotIntInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotIntFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotIntStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotStrInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotStrFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotStrStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
-
-            MovInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovStr(dst, src) => {
-                let sv = self.get_local(src.reflect())?;
-                self.call("ref_str", &mut [sv]);
-                let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
-                self.bind_reg(dst, loaded);
+            LoadSlot { ty, dst, slot } => self.load_slot((*dst, *ty), *slot),
+            StoreSlot { ty, src, slot } => self.store_slot((*src, *ty), *slot)?,
+            Mov(ty, dst, src) => {
+                if let Ty::Str = ty {
+                    let sv = self.get_local((*src, Ty::Str))?;
+                    self.call("ref_str", &mut [sv]);
+                    let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
+                    self.bind_val((*dst, Ty::Str), loaded)
+                } else {
+                    self.bind_val((*dst, *ty), self.get_local((*src, *ty))?)
+                }
             }
-            MovMapIntInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapIntFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapIntStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapStrInt(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapStrFloat(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            MovMapStrStr(dst, src) => self.bind_reg(dst, self.get_local(src.reflect())?),
-            IterBeginIntInt(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginIntFloat(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginIntStr(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginStrInt(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginStrFloat(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginStrStr(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterHasNextInt(dst, iter) => self.iter_hasnext(iter.reflect(), dst.reflect())?,
-            IterHasNextStr(dst, iter) => self.iter_hasnext(iter.reflect(), dst.reflect())?,
-            IterGetNextInt(dst, iter) => self.iter_getnext(iter.reflect(), dst.reflect())?,
-            IterGetNextStr(dst, iter) => self.iter_getnext(iter.reflect(), dst.reflect())?,
-
-            PushInt(_) | PushFloat(_) | PushStr(_) | PushIntInt(_) | PushIntFloat(_)
-            | PushIntStr(_) | PushStrInt(_) | PushStrFloat(_) | PushStrStr(_) | PopInt(_)
-            | PopFloat(_) | PopStr(_) | PopIntInt(_) | PopIntFloat(_) | PopIntStr(_)
-            | PopStrInt(_) | PopStrFloat(_) | PopStrStr(_) => {
-                return err!("unexpected explicit push/pop in llvm")
+            IterBegin { map_ty, map, dst } => {
+                self.iter_begin((*dst, map_ty.key_iter()?), (*map, *map_ty))?
             }
-            AllocMapIntInt(_) | AllocMapIntFloat(_) | AllocMapIntStr(_) | AllocMapStrInt(_)
-            | AllocMapStrFloat(_) | AllocMapStrStr(_) => {
+            IterHasNext { iter_ty, dst, iter } => {
+                self.iter_hasnext((*iter, *iter_ty), (*dst, Ty::Int))?
+            }
+            IterGetNext { iter_ty, dst, iter } => {
+                self.iter_getnext((*iter, *iter_ty), (*dst, iter_ty.iter()?))?
+            }
+            Push(_, _) | Pop(_, _) => return err!("unexpected explicit push/pop in llvm"),
+            AllocMap(_, _) => {
                 return err!("unexpected AllocMap (allocs are handled differently in LLVM)")
             }
             Ret | Halt | Jmp(_) | JmpIf(_, _) | Call(_) => {

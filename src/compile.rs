@@ -73,7 +73,18 @@ impl Ty {
         }
     }
 
-    fn iter(self) -> Result<Ty> {
+    pub(crate) fn key_iter(self) -> Result<Ty> {
+        use Ty::*;
+        match self {
+            MapIntInt | MapIntFloat | MapIntStr => Ok(IterInt),
+            MapStrInt | MapStrFloat | MapStrStr => Ok(IterStr),
+            Null | Int | Float | Str | IterInt | IterStr => {
+                err!("attempt to get iterator from non-map type: {:?}", self)
+            }
+        }
+    }
+
+    pub(crate) fn iter(self) -> Result<Ty> {
         use Ty::*;
         match self {
             IterInt => Ok(Int),
@@ -356,16 +367,9 @@ fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
     instrs.push(match ty {
         Null => return Ok(()),
-        Int => LL::PopInt(reg.into()),
-        Float => LL::PopFloat(reg.into()),
-        Str => LL::PopStr(reg.into()),
-        MapIntInt => LL::PopIntInt(reg.into()),
-        MapIntFloat => LL::PopIntFloat(reg.into()),
-        MapIntStr => LL::PopIntStr(reg.into()),
-        MapStrInt => LL::PopStrInt(reg.into()),
-        MapStrFloat => LL::PopStrFloat(reg.into()),
-        MapStrStr => LL::PopStrStr(reg.into()),
         IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
+        Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+        | MapStrStr => LL::Pop(ty, reg),
     });
     Ok(())
 }
@@ -374,15 +378,8 @@ fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
     instrs.push(match ty {
         Null => return Ok(()),
-        Int => LL::PushInt(reg.into()),
-        Float => LL::PushFloat(reg.into()),
-        Str => LL::PushStr(reg.into()),
-        MapIntInt => LL::PushIntInt(reg.into()),
-        MapIntFloat => LL::PushIntFloat(reg.into()),
-        MapIntStr => LL::PushIntStr(reg.into()),
-        MapStrInt => LL::PushStrInt(reg.into()),
-        MapStrFloat => LL::PushStrFloat(reg.into()),
-        MapStrStr => LL::PushStrStr(reg.into()),
+        Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+        | MapStrStr => LL::Push(ty, reg),
         IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
     });
     Ok(())
@@ -391,12 +388,9 @@ fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
 fn alloc_local<'a>(dst_reg: NumTy, dst_ty: Ty) -> Option<LL<'a>> {
     use Ty::*;
     match dst_ty {
-        MapIntInt => Some(LL::AllocMapIntInt(dst_reg.into())),
-        MapIntFloat => Some(LL::AllocMapIntFloat(dst_reg.into())),
-        MapIntStr => Some(LL::AllocMapIntStr(dst_reg.into())),
-        MapStrInt => Some(LL::AllocMapStrInt(dst_reg.into())),
-        MapStrFloat => Some(LL::AllocMapStrFloat(dst_reg.into())),
-        MapStrStr => Some(LL::AllocMapStrStr(dst_reg.into())),
+        MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+            Some(LL::AllocMap(dst_ty, dst_reg))
+        }
         _ => None,
     }
 }
@@ -406,23 +400,13 @@ fn mov<'a>(dst_reg: u32, src_reg: u32, ty: Ty) -> Result<Option<LL<'a>>> {
     if dst_reg == UNUSED || src_reg == UNUSED {
         return Ok(None);
     }
-
     let res = match ty {
         Null => return Ok(None),
-        Int => LL::MovInt(dst_reg.into(), src_reg.into()),
-        Float => LL::MovFloat(dst_reg.into(), src_reg.into()),
-        Str => LL::MovStr(dst_reg.into(), src_reg.into()),
-
-        MapIntInt => LL::MovMapIntInt(dst_reg.into(), src_reg.into()),
-        MapIntFloat => LL::MovMapIntFloat(dst_reg.into(), src_reg.into()),
-        MapIntStr => LL::MovMapIntStr(dst_reg.into(), src_reg.into()),
-
-        MapStrInt => LL::MovMapStrInt(dst_reg.into(), src_reg.into()),
-        MapStrFloat => LL::MovMapStrFloat(dst_reg.into(), src_reg.into()),
-        MapStrStr => LL::MovMapStrStr(dst_reg.into(), src_reg.into()),
-
         IterInt | IterStr => return err!("attempt to move values of type {:?}", ty),
+        Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+        | MapStrStr => LL::Mov(ty, dst_reg, src_reg),
     };
+
     Ok(Some(res))
 }
 
@@ -729,8 +713,11 @@ impl<'a> Typer<'a> {
                         Either::Left(LL::StoreConstInt(dst, i)) if *i >= 0 => {
                             ufa.add_field(*dst, *i as usize)
                         }
-                        Either::Left(LL::MovInt(dst, src)) => {
-                            ufa.add_dep(/*from_reg=*/ *src, /*to_reg=*/ *dst);
+                        Either::Left(LL::Mov(Ty::Int, dst, src)) => {
+                            ufa.add_dep(
+                                /*from_reg=*/ (*src).into(),
+                                /*to_reg=*/ (*dst).into(),
+                            );
                         }
                         Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
                         Either::Left(LL::JoinCSV(_, start, end))
@@ -1050,12 +1037,6 @@ impl<'a, 'b> View<'a, 'b> {
 
             (Int, Str) => LL::StrToInt(dst_reg.into(), src_reg.into()),
             (Float, Str) => LL::StrToFloat(dst_reg.into(), src_reg.into()),
-
-            (MapIntFloat, MapIntFloat) => LL::MovMapIntFloat(dst_reg.into(), src_reg.into()),
-            (MapIntStr, MapIntStr) => LL::MovMapIntStr(dst_reg.into(), src_reg.into()),
-
-            (MapStrFloat, MapStrFloat) => LL::MovMapStrFloat(dst_reg.into(), src_reg.into()),
-            (MapStrStr, MapStrStr) => LL::MovMapStrStr(dst_reg.into(), src_reg.into()),
             (dst, src) => {
                 if dst == src {
                     return self.mov(dst_reg, src_reg, dst);
@@ -1140,17 +1121,18 @@ impl<'a, 'b> View<'a, 'b> {
 
         // Emit the corresponding instruction.
         use Ty::*;
-        self.pushl(match arr_ty {
-            MapIntInt => LL::LookupIntInt(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapIntFloat => LL::LookupIntFloat(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapIntStr => LL::LookupIntStr(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapStrInt => LL::LookupStrInt(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapStrFloat => LL::LookupStrFloat(load_reg.into(), arr_reg.into(), key_reg.into()),
-            MapStrStr => LL::LookupStrStr(load_reg.into(), arr_reg.into(), key_reg.into()),
+        match arr_ty {
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => self
+                .pushl(LL::Lookup {
+                    map_ty: arr_ty,
+                    dst: load_reg,
+                    map: arr_reg,
+                    key: key_reg,
+                }),
             Null | Int | Float | Str | IterInt | IterStr => {
                 return err!("[load_map] expected map type, found {:?}", arr_ty)
             }
-        });
+        };
         // Convert the result: note that if we had load_reg == dst_reg, then this is a noop.
         self.convert(dst_reg, dst_ty, load_reg, arr_val_ty)
     }
@@ -1273,15 +1255,26 @@ impl<'a, 'b> View<'a, 'b> {
             }
             Match => gen_op!(Match, [Str, Match]),
             SubstrIndex => gen_op!(SubstrIndex, [Str, SubstrIndex]),
-            Contains => gen_op!(
-                Contains,
-                [MapIntInt, ContainsIntInt],
-                [MapIntStr, ContainsIntStr],
-                [MapIntFloat, ContainsIntFloat],
-                [MapStrInt, ContainsStrInt],
-                [MapStrStr, ContainsStrStr],
-                [MapStrFloat, ContainsStrFloat]
-            ),
+            Contains => {
+                if res_reg != UNUSED {
+                    match conv_tys[0] {
+                        Ty::MapIntInt
+                        | Ty::MapIntStr
+                        | Ty::MapIntFloat
+                        | Ty::MapStrInt
+                        | Ty::MapStrStr
+                        | Ty::MapStrFloat => self.pushl(LL::Contains {
+                            map_ty: conv_tys[0],
+                            dst: res_reg,
+                            map: conv_regs[0],
+                            key: conv_regs[1],
+                        }),
+                        Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
+                            return err!("unexpected non-map type for Contains: {:?}", conv_tys[0]);
+                        }
+                    }
+                }
+            }
             ReadErr => {
                 if res_reg != UNUSED {
                     self.pushl(LL::ReadErr(res_reg.into(), conv_regs[0].into()))
@@ -1389,12 +1382,16 @@ impl<'a, 'b> View<'a, 'b> {
                 if res_reg != UNUSED {
                     self.pushl(match conv_tys[0] {
                         Ty::Null => LL::StoreConstInt(res_reg.into(), 0),
-                        Ty::MapIntInt => LL::LenIntInt(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapIntStr => LL::LenIntStr(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapIntFloat => LL::LenIntFloat(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapStrInt => LL::LenStrInt(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapStrStr => LL::LenStrStr(res_reg.into(), conv_regs[0].into()),
-                        Ty::MapStrFloat => LL::LenStrFloat(res_reg.into(), conv_regs[0].into()),
+                        Ty::MapIntInt
+                        | Ty::MapIntStr
+                        | Ty::MapIntFloat
+                        | Ty::MapStrInt
+                        | Ty::MapStrStr
+                        | Ty::MapStrFloat => LL::Len {
+                            map_ty: conv_tys[0],
+                            map: conv_regs[0],
+                            dst: res_reg.into(),
+                        },
                         Ty::Str => LL::LenStr(res_reg.into(), conv_regs[0].into()),
                         _ => return err!("invalid input type for length: {:?}", &conv_tys[..]),
                     })
@@ -1414,25 +1411,18 @@ impl<'a, 'b> View<'a, 'b> {
                 self.pushl(LL::PrintStdout(conv_regs[0].into()));
                 return Ok(());
             }
+
             Delete => match &conv_tys[0] {
-                Ty::MapIntInt => {
-                    self.pushl(LL::DeleteIntInt(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapIntStr => {
-                    self.pushl(LL::DeleteIntStr(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapIntFloat => {
-                    self.pushl(LL::DeleteIntFloat(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapStrInt => {
-                    self.pushl(LL::DeleteStrInt(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapStrStr => {
-                    self.pushl(LL::DeleteStrStr(conv_regs[0].into(), conv_regs[1].into()))
-                }
-                Ty::MapStrFloat => {
-                    self.pushl(LL::DeleteStrFloat(conv_regs[0].into(), conv_regs[1].into()))
-                }
+                Ty::MapIntInt
+                | Ty::MapIntStr
+                | Ty::MapIntFloat
+                | Ty::MapStrInt
+                | Ty::MapStrStr
+                | Ty::MapStrFloat => self.pushl(LL::Delete {
+                    map_ty: conv_tys[0],
+                    map: conv_regs[0],
+                    key: conv_regs[1],
+                }),
                 _ => return err!("incorrect parameter types for Delete: {:?}", &conv_tys[..]),
             },
             Close => {
@@ -1594,18 +1584,18 @@ impl<'a, 'b> View<'a, 'b> {
                         arr_ty
                     );
                 }
-                self.pushl(match arr_ty {
-                    Ty::MapIntInt => LL::IterBeginIntInt(dst_reg.into(), arr_reg.into()),
-                    Ty::MapIntFloat => LL::IterBeginIntFloat(dst_reg.into(), arr_reg.into()),
-                    Ty::MapIntStr => LL::IterBeginIntStr(dst_reg.into(), arr_reg.into()),
-                    Ty::MapStrInt => LL::IterBeginStrInt(dst_reg.into(), arr_reg.into()),
-                    Ty::MapStrFloat => LL::IterBeginStrFloat(dst_reg.into(), arr_reg.into()),
-                    Ty::MapStrStr => LL::IterBeginStrStr(dst_reg.into(), arr_reg.into()),
-                    Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
-                        // covered by the error check above
-                        unreachable!()
+                use Ty::*;
+                match arr_ty {
+                    MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                        self.pushl(LL::IterBegin {
+                            map_ty: arr_ty,
+                            dst: dst_reg,
+                            map: arr_reg,
+                        })
                     }
-                });
+                    // Covered by the error check above
+                    Null | Int | Float | Str | IterInt | IterStr => unreachable!(),
+                };
             }
             PrimExpr::HasNext(pv) => {
                 let target_reg = if dst_ty == Ty::Int {
@@ -1614,10 +1604,11 @@ impl<'a, 'b> View<'a, 'b> {
                     self.regs.stats.reg_of_ty(Ty::Int)
                 };
                 let (iter_reg, iter_ty) = self.get_reg(pv)?;
-                self.pushl(match iter_ty.iter()? {
-                    Ty::Int => LL::IterHasNextInt(target_reg.into(), iter_reg.into()),
-                    Ty::Str => LL::IterHasNextStr(target_reg.into(), iter_reg.into()),
-                    _ => unreachable!(),
+                assert!(matches!(iter_ty.iter(), Ok(Ty::Int) | Ok(Ty::Str)));
+                self.pushl(LL::IterHasNext {
+                    iter_ty,
+                    dst: target_reg,
+                    iter: iter_reg,
                 });
                 self.convert(dst_reg, dst_ty, target_reg, Ty::Int)?
             }
@@ -1629,10 +1620,11 @@ impl<'a, 'b> View<'a, 'b> {
                 } else {
                     self.regs.stats.reg_of_ty(elt_ty)
                 };
-                self.pushl(match elt_ty {
-                    Ty::Int => LL::IterGetNextInt(target_reg.into(), iter_reg.into()),
-                    Ty::Str => LL::IterGetNextStr(target_reg.into(), iter_reg.into()),
-                    _ => unreachable!(),
+                assert!(matches!(iter_ty.iter(), Ok(Ty::Int) | Ok(Ty::Str)));
+                self.pushl(LL::IterGetNext {
+                    iter_ty,
+                    dst: target_reg,
+                    iter: iter_reg,
                 });
                 self.convert(dst_reg, dst_ty, target_reg, elt_ty)?
             }
@@ -1669,13 +1661,15 @@ impl<'a, 'b> View<'a, 'b> {
                 let v_reg = self.regs.stats.reg_of_ty(v_ty);
                 self.expr(v_reg, v_ty, pe)?;
                 use Ty::*;
-                self.pushl(match a_ty {
-                    MapIntInt => LL::StoreIntInt(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapIntFloat => LL::StoreIntFloat(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapIntStr => LL::StoreIntStr(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapStrInt => LL::StoreStrInt(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapStrFloat => LL::StoreStrFloat(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapStrStr => LL::StoreStrStr(a_reg.into(), k_reg.into(), v_reg.into()),
+                match a_ty {
+                    MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                        self.pushl(LL::Store {
+                            map_ty: a_ty,
+                            map: a_reg,
+                            key: k_reg,
+                            val: v_reg,
+                        })
+                    }
                     Null | Int | Float | Str | IterInt | IterStr => {
                         return err!(
                             "in stmt {:?} computed type is non-map type {:?}",
@@ -1683,7 +1677,7 @@ impl<'a, 'b> View<'a, 'b> {
                             a_ty
                         )
                     }
-                });
+                };
             }
             PrimStmt::AsgnVar(id, pe) => {
                 let (dst_reg, dst_ty) = self.reg_of_ident(id);

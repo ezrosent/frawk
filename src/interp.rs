@@ -1,5 +1,5 @@
 use crate::builtins::Variable;
-use crate::bytecode::{Get, Instr, Label, Pop, Reg};
+use crate::bytecode::{Get, Instr, Label, Reg};
 use crate::common::{NumTy, Result, Stage};
 use crate::compile::{self, Ty};
 use crate::pushdown::FieldSet;
@@ -312,6 +312,76 @@ impl<'a> Core<'a> {
     }
 }
 
+macro_rules! map_regs {
+    ($map_ty:expr, $map_reg:ident, $body:expr) => {{
+        let _placeholder_k = 0u32;
+        let _placeholder_v = 0u32;
+        map_regs!($map_ty, $map_reg, _placeholder_k, _placeholder_v, $body)
+    }};
+    ($map_ty:expr, $map_reg:ident, $key_reg:ident, $val_reg:ident, $body:expr) => {{
+        let _placeholder_iter = 0u32;
+        map_regs!(
+            $map_ty,
+            $map_reg,
+            $key_reg,
+            $val_reg,
+            _placeholder_iter,
+            $body
+        )
+    }};
+    ($map_ty:expr, $map_reg:ident, $key_reg:ident, $val_reg:ident, $iter_reg:ident, $body:expr) => {{
+        let map_ty = $map_ty;
+        match map_ty {
+            Ty::MapIntInt => {
+                let $map_reg: Reg<runtime::IntMap<Int>> = $map_reg.into();
+                let $key_reg: Reg<Int> = $key_reg.into();
+                let $val_reg: Reg<Int> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Int>> = $iter_reg.into();
+                $body
+            }
+            Ty::MapIntFloat => {
+                let $map_reg: Reg<runtime::IntMap<Float>> = $map_reg.into();
+                let $key_reg: Reg<Int> = $key_reg.into();
+                let $val_reg: Reg<Float> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Int>> = $iter_reg.into();
+                $body
+            }
+            Ty::MapIntStr => {
+                let $map_reg: Reg<runtime::IntMap<Str<'a>>> = $map_reg.into();
+                let $key_reg: Reg<Int> = $key_reg.into();
+                let $val_reg: Reg<Str<'a>> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Int>> = $iter_reg.into();
+                $body
+            }
+            Ty::MapStrInt => {
+                let $map_reg: Reg<runtime::StrMap<'a, Int>> = $map_reg.into();
+                let $key_reg: Reg<Str<'a>> = $key_reg.into();
+                let $val_reg: Reg<Int> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Str<'a>>> = $iter_reg.into();
+                $body
+            }
+            Ty::MapStrFloat => {
+                let $map_reg: Reg<runtime::StrMap<'a, Float>> = $map_reg.into();
+                let $key_reg: Reg<Str<'a>> = $key_reg.into();
+                let $val_reg: Reg<Float> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Str<'a>>> = $iter_reg.into();
+                $body
+            }
+            Ty::MapStrStr => {
+                let $map_reg: Reg<runtime::StrMap<'a, Str<'a>>> = $map_reg.into();
+                let $key_reg: Reg<Str<'a>> = $key_reg.into();
+                let $val_reg: Reg<Str<'a>> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Str<'a>>> = $iter_reg.into();
+                $body
+            }
+            Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => panic!(
+                "attempting to perform map operations on non-map type: {:?}",
+                map_ty
+            ),
+        }
+    }};
+}
+
 pub(crate) struct Interp<'a, LR: LineReader = ClassicReader> {
     // index of `instrs` that contains "main"
     main_func: Stage<usize>,
@@ -534,32 +604,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         let mut instrs = (&mut self.instrs[cur_fn]) as *mut Vec<Instr<'a>>;
         let mut cur = 0;
 
-        // Local macros help to eliminate boilerplate in type-specific instructions.
-        // StoreSlot<T>(ident, slot_id)
-        macro_rules! store_slot {
-            ($src: ident, $slot_id: ident, $slot_meth:tt) => {{
-                let src = *$src;
-                let new_val = self.get(src).clone();
-                self.core.$slot_meth(*$slot_id as usize, new_val);
-            }};
-        }
-        // LoadSlot<T>(ident, slot_id)
-        macro_rules! load_slot {
-            ($dst: ident, $slot_id: ident, $slot_meth:tt) => {{
-                let dst = *$dst;
-                let new_val = self.core.$slot_meth(*$slot_id as usize);
-                *self.get_mut(dst) = new_val;
-            }};
-        }
-        // IterBegin<T>(dst, arr)
-        macro_rules! iter_begin {
-            ($dst:ident, $arr:ident) => {{
-                let arr = *$arr;
-                let dst = *$dst;
-                let iter = self.get(arr).to_iter();
-                *self.get_mut(dst) = iter;
-            }};
-        }
         'outer: loop {
             // must end with Halt
             cur = loop {
@@ -1024,192 +1068,26 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.core.write_files.close(file)?;
                         self.read_files.close(file);
                     }
-                    LookupIntInt(res, arr, k) => {
-                        let arr = index(&self.maps_int_int, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).unwrap_or(0);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupIntStr(res, arr, k) => {
-                        let arr = index(&self.maps_int_str, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).unwrap_or_else(Default::default);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupIntFloat(res, arr, k) => {
-                        let arr = index(&self.maps_int_float, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).unwrap_or(0.0);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupStrInt(res, arr, k) => {
-                        let arr = index(&self.maps_str_int, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).unwrap_or(0);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupStrStr(res, arr, k) => {
-                        let arr = index(&self.maps_str_str, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).unwrap_or_else(Default::default);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    LookupStrFloat(res, arr, k) => {
-                        let arr = index(&self.maps_str_float, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).unwrap_or(0.0);
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsIntInt(res, arr, k) => {
-                        let arr = index(&self.maps_int_int, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsIntStr(res, arr, k) => {
-                        let arr = index(&self.maps_int_str, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsIntFloat(res, arr, k) => {
-                        let arr = index(&self.maps_int_float, arr);
-                        let k = index(&self.ints, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsStrInt(res, arr, k) => {
-                        let arr = index(&self.maps_str_int, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsStrStr(res, arr, k) => {
-                        let arr = index(&self.maps_str_str, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    ContainsStrFloat(res, arr, k) => {
-                        let arr = index(&self.maps_str_float, arr);
-                        let k = index(&self.strs, k);
-                        let v = arr.get(k).is_some() as i64;
-                        let res = *res;
-                        *self.get_mut(res) = v;
-                    }
-                    DeleteIntInt(arr, k) => {
-                        let arr = index(&self.maps_int_int, arr);
-                        let k = index(&self.ints, k);
-                        arr.delete(k);
-                    }
-                    DeleteIntFloat(arr, k) => {
-                        let arr = index(&self.maps_int_float, arr);
-                        let k = index(&self.ints, k);
-                        arr.delete(k);
-                    }
-                    DeleteIntStr(arr, k) => {
-                        let arr = index(&self.maps_int_str, arr);
-                        let k = index(&self.ints, k);
-                        arr.delete(k);
-                    }
-                    DeleteStrInt(arr, k) => {
-                        let arr = index(&self.maps_str_int, arr);
-                        let k = index(&self.strs, k);
-                        arr.delete(k);
-                    }
-                    DeleteStrFloat(arr, k) => {
-                        let arr = index(&self.maps_str_float, arr);
-                        let k = index(&self.strs, k);
-                        arr.delete(k);
-                    }
-                    DeleteStrStr(arr, k) => {
-                        let arr = index(&self.maps_str_str, arr);
-                        let k = index(&self.strs, k);
-                        arr.delete(k);
-                    }
-                    LenIntInt(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenIntFloat(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenIntStr(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenStrInt(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenStrFloat(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    LenStrStr(res, arr) => {
-                        let arr = *arr;
-                        let len = self.get(arr).len();
-                        let res = *res;
-                        *self.get_mut(res) = len as Int;
-                    }
-                    StoreIntInt(arr, k, v) => {
-                        let arr = index(&self.maps_int_int, arr);
-                        let k = index(&self.ints, k).clone();
-                        let v = index(&self.ints, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreIntFloat(arr, k, v) => {
-                        let arr = index(&self.maps_int_float, arr);
-                        let k = index(&self.ints, k).clone();
-                        let v = index(&self.floats, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreIntStr(arr, k, v) => {
-                        let arr = index(&self.maps_int_str, arr);
-                        let k = index(&self.ints, k).clone();
-                        let v = index(&self.strs, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreStrInt(arr, k, v) => {
-                        let arr = index(&self.maps_str_int, arr);
-                        let k = index(&self.strs, k).clone();
-                        let v = index(&self.ints, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreStrFloat(arr, k, v) => {
-                        let arr = index(&self.maps_str_float, arr);
-                        let k = index(&self.strs, k).clone();
-                        let v = index(&self.floats, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreStrStr(arr, k, v) => {
-                        let arr = index(&self.maps_str_str, arr);
-                        let k = index(&self.strs, k).clone();
-                        let v = index(&self.strs, v).clone();
-                        arr.insert(k, v);
-                    }
+                    Lookup {
+                        map_ty,
+                        dst,
+                        map,
+                        key,
+                    } => self.lookup(*map_ty, *dst, *map, *key),
+                    Contains {
+                        map_ty,
+                        dst,
+                        map,
+                        key,
+                    } => self.contains(*map_ty, *dst, *map, *key),
+                    Delete { map_ty, map, key } => self.delete(*map_ty, *map, *key),
+                    Len { map_ty, map, dst } => self.len(*map_ty, *map, *dst),
+                    Store {
+                        map_ty,
+                        map,
+                        key,
+                        val,
+                    } => self.store_map(*map_ty, *map, *key, *val),
                     LoadVarStr(dst, var) => {
                         let s = self.core.vars.load_str(*var)?;
                         let dst = *dst;
@@ -1247,130 +1125,15 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.core.vars.store_intmap(*var, s)?;
                     }
 
-                    LoadSlotInt(dst, slot) => load_slot!(dst, slot, load_int),
-                    LoadSlotFloat(dst, slot) => load_slot!(dst, slot, load_float),
-                    LoadSlotStr(dst, slot) => load_slot!(dst, slot, load_str),
-                    LoadSlotIntInt(dst, slot) => load_slot!(dst, slot, load_intint),
-                    LoadSlotIntFloat(dst, slot) => load_slot!(dst, slot, load_intfloat),
-                    LoadSlotIntStr(dst, slot) => load_slot!(dst, slot, load_intstr),
-                    LoadSlotStrInt(dst, slot) => load_slot!(dst, slot, load_strint),
-                    LoadSlotStrFloat(dst, slot) => load_slot!(dst, slot, load_strfloat),
-                    LoadSlotStrStr(dst, slot) => load_slot!(dst, slot, load_strstr),
-                    StoreSlotInt(src, slot) => store_slot!(src, slot, store_int),
-                    StoreSlotFloat(src, slot) => store_slot!(src, slot, store_float),
-                    StoreSlotStr(src, slot) => store_slot!(src, slot, store_str),
-                    StoreSlotIntInt(src, slot) => store_slot!(src, slot, store_intint),
-                    StoreSlotIntFloat(src, slot) => store_slot!(src, slot, store_intfloat),
-                    StoreSlotIntStr(src, slot) => store_slot!(src, slot, store_intstr),
-                    StoreSlotStrInt(src, slot) => store_slot!(src, slot, store_strint),
-                    StoreSlotStrFloat(src, slot) => store_slot!(src, slot, store_strfloat),
-                    StoreSlotStrStr(src, slot) => store_slot!(src, slot, store_strstr),
+                    IterBegin { map_ty, map, dst } => self.iter_begin(*map_ty, *map, *dst),
+                    IterHasNext { iter_ty, dst, iter } => self.iter_has_next(*iter_ty, *dst, *iter),
+                    IterGetNext { iter_ty, dst, iter } => self.iter_get_next(*iter_ty, *dst, *iter),
 
-                    IterBeginIntInt(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginIntFloat(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginIntStr(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginStrInt(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginStrFloat(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginStrStr(dst, arr) => iter_begin!(dst, arr),
+                    LoadSlot { ty, dst, slot } => self.load_slot(*ty, *dst, *slot),
+                    StoreSlot { ty, src, slot } => self.store_slot(*ty, *src, *slot),
+                    Mov(ty, dst, src) => self.mov(*ty, *dst, *src),
+                    AllocMap(ty, reg) => self.alloc_map(*ty, *reg),
 
-                    IterHasNextInt(dst, iter) => {
-                        let res = self.get(*iter).has_next() as Int;
-                        let dst = *dst;
-                        *self.get_mut(dst) = res;
-                    }
-                    IterHasNextStr(dst, iter) => {
-                        let res = self.get(*iter).has_next() as Int;
-                        let dst = *dst;
-                        *self.get_mut(dst) = res;
-                    }
-                    IterGetNextInt(dst, iter) => {
-                        let res = unsafe { self.get(*iter).get_next().clone() };
-                        let dst = *dst;
-                        *self.get_mut(dst) = res;
-                    }
-                    IterGetNextStr(dst, iter) => {
-                        let res = unsafe { self.get(*iter).get_next().clone() };
-                        let dst = *dst;
-                        *self.get_mut(dst) = res;
-                    }
-                    MovInt(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovFloat(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovStr(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapIntInt(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapIntFloat(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapIntStr(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapStrInt(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapStrFloat(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    MovMapStrStr(dst, src) => {
-                        let src = *src;
-                        let src_contents = self.get(src).clone();
-                        let dst = *dst;
-                        *self.get_mut(dst) = src_contents;
-                    }
-                    AllocMapIntInt(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapIntFloat(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapIntStr(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapStrInt(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapStrFloat(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
-                    AllocMapStrStr(dst) => {
-                        let dst = *dst;
-                        *self.get_mut(dst) = Default::default();
-                    }
                     // TODO add error logging for these errors perhaps?
                     ReadErr(dst, file) => {
                         let dst = *dst;
@@ -1429,79 +1192,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     Jmp(lbl) => {
                         break lbl.0 as usize;
                     }
-                    PushInt(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushFloat(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushStr(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushIntInt(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushIntFloat(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushIntStr(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushStrInt(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushStrFloat(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushStrStr(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-
-                    PopInt(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopFloat(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopStr(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopIntInt(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopIntFloat(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopIntStr(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopStrInt(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopStrFloat(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopStrStr(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
+                    Push(ty, reg) => self.push_reg(*ty, *reg),
+                    Pop(ty, reg) => self.pop_reg(*ty, *reg),
                     Call(func) => {
                         self.stack.push((cur_fn, Label(cur + 1)));
                         cur_fn = *func;
@@ -1521,6 +1213,207 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 };
                 break cur + 1;
             };
+        }
+    }
+    fn mov(&mut self, ty: Ty, dst: NumTy, src: NumTy) {
+        match ty {
+            Ty::Int => {
+                let src = *index(&self.ints, &src.into());
+                *index_mut(&mut self.ints, &dst.into()) = src;
+            }
+            Ty::Float => {
+                let src = *index(&self.floats, &src.into());
+                *index_mut(&mut self.floats, &dst.into()) = src;
+            }
+            Ty::Str => {
+                let src = index(&self.strs, &src.into()).clone();
+                *index_mut(&mut self.strs, &dst.into()) = src;
+            }
+            Ty::MapIntInt => {
+                let src = index(&self.maps_int_int, &src.into()).clone();
+                *index_mut(&mut self.maps_int_int, &dst.into()) = src;
+            }
+            Ty::MapIntFloat => {
+                let src = index(&self.maps_int_float, &src.into()).clone();
+                *index_mut(&mut self.maps_int_float, &dst.into()) = src;
+            }
+            Ty::MapIntStr => {
+                let src = index(&self.maps_int_str, &src.into()).clone();
+                *index_mut(&mut self.maps_int_str, &dst.into()) = src;
+            }
+            Ty::MapStrInt => {
+                let src = index(&self.maps_str_int, &src.into()).clone();
+                *index_mut(&mut self.maps_str_int, &dst.into()) = src;
+            }
+            Ty::MapStrFloat => {
+                let src = index(&self.maps_str_float, &src.into()).clone();
+                *index_mut(&mut self.maps_str_float, &dst.into()) = src;
+            }
+            Ty::MapStrStr => {
+                let src = index(&self.maps_str_str, &src.into()).clone();
+                *index_mut(&mut self.maps_str_str, &dst.into()) = src;
+            }
+            Ty::Null | Ty::IterInt | Ty::IterStr => {
+                panic!("invalid type for move operation: {:?}", ty)
+            }
+        }
+    }
+    fn alloc_map(&mut self, ty: Ty, reg: NumTy) {
+        map_regs!(ty, reg, *self.get_mut(reg) = Default::default())
+    }
+    fn lookup(&mut self, map_ty: Ty, dst: NumTy, map: NumTy, key: NumTy) {
+        map_regs!(map_ty, map, key, dst, {
+            let res = self
+                .get(map)
+                .get(self.get(key))
+                .unwrap_or_else(Default::default);
+            *self.get_mut(dst) = res;
+        });
+    }
+    fn contains(&mut self, map_ty: Ty, dst: NumTy, map: NumTy, key: NumTy) {
+        let _v = 0u32;
+        let dst: Reg<Int> = dst.into();
+        map_regs!(map_ty, map, key, _v, {
+            let res = self.get(map).get(self.get(key)).is_some() as Int;
+            *self.get_mut(dst) = res;
+        });
+    }
+    fn delete(&mut self, map_ty: Ty, map: NumTy, key: NumTy) {
+        let _v = 0u32;
+        map_regs!(map_ty, map, key, _v, {
+            self.get(map).delete(self.get(key))
+        });
+    }
+    fn store_map(&mut self, map_ty: Ty, map: NumTy, key: NumTy, val: NumTy) {
+        map_regs!(map_ty, map, key, val, {
+            let k = self.get(key).clone();
+            let v = self.get(val).clone();
+            self.get(map).insert(k, v);
+        });
+    }
+    fn len(&mut self, map_ty: Ty, map: NumTy, dst: NumTy) {
+        let len = map_regs!(map_ty, map, self.get(map).len() as Int);
+        *index_mut(&mut self.ints, &dst.into()) = len;
+    }
+    fn iter_begin(&mut self, map_ty: Ty, map: NumTy, dst: NumTy) {
+        let _k = 0u32;
+        let _v = 0u32;
+        map_regs!(map_ty, map, _k, _v, dst, {
+            let iter = self.get(map).to_iter();
+            *self.get_mut(dst) = iter;
+        })
+    }
+    fn iter_has_next(&mut self, iter_ty: Ty, dst: NumTy, iter: NumTy) {
+        match iter_ty {
+            Ty::IterInt => {
+                let res = index(&self.iters_int, &iter.into()).has_next() as Int;
+                *index_mut(&mut self.ints, &dst.into()) = res;
+            }
+            Ty::IterStr => {
+                let res = index(&self.iters_str, &iter.into()).has_next() as Int;
+                *index_mut(&mut self.ints, &dst.into()) = res;
+            }
+            x => panic!("non-iterator type passed to has_next: {:?}", x),
+        }
+    }
+    fn iter_get_next(&mut self, iter_ty: Ty, dst: NumTy, iter: NumTy) {
+        match iter_ty {
+            Ty::IterInt => {
+                let res = unsafe { index(&self.iters_int, &iter.into()).get_next().clone() };
+                *index_mut(&mut self.ints, &dst.into()) = res;
+            }
+            Ty::IterStr => {
+                let res = unsafe { index(&self.iters_str, &iter.into()).get_next().clone() };
+                *index_mut(&mut self.strs, &dst.into()) = res;
+            }
+            x => panic!("non-iterator type passed to get_next: {:?}", x),
+        }
+    }
+    fn load_slot(&mut self, ty: Ty, dst: NumTy, slot: Int) {
+        let slot = slot as usize;
+        macro_rules! do_load {
+            ($load_meth:tt, $reg_fld:tt) => {
+                *index_mut(&mut self.$reg_fld, &dst.into()) = self.core.$load_meth(slot)
+            };
+        }
+        match ty {
+            Ty::Int => do_load!(load_int, ints),
+            Ty::Float => do_load!(load_float, floats),
+            Ty::Str => do_load!(load_str, strs),
+            Ty::MapIntInt => do_load!(load_intint, maps_int_int),
+            Ty::MapIntFloat => do_load!(load_intfloat, maps_int_float),
+            Ty::MapIntStr => do_load!(load_intstr, maps_int_str),
+            Ty::MapStrInt => do_load!(load_strint, maps_str_int),
+            Ty::MapStrFloat => do_load!(load_strfloat, maps_str_float),
+            Ty::MapStrStr => do_load!(load_strstr, maps_str_str),
+            Ty::Null | Ty::IterInt | Ty::IterStr => {
+                panic!("unexpected operand type to slot operation: {:?}", ty)
+            }
+        }
+    }
+    fn store_slot(&mut self, ty: Ty, src: NumTy, slot: Int) {
+        let slot = slot as usize;
+        macro_rules! do_store {
+            ($store_meth:tt, $reg_fld:tt) => {
+                self.core
+                    .$store_meth(slot, index(&self.$reg_fld, &src.into()).clone())
+            };
+        }
+        match ty {
+            Ty::Int => do_store!(store_int, ints),
+            Ty::Float => do_store!(store_float, floats),
+            Ty::Str => do_store!(store_str, strs),
+            Ty::MapIntInt => do_store!(store_intint, maps_int_int),
+            Ty::MapIntFloat => do_store!(store_intfloat, maps_int_float),
+            Ty::MapIntStr => do_store!(store_intstr, maps_int_str),
+            Ty::MapStrInt => do_store!(store_strint, maps_str_int),
+            Ty::MapStrFloat => do_store!(store_strfloat, maps_str_float),
+            Ty::MapStrStr => do_store!(store_strstr, maps_str_str),
+            Ty::Null | Ty::IterInt | Ty::IterStr => panic!("unsupported slot type: {:?}", ty),
+        }
+    }
+    fn push_reg(&mut self, ty: Ty, src: NumTy) {
+        match ty {
+            Ty::Int => push(&mut self.ints, &src.into()),
+            Ty::Float => push(&mut self.floats, &src.into()),
+            Ty::Str => push(&mut self.strs, &src.into()),
+            Ty::MapIntInt => push(&mut self.maps_int_int, &src.into()),
+            Ty::MapIntFloat => push(&mut self.maps_int_float, &src.into()),
+            Ty::MapIntStr => push(&mut self.maps_int_str, &src.into()),
+            Ty::MapStrInt => push(&mut self.maps_str_int, &src.into()),
+            Ty::MapStrFloat => push(&mut self.maps_str_float, &src.into()),
+            Ty::MapStrStr => push(&mut self.maps_str_str, &src.into()),
+            Ty::Null | Ty::IterInt | Ty::IterStr => {
+                panic!("unsupported register type for push operation: {:?}", ty)
+            }
+        }
+    }
+    fn pop_reg(&mut self, ty: Ty, dst: NumTy) {
+        match ty {
+            Ty::Int => *index_mut(&mut self.ints, &dst.into()) = pop(&mut self.ints),
+            Ty::Float => *index_mut(&mut self.floats, &dst.into()) = pop(&mut self.floats),
+            Ty::Str => *index_mut(&mut self.strs, &dst.into()) = pop(&mut self.strs),
+            Ty::MapIntInt => {
+                *index_mut(&mut self.maps_int_int, &dst.into()) = pop(&mut self.maps_int_int)
+            }
+            Ty::MapIntFloat => {
+                *index_mut(&mut self.maps_int_float, &dst.into()) = pop(&mut self.maps_int_float)
+            }
+            Ty::MapIntStr => {
+                *index_mut(&mut self.maps_int_str, &dst.into()) = pop(&mut self.maps_int_str)
+            }
+            Ty::MapStrInt => {
+                *index_mut(&mut self.maps_str_int, &dst.into()) = pop(&mut self.maps_str_int)
+            }
+            Ty::MapStrFloat => {
+                *index_mut(&mut self.maps_str_float, &dst.into()) = pop(&mut self.maps_str_float)
+            }
+            Ty::MapStrStr => {
+                *index_mut(&mut self.maps_str_float, &dst.into()) = pop(&mut self.maps_str_float)
+            }
+            Ty::Null | Ty::IterInt | Ty::IterStr => {
+                panic!("unsupported register type for pop operation: {:?}", ty)
+            }
         }
     }
 }

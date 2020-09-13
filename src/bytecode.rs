@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use crate::builtins::{Bitwise, FloatFunc, Variable};
 use crate::common::NumTy;
 use crate::compile::{self, Ty};
-use crate::interp::{index, index_mut, pop, push, Storage};
+use crate::interp::{index, index_mut, Storage};
 use crate::runtime::{self, Float, Int, Str, UniqueStr};
 
 pub(crate) use crate::interp::Interp;
@@ -76,32 +76,11 @@ pub(crate) enum Instr<'a> {
     StrToFloat(Reg<Float>, Reg<Str<'a>>),
 
     // Assignment
-    MovInt(Reg<Int>, Reg<Int>),
-    MovFloat(Reg<Float>, Reg<Float>),
-    MovStr(Reg<Str<'a>>, Reg<Str<'a>>),
-
-    MovMapIntInt(Reg<runtime::IntMap<Int>>, Reg<runtime::IntMap<Int>>),
-    MovMapIntFloat(Reg<runtime::IntMap<Float>>, Reg<runtime::IntMap<Float>>),
-    MovMapIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<runtime::IntMap<Str<'a>>>),
-
-    MovMapStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<runtime::StrMap<'a, Int>>),
-    MovMapStrFloat(
-        Reg<runtime::StrMap<'a, Float>>,
-        Reg<runtime::StrMap<'a, Float>>,
-    ),
-    MovMapStrStr(
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-    ),
-
-    AllocMapIntInt(Reg<runtime::IntMap<Int>>),
-    AllocMapIntFloat(Reg<runtime::IntMap<Float>>),
-    AllocMapIntStr(Reg<runtime::IntMap<Str<'a>>>),
-    AllocMapStrInt(Reg<runtime::StrMap<'a, Int>>),
-    AllocMapStrFloat(Reg<runtime::StrMap<'a, Float>>),
-    AllocMapStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
     // Note, for now we do not support iterator moves. Iterators own their own copy of an array,
     // and there is no reason we should be emitting movs for them.
+    Mov(Ty, NumTy, NumTy),
+
+    AllocMap(Ty, NumTy),
 
     // Math
     AddInt(Reg<Int>, Reg<Int>, Reg<Int>),
@@ -231,59 +210,49 @@ pub(crate) enum Instr<'a> {
     Close(Reg<Str<'a>>),
 
     // Map operations
-    LookupIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>, Reg<Int>),
-    LookupIntStr(Reg<Str<'a>>, Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
-    LookupIntFloat(Reg<Float>, Reg<runtime::IntMap<Float>>, Reg<Int>),
-    LookupStrInt(Reg<Int>, Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
-    LookupStrStr(
-        Reg<Str<'a>>,
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-        Reg<Str<'a>>,
-    ),
-    LookupStrFloat(Reg<Float>, Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
-    ContainsIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>, Reg<Int>),
-    ContainsIntStr(Reg<Int>, Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
-    ContainsIntFloat(Reg<Int>, Reg<runtime::IntMap<Float>>, Reg<Int>),
-    ContainsStrInt(Reg<Int>, Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
-    ContainsStrStr(Reg<Int>, Reg<runtime::StrMap<'a, Str<'a>>>, Reg<Str<'a>>),
-    ContainsStrFloat(Reg<Int>, Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
-    DeleteIntInt(Reg<runtime::IntMap<Int>>, Reg<Int>),
-    DeleteIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<Int>),
-    DeleteIntFloat(Reg<runtime::IntMap<Float>>, Reg<Int>),
-    DeleteStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>),
-    DeleteStrStr(Reg<runtime::StrMap<'a, Str<'a>>>, Reg<Str<'a>>),
-    DeleteStrFloat(Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>),
-    LenIntInt(Reg<Int>, Reg<runtime::IntMap<Int>>),
-    LenIntFloat(Reg<Int>, Reg<runtime::IntMap<Float>>),
-    LenIntStr(Reg<Int>, Reg<runtime::IntMap<Str<'a>>>),
-    LenStrInt(Reg<Int>, Reg<runtime::StrMap<'a, Int>>),
-    LenStrFloat(Reg<Int>, Reg<runtime::StrMap<'a, Float>>),
-    LenStrStr(Reg<Int>, Reg<runtime::StrMap<'a, Str<'a>>>),
-
-    IterBeginIntInt(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Int>>),
-    IterBeginIntStr(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Str<'a>>>),
-    IterBeginIntFloat(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Float>>),
-    IterBeginStrInt(Reg<runtime::Iter<Str<'a>>>, Reg<runtime::StrMap<'a, Int>>),
-    IterBeginStrStr(
-        Reg<runtime::Iter<Str<'a>>>,
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-    ),
-    IterBeginStrFloat(Reg<runtime::Iter<Str<'a>>>, Reg<runtime::StrMap<'a, Float>>),
-    IterHasNextInt(Reg<Int>, Reg<runtime::Iter<Int>>),
-    IterHasNextStr(Reg<Int>, Reg<runtime::Iter<Str<'a>>>),
-    IterGetNextInt(Reg<Int>, Reg<runtime::Iter<Int>>),
-    IterGetNextStr(Reg<Str<'a>>, Reg<runtime::Iter<Str<'a>>>),
-    StoreIntInt(Reg<runtime::IntMap<Int>>, Reg<Int>, Reg<Int>),
-    StoreIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<Int>, Reg<Str<'a>>),
-    StoreIntFloat(Reg<runtime::IntMap<Float>>, Reg<Int>, Reg<Float>),
-    StoreStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>, Reg<Int>),
-    StoreStrStr(
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-        Reg<Str<'a>>,
-        Reg<Str<'a>>,
-    ),
-    StoreStrFloat(Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>, Reg<Float>),
-
+    Lookup {
+        map_ty: Ty,
+        dst: NumTy,
+        map: NumTy,
+        key: NumTy,
+    },
+    Contains {
+        map_ty: Ty,
+        dst: NumTy,
+        map: NumTy,
+        key: NumTy,
+    },
+    Delete {
+        map_ty: Ty,
+        map: NumTy,
+        key: NumTy,
+    },
+    Len {
+        map_ty: Ty,
+        dst: NumTy,
+        map: NumTy,
+    },
+    Store {
+        map_ty: Ty,
+        map: NumTy,
+        key: NumTy,
+        val: NumTy,
+    },
+    IterBegin {
+        map_ty: Ty,
+        dst: NumTy,
+        map: NumTy,
+    },
+    IterHasNext {
+        iter_ty: Ty,
+        dst: NumTy,
+        iter: NumTy,
+    },
+    IterGetNext {
+        iter_ty: Ty,
+        dst: NumTy,
+        iter: NumTy,
+    },
     // Special variables
     LoadVarStr(Reg<Str<'a>>, Variable),
     StoreVarStr(Variable, Reg<Str<'a>>),
@@ -292,25 +261,16 @@ pub(crate) enum Instr<'a> {
     LoadVarIntMap(Reg<runtime::IntMap<Str<'a>>>, Variable),
     StoreVarIntMap(Variable, Reg<runtime::IntMap<Str<'a>>>),
 
-    LoadSlotInt(Reg<Int>, Int),
-    LoadSlotFloat(Reg<Float>, Int),
-    LoadSlotStr(Reg<Str<'a>>, Int),
-    LoadSlotIntInt(Reg<runtime::IntMap<Int>>, Int),
-    LoadSlotIntFloat(Reg<runtime::IntMap<Float>>, Int),
-    LoadSlotIntStr(Reg<runtime::IntMap<Str<'a>>>, Int),
-    LoadSlotStrInt(Reg<runtime::StrMap<'a, Int>>, Int),
-    LoadSlotStrFloat(Reg<runtime::StrMap<'a, Float>>, Int),
-    LoadSlotStrStr(Reg<runtime::StrMap<'a, Str<'a>>>, Int),
-
-    StoreSlotInt(Reg<Int>, Int),
-    StoreSlotFloat(Reg<Float>, Int),
-    StoreSlotStr(Reg<Str<'a>>, Int),
-    StoreSlotIntInt(Reg<runtime::IntMap<Int>>, Int),
-    StoreSlotIntFloat(Reg<runtime::IntMap<Float>>, Int),
-    StoreSlotIntStr(Reg<runtime::IntMap<Str<'a>>>, Int),
-    StoreSlotStrInt(Reg<runtime::StrMap<'a, Int>>, Int),
-    StoreSlotStrFloat(Reg<runtime::StrMap<'a, Float>>, Int),
-    StoreSlotStrStr(Reg<runtime::StrMap<'a, Str<'a>>>, Int),
+    LoadSlot {
+        ty: Ty,
+        slot: Int,
+        dst: NumTy,
+    },
+    StoreSlot {
+        ty: Ty,
+        slot: Int,
+        src: NumTy,
+    },
 
     // Control
     JmpIf(Reg<Int>, Label),
@@ -318,28 +278,9 @@ pub(crate) enum Instr<'a> {
     Halt,
 
     // Functions
-    PushInt(Reg<Int>),
-    PushFloat(Reg<Float>),
-    PushStr(Reg<Str<'a>>),
-    PushIntInt(Reg<runtime::IntMap<Int>>),
-    PushIntFloat(Reg<runtime::IntMap<Float>>),
-    PushIntStr(Reg<runtime::IntMap<Str<'a>>>),
-
-    PushStrInt(Reg<runtime::StrMap<'a, Int>>),
-    PushStrFloat(Reg<runtime::StrMap<'a, Float>>),
-    PushStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
-
-    PopInt(Reg<Int>),
-    PopFloat(Reg<Float>),
-    PopStr(Reg<Str<'a>>),
-    PopIntInt(Reg<runtime::IntMap<Int>>),
-    PopIntFloat(Reg<runtime::IntMap<Float>>),
-    PopIntStr(Reg<runtime::IntMap<Str<'a>>>),
-
-    PopStrInt(Reg<runtime::StrMap<'a, Int>>),
-    PopStrFloat(Reg<runtime::StrMap<'a, Float>>),
-    PopStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
-
+    // TODO: we may need to push iterators as well?
+    Push(Ty, NumTy),
+    Pop(Ty, NumTy),
     Call(usize),
     Ret,
 }
@@ -363,10 +304,6 @@ pub(crate) trait Get<T> {
     fn get(&self, r: Reg<T>) -> &T;
     fn get_mut(&mut self, r: Reg<T>) -> &mut T;
 }
-pub(crate) trait Pop<T> {
-    fn push(&mut self, r: Reg<T>);
-    fn pop(&mut self, r: Reg<T>);
-}
 
 fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) {
     assert!(
@@ -376,20 +313,6 @@ fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) 
         r,
         regs.len()
     );
-}
-
-macro_rules! impl_pop {
-    ($t:ty, $fld:ident) => {
-        impl<'a, LR: runtime::LineReader> Pop<$t> for Interp<'a, LR> {
-            fn push(&mut self, r: Reg<$t>) {
-                push(&mut self.$fld, &r)
-            }
-            fn pop(&mut self, r: Reg<$t>) {
-                let v = pop(&mut self.$fld);
-                *self.get_mut(r) = v;
-            }
-        }
-    };
 }
 
 macro_rules! impl_accum  {
@@ -437,22 +360,15 @@ macro_rules! impl_get {
     };
 }
 
-macro_rules! impl_all {
-    ($t:ty, $fld:ident, $ty:tt $(,$lt:tt)*) => {
-        impl_get!($t, $fld, $ty $(,$lt)* );
-        impl_pop!($t, $fld);
-    };
-}
-
-impl_all!(Int, ints, Int);
-impl_all!(Str<'a>, strs, Str, 'a);
-impl_all!(Float, floats, Float);
-impl_all!(runtime::IntMap<Float>, maps_int_float, MapIntFloat);
-impl_all!(runtime::IntMap<Int>, maps_int_int, MapIntInt);
-impl_all!(runtime::IntMap<Str<'a>>, maps_int_str, MapIntStr, 'a);
-impl_all!(runtime::StrMap<'a, Float>, maps_str_float, MapStrFloat, 'a);
-impl_all!(runtime::StrMap<'a, Int>, maps_str_int, MapStrInt, 'a);
-impl_all!(runtime::StrMap<'a, Str<'a>>, maps_str_str, MapStrStr, 'a);
+impl_get!(Int, ints, Int);
+impl_get!(Str<'a>, strs, Str, 'a);
+impl_get!(Float, floats, Float);
+impl_get!(runtime::IntMap<Float>, maps_int_float, MapIntFloat);
+impl_get!(runtime::IntMap<Int>, maps_int_int, MapIntInt);
+impl_get!(runtime::IntMap<Str<'a>>, maps_int_str, MapIntStr, 'a);
+impl_get!(runtime::StrMap<'a, Float>, maps_str_float, MapStrFloat, 'a);
+impl_get!(runtime::StrMap<'a, Int>, maps_str_int, MapStrInt, 'a);
+impl_get!(runtime::StrMap<'a, Str<'a>>, maps_str_str, MapStrStr, 'a);
 impl_get!(runtime::Iter<Int>, iters_int, IterInt);
 impl_get!(runtime::Iter<Str<'a>>, iters_str, IterStr, 'a);
 
@@ -741,143 +657,50 @@ impl<'a> Instr<'a> {
                 out.accum(&mut f)
             }
             Close(file) => file.accum(&mut f),
-            LookupIntInt(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
+            Lookup {
+                map_ty,
+                dst,
+                map,
+                key,
+            } => {
+                let (k, v) = (map_ty.key().unwrap(), map_ty.val().unwrap());
+                f(*dst, v);
+                f(*key, k);
+                f(*map, *map_ty);
             }
-            LookupIntStr(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
+            Contains {
+                map_ty,
+                dst,
+                map,
+                key,
+            } => {
+                let k = map_ty.key().unwrap();
+                f(*dst, Ty::Int);
+                f(*key, k);
+                f(*map, *map_ty);
             }
-            LookupIntFloat(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
+            Delete { map_ty, map, key } => {
+                let k = map_ty.key().unwrap();
+                f(*key, k);
+                f(*map, *map_ty);
             }
-            LookupStrInt(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
+            Len { map_ty, map, dst } => {
+                f(*dst, Ty::Int);
+                f(*map, *map_ty);
             }
-            LookupStrStr(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
+            IterBegin { map_ty, map, dst } => {
+                f(*dst, map_ty.key_iter().unwrap());
+                f(*map, *map_ty);
             }
-            LookupStrFloat(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsIntInt(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsIntStr(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsIntFloat(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsStrInt(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsStrStr(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            ContainsStrFloat(res, arr, k) => {
-                res.accum(&mut f);
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteIntInt(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteIntFloat(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteIntStr(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteStrInt(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteStrFloat(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            DeleteStrStr(arr, k) => {
-                arr.accum(&mut f);
-                k.accum(&mut f)
-            }
-            LenIntInt(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenIntFloat(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenIntStr(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenStrInt(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenStrFloat(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            LenStrStr(res, arr) => {
-                res.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            StoreIntInt(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreIntFloat(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreIntStr(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreStrInt(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreStrFloat(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreStrStr(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
+            Store {
+                map_ty,
+                map,
+                key,
+                val,
+            } => {
+                f(*map, *map_ty);
+                f(*key, map_ty.key().unwrap());
+                f(*val, map_ty.val().unwrap());
             }
             LoadVarStr(dst, _var) => dst.accum(&mut f),
             StoreVarStr(_var, src) => src.accum(&mut f),
@@ -886,108 +709,22 @@ impl<'a> Instr<'a> {
             LoadVarIntMap(dst, _var) => dst.accum(&mut f),
             StoreVarIntMap(_var, src) => src.accum(&mut f),
 
-            LoadSlotInt(dst, _) => dst.accum(&mut f),
-            LoadSlotFloat(dst, _) => dst.accum(&mut f),
-            LoadSlotStr(dst, _) => dst.accum(&mut f),
-            LoadSlotIntInt(dst, _) => dst.accum(&mut f),
-            LoadSlotIntFloat(dst, _) => dst.accum(&mut f),
-            LoadSlotIntStr(dst, _) => dst.accum(&mut f),
-            LoadSlotStrInt(dst, _) => dst.accum(&mut f),
-            LoadSlotStrFloat(dst, _) => dst.accum(&mut f),
-            LoadSlotStrStr(dst, _) => dst.accum(&mut f),
+            LoadSlot { ty, dst, .. } => f(*dst, *ty),
+            StoreSlot { ty, src, .. } => f(*src, *ty),
 
-            StoreSlotInt(src, _) => src.accum(&mut f),
-            StoreSlotFloat(src, _) => src.accum(&mut f),
-            StoreSlotStr(src, _) => src.accum(&mut f),
-            StoreSlotIntInt(src, _) => src.accum(&mut f),
-            StoreSlotIntFloat(src, _) => src.accum(&mut f),
-            StoreSlotIntStr(src, _) => src.accum(&mut f),
-            StoreSlotStrInt(src, _) => src.accum(&mut f),
-            StoreSlotStrFloat(src, _) => src.accum(&mut f),
-            StoreSlotStrStr(src, _) => src.accum(&mut f),
-
-            IterBeginIntInt(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
+            IterHasNext { iter_ty, dst, iter } => {
+                f(*dst, Ty::Int);
+                f(*iter, *iter_ty);
             }
-            IterBeginIntFloat(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
+            IterGetNext { iter_ty, dst, iter } => {
+                f(*dst, iter_ty.iter().unwrap());
+                f(*iter, *iter_ty);
             }
-            IterBeginIntStr(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
+            Mov(ty, dst, src) => {
+                f(*dst, *ty);
+                f(*src, *ty);
             }
-            IterBeginStrInt(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            IterBeginStrFloat(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            IterBeginStrStr(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            IterHasNextInt(dst, iter) => {
-                dst.accum(&mut f);
-                iter.accum(&mut f)
-            }
-            IterHasNextStr(dst, iter) => {
-                dst.accum(&mut f);
-                iter.accum(&mut f)
-            }
-            IterGetNextInt(dst, iter) => {
-                dst.accum(&mut f);
-                iter.accum(&mut f)
-            }
-            IterGetNextStr(dst, iter) => {
-                dst.accum(&mut f);
-                iter.accum(&mut f)
-            }
-            MovInt(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovFloat(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovStr(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapIntInt(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapIntFloat(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapIntStr(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapStrInt(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapStrFloat(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            MovMapStrStr(dst, src) => {
-                dst.accum(&mut f);
-                src.accum(&mut f)
-            }
-            AllocMapIntInt(dst) => dst.accum(f),
-            AllocMapIntFloat(dst) => dst.accum(f),
-            AllocMapIntStr(dst) => dst.accum(f),
-            AllocMapStrInt(dst) => dst.accum(f),
-            AllocMapStrFloat(dst) => dst.accum(f),
-            AllocMapStrStr(dst) => dst.accum(f),
+            AllocMap(ty, reg) => f(*reg, *ty),
             ReadErr(dst, file) => {
                 dst.accum(&mut f);
                 file.accum(&mut f)
@@ -999,24 +736,8 @@ impl<'a> Instr<'a> {
             ReadErrStdin(dst) => dst.accum(&mut f),
             NextLineStdin(dst) => dst.accum(&mut f),
             JmpIf(cond, _lbl) => cond.accum(&mut f),
-            PushInt(reg) => reg.accum(&mut f),
-            PushFloat(reg) => reg.accum(&mut f),
-            PushStr(reg) => reg.accum(&mut f),
-            PushIntInt(reg) => reg.accum(&mut f),
-            PushIntFloat(reg) => reg.accum(&mut f),
-            PushIntStr(reg) => reg.accum(&mut f),
-            PushStrInt(reg) => reg.accum(&mut f),
-            PushStrFloat(reg) => reg.accum(&mut f),
-            PushStrStr(reg) => reg.accum(&mut f),
-            PopInt(reg) => reg.accum(&mut f),
-            PopFloat(reg) => reg.accum(&mut f),
-            PopStr(reg) => reg.accum(&mut f),
-            PopIntInt(reg) => reg.accum(&mut f),
-            PopIntFloat(reg) => reg.accum(&mut f),
-            PopIntStr(reg) => reg.accum(&mut f),
-            PopStrInt(reg) => reg.accum(&mut f),
-            PopStrFloat(reg) => reg.accum(&mut f),
-            PopStrStr(reg) => reg.accum(&mut f),
+            Push(ty, reg) => f(*reg, *ty),
+            Pop(ty, reg) => f(*reg, *ty),
             NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret | Halt => {}
         }
     }
