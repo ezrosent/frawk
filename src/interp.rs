@@ -1,5 +1,5 @@
 use crate::builtins::Variable;
-use crate::bytecode::{Get, Instr, Label, Pop, Reg};
+use crate::bytecode::{Get, Instr, Label, Reg};
 use crate::common::{NumTy, Result, Stage};
 use crate::compile::{self, Ty};
 use crate::pushdown::FieldSet;
@@ -1192,79 +1192,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     Jmp(lbl) => {
                         break lbl.0 as usize;
                     }
-                    PushInt(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushFloat(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushStr(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushIntInt(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushIntFloat(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushIntStr(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushStrInt(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushStrFloat(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-                    PushStrStr(reg) => {
-                        let reg = *reg;
-                        self.push(reg)
-                    }
-
-                    PopInt(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopFloat(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopStr(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopIntInt(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopIntFloat(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopIntStr(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopStrInt(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopStrFloat(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
-                    PopStrStr(reg) => {
-                        let reg = *reg;
-                        self.pop(reg)
-                    }
+                    Push(ty, reg) => self.push_reg(*ty, *reg),
+                    Pop(ty, reg) => self.pop_reg(*ty, *reg),
                     Call(func) => {
                         self.stack.push((cur_fn, Label(cur + 1)));
                         cur_fn = *func;
@@ -1441,6 +1370,50 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             Ty::MapStrFloat => do_store!(store_strfloat, maps_str_float),
             Ty::MapStrStr => do_store!(store_strstr, maps_str_str),
             Ty::Null | Ty::IterInt | Ty::IterStr => panic!("unsupported slot type: {:?}", ty),
+        }
+    }
+    fn push_reg(&mut self, ty: Ty, src: NumTy) {
+        match ty {
+            Ty::Int => push(&mut self.ints, &src.into()),
+            Ty::Float => push(&mut self.floats, &src.into()),
+            Ty::Str => push(&mut self.strs, &src.into()),
+            Ty::MapIntInt => push(&mut self.maps_int_int, &src.into()),
+            Ty::MapIntFloat => push(&mut self.maps_int_float, &src.into()),
+            Ty::MapIntStr => push(&mut self.maps_int_str, &src.into()),
+            Ty::MapStrInt => push(&mut self.maps_str_int, &src.into()),
+            Ty::MapStrFloat => push(&mut self.maps_str_float, &src.into()),
+            Ty::MapStrStr => push(&mut self.maps_str_str, &src.into()),
+            Ty::Null | Ty::IterInt | Ty::IterStr => {
+                panic!("unsupported register type for push operation: {:?}", ty)
+            }
+        }
+    }
+    fn pop_reg(&mut self, ty: Ty, dst: NumTy) {
+        match ty {
+            Ty::Int => *index_mut(&mut self.ints, &dst.into()) = pop(&mut self.ints),
+            Ty::Float => *index_mut(&mut self.floats, &dst.into()) = pop(&mut self.floats),
+            Ty::Str => *index_mut(&mut self.strs, &dst.into()) = pop(&mut self.strs),
+            Ty::MapIntInt => {
+                *index_mut(&mut self.maps_int_int, &dst.into()) = pop(&mut self.maps_int_int)
+            }
+            Ty::MapIntFloat => {
+                *index_mut(&mut self.maps_int_float, &dst.into()) = pop(&mut self.maps_int_float)
+            }
+            Ty::MapIntStr => {
+                *index_mut(&mut self.maps_int_str, &dst.into()) = pop(&mut self.maps_int_str)
+            }
+            Ty::MapStrInt => {
+                *index_mut(&mut self.maps_str_int, &dst.into()) = pop(&mut self.maps_str_int)
+            }
+            Ty::MapStrFloat => {
+                *index_mut(&mut self.maps_str_float, &dst.into()) = pop(&mut self.maps_str_float)
+            }
+            Ty::MapStrStr => {
+                *index_mut(&mut self.maps_str_float, &dst.into()) = pop(&mut self.maps_str_float)
+            }
+            Ty::Null | Ty::IterInt | Ty::IterStr => {
+                panic!("unsupported register type for pop operation: {:?}", ty)
+            }
         }
     }
 }

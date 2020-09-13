@@ -1862,12 +1862,7 @@ impl<'a> View<'a> {
             IterGetNext { iter_ty, dst, iter } => {
                 self.iter_getnext((*iter, *iter_ty), (*dst, iter_ty.iter()?))?
             }
-            PushInt(_) | PushFloat(_) | PushStr(_) | PushIntInt(_) | PushIntFloat(_)
-            | PushIntStr(_) | PushStrInt(_) | PushStrFloat(_) | PushStrStr(_) | PopInt(_)
-            | PopFloat(_) | PopStr(_) | PopIntInt(_) | PopIntFloat(_) | PopIntStr(_)
-            | PopStrInt(_) | PopStrFloat(_) | PopStrStr(_) => {
-                return err!("unexpected explicit push/pop in llvm")
-            }
+            Push(_, _) | Pop(_, _) => return err!("unexpected explicit push/pop in llvm"),
             AllocMap(_, _) => {
                 return err!("unexpected AllocMap (allocs are handled differently in LLVM)")
             }

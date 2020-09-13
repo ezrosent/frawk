@@ -367,16 +367,9 @@ fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
     instrs.push(match ty {
         Null => return Ok(()),
-        Int => LL::PopInt(reg.into()),
-        Float => LL::PopFloat(reg.into()),
-        Str => LL::PopStr(reg.into()),
-        MapIntInt => LL::PopIntInt(reg.into()),
-        MapIntFloat => LL::PopIntFloat(reg.into()),
-        MapIntStr => LL::PopIntStr(reg.into()),
-        MapStrInt => LL::PopStrInt(reg.into()),
-        MapStrFloat => LL::PopStrFloat(reg.into()),
-        MapStrStr => LL::PopStrStr(reg.into()),
         IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
+        Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+        | MapStrStr => LL::Pop(ty, reg),
     });
     Ok(())
 }
@@ -385,15 +378,8 @@ fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
     instrs.push(match ty {
         Null => return Ok(()),
-        Int => LL::PushInt(reg.into()),
-        Float => LL::PushFloat(reg.into()),
-        Str => LL::PushStr(reg.into()),
-        MapIntInt => LL::PushIntInt(reg.into()),
-        MapIntFloat => LL::PushIntFloat(reg.into()),
-        MapIntStr => LL::PushIntStr(reg.into()),
-        MapStrInt => LL::PushStrInt(reg.into()),
-        MapStrFloat => LL::PushStrFloat(reg.into()),
-        MapStrStr => LL::PushStrStr(reg.into()),
+        Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+        | MapStrStr => LL::Push(ty, reg),
         IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
     });
     Ok(())

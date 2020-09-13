@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use crate::builtins::{Bitwise, FloatFunc, Variable};
 use crate::common::NumTy;
 use crate::compile::{self, Ty};
-use crate::interp::{index, index_mut, pop, push, Storage};
+use crate::interp::{index, index_mut, Storage};
 use crate::runtime::{self, Float, Int, Str, UniqueStr};
 
 pub(crate) use crate::interp::Interp;
@@ -278,28 +278,9 @@ pub(crate) enum Instr<'a> {
     Halt,
 
     // Functions
-    PushInt(Reg<Int>),
-    PushFloat(Reg<Float>),
-    PushStr(Reg<Str<'a>>),
-    PushIntInt(Reg<runtime::IntMap<Int>>),
-    PushIntFloat(Reg<runtime::IntMap<Float>>),
-    PushIntStr(Reg<runtime::IntMap<Str<'a>>>),
-
-    PushStrInt(Reg<runtime::StrMap<'a, Int>>),
-    PushStrFloat(Reg<runtime::StrMap<'a, Float>>),
-    PushStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
-
-    PopInt(Reg<Int>),
-    PopFloat(Reg<Float>),
-    PopStr(Reg<Str<'a>>),
-    PopIntInt(Reg<runtime::IntMap<Int>>),
-    PopIntFloat(Reg<runtime::IntMap<Float>>),
-    PopIntStr(Reg<runtime::IntMap<Str<'a>>>),
-
-    PopStrInt(Reg<runtime::StrMap<'a, Int>>),
-    PopStrFloat(Reg<runtime::StrMap<'a, Float>>),
-    PopStrStr(Reg<runtime::StrMap<'a, Str<'a>>>),
-
+    // TODO: we may need to push iterators as well?
+    Push(Ty, NumTy),
+    Pop(Ty, NumTy),
     Call(usize),
     Ret,
 }
@@ -323,10 +304,6 @@ pub(crate) trait Get<T> {
     fn get(&self, r: Reg<T>) -> &T;
     fn get_mut(&mut self, r: Reg<T>) -> &mut T;
 }
-pub(crate) trait Pop<T> {
-    fn push(&mut self, r: Reg<T>);
-    fn pop(&mut self, r: Reg<T>);
-}
 
 fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) {
     assert!(
@@ -336,20 +313,6 @@ fn _dbg_check_index<T>(desc: &str, Storage { regs, .. }: &Storage<T>, r: usize) 
         r,
         regs.len()
     );
-}
-
-macro_rules! impl_pop {
-    ($t:ty, $fld:ident) => {
-        impl<'a, LR: runtime::LineReader> Pop<$t> for Interp<'a, LR> {
-            fn push(&mut self, r: Reg<$t>) {
-                push(&mut self.$fld, &r)
-            }
-            fn pop(&mut self, r: Reg<$t>) {
-                let v = pop(&mut self.$fld);
-                *self.get_mut(r) = v;
-            }
-        }
-    };
 }
 
 macro_rules! impl_accum  {
@@ -397,22 +360,15 @@ macro_rules! impl_get {
     };
 }
 
-macro_rules! impl_all {
-    ($t:ty, $fld:ident, $ty:tt $(,$lt:tt)*) => {
-        impl_get!($t, $fld, $ty $(,$lt)* );
-        impl_pop!($t, $fld);
-    };
-}
-
-impl_all!(Int, ints, Int);
-impl_all!(Str<'a>, strs, Str, 'a);
-impl_all!(Float, floats, Float);
-impl_all!(runtime::IntMap<Float>, maps_int_float, MapIntFloat);
-impl_all!(runtime::IntMap<Int>, maps_int_int, MapIntInt);
-impl_all!(runtime::IntMap<Str<'a>>, maps_int_str, MapIntStr, 'a);
-impl_all!(runtime::StrMap<'a, Float>, maps_str_float, MapStrFloat, 'a);
-impl_all!(runtime::StrMap<'a, Int>, maps_str_int, MapStrInt, 'a);
-impl_all!(runtime::StrMap<'a, Str<'a>>, maps_str_str, MapStrStr, 'a);
+impl_get!(Int, ints, Int);
+impl_get!(Str<'a>, strs, Str, 'a);
+impl_get!(Float, floats, Float);
+impl_get!(runtime::IntMap<Float>, maps_int_float, MapIntFloat);
+impl_get!(runtime::IntMap<Int>, maps_int_int, MapIntInt);
+impl_get!(runtime::IntMap<Str<'a>>, maps_int_str, MapIntStr, 'a);
+impl_get!(runtime::StrMap<'a, Float>, maps_str_float, MapStrFloat, 'a);
+impl_get!(runtime::StrMap<'a, Int>, maps_str_int, MapStrInt, 'a);
+impl_get!(runtime::StrMap<'a, Str<'a>>, maps_str_str, MapStrStr, 'a);
 impl_get!(runtime::Iter<Int>, iters_int, IterInt);
 impl_get!(runtime::Iter<Str<'a>>, iters_str, IterStr, 'a);
 
@@ -780,24 +736,8 @@ impl<'a> Instr<'a> {
             ReadErrStdin(dst) => dst.accum(&mut f),
             NextLineStdin(dst) => dst.accum(&mut f),
             JmpIf(cond, _lbl) => cond.accum(&mut f),
-            PushInt(reg) => reg.accum(&mut f),
-            PushFloat(reg) => reg.accum(&mut f),
-            PushStr(reg) => reg.accum(&mut f),
-            PushIntInt(reg) => reg.accum(&mut f),
-            PushIntFloat(reg) => reg.accum(&mut f),
-            PushIntStr(reg) => reg.accum(&mut f),
-            PushStrInt(reg) => reg.accum(&mut f),
-            PushStrFloat(reg) => reg.accum(&mut f),
-            PushStrStr(reg) => reg.accum(&mut f),
-            PopInt(reg) => reg.accum(&mut f),
-            PopFloat(reg) => reg.accum(&mut f),
-            PopStr(reg) => reg.accum(&mut f),
-            PopIntInt(reg) => reg.accum(&mut f),
-            PopIntFloat(reg) => reg.accum(&mut f),
-            PopIntStr(reg) => reg.accum(&mut f),
-            PopStrInt(reg) => reg.accum(&mut f),
-            PopStrFloat(reg) => reg.accum(&mut f),
-            PopStrStr(reg) => reg.accum(&mut f),
+            Push(ty, reg) => f(*reg, *ty),
+            Pop(ty, reg) => f(*reg, *ty),
             NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret | Halt => {}
         }
     }
