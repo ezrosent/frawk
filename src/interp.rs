@@ -1099,43 +1099,12 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     } => self.contains(*map_ty, *dst, *map, *key),
                     Delete { map_ty, map, key } => self.delete(*map_ty, *map, *key),
                     Len { map_ty, map, dst } => self.len(*map_ty, *map, *dst),
-                    IterBegin { map_ty, map, dst } => self.iter_begin(*map_ty, *map, *dst),
-                    StoreIntInt(arr, k, v) => {
-                        let arr = index(&self.maps_int_int, arr);
-                        let k = index(&self.ints, k).clone();
-                        let v = index(&self.ints, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreIntFloat(arr, k, v) => {
-                        let arr = index(&self.maps_int_float, arr);
-                        let k = index(&self.ints, k).clone();
-                        let v = index(&self.floats, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreIntStr(arr, k, v) => {
-                        let arr = index(&self.maps_int_str, arr);
-                        let k = index(&self.ints, k).clone();
-                        let v = index(&self.strs, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreStrInt(arr, k, v) => {
-                        let arr = index(&self.maps_str_int, arr);
-                        let k = index(&self.strs, k).clone();
-                        let v = index(&self.ints, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreStrFloat(arr, k, v) => {
-                        let arr = index(&self.maps_str_float, arr);
-                        let k = index(&self.strs, k).clone();
-                        let v = index(&self.floats, v).clone();
-                        arr.insert(k, v);
-                    }
-                    StoreStrStr(arr, k, v) => {
-                        let arr = index(&self.maps_str_str, arr);
-                        let k = index(&self.strs, k).clone();
-                        let v = index(&self.strs, v).clone();
-                        arr.insert(k, v);
-                    }
+                    Store {
+                        map_ty,
+                        map,
+                        key,
+                        val,
+                    } => self.store_map(*map_ty, *map, *key, *val),
                     LoadVarStr(dst, var) => {
                         let s = self.core.vars.load_str(*var)?;
                         let dst = *dst;
@@ -1173,6 +1142,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.core.vars.store_intmap(*var, s)?;
                     }
 
+                    IterBegin { map_ty, map, dst } => self.iter_begin(*map_ty, *map, *dst),
+                    IterHasNext { iter_ty, dst, iter } => self.iter_has_next(*iter_ty, *dst, *iter),
+                    IterGetNext { iter_ty, dst, iter } => self.iter_get_next(*iter_ty, *dst, *iter),
+
                     LoadSlotInt(dst, slot) => load_slot!(dst, slot, load_int),
                     LoadSlotFloat(dst, slot) => load_slot!(dst, slot, load_float),
                     LoadSlotStr(dst, slot) => load_slot!(dst, slot, load_str),
@@ -1191,8 +1164,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     StoreSlotStrInt(src, slot) => store_slot!(src, slot, store_strint),
                     StoreSlotStrFloat(src, slot) => store_slot!(src, slot, store_strfloat),
                     StoreSlotStrStr(src, slot) => store_slot!(src, slot, store_strstr),
-                    IterHasNext { iter_ty, dst, iter } => self.iter_has_next(*iter_ty, *dst, *iter),
-                    IterGetNext { iter_ty, dst, iter } => self.iter_get_next(*iter_ty, *dst, *iter),
                     Mov(ty, dst, src) => self.mov(*ty, *dst, *src),
                     AllocMap(ty, reg) => self.alloc_map(*ty, *reg),
 
@@ -1415,6 +1386,13 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         let _v = 0u32;
         map_regs!(map_ty, map, key, _v, {
             self.get(map).delete(self.get(key))
+        });
+    }
+    fn store_map(&mut self, map_ty: Ty, map: NumTy, key: NumTy, val: NumTy) {
+        map_regs!(map_ty, map, key, val, {
+            let k = self.get(key).clone();
+            let v = self.get(val).clone();
+            self.get(map).insert(k, v);
         });
     }
     fn len(&mut self, map_ty: Ty, map: NumTy, dst: NumTy) {

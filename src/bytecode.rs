@@ -232,6 +232,12 @@ pub(crate) enum Instr<'a> {
         dst: NumTy,
         map: NumTy,
     },
+    Store {
+        map_ty: Ty,
+        map: NumTy,
+        key: NumTy,
+        val: NumTy,
+    },
     IterBegin {
         map_ty: Ty,
         dst: NumTy,
@@ -247,17 +253,6 @@ pub(crate) enum Instr<'a> {
         dst: NumTy,
         iter: NumTy,
     },
-    StoreIntInt(Reg<runtime::IntMap<Int>>, Reg<Int>, Reg<Int>),
-    StoreIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<Int>, Reg<Str<'a>>),
-    StoreIntFloat(Reg<runtime::IntMap<Float>>, Reg<Int>, Reg<Float>),
-    StoreStrInt(Reg<runtime::StrMap<'a, Int>>, Reg<Str<'a>>, Reg<Int>),
-    StoreStrStr(
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-        Reg<Str<'a>>,
-        Reg<Str<'a>>,
-    ),
-    StoreStrFloat(Reg<runtime::StrMap<'a, Float>>, Reg<Str<'a>>, Reg<Float>),
-
     // Special variables
     LoadVarStr(Reg<Str<'a>>, Variable),
     StoreVarStr(Variable, Reg<Str<'a>>),
@@ -750,35 +745,15 @@ impl<'a> Instr<'a> {
                 f(*dst, map_ty.key_iter().unwrap());
                 f(*map, *map_ty);
             }
-            StoreIntInt(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreIntFloat(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreIntStr(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreStrInt(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreStrFloat(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
-            }
-            StoreStrStr(arr, k, v) => {
-                arr.accum(&mut f);
-                k.accum(&mut f);
-                v.accum(&mut f)
+            Store {
+                map_ty,
+                map,
+                key,
+                val,
+            } => {
+                f(*map, *map_ty);
+                f(*key, map_ty.key().unwrap());
+                f(*val, map_ty.val().unwrap());
             }
             LoadVarStr(dst, _var) => dst.accum(&mut f),
             StoreVarStr(_var, src) => src.accum(&mut f),

@@ -1675,13 +1675,15 @@ impl<'a, 'b> View<'a, 'b> {
                 let v_reg = self.regs.stats.reg_of_ty(v_ty);
                 self.expr(v_reg, v_ty, pe)?;
                 use Ty::*;
-                self.pushl(match a_ty {
-                    MapIntInt => LL::StoreIntInt(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapIntFloat => LL::StoreIntFloat(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapIntStr => LL::StoreIntStr(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapStrInt => LL::StoreStrInt(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapStrFloat => LL::StoreStrFloat(a_reg.into(), k_reg.into(), v_reg.into()),
-                    MapStrStr => LL::StoreStrStr(a_reg.into(), k_reg.into(), v_reg.into()),
+                match a_ty {
+                    MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                        self.pushl(LL::Store {
+                            map_ty: a_ty,
+                            map: a_reg,
+                            key: k_reg,
+                            val: v_reg,
+                        })
+                    }
                     Null | Int | Float | Str | IterInt | IterStr => {
                         return err!(
                             "in stmt {:?} computed type is non-map type {:?}",
@@ -1689,7 +1691,7 @@ impl<'a, 'b> View<'a, 'b> {
                             a_ty
                         )
                     }
-                });
+                };
             }
             PrimStmt::AsgnVar(id, pe) => {
                 let (dst_reg, dst_ty) = self.reg_of_ident(id);

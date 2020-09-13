@@ -1785,12 +1785,16 @@ impl<'a> View<'a> {
                 self.delete_map((*map, *map_ty), (*key, map_ty.key()?))?
             }
             Len { map_ty, map, dst } => self.len_map((*map, *map_ty), (*dst, Ty::Int))?,
-            StoreIntInt(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreIntFloat(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreIntStr(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreStrInt(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreStrFloat(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
-            StoreStrStr(arr, k, v) => self.store_map(arr.reflect(), k.reflect(), v.reflect())?,
+            Store {
+                map_ty,
+                map,
+                key,
+                val,
+            } => self.store_map(
+                (*map, *map_ty),
+                (*key, map_ty.key()?),
+                (*val, map_ty.val()?),
+            )?,
             LoadVarStr(dst, var) => {
                 let v = self.var_val(var);
                 let res = self.call("load_var_str", &mut [self.runtime_val(), v]);
