@@ -237,10 +237,16 @@ pub(crate) enum Instr<'a> {
         dst: NumTy,
         map: NumTy,
     },
-    IterHasNextInt(Reg<Int>, Reg<runtime::Iter<Int>>),
-    IterHasNextStr(Reg<Int>, Reg<runtime::Iter<Str<'a>>>),
-    IterGetNextInt(Reg<Int>, Reg<runtime::Iter<Int>>),
-    IterGetNextStr(Reg<Str<'a>>, Reg<runtime::Iter<Str<'a>>>),
+    IterHasNext {
+        iter_ty: Ty,
+        dst: NumTy,
+        iter: NumTy,
+    },
+    IterGetNext {
+        iter_ty: Ty,
+        dst: NumTy,
+        iter: NumTy,
+    },
     StoreIntInt(Reg<runtime::IntMap<Int>>, Reg<Int>, Reg<Int>),
     StoreIntStr(Reg<runtime::IntMap<Str<'a>>>, Reg<Int>, Reg<Str<'a>>),
     StoreIntFloat(Reg<runtime::IntMap<Float>>, Reg<Int>, Reg<Float>),
@@ -801,21 +807,13 @@ impl<'a> Instr<'a> {
             StoreSlotStrFloat(src, _) => src.accum(&mut f),
             StoreSlotStrStr(src, _) => src.accum(&mut f),
 
-            IterHasNextInt(dst, iter) => {
-                dst.accum(&mut f);
-                iter.accum(&mut f)
+            IterHasNext { iter_ty, dst, iter } => {
+                f(*dst, Ty::Int);
+                f(*iter, *iter_ty);
             }
-            IterHasNextStr(dst, iter) => {
-                dst.accum(&mut f);
-                iter.accum(&mut f)
-            }
-            IterGetNextInt(dst, iter) => {
-                dst.accum(&mut f);
-                iter.accum(&mut f)
-            }
-            IterGetNextStr(dst, iter) => {
-                dst.accum(&mut f);
-                iter.accum(&mut f)
+            IterGetNext { iter_ty, dst, iter } => {
+                f(*dst, iter_ty.iter().unwrap());
+                f(*iter, *iter_ty);
             }
             Mov(ty, dst, src) => {
                 f(*dst, *ty);

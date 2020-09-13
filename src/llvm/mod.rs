@@ -1870,11 +1870,12 @@ impl<'a> View<'a> {
             IterBegin { map_ty, map, dst } => {
                 self.iter_begin((*dst, map_ty.key_iter()?), (*map, *map_ty))?
             }
-            IterHasNextInt(dst, iter) => self.iter_hasnext(iter.reflect(), dst.reflect())?,
-            IterHasNextStr(dst, iter) => self.iter_hasnext(iter.reflect(), dst.reflect())?,
-            IterGetNextInt(dst, iter) => self.iter_getnext(iter.reflect(), dst.reflect())?,
-            IterGetNextStr(dst, iter) => self.iter_getnext(iter.reflect(), dst.reflect())?,
-
+            IterHasNext { iter_ty, dst, iter } => {
+                self.iter_hasnext((*iter, *iter_ty), (*dst, Ty::Int))?
+            }
+            IterGetNext { iter_ty, dst, iter } => {
+                self.iter_getnext((*iter, *iter_ty), (*dst, iter_ty.iter()?))?
+            }
             PushInt(_) | PushFloat(_) | PushStr(_) | PushIntInt(_) | PushIntFloat(_)
             | PushIntStr(_) | PushStrInt(_) | PushStrFloat(_) | PushStrStr(_) | PopInt(_)
             | PopFloat(_) | PopStr(_) | PopIntInt(_) | PopIntFloat(_) | PopIntStr(_)

@@ -84,7 +84,7 @@ impl Ty {
         }
     }
 
-    fn iter(self) -> Result<Ty> {
+    pub(crate) fn iter(self) -> Result<Ty> {
         use Ty::*;
         match self {
             IterInt => Ok(Int),
@@ -1618,10 +1618,11 @@ impl<'a, 'b> View<'a, 'b> {
                     self.regs.stats.reg_of_ty(Ty::Int)
                 };
                 let (iter_reg, iter_ty) = self.get_reg(pv)?;
-                self.pushl(match iter_ty.iter()? {
-                    Ty::Int => LL::IterHasNextInt(target_reg.into(), iter_reg.into()),
-                    Ty::Str => LL::IterHasNextStr(target_reg.into(), iter_reg.into()),
-                    _ => unreachable!(),
+                assert!(matches!(iter_ty.iter(), Ok(Ty::Int) | Ok(Ty::Str)));
+                self.pushl(LL::IterHasNext {
+                    iter_ty,
+                    dst: target_reg,
+                    iter: iter_reg,
                 });
                 self.convert(dst_reg, dst_ty, target_reg, Ty::Int)?
             }
@@ -1633,10 +1634,11 @@ impl<'a, 'b> View<'a, 'b> {
                 } else {
                     self.regs.stats.reg_of_ty(elt_ty)
                 };
-                self.pushl(match elt_ty {
-                    Ty::Int => LL::IterGetNextInt(target_reg.into(), iter_reg.into()),
-                    Ty::Str => LL::IterGetNextStr(target_reg.into(), iter_reg.into()),
-                    _ => unreachable!(),
+                assert!(matches!(iter_ty.iter(), Ok(Ty::Int) | Ok(Ty::Str)));
+                self.pushl(LL::IterGetNext {
+                    iter_ty,
+                    dst: target_reg,
+                    iter: iter_reg,
                 });
                 self.convert(dst_reg, dst_ty, target_reg, elt_ty)?
             }

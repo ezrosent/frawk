@@ -1191,26 +1191,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     StoreSlotStrInt(src, slot) => store_slot!(src, slot, store_strint),
                     StoreSlotStrFloat(src, slot) => store_slot!(src, slot, store_strfloat),
                     StoreSlotStrStr(src, slot) => store_slot!(src, slot, store_strstr),
-                    IterHasNextInt(dst, iter) => {
-                        let res = self.get(*iter).has_next() as Int;
-                        let dst = *dst;
-                        *self.get_mut(dst) = res;
-                    }
-                    IterHasNextStr(dst, iter) => {
-                        let res = self.get(*iter).has_next() as Int;
-                        let dst = *dst;
-                        *self.get_mut(dst) = res;
-                    }
-                    IterGetNextInt(dst, iter) => {
-                        let res = unsafe { self.get(*iter).get_next().clone() };
-                        let dst = *dst;
-                        *self.get_mut(dst) = res;
-                    }
-                    IterGetNextStr(dst, iter) => {
-                        let res = unsafe { self.get(*iter).get_next().clone() };
-                        let dst = *dst;
-                        *self.get_mut(dst) = res;
-                    }
+                    IterHasNext { iter_ty, dst, iter } => self.iter_has_next(*iter_ty, *dst, *iter),
+                    IterGetNext { iter_ty, dst, iter } => self.iter_get_next(*iter_ty, *dst, *iter),
                     Mov(ty, dst, src) => self.mov(*ty, *dst, *src),
                     AllocMap(ty, reg) => self.alloc_map(*ty, *reg),
 
@@ -1446,6 +1428,32 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             let iter = self.get(map).to_iter();
             *self.get_mut(dst) = iter;
         })
+    }
+    fn iter_has_next(&mut self, iter_ty: Ty, dst: NumTy, iter: NumTy) {
+        match iter_ty {
+            Ty::IterInt => {
+                let res = index(&self.iters_int, &iter.into()).has_next() as Int;
+                *index_mut(&mut self.ints, &dst.into()) = res;
+            }
+            Ty::IterStr => {
+                let res = index(&self.iters_str, &iter.into()).has_next() as Int;
+                *index_mut(&mut self.ints, &dst.into()) = res;
+            }
+            x => panic!("non-iterator type passed to has_next: {:?}", x),
+        }
+    }
+    fn iter_get_next(&mut self, iter_ty: Ty, dst: NumTy, iter: NumTy) {
+        match iter_ty {
+            Ty::IterInt => {
+                let res = unsafe { index(&self.iters_int, &iter.into()).get_next().clone() };
+                *index_mut(&mut self.ints, &dst.into()) = res;
+            }
+            Ty::IterStr => {
+                let res = unsafe { index(&self.iters_str, &iter.into()).get_next().clone() };
+                *index_mut(&mut self.strs, &dst.into()) = res;
+            }
+            x => panic!("non-iterator type passed to get_next: {:?}", x),
+        }
     }
 }
 
