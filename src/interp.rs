@@ -319,42 +319,59 @@ macro_rules! map_regs {
         map_regs!($map_ty, $map_reg, _placeholder_k, _placeholder_v, $body)
     }};
     ($map_ty:expr, $map_reg:ident, $key_reg:ident, $val_reg:ident, $body:expr) => {{
+        let _placeholder_iter = 0u32;
+        map_regs!(
+            $map_ty,
+            $map_reg,
+            $key_reg,
+            $val_reg,
+            _placeholder_iter,
+            $body
+        )
+    }};
+    ($map_ty:expr, $map_reg:ident, $key_reg:ident, $val_reg:ident, $iter_reg:ident, $body:expr) => {{
         let map_ty = $map_ty;
         match map_ty {
             Ty::MapIntInt => {
                 let $map_reg: Reg<runtime::IntMap<Int>> = $map_reg.into();
                 let $key_reg: Reg<Int> = $key_reg.into();
                 let $val_reg: Reg<Int> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Int>> = $iter_reg.into();
                 $body
             }
             Ty::MapIntFloat => {
                 let $map_reg: Reg<runtime::IntMap<Float>> = $map_reg.into();
                 let $key_reg: Reg<Int> = $key_reg.into();
                 let $val_reg: Reg<Float> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Int>> = $iter_reg.into();
                 $body
             }
             Ty::MapIntStr => {
                 let $map_reg: Reg<runtime::IntMap<Str<'a>>> = $map_reg.into();
                 let $key_reg: Reg<Int> = $key_reg.into();
                 let $val_reg: Reg<Str<'a>> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Int>> = $iter_reg.into();
                 $body
             }
             Ty::MapStrInt => {
                 let $map_reg: Reg<runtime::StrMap<'a, Int>> = $map_reg.into();
                 let $key_reg: Reg<Str<'a>> = $key_reg.into();
                 let $val_reg: Reg<Int> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Str<'a>>> = $iter_reg.into();
                 $body
             }
             Ty::MapStrFloat => {
                 let $map_reg: Reg<runtime::StrMap<'a, Float>> = $map_reg.into();
                 let $key_reg: Reg<Str<'a>> = $key_reg.into();
                 let $val_reg: Reg<Float> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Str<'a>>> = $iter_reg.into();
                 $body
             }
             Ty::MapStrStr => {
                 let $map_reg: Reg<runtime::StrMap<'a, Str<'a>>> = $map_reg.into();
                 let $key_reg: Reg<Str<'a>> = $key_reg.into();
                 let $val_reg: Reg<Str<'a>> = $val_reg.into();
+                let $iter_reg: Reg<runtime::Iter<Str<'a>>> = $iter_reg.into();
                 $body
             }
             Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => panic!(
@@ -602,15 +619,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 let dst = *$dst;
                 let new_val = self.core.$slot_meth(*$slot_id as usize);
                 *self.get_mut(dst) = new_val;
-            }};
-        }
-        // IterBegin<T>(dst, arr)
-        macro_rules! iter_begin {
-            ($dst:ident, $arr:ident) => {{
-                let arr = *$arr;
-                let dst = *$dst;
-                let iter = self.get(arr).to_iter();
-                *self.get_mut(dst) = iter;
             }};
         }
         'outer: loop {
@@ -1091,6 +1099,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     } => self.contains(*map_ty, *dst, *map, *key),
                     Delete { map_ty, map, key } => self.delete(*map_ty, *map, *key),
                     Len { map_ty, map, dst } => self.len(*map_ty, *map, *dst),
+                    IterBegin { map_ty, map, dst } => self.iter_begin(*map_ty, *map, *dst),
                     StoreIntInt(arr, k, v) => {
                         let arr = index(&self.maps_int_int, arr);
                         let k = index(&self.ints, k).clone();
@@ -1182,14 +1191,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     StoreSlotStrInt(src, slot) => store_slot!(src, slot, store_strint),
                     StoreSlotStrFloat(src, slot) => store_slot!(src, slot, store_strfloat),
                     StoreSlotStrStr(src, slot) => store_slot!(src, slot, store_strstr),
-
-                    IterBeginIntInt(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginIntFloat(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginIntStr(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginStrInt(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginStrFloat(dst, arr) => iter_begin!(dst, arr),
-                    IterBeginStrStr(dst, arr) => iter_begin!(dst, arr),
-
                     IterHasNextInt(dst, iter) => {
                         let res = self.get(*iter).has_next() as Int;
                         let dst = *dst;
@@ -1437,6 +1438,14 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     fn len(&mut self, map_ty: Ty, map: NumTy, dst: NumTy) {
         let len = map_regs!(map_ty, map, self.get(map).len() as Int);
         *index_mut(&mut self.ints, &dst.into()) = len;
+    }
+    fn iter_begin(&mut self, map_ty: Ty, map: NumTy, dst: NumTy) {
+        let _k = 0u32;
+        let _v = 0u32;
+        map_regs!(map_ty, map, _k, _v, dst, {
+            let iter = self.get(map).to_iter();
+            *self.get_mut(dst) = iter;
+        })
     }
 }
 

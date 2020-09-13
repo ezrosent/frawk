@@ -1862,17 +1862,14 @@ impl<'a> View<'a> {
                     let sv = self.get_local((*src, Ty::Str))?;
                     self.call("ref_str", &mut [sv]);
                     let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
-                    self.bind_val((*dst, Ty::Str), loaded);
+                    self.bind_val((*dst, Ty::Str), loaded)
                 } else {
                     self.bind_val((*dst, *ty), self.get_local((*src, *ty))?)
                 }
             }
-            IterBeginIntInt(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginIntFloat(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginIntStr(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginStrInt(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginStrFloat(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
-            IterBeginStrStr(dst, arr) => self.iter_begin(dst.reflect(), arr.reflect())?,
+            IterBegin { map_ty, map, dst } => {
+                self.iter_begin((*dst, map_ty.key_iter()?), (*map, *map_ty))?
+            }
             IterHasNextInt(dst, iter) => self.iter_hasnext(iter.reflect(), dst.reflect())?,
             IterHasNextStr(dst, iter) => self.iter_hasnext(iter.reflect(), dst.reflect())?,
             IterGetNextInt(dst, iter) => self.iter_getnext(iter.reflect(), dst.reflect())?,

@@ -73,6 +73,17 @@ impl Ty {
         }
     }
 
+    pub(crate) fn key_iter(self) -> Result<Ty> {
+        use Ty::*;
+        match self {
+            MapIntInt | MapIntFloat | MapIntStr => Ok(IterInt),
+            MapStrInt | MapStrFloat | MapStrStr => Ok(IterStr),
+            Null | Int | Float | Str | IterInt | IterStr => {
+                err!("attempt to get iterator from non-map type: {:?}", self)
+            }
+        }
+    }
+
     fn iter(self) -> Result<Ty> {
         use Ty::*;
         match self {
@@ -1587,18 +1598,18 @@ impl<'a, 'b> View<'a, 'b> {
                         arr_ty
                     );
                 }
-                self.pushl(match arr_ty {
-                    Ty::MapIntInt => LL::IterBeginIntInt(dst_reg.into(), arr_reg.into()),
-                    Ty::MapIntFloat => LL::IterBeginIntFloat(dst_reg.into(), arr_reg.into()),
-                    Ty::MapIntStr => LL::IterBeginIntStr(dst_reg.into(), arr_reg.into()),
-                    Ty::MapStrInt => LL::IterBeginStrInt(dst_reg.into(), arr_reg.into()),
-                    Ty::MapStrFloat => LL::IterBeginStrFloat(dst_reg.into(), arr_reg.into()),
-                    Ty::MapStrStr => LL::IterBeginStrStr(dst_reg.into(), arr_reg.into()),
-                    Ty::Null | Ty::Int | Ty::Float | Ty::Str | Ty::IterInt | Ty::IterStr => {
-                        // covered by the error check above
-                        unreachable!()
+                use Ty::*;
+                match arr_ty {
+                    MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                        self.pushl(LL::IterBegin {
+                            map_ty: arr_ty,
+                            dst: dst_reg,
+                            map: arr_reg,
+                        })
                     }
-                });
+                    // Covered by the error check above
+                    Null | Int | Float | Str | IterInt | IterStr => unreachable!(),
+                };
             }
             PrimExpr::HasNext(pv) => {
                 let target_reg = if dst_ty == Ty::Int {

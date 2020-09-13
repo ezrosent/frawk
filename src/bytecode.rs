@@ -232,16 +232,11 @@ pub(crate) enum Instr<'a> {
         dst: NumTy,
         map: NumTy,
     },
-
-    IterBeginIntInt(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Int>>),
-    IterBeginIntStr(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Str<'a>>>),
-    IterBeginIntFloat(Reg<runtime::Iter<Int>>, Reg<runtime::IntMap<Float>>),
-    IterBeginStrInt(Reg<runtime::Iter<Str<'a>>>, Reg<runtime::StrMap<'a, Int>>),
-    IterBeginStrStr(
-        Reg<runtime::Iter<Str<'a>>>,
-        Reg<runtime::StrMap<'a, Str<'a>>>,
-    ),
-    IterBeginStrFloat(Reg<runtime::Iter<Str<'a>>>, Reg<runtime::StrMap<'a, Float>>),
+    IterBegin {
+        map_ty: Ty,
+        dst: NumTy,
+        map: NumTy,
+    },
     IterHasNextInt(Reg<Int>, Reg<runtime::Iter<Int>>),
     IterHasNextStr(Reg<Int>, Reg<runtime::Iter<Str<'a>>>),
     IterGetNextInt(Reg<Int>, Reg<runtime::Iter<Int>>),
@@ -745,6 +740,10 @@ impl<'a> Instr<'a> {
                 f(*dst, Ty::Int);
                 f(*map, *map_ty);
             }
+            IterBegin { map_ty, map, dst } => {
+                f(*dst, map_ty.key_iter().unwrap());
+                f(*map, *map_ty);
+            }
             StoreIntInt(arr, k, v) => {
                 arr.accum(&mut f);
                 k.accum(&mut f);
@@ -802,30 +801,6 @@ impl<'a> Instr<'a> {
             StoreSlotStrFloat(src, _) => src.accum(&mut f),
             StoreSlotStrStr(src, _) => src.accum(&mut f),
 
-            IterBeginIntInt(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            IterBeginIntFloat(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            IterBeginIntStr(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            IterBeginStrInt(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            IterBeginStrFloat(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
-            IterBeginStrStr(dst, arr) => {
-                dst.accum(&mut f);
-                arr.accum(&mut f)
-            }
             IterHasNextInt(dst, iter) => {
                 dst.accum(&mut f);
                 iter.accum(&mut f)
