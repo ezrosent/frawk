@@ -1841,26 +1841,8 @@ impl<'a> View<'a> {
                 self.call("store_var_intmap", &mut [self.runtime_val(), v, sv]);
             }
 
-            LoadSlotInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotIntInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotIntFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotIntStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotStrInt(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotStrFloat(dst, slot) => self.load_slot(dst.reflect(), *slot),
-            LoadSlotStrStr(dst, slot) => self.load_slot(dst.reflect(), *slot),
-
-            StoreSlotInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotIntInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotIntFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotIntStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotStrInt(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotStrFloat(src, slot) => self.store_slot(src.reflect(), *slot)?,
-            StoreSlotStrStr(src, slot) => self.store_slot(src.reflect(), *slot)?,
-
+            LoadSlot { ty, dst, slot } => self.load_slot((*dst, *ty), *slot),
+            StoreSlot { ty, src, slot } => self.store_slot((*src, *ty), *slot)?,
             Mov(ty, dst, src) => {
                 if let Ty::Str = ty {
                     let sv = self.get_local((*src, Ty::Str))?;

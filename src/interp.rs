@@ -604,23 +604,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         let mut instrs = (&mut self.instrs[cur_fn]) as *mut Vec<Instr<'a>>;
         let mut cur = 0;
 
-        // Local macros help to eliminate boilerplate in type-specific instructions.
-        // StoreSlot<T>(ident, slot_id)
-        macro_rules! store_slot {
-            ($src: ident, $slot_id: ident, $slot_meth:tt) => {{
-                let src = *$src;
-                let new_val = self.get(src).clone();
-                self.core.$slot_meth(*$slot_id as usize, new_val);
-            }};
-        }
-        // LoadSlot<T>(ident, slot_id)
-        macro_rules! load_slot {
-            ($dst: ident, $slot_id: ident, $slot_meth:tt) => {{
-                let dst = *$dst;
-                let new_val = self.core.$slot_meth(*$slot_id as usize);
-                *self.get_mut(dst) = new_val;
-            }};
-        }
         'outer: loop {
             // must end with Halt
             cur = loop {
@@ -1146,24 +1129,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     IterHasNext { iter_ty, dst, iter } => self.iter_has_next(*iter_ty, *dst, *iter),
                     IterGetNext { iter_ty, dst, iter } => self.iter_get_next(*iter_ty, *dst, *iter),
 
-                    LoadSlotInt(dst, slot) => load_slot!(dst, slot, load_int),
-                    LoadSlotFloat(dst, slot) => load_slot!(dst, slot, load_float),
-                    LoadSlotStr(dst, slot) => load_slot!(dst, slot, load_str),
-                    LoadSlotIntInt(dst, slot) => load_slot!(dst, slot, load_intint),
-                    LoadSlotIntFloat(dst, slot) => load_slot!(dst, slot, load_intfloat),
-                    LoadSlotIntStr(dst, slot) => load_slot!(dst, slot, load_intstr),
-                    LoadSlotStrInt(dst, slot) => load_slot!(dst, slot, load_strint),
-                    LoadSlotStrFloat(dst, slot) => load_slot!(dst, slot, load_strfloat),
-                    LoadSlotStrStr(dst, slot) => load_slot!(dst, slot, load_strstr),
-                    StoreSlotInt(src, slot) => store_slot!(src, slot, store_int),
-                    StoreSlotFloat(src, slot) => store_slot!(src, slot, store_float),
-                    StoreSlotStr(src, slot) => store_slot!(src, slot, store_str),
-                    StoreSlotIntInt(src, slot) => store_slot!(src, slot, store_intint),
-                    StoreSlotIntFloat(src, slot) => store_slot!(src, slot, store_intfloat),
-                    StoreSlotIntStr(src, slot) => store_slot!(src, slot, store_intstr),
-                    StoreSlotStrInt(src, slot) => store_slot!(src, slot, store_strint),
-                    StoreSlotStrFloat(src, slot) => store_slot!(src, slot, store_strfloat),
-                    StoreSlotStrStr(src, slot) => store_slot!(src, slot, store_strstr),
+                    LoadSlot { ty, dst, slot } => self.load_slot(*ty, *dst, *slot),
+                    StoreSlot { ty, src, slot } => self.store_slot(*ty, *src, *slot),
                     Mov(ty, dst, src) => self.mov(*ty, *dst, *src),
                     AllocMap(ty, reg) => self.alloc_map(*ty, *reg),
 
@@ -1431,6 +1398,49 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 *index_mut(&mut self.strs, &dst.into()) = res;
             }
             x => panic!("non-iterator type passed to get_next: {:?}", x),
+        }
+    }
+    fn load_slot(&mut self, ty: Ty, dst: NumTy, slot: Int) {
+        let slot = slot as usize;
+        macro_rules! do_load {
+            ($load_meth:tt, $reg_fld:tt) => {
+                *index_mut(&mut self.$reg_fld, &dst.into()) = self.core.$load_meth(slot)
+            };
+        }
+        match ty {
+            Ty::Int => do_load!(load_int, ints),
+            Ty::Float => do_load!(load_float, floats),
+            Ty::Str => do_load!(load_str, strs),
+            Ty::MapIntInt => do_load!(load_intint, maps_int_int),
+            Ty::MapIntFloat => do_load!(load_intfloat, maps_int_float),
+            Ty::MapIntStr => do_load!(load_intstr, maps_int_str),
+            Ty::MapStrInt => do_load!(load_strint, maps_str_int),
+            Ty::MapStrFloat => do_load!(load_strfloat, maps_str_float),
+            Ty::MapStrStr => do_load!(load_strstr, maps_str_str),
+            Ty::Null | Ty::IterInt | Ty::IterStr => {
+                panic!("unexpected operand type to slot operation: {:?}", ty)
+            }
+        }
+    }
+    fn store_slot(&mut self, ty: Ty, src: NumTy, slot: Int) {
+        let slot = slot as usize;
+        macro_rules! do_store {
+            ($store_meth:tt, $reg_fld:tt) => {
+                self.core
+                    .$store_meth(slot, index(&self.$reg_fld, &src.into()).clone())
+            };
+        }
+        match ty {
+            Ty::Int => do_store!(store_int, ints),
+            Ty::Float => do_store!(store_float, floats),
+            Ty::Str => do_store!(store_str, strs),
+            Ty::MapIntInt => do_store!(store_intint, maps_int_int),
+            Ty::MapIntFloat => do_store!(store_intfloat, maps_int_float),
+            Ty::MapIntStr => do_store!(store_intstr, maps_int_str),
+            Ty::MapStrInt => do_store!(store_strint, maps_str_int),
+            Ty::MapStrFloat => do_store!(store_strfloat, maps_str_float),
+            Ty::MapStrStr => do_store!(store_strstr, maps_str_str),
+            Ty::Null | Ty::IterInt | Ty::IterStr => panic!("unsupported slot type: {:?}", ty),
         }
     }
 }

@@ -261,25 +261,16 @@ pub(crate) enum Instr<'a> {
     LoadVarIntMap(Reg<runtime::IntMap<Str<'a>>>, Variable),
     StoreVarIntMap(Variable, Reg<runtime::IntMap<Str<'a>>>),
 
-    LoadSlotInt(Reg<Int>, Int),
-    LoadSlotFloat(Reg<Float>, Int),
-    LoadSlotStr(Reg<Str<'a>>, Int),
-    LoadSlotIntInt(Reg<runtime::IntMap<Int>>, Int),
-    LoadSlotIntFloat(Reg<runtime::IntMap<Float>>, Int),
-    LoadSlotIntStr(Reg<runtime::IntMap<Str<'a>>>, Int),
-    LoadSlotStrInt(Reg<runtime::StrMap<'a, Int>>, Int),
-    LoadSlotStrFloat(Reg<runtime::StrMap<'a, Float>>, Int),
-    LoadSlotStrStr(Reg<runtime::StrMap<'a, Str<'a>>>, Int),
-
-    StoreSlotInt(Reg<Int>, Int),
-    StoreSlotFloat(Reg<Float>, Int),
-    StoreSlotStr(Reg<Str<'a>>, Int),
-    StoreSlotIntInt(Reg<runtime::IntMap<Int>>, Int),
-    StoreSlotIntFloat(Reg<runtime::IntMap<Float>>, Int),
-    StoreSlotIntStr(Reg<runtime::IntMap<Str<'a>>>, Int),
-    StoreSlotStrInt(Reg<runtime::StrMap<'a, Int>>, Int),
-    StoreSlotStrFloat(Reg<runtime::StrMap<'a, Float>>, Int),
-    StoreSlotStrStr(Reg<runtime::StrMap<'a, Str<'a>>>, Int),
+    LoadSlot {
+        ty: Ty,
+        slot: Int,
+        dst: NumTy,
+    },
+    StoreSlot {
+        ty: Ty,
+        slot: Int,
+        src: NumTy,
+    },
 
     // Control
     JmpIf(Reg<Int>, Label),
@@ -762,25 +753,8 @@ impl<'a> Instr<'a> {
             LoadVarIntMap(dst, _var) => dst.accum(&mut f),
             StoreVarIntMap(_var, src) => src.accum(&mut f),
 
-            LoadSlotInt(dst, _) => dst.accum(&mut f),
-            LoadSlotFloat(dst, _) => dst.accum(&mut f),
-            LoadSlotStr(dst, _) => dst.accum(&mut f),
-            LoadSlotIntInt(dst, _) => dst.accum(&mut f),
-            LoadSlotIntFloat(dst, _) => dst.accum(&mut f),
-            LoadSlotIntStr(dst, _) => dst.accum(&mut f),
-            LoadSlotStrInt(dst, _) => dst.accum(&mut f),
-            LoadSlotStrFloat(dst, _) => dst.accum(&mut f),
-            LoadSlotStrStr(dst, _) => dst.accum(&mut f),
-
-            StoreSlotInt(src, _) => src.accum(&mut f),
-            StoreSlotFloat(src, _) => src.accum(&mut f),
-            StoreSlotStr(src, _) => src.accum(&mut f),
-            StoreSlotIntInt(src, _) => src.accum(&mut f),
-            StoreSlotIntFloat(src, _) => src.accum(&mut f),
-            StoreSlotIntStr(src, _) => src.accum(&mut f),
-            StoreSlotStrInt(src, _) => src.accum(&mut f),
-            StoreSlotStrFloat(src, _) => src.accum(&mut f),
-            StoreSlotStrStr(src, _) => src.accum(&mut f),
+            LoadSlot { ty, dst, .. } => f(*dst, *ty),
+            StoreSlot { ty, src, .. } => f(*src, *ty),
 
             IterHasNext { iter_ty, dst, iter } => {
                 f(*dst, Ty::Int);

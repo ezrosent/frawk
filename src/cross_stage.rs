@@ -18,36 +18,30 @@ pub(crate) struct SlotOps {
 
 pub(crate) fn load_slot_instr<'a>(reg: NumTy, ty: Ty, slot: usize) -> Result<Option<LL<'a>>> {
     use Ty::*;
-    Ok(Some(match ty {
-        Int => LL::LoadSlotInt(reg.into(), slot as _),
-        Float => LL::LoadSlotFloat(reg.into(), slot as _),
-        Str => LL::LoadSlotStr(reg.into(), slot as _),
-        MapIntInt => LL::LoadSlotIntInt(reg.into(), slot as _),
-        MapIntFloat => LL::LoadSlotIntFloat(reg.into(), slot as _),
-        MapIntStr => LL::LoadSlotIntStr(reg.into(), slot as _),
-        MapStrInt => LL::LoadSlotStrInt(reg.into(), slot as _),
-        MapStrFloat => LL::LoadSlotStrFloat(reg.into(), slot as _),
-        MapStrStr => LL::LoadSlotStrStr(reg.into(), slot as _),
-        Null => return Ok(None),
-        IterInt | IterStr => return err!("unexpected slot type: {:?}", ty),
-    }))
+    match ty {
+        Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+        | MapStrStr => Ok(Some(LL::LoadSlot {
+            ty,
+            dst: reg,
+            slot: slot as _,
+        })),
+        Null => Ok(None),
+        IterInt | IterStr => err!("unexpected slot type: {:?}", ty),
+    }
 }
 
 pub(crate) fn store_slot_instr<'a>(reg: NumTy, ty: Ty, slot: usize) -> Result<Option<LL<'a>>> {
     use Ty::*;
-    Ok(Some(match ty {
-        Int => LL::StoreSlotInt(reg.into(), slot as _),
-        Float => LL::StoreSlotFloat(reg.into(), slot as _),
-        Str => LL::StoreSlotStr(reg.into(), slot as _),
-        MapIntInt => LL::StoreSlotIntInt(reg.into(), slot as _),
-        MapIntFloat => LL::StoreSlotIntFloat(reg.into(), slot as _),
-        MapIntStr => LL::StoreSlotIntStr(reg.into(), slot as _),
-        MapStrInt => LL::StoreSlotStrInt(reg.into(), slot as _),
-        MapStrFloat => LL::StoreSlotStrFloat(reg.into(), slot as _),
-        MapStrStr => LL::StoreSlotStrStr(reg.into(), slot as _),
-        Null => return Ok(None),
-        IterInt | IterStr => return err!("unexpected slot type: {:?}", ty),
-    }))
+    match ty {
+        Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+        | MapStrStr => Ok(Some(LL::StoreSlot {
+            ty,
+            src: reg,
+            slot: slot as _,
+        })),
+        Null => Ok(None),
+        IterInt | IterStr => err!("unexpected slot type: {:?}", ty),
+    }
 }
 
 fn compute_par(
