@@ -7,7 +7,14 @@ use unicode_xid::UnicodeXID;
 
 use crate::arena::Arena;
 
-pub type Spanned<T> = (usize, T, usize);
+#[derive(PartialEq, Eq, Clone, Debug, Default)]
+pub struct Loc {
+    line: usize,
+    col: usize,
+    offset: usize,
+}
+
+pub type Spanned<T> = (Loc, T, Loc);
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Tok<'a> {
@@ -176,6 +183,7 @@ pub struct Tokenizer<'a> {
     text: &'a str,
     cur: usize,
     prev_tok: Option<Tok<'a>>,
+    lines: Vec<usize>,
 }
 
 fn is_id_start(c: char) -> bool {
@@ -340,7 +348,7 @@ impl<'a> Tokenizer<'a> {
         match bound {
             Some(end) => Ok((&self.text[self.cur..self.cur + end], self.cur + end + 1)),
             None => Err(Error {
-                location: self.cur,
+                location: self.index_to_loc(self.cur),
                 desc: error_msg,
             }),
         }
@@ -399,7 +407,7 @@ impl<'a> Tokenizer<'a> {
 
 #[derive(Debug)]
 pub struct Error {
-    pub location: usize,
+    pub location: Loc,
     pub desc: &'static str,
 }
 
@@ -409,7 +417,36 @@ impl<'a> Tokenizer<'a> {
             text,
             cur: 0,
             prev_tok: None,
+            lines: text
+                .as_bytes()
+                .iter()
+                .enumerate()
+                .flat_map(|(i, b)| if *b == b'\n' { Some(i) } else { None }.into_iter())
+                .collect(),
         }
+    }
+    fn index_to_loc(&self, ix: usize) -> Loc {
+        let offset = ix;
+        match self.lines.binary_search(&ix) {
+            Ok(0) | Err(0) => Loc {
+                line: 0,
+                col: ix,
+                offset,
+            },
+            Ok(line) => Loc {
+                line: line - 1,
+                col: ix - self.lines[line - 1] - 1,
+                offset,
+            },
+            Err(line) => Loc {
+                line,
+                col: ix - self.lines[line - 1] - 1,
+                offset,
+            },
+        }
+    }
+    fn spanned<T>(&self, l: usize, r: usize, t: T) -> Spanned<T> {
+        (self.index_to_loc(l), t, self.index_to_loc(r))
     }
 }
 
@@ -432,31 +469,31 @@ impl<'a> Iterator for Tokenizer<'a> {
                     self.cur += 1;
                     let (s, new_start) = try_tok!(self.string_lit());
                     self.cur = new_start;
-                    (ix, Tok::StrLit(s), new_start)
+                    self.spanned(ix, new_start, Tok::StrLit(s))
                 }
                 '/' if self.potential_re() => {
                     self.cur += 1;
                     let (re, new_start) = try_tok!(self.regex_lit());
                     self.cur = new_start;
-                    (ix, Tok::PatLit(re), new_start)
+                    self.spanned(ix, new_start, Tok::PatLit(re))
                 }
                 c => {
                     if let Some((tok, len)) = self.keyword() {
                         self.cur += len;
-                        (ix, tok, self.cur)
+                        self.spanned(ix, self.cur, tok)
                     } else if let Some((tok, len)) = self.num() {
                         self.cur += len;
-                        (ix, tok, self.cur)
+                        self.spanned(ix, self.cur, tok)
                     } else if is_id_start(c) {
                         self.cur += c.len_utf8();
                         let (s, new_start) = self.ident(ix);
                         let bs = self.text.as_bytes();
                         if new_start < bs.len() && self.text.as_bytes()[new_start] == b'(' {
                             self.cur = new_start + 1;
-                            (ix, Tok::CallStart(s), self.cur)
+                            self.spanned(ix, self.cur, Tok::CallStart(s))
                         } else {
                             self.cur = new_start;
-                            (ix, Tok::Ident(s), self.cur)
+                            self.spanned(ix, self.cur, Tok::Ident(s))
                         }
                     } else {
                         return None;
@@ -476,6 +513,63 @@ mod tests {
     use super::*;
     fn lex_str<'b>(s: &'b str) -> Vec<Spanned<Tok<'b>>> {
         Tokenizer::new(s).map(|x| x.ok().unwrap()).collect()
+    }
+
+    #[test]
+    fn locations() {
+        const TEXT: &'static str = r#"This is the first line
+and the second
+and the third"#;
+        let tok = Tokenizer::new(TEXT);
+        assert_eq!(
+            tok.index_to_loc(4),
+            Loc {
+                line: 0,
+                col: 4,
+                offset: 4,
+            }
+        );
+        assert_eq!(
+            tok.index_to_loc(22),
+            Loc {
+                line: 0,
+                col: 22,
+                offset: 22,
+            }
+        );
+        assert_eq!(
+            tok.index_to_loc(23),
+            Loc {
+                line: 1,
+                col: 0,
+                offset: 23,
+            }
+        );
+        let tok2 = Tokenizer::new("\nhello");
+        assert_eq!(
+            tok2.index_to_loc(0),
+            Loc {
+                line: 0,
+                col: 0,
+                offset: 0
+            },
+        );
+        assert_eq!(
+            tok2.index_to_loc(1),
+            Loc {
+                line: 1,
+                col: 0,
+                offset: 1
+            },
+        );
+        assert_eq!(
+            tok2.index_to_loc(2),
+            Loc {
+                line: 1,
+                col: 1,
+                offset: 2
+            },
+        );
     }
 
     #[test]
