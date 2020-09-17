@@ -340,7 +340,7 @@ BaseTerm: &'a Expr<'a,'a, &'a str> = {
 }
 
 extern {
-  type Location = usize;
+  type Location = lexer::Loc;
   type Error = lexer::Error;
   enum Tok<'a> {
       "INT" => Tok::ILit(<&'a str>),
