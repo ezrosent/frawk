@@ -170,14 +170,7 @@ fn get_context<'a>(
             a.alloc_v(program)
         }
         Err(e) => {
-            let mut ix = 0;
-            let mut msg: Vec<u8> = "failed to parse program:\n======\n".as_bytes().into();
-            for line in prog.lines() {
-                write!(&mut msg, "[{:3}] {}\n", ix, line).unwrap();
-                ix += line.len() + 1;
-            }
-            write!(&mut msg, "=====\nError: {:?}\n", e).unwrap();
-            fail!("{}", String::from_utf8(msg).unwrap())
+            fail!("{}", e);
         }
     };
     match cfg::ProgramContext::from_prog(a, stmt, prelude.escaper) {

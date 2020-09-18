@@ -2,6 +2,7 @@
 use crate::ast::{Binop, Unop};
 use crate::builtins::{Function, Variable};
 use crate::cfg::{BasicBlock, Ident, PrimExpr, PrimStmt, PrimVal, Transition};
+use crate::lexer;
 use std::fmt::{self, Display, Formatter};
 
 pub(crate) struct Wrap(pub Ident);
@@ -220,5 +221,103 @@ impl Display for Binop {
                 EQ => "==",
             }
         )
+    }
+}
+
+impl Display for lexer::Loc {
+    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+        write!(fmt, "line {}, column {}", self.line + 1, self.col + 1)
+    }
+}
+
+impl Display for lexer::Error {
+    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+        write!(fmt, "{}. {}", self.location, self.desc)
+    }
+}
+
+impl<'a> Display for lexer::Tok<'a> {
+    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+        use lexer::Tok::*;
+        let rep = match self {
+            Begin => "BEGIN",
+            Prepare => "PREPARE",
+            End => "END",
+            Break => "break",
+            Continue => "continue",
+            Next => "next",
+            NextFile => "nextfile",
+            For => "for",
+            If => "if",
+            Else => "else",
+            Print => "print",
+            Printf => "printf",
+            // Separate token for a "print(" and "printf(".
+            PrintLP => "print(",
+            PrintfLP => "printf(",
+            While => "while",
+            Do => "do",
+
+            // { }
+            LBrace => "{",
+            RBrace => "}",
+            // [ ]
+            LBrack => "[",
+            RBrack => "]",
+            // ( )
+            LParen => "(",
+            RParen => ")",
+
+            Getline => "getline",
+            Assign => "=",
+            Add => "+",
+            AddAssign => "+=",
+            Sub => "-",
+            SubAssign => "-=",
+            Mul => "*",
+            MulAssign => "*=",
+            Div => "/",
+            DivAssign => "/=",
+            Pow => "^",
+            PowAssign => "^=",
+            Mod => "%",
+            ModAssign => "%=",
+            Match => "~",
+            NotMatch => "!~",
+
+            EQ => "==",
+            NEQ => "!=",
+            LT => "<",
+            GT => ">",
+            LTE => "<=",
+            GTE => ">=",
+            Incr => "++",
+            Decr => "--",
+            Not => "!",
+
+            AND => "&&",
+            OR => "||",
+            QUESTION => "?",
+            COLON => ":",
+
+            Append => ">>",
+
+            Dollar => "$",
+            Semi => ";",
+            Newline => "\\n",
+            Comma => ",",
+            In => "in",
+            Delete => "delete",
+            Function => "function",
+            Return => "return",
+
+            Ident(s) => return write!(fmt, "identifier({})", s),
+            StrLit(s) => return write!(fmt, "{:?}", s),
+            PatLit(s) => return write!(fmt, "/{}/", s),
+            CallStart(s) => return write!(fmt, "{}(", s),
+
+            ILit(s) | HexLit(s) | FLit(s) => return write!(fmt, "{}", s),
+        };
+        write!(fmt, "{}", rep)
     }
 }
