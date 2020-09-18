@@ -9,8 +9,8 @@ use crate::arena::Arena;
 
 #[derive(PartialEq, Eq, Clone, Debug, Default)]
 pub struct Loc {
-    line: usize,
-    col: usize,
+    pub line: usize,
+    pub col: usize,
     offset: usize,
 }
 
