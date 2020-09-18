@@ -2,6 +2,7 @@
 //!
 //! This lexer is fairly rudamentary. It ought not be too slow, but it also has not been optimized
 //! very aggressively. Various edge cases still do not work.
+use hashbrown::HashMap;
 use regex::Regex;
 use unicode_xid::UnicodeXID;
 
@@ -169,11 +170,11 @@ static_map!(
 use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref KEYWORDS_BY_LEN: Vec<Vec<(&'static [u8], Tok<'static>)>> = {
+    static ref KEYWORDS_BY_LEN: Vec<HashMap<&'static [u8], Tok<'static>>> = {
         let max_len = KEYWORDS.keys().map(|s| s.len()).max().unwrap();
-        let mut res: Vec<Vec<_>> = vec![Default::default(); max_len];
+        let mut res: Vec<HashMap<_, _>> = vec![Default::default(); max_len];
         for (k, v) in KEYWORDS.iter() {
-            res[k.len() - 1].push((k.as_bytes(), v.clone()));
+            res[k.len() - 1].insert(k.as_bytes(), v.clone());
         }
         res
     };
@@ -285,11 +286,8 @@ impl<'a> Tokenizer<'a> {
             if remaining < len {
                 continue;
             }
-            for (bs, tok) in ks.iter() {
-                debug_assert_eq!(bs.len(), len);
-                if *bs == &self.text.as_bytes()[start..start + bs.len()] {
-                    return Some((tok.clone(), len));
-                }
+            if let Some(tok) = ks.get(&self.text.as_bytes()[start..start + len]) {
+                return Some((tok.clone(), len));
             }
         }
         None
