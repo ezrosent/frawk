@@ -16,8 +16,6 @@ pub struct RegexSplitter<R> {
     used_fields: FieldSet,
     // Used to trigger updating FILENAME on the first read.
     start: bool,
-    // Yield one more empty record
-    yield_empty: bool,
 }
 
 impl<R: Read> LineReader for RegexSplitter<R> {
@@ -79,7 +77,6 @@ impl<R: Read> RegexSplitter<R> {
             name: name.into(),
             used_fields: FieldSet::all(),
             start: true,
-            yield_empty: false,
         }
     }
 
@@ -91,10 +88,6 @@ impl<R: Read> RegexSplitter<R> {
     }
 
     fn read_line_inner(&mut self, pat: &Regex) -> (Str<'static>, usize) {
-        if self.yield_empty {
-            self.yield_empty = false;
-            return (Str::default(), 1);
-        }
         if self.reader.is_eof() {
             return (Str::default(), 0);
         }
@@ -115,15 +108,6 @@ impl<R: Read> RegexSplitter<R> {
                             .buf
                             .slice_to_str(self.reader.start, self.reader.start + start)
                     };
-                    if self.reader.start + end == self.reader.end
-                        && self.reader.state == ReaderState::EOF
-                    {
-                        // Edge-case: We want input that looks like
-                        // "string\n"
-                        // To have two records, one with "string" the other with "".
-                        // We use yield_empty to signal to return an empty record on the last line.
-                        self.yield_empty = true;
-                    }
                     self.reader.start += end;
                     return (res, end);
                 }
@@ -255,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_clipped_chunk_split_random() {
-        const N_RUNS: usize = 50;
+        const N_RUNS: usize = 5;
         for iter in 0..N_RUNS {
             use std::io::Cursor;
 

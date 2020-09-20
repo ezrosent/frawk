@@ -1351,7 +1351,6 @@ pub struct ByteReader<P: ChunkProducer> {
     record_sep: u8,
 
     last_len: usize,
-    yield_empty: bool,
 }
 
 impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
@@ -1405,7 +1404,6 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             record_sep,
             used_fields: FieldSet::all(),
             last_len: usize::max_value(),
-            yield_empty: false,
         }
     }
 }
@@ -1454,7 +1452,6 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
             record_sep: 0, // unused
             used_fields: FieldSet::all(),
             last_len: usize::max_value(),
-            yield_empty: false,
         }
     }
 }
@@ -1481,7 +1478,6 @@ where
                 progress: 0,
                 record_sep,
                 last_len: usize::max_value(),
-                yield_empty: false,
                 used_fields,
             }) as _)
         }
@@ -1587,13 +1583,11 @@ where
         // up the rest of the buffer with no more record or field separators. In that case, we
         // want to return the rest of the input as a single-field record, which one more
         // `consume_line` will indeed accomplish.
-        let yield_empty = br.yield_empty;
-        br.yield_empty = false;
         let (is_eof, has_changed) = br.refresh_buf()?;
         changed = has_changed;
         if is_eof && br.progress == br.buf_len {
             *line = Str::default();
-            br.last_len = if yield_empty { 1 } else { 0 };
+            br.last_len = 0;
             debug_assert!(!changed);
             return Ok(false);
         }
@@ -1657,10 +1651,6 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
             self.progress = index + 1;
             if is_record_sep {
                 let line = get_field!(0, line_start, index);
-                // If the entire input stream ends on a record separator, Awk adds an additional
-                // empty line after the current line. yield_empty signals to insert this empty line
-                // if we have reached an EOF.
-                self.yield_empty = self.progress == self.buf_len;
                 return (line, self.progress - line_start);
             }
         }
@@ -1706,7 +1696,6 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
                 get_field!(fields.len() + 1, self.progress, $index)
             };
         }
-
         let line_start = self.progress;
         let offs_nl = &mut self.cur_chunk.off.nl;
         let record_end = if offs_nl.start == offs_nl.fields.len() {
@@ -1716,6 +1705,14 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             offs_nl.start += 1;
             record_end as usize
         };
+
+        // If we are at the very end of the buffer, consume no bytes and finish early. Running this
+        // normally would yield semantics not unlike split by newline in normal rust code, but it
+        // would result in us yielding an extra empty record in inputs that end in a newline when
+        // compared with awk, so we finish early instead.
+        if line_start == self.buf_len {
+            return (Str::default(), 0);
+        }
 
         // See the comments for Vector::whitespace_masks for more info on the format of the offsets
         // here.
@@ -1872,7 +1869,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
         let mut expected_lines: Vec<Str<'static>> = Vec::new();
-        let expected: Vec<Vec<Str<'static>>> = corpus
+        let mut expected: Vec<Vec<Str<'static>>> = corpus
             .split(rs as char)
             .map(|line| {
                 expected_lines.push(Str::from(line));
@@ -1886,6 +1883,13 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
                 }
             })
             .collect();
+
+        // For buffers that end in "\n" we don't want a trailing empty field.
+        if corpus.as_bytes().last() == Some(&b'\n') {
+            let _ = expected_lines.pop();
+            let _ = expected.pop();
+        }
+
         let reader = std::io::Cursor::new(corpus);
         let mut reader = ByteReader::new(
             once((reader, String::from("fake-stdin"))),
@@ -1974,7 +1978,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
         let mut expected_lines: Vec<Str<'static>> = Vec::new();
-        let expected: Vec<Vec<Str<'static>>> = corpus
+        let mut expected: Vec<Vec<Str<'static>>> = corpus
             .split('\n')
             .map(|line| {
                 expected_lines.push(line.into());
@@ -1985,6 +1989,12 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
                     .collect()
             })
             .collect();
+
+        // For buffers that end in "\n" we don't want a trailing empty field.
+        if corpus.as_bytes().last() == Some(&b'\n') {
+            let _ = expected_lines.pop();
+            let _ = expected.pop();
+        }
         let reader = std::io::Cursor::new(corpus);
         let mut reader = ByteReader::new_whitespace(
             std::iter::once((reader, String::from("fake-stdin"))),

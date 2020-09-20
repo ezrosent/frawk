@@ -750,7 +750,7 @@ fact=1
 for (i=1; i<=target; ++i) fact *= i
 print fact
 }"#,
-        "24\n120\n1\n",
+        "24\n120\n",
         @input "4\n5\n"
     );
 
