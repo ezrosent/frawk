@@ -2073,8 +2073,8 @@ impl<'a> View<'a> {
                     args_ptr,
                     tys_ptr,
                     len_v,
-                    LLVMGetParam(f, len - 2),
-                    LLVMGetParam(f, len - 1),
+                    LLVMGetParam(f, arg_lltys.len() as libc::c_uint - 2),
+                    LLVMGetParam(f, arg_lltys.len() as libc::c_uint - 1),
                 ];
                 LLVMBuildCall(
                     builder,

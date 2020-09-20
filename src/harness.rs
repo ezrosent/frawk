@@ -532,6 +532,8 @@ mod tests {
         };
     }
 
+    // TODO: extend testing macros to read non-stdout files and test more of those cases.
+
     #[test]
     fn basic_used_fields() {
         let p1 = r#"{ print $0; x=1; if (z) { x=3 } else { x=4 }; print $x, $5; }"#;
