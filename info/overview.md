@@ -242,8 +242,8 @@ surprised to discover there were bugs in frawk's parser.
   disallow this case. Again, let me know if this is an important use-case for
   you.
 * Some basic Awk commands are missing (e.g. `exit`), because I have not gotten
-  to them yet. Many of the extensions in gawk (e.g. bitwise operators,
-  coprocessors, multidimensional arrays) are also not implemented.
+  to them yet. Many of the extensions in gawk (e.g. co-processes,
+  multidimensional arrays) are also not implemented.
 * While it has never been tried, I sincerely doubt that frawk will run at all
   well --- or at all --- on a 32-bit platform. I suspect it would run much
   slower on a 64-bit non-x86 architecture.
