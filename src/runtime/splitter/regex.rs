@@ -101,7 +101,8 @@ impl<R: Read> RegexSplitter<R> {
             // makes it harder for us to call mutable methods like advance in the body, so just get
             // the start and end pointers.
             match pat.find(s).map(|m| (m.start(), m.end())) {
-                Some((start, end)) => {
+                // We need this check in case the regex matches across a chunk boundary.
+                Some((start, end)) if end + self.reader.start < self.reader.end => {
                     // Valid offsets guaranteed by correctness of regex `find`.
                     let res = unsafe {
                         self.reader
@@ -150,6 +151,28 @@ impl<R: Read> RegexSplitter<R> {
                         }
                     };
                 }
+                Some((start, end)) => {
+                    return match self.reader.reset() {
+                        Ok(true) => {
+                            // Valid offsets guaranteed by correctness of regex `find`.
+                            let res = unsafe {
+                                self.reader
+                                    .buf
+                                    .slice_to_str(self.reader.start, self.reader.start + start)
+                            };
+                            self.reader.start += end;
+                            (res, end)
+                        }
+                        Ok(false) => {
+                            // See comment in the previous branch.
+                            continue;
+                        }
+                        Err(_) => {
+                            self.reader.state = ReaderState::ERROR;
+                            (Str::default(), 0)
+                        }
+                    };
+                }
             }
         }
     }
@@ -162,11 +185,13 @@ mod tests {
     use super::*;
     use lazy_static::lazy_static;
     use regex::Regex;
+    use std::io::Cursor;
     use test::{black_box, Bencher};
     lazy_static! {
         static ref STR: String = String::from_utf8(bytes(1 << 20, 0.001, 0.05)).unwrap();
         static ref LINE: Regex = Regex::new("\n").unwrap();
         static ref SPACE: Regex = Regex::new(" ").unwrap();
+        static ref BS: Regex = Regex::new("b+").unwrap();
     }
 
     // Helps type inference along.
@@ -175,8 +200,39 @@ mod tests {
     }
 
     #[test]
+    fn test_line_split_big_sep() {
+        let mut buf = Vec::new();
+        for _ in 0..10 {
+            buf.extend("hi".as_bytes().iter().cloned());
+            buf.extend((0..1024).map(|_| b'a'));
+            buf.extend("there".as_bytes().iter().cloned());
+            buf.extend((0..2048).map(|_| b'b'));
+        }
+        let bs = String::from_utf8(buf).unwrap();
+        let c = Cursor::new(bs.clone());
+        let mut rdr = RegexSplitter::new(c, /*chunk_size=*/ 512, "");
+        let mut lines = Vec::new();
+        while !rdr.reader.is_eof() {
+            let line = rdr.read_line_regex(&*BS).upcast();
+            assert!(rdr.read_state() != -1);
+            lines.push(line);
+        }
+        let mut expected: Vec<_> = BS.split(bs.as_str()).map(ref_str).collect();
+        // remove trailing empty line
+        assert_eq!(expected.pop(), Some(Str::default()));
+        if lines != expected {
+            eprintln!("lines.len={}, expected.len={}", lines.len(), expected.len());
+            for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
+                if l != e {
+                    eprintln!("mismatch at index {}:\ngot={:?}\nwant={:?}", i, l, e);
+                }
+            }
+            assert!(false, "lines do not match");
+        }
+    }
+
+    #[test]
     fn test_line_split() {
-        use std::io::Cursor;
         let chunk_size = 1 << 9;
         let bs: String = crate::test_string_constants::PRIDE_PREJUDICE_CH2.into();
         let c = Cursor::new(bs.clone());
@@ -203,7 +259,6 @@ mod tests {
     #[test]
     fn test_clipped_chunk_split_pp() {
         // _random is more thorough, but this works as a sort of smoke test.
-        use std::io::Cursor;
 
         let chunk_size = 1 << 9;
 
@@ -241,8 +296,6 @@ mod tests {
     fn test_clipped_chunk_split_random() {
         const N_RUNS: usize = 5;
         for iter in 0..N_RUNS {
-            use std::io::Cursor;
-
             let corpus_size = 1 << 18;
             let chunk_size = 1 << 9;
 
