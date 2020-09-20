@@ -98,8 +98,6 @@ impl<R: Read> RegexSplitter<R> {
         if self.reader.is_eof() {
             return (Str::default(), 0);
         }
-        // We want to scan from reader.start to reader.end. If we have to reset the buffer, we want
-        // to avoid rescanning the data we have already resumed, so we add "scanned" to the offset.
         loop {
             let s = unsafe {
                 str::from_utf8_unchecked(
@@ -117,7 +115,9 @@ impl<R: Read> RegexSplitter<R> {
                             .buf
                             .slice_to_str(self.reader.start, self.reader.start + start)
                     };
-                    if self.reader.start + end == self.reader.end {
+                    if self.reader.start + end == self.reader.end
+                        && self.reader.state == ReaderState::EOF
+                    {
                         // Edge-case: We want input that looks like
                         // "string\n"
                         // To have two records, one with "string" the other with "".
@@ -217,15 +217,16 @@ mod tests {
     }
 
     #[test]
-    fn test_clipped_chunk_split() {
+    fn test_clipped_chunk_split_pp() {
+        // _random is more thorough, but this works as a sort of smoke test.
         use std::io::Cursor;
 
-        let corpus_size = 1 << 18;
         let chunk_size = 1 << 9;
 
         let multi_byte = "學";
         assert!(multi_byte.len() > 1);
-        let mut bs = bytes(corpus_size, 0.001, 0.05);
+        let mut bs = Vec::new();
+        bs.extend(crate::test_string_constants::PRIDE_PREJUDICE_CH2.bytes());
         let start = chunk_size - 1;
         for (i, b) in multi_byte.as_bytes().iter().enumerate() {
             bs[start + i] = *b;
@@ -245,10 +246,54 @@ mod tests {
             eprintln!("lines.len={}, expected.len={}", lines.len(), expected.len());
             for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
                 if l != e {
-                    eprintln!("mismatch at index {}:\ngot={:?}\nwant={:?}", i, l, e);
+                    eprintln!("mismatch at index {}:\ngot=<{}>\nwant=<{}>", i, l, e);
                 }
             }
-            assert!(false, "lines do not match");
+            assert!(false, "number of lines does not match");
+        }
+    }
+
+    #[test]
+    fn test_clipped_chunk_split_random() {
+        const N_RUNS: usize = 50;
+        for iter in 0..N_RUNS {
+            use std::io::Cursor;
+
+            let corpus_size = 1 << 18;
+            let chunk_size = 1 << 9;
+
+            let multi_byte = "學";
+            assert!(multi_byte.len() > 1);
+            let mut bs = bytes(corpus_size, 0.001, 0.05);
+            let start = chunk_size - 1;
+            for (i, b) in multi_byte.as_bytes().iter().enumerate() {
+                bs[start + i] = *b;
+            }
+
+            let s = String::from_utf8(bs).unwrap();
+            let c = Cursor::new(s.clone());
+            let mut rdr = RegexSplitter::new(c, chunk_size, "");
+            let mut lines = Vec::new();
+            while !rdr.reader.is_eof() {
+                let line = rdr.read_line_regex(&*LINE).upcast();
+                assert!(rdr.read_state() != -1);
+                lines.push(line);
+            }
+            let expected: Vec<_> = LINE.split(s.as_str()).map(ref_str).collect();
+            if lines != expected {
+                eprintln!(
+                    "Failed after {} runs. lines.len={}, expected.len={}",
+                    iter,
+                    lines.len(),
+                    expected.len()
+                );
+                for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
+                    if l != e {
+                        eprintln!("mismatch at index {}:\ngot=<{}>\nwant=<{}>", i, l, e);
+                    }
+                }
+                assert!(false, "number of lines does not match");
+            }
         }
     }
 
