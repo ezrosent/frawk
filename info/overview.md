@@ -304,3 +304,7 @@ if you find that the following are a serious hindrance:
   have been optional. However, refactoring the code to support arbitrary
   byte-streams would be a lot of work, as the implementation uses Rust strings
   throughout.
+* *Batching* frawk batches reading and writing data fairly aggressively compared
+  with most Awk implementations that I have come across. This is done largely for
+  performance reasons, and reflects the intended use-case of "batch" data-
+  processing scripts.
