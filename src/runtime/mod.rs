@@ -329,6 +329,10 @@ impl FileWrite {
         FileWrite(writers::Registry::from_factory(ff))
     }
 
+    pub(crate) fn shutdown(&mut self) -> Result<()> {
+        self.0.destroy_and_flush_all_files()
+    }
+
     pub(crate) fn printf(
         &mut self,
         path: Option<(&Str, bool)>,

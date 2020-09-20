@@ -1006,14 +1006,14 @@ pub unsafe extern "C" fn printf_impl_file(
 ) {
     let output_wrapped = Some((&*(output as *mut Str), append != 0));
     let format_args = wrap_args(&mut *(rt as *mut _), args, tys, num_args);
-    let res = (*(rt as *mut Runtime)).core.write_files.printf(
-        output_wrapped,
-        &*(spec as *mut Str),
-        &format_args[..],
-    );
-    if res.is_err() {
-        exit!(rt);
-    }
+    let rt = rt as *mut Runtime;
+    try_abort!(
+        rt,
+        (*rt)
+            .core
+            .write_files
+            .printf(output_wrapped, &*(spec as *mut Str), &format_args[..],)
+    )
 }
 
 #[no_mangle]

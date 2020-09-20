@@ -32,6 +32,14 @@ pub(crate) struct Core<'a> {
     pub slots: Slots,
 }
 
+impl<'a> Drop for Core<'a> {
+    fn drop(&mut self) {
+        if let Err(e) = self.write_files.shutdown() {
+            eprintln_ignore!("{}", e);
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct Slots {
     pub int: Vec<Int>,
@@ -1020,9 +1028,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     Print(txt, out, append) => {
                         let txt = index(&self.strs, txt);
                         let out = index(&self.strs, out);
-                        if let Err(_) = self.core.write_files.write_str(out, txt, *append) {
-                            return Ok(());
-                        };
+                        self.core.write_files.write_str(out, txt, *append)?
                     }
                     Sprintf { dst, fmt, args } => {
                         debug_assert_eq!(scratch.len(), 0);

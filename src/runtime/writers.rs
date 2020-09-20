@@ -163,6 +163,17 @@ impl Registry {
             None => &mut self.stdout,
         }
     }
+
+    pub fn destroy_and_flush_all_files(&mut self) -> Result<()> {
+        let mut last_error = Ok(());
+        for (_, mut fh) in self.local.drain() {
+            let res = fh.flush();
+            if res.is_err() {
+                last_error = res;
+            }
+        }
+        last_error
+    }
 }
 
 impl Clone for Registry {
