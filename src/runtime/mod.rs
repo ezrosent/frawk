@@ -1,6 +1,6 @@
 use crate::common::{Either, Result};
 use hashbrown::HashMap;
-use regex::Regex;
+use regex::bytes::Regex;
 use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::hash::Hash;
@@ -290,7 +290,7 @@ impl RegexCache {
         use crate::builtins::Variable;
         // We use the awk semantics for `match`. If we match
         let (start, len) = self.with_regex(pat, |re| {
-            s.with_str(|s| match re.find(s) {
+            s.with_str(|s| match re.find(s.as_bytes()) {
                 Some(m) => {
                     let start = m.start() as Int;
                     let end = m.end() as Int;
@@ -305,7 +305,7 @@ impl RegexCache {
     }
 
     pub(crate) fn is_regex_match(&mut self, pat: &Str, s: &Str) -> Result<bool> {
-        self.with_regex(pat, |re| s.with_str(|s| re.is_match(s)))
+        self.with_regex(pat, |re| s.with_str(|s| re.is_match(s.as_bytes())))
     }
 }
 

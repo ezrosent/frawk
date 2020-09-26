@@ -1,11 +1,10 @@
 //! Regex-based splitting routines
 use std::io::Read;
-use std::str;
 
 use crate::common::Result;
 use crate::pushdown::FieldSet;
 use crate::runtime::{LazyVec, Str};
-use regex::Regex;
+use regex::bytes::Regex;
 
 use super::{DefaultLine, LineReader, Reader, ReaderState};
 
@@ -92,11 +91,7 @@ impl<R: Read> RegexSplitter<R> {
             return (Str::default(), 0);
         }
         loop {
-            let s = unsafe {
-                str::from_utf8_unchecked(
-                    &self.reader.buf.as_bytes()[self.reader.start..self.reader.end],
-                )
-            };
+            let s = &self.reader.buf.as_bytes()[self.reader.start..self.reader.end];
             // Why this map invocation? Match objects hold a reference to the substring, which
             // makes it harder for us to call mutable methods like advance in the body, so just get
             // the start and end pointers.
@@ -184,7 +179,7 @@ mod tests {
     extern crate test;
     use super::*;
     use lazy_static::lazy_static;
-    use regex::Regex;
+    use regex::bytes::Regex;
     use std::io::Cursor;
     use test::{black_box, Bencher};
     lazy_static! {
@@ -195,8 +190,8 @@ mod tests {
     }
 
     // Helps type inference along.
-    fn ref_str<'a>(s: &'a str) -> Str<'a> {
-        s.into()
+    fn ref_str<'a>(s: &'a [u8]) -> Str<'a> {
+        std::str::from_utf8(s).unwrap().into()
     }
 
     #[test]
@@ -217,7 +212,7 @@ mod tests {
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
-        let mut expected: Vec<_> = BS.split(bs.as_str()).map(ref_str).collect();
+        let mut expected: Vec<_> = BS.split(bs.as_bytes()).map(ref_str).collect();
         // remove trailing empty line
         assert_eq!(expected.pop(), Some(Str::default()));
         if lines != expected {
@@ -244,7 +239,7 @@ mod tests {
             lines.push(line);
         }
 
-        let expected: Vec<_> = LINE.split(bs.as_str()).map(ref_str).collect();
+        let expected: Vec<_> = LINE.split(bs.as_bytes()).map(ref_str).collect();
         if lines != expected {
             eprintln!("lines.len={}, expected.len={}", lines.len(), expected.len());
             for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
@@ -280,7 +275,7 @@ mod tests {
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
-        let expected: Vec<_> = LINE.split(s.as_str()).map(ref_str).collect();
+        let expected: Vec<_> = LINE.split(s.as_bytes()).map(ref_str).collect();
         if lines != expected {
             eprintln!("lines.len={}, expected.len={}", lines.len(), expected.len());
             for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
@@ -316,7 +311,7 @@ mod tests {
                 assert!(rdr.read_state() != -1);
                 lines.push(line);
             }
-            let expected: Vec<_> = LINE.split(s.as_str()).map(ref_str).collect();
+            let expected: Vec<_> = LINE.split(s.as_bytes()).map(ref_str).collect();
             if lines != expected {
                 eprintln!(
                     "Failed after {} runs. lines.len={}, expected.len={}",
@@ -336,7 +331,7 @@ mod tests {
 
     #[bench]
     fn bench_find_iter(b: &mut Bencher) {
-        let bs = STR.as_str();
+        let bs = STR.as_bytes();
         let line = &*LINE;
         let space = &*SPACE;
         b.iter(|| {
@@ -349,7 +344,7 @@ mod tests {
                 };
                 while cstart < start {
                     if let Some(m) = space.find_at(bs, cstart) {
-                        black_box(m.as_str());
+                        black_box(m.as_bytes());
                         cstart = m.end();
                     } else {
                         break;
@@ -389,7 +384,7 @@ mod tests {
 
     #[bench]
     fn bench_split_batched(b: &mut Bencher) {
-        let bs = STR.as_str();
+        let bs = STR.as_bytes();
         let line = &*LINE;
         let space = &*SPACE;
         b.iter(|| {
@@ -420,7 +415,7 @@ mod tests {
 
     #[bench]
     fn bench_split_by_line(b: &mut Bencher) {
-        let bs = STR.as_str();
+        let bs = STR.as_bytes();
         let line = &*LINE;
         let space = &*SPACE;
         b.iter(|| {

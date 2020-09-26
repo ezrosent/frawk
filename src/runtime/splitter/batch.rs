@@ -25,7 +25,7 @@ use std::mem;
 use std::str;
 
 use lazy_static::lazy_static;
-use regex::{bytes, Regex};
+use regex::{bytes, bytes::Regex};
 
 use crate::common::{ExecutionStrategy, Result};
 use crate::pushdown::FieldSet;

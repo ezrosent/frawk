@@ -9,7 +9,7 @@
 use crate::pushdown::FieldSet;
 use crate::runtime::{Float, Int};
 
-use regex::Regex;
+use regex::bytes::Regex;
 use smallvec::SmallVec;
 
 use std::alloc::{alloc_zeroed, dealloc, realloc, Layout};
@@ -413,7 +413,7 @@ impl<'a> Str<'a> {
         self.with_str(|s| {
             let mut prev = 0;
             let mut cur_field = 1;
-            for m in pat.find_iter(s) {
+            for m in pat.find_iter(s.as_bytes()) {
                 let is_empty = prev == m.start();
                 cur_field += if used_fields.get(cur_field) {
                     push(self.slice(prev, m.start()), is_empty)
@@ -446,7 +446,7 @@ impl<'a> Str<'a> {
     pub fn subst_first(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, bool) {
         self.with_str(|s| {
             subst.with_str(|subst| {
-                if let Some(m) = pat.find(s) {
+                if let Some(m) = pat.find(s.as_bytes()) {
                     let mut buf = DynamicBuf::new(s.len());
                     buf.write(&s.as_bytes()[0..m.start()]).unwrap();
                     buf.write(subst.as_bytes()).unwrap();
@@ -465,7 +465,7 @@ impl<'a> Str<'a> {
                 let mut buf = DynamicBuf::new(0);
                 let mut prev = 0;
                 let mut count = 0;
-                for m in pat.find_iter(s) {
+                for m in pat.find_iter(s.as_bytes()) {
                     buf.write(&s.as_bytes()[prev..m.start()]).unwrap();
                     buf.write(subst.as_bytes()).unwrap();
                     prev = m.end();
@@ -1226,7 +1226,7 @@ mod tests {
     fn test_str_split(pat: &Regex, base: &str) {
         let s = Str::from(base);
         let want = pat
-            .split(base)
+            .split(base.as_bytes())
             .skip_while(|x| x.len() == 0)
             .collect::<Vec<_>>();
         let mut got = Vec::new();
@@ -1241,7 +1241,7 @@ mod tests {
         let total_got = got.len();
         let total = want.len();
         for (g, w) in got.iter().cloned().zip(want.iter().cloned()) {
-            assert_eq!(g, Str::from(w));
+            assert_eq!(g, Str::from(std::str::from_utf8(w).unwrap()));
         }
         if total_got > total {
             // We want there to be trailing empty fields in this case.
