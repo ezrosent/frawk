@@ -39,6 +39,7 @@ extern crate lazy_static;
 extern crate libc;
 #[cfg(feature = "llvm_backend")]
 extern crate llvm_sys;
+extern crate memchr;
 extern crate num_cpus;
 extern crate petgraph;
 extern crate rand;
@@ -233,6 +234,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
             once((fake_inp, String::from("unused"))),
             InputFormat::CSV,
             CHUNK_SIZE,
+            /*check_utf8=*/ false,
             ExecutionStrategy::Serial,
         )),
         runtime::writers::default_factory(),
@@ -265,6 +267,7 @@ fn main() {
              .about("the optimization level for the program. Positive levels determine the optimization level for LLVM. Level -1 forces bytecode interpretation")
              .possible_values(&["-1", "0", "1", "2", "3"]))
         .arg("--out-file=[FILE] 'the output file used in place of standard input'")
+        .arg("--utf8 'validate all input as UTF-8, returning an error if it is invalid'")
         .arg("--dump-cfg 'print untyped SSA form for input program'")
         .arg("--dump-bytecode 'print bytecode for input program'")
         .arg(Arg::new("input-format")
@@ -415,6 +418,7 @@ fn main() {
     if skip_output {
         return;
     }
+    let check_utf8 = matches.is_present("utf8");
 
     // This horrid macro is here because all of the different ways of reading input are different
     // types, making functions hard to write. Still, there must be something to be done to clean
@@ -429,6 +433,7 @@ fn main() {
                             once((_reader, String::from("-"))),
                             ifmt,
                             CHUNK_SIZE,
+                            check_utf8,
                             exec_strategy,
                         );
                         $body
@@ -447,6 +452,7 @@ fn main() {
                                 let $inp = ByteReader::new_whitespace(
                                     once((_reader, String::from("-"))),
                                     CHUNK_SIZE,
+                                    check_utf8,
                                     exec_strategy,
                                 );
                                 $body
@@ -456,17 +462,20 @@ fn main() {
                                     field_sep.as_bytes()[0],
                                     record_sep.as_bytes()[0],
                                     CHUNK_SIZE,
+                                    check_utf8,
                                     exec_strategy,
                                 );
                                 $body
                             }
                         } else {
-                            let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
+                            let $inp =
+                                chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-", check_utf8));
                             $body
                         }
                     }
                     (None, cfg::SepAssign::Unsure) => {
-                        let $inp = chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-"));
+                        let $inp =
+                            chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-", check_utf8));
                         $body
                     }
                 }
@@ -476,8 +485,13 @@ fn main() {
                     .cloned()
                     .map(|file| (open_file_read(file.as_str()), file))
                     .collect();
-                let $inp =
-                    CSVReader::new(file_handles.into_iter(), ifmt, CHUNK_SIZE, exec_strategy);
+                let $inp = CSVReader::new(
+                    file_handles.into_iter(),
+                    ifmt,
+                    CHUNK_SIZE,
+                    check_utf8,
+                    exec_strategy,
+                );
                 $body
             } else {
                 match $analysis {
@@ -497,6 +511,7 @@ fn main() {
                                 let $inp = ByteReader::new_whitespace(
                                     file_handles.into_iter(),
                                     CHUNK_SIZE,
+                                    check_utf8,
                                     exec_strategy,
                                 );
                                 $body
@@ -506,6 +521,7 @@ fn main() {
                                     field_sep.as_bytes()[0],
                                     record_sep.as_bytes()[0],
                                     CHUNK_SIZE,
+                                    check_utf8,
                                     exec_strategy,
                                 );
                                 $body
@@ -514,7 +530,7 @@ fn main() {
                             let iter = input_files.iter().cloned().map(|file| {
                                 let reader: Box<dyn io::Read + Send> =
                                     Box::new(open_file_read(file.as_str()));
-                                RegexSplitter::new(reader, CHUNK_SIZE, file)
+                                RegexSplitter::new(reader, CHUNK_SIZE, file, check_utf8)
                             });
                             let $inp = ChainedReader::new(iter);
                             $body
@@ -524,7 +540,7 @@ fn main() {
                         let iter = input_files.iter().cloned().map(|file| {
                             let reader: Box<dyn io::Read + Send> =
                                 Box::new(open_file_read(file.as_str()));
-                            RegexSplitter::new(reader, CHUNK_SIZE, file)
+                            RegexSplitter::new(reader, CHUNK_SIZE, file, check_utf8)
                         });
                         let $inp = ChainedReader::new(iter);
                         $body

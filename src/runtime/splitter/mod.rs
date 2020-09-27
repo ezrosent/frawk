@@ -61,6 +61,9 @@ pub trait LineReader: Sized {
     fn read_state(&self) -> i64;
     fn next_file(&mut self) -> Result<bool>;
     fn set_used_fields(&mut self, _used_fields: &FieldSet);
+    // Whether or not this LineReader is configured to check for valid UTF-8. This is used to
+    // propagate consistent options across multiple LineReader instances.
+    fn check_utf8(&self) -> bool;
 }
 
 fn normalize_join_indexes(start: Int, end: Int, nf: usize) -> Result<(usize, usize)> {
@@ -191,13 +194,18 @@ impl<'a> Line<'a> for DefaultLine {
     }
 }
 
-pub struct ChainedReader<R>(Vec<R>);
+pub struct ChainedReader<R>(Vec<R>, /*check_utf8=*/ bool);
 
-impl<R> ChainedReader<R> {
+impl<R: LineReader> ChainedReader<R> {
     pub fn new(rs: impl Iterator<Item = R>) -> ChainedReader<R> {
         let mut v: Vec<_> = rs.collect();
         v.reverse();
-        ChainedReader(v)
+        let check_utf8 = if let Some(r) = v.last() {
+            r.check_utf8()
+        } else {
+            false
+        };
+        ChainedReader(v, check_utf8)
     }
 }
 
@@ -206,6 +214,9 @@ where
     R::Line: Default,
 {
     type Line = R::Line;
+    fn check_utf8(&self) -> bool {
+        self.1
+    }
     fn filename(&self) -> Str<'static> {
         self.0
             .last()
@@ -295,6 +306,9 @@ struct Reader<R> {
     // Reads of the "error state" lag behind reads from the buffer. last_len helps us determine
     // when an EOF has been reached from an external perspective.
     last_len: usize,
+
+    // Validate input as UTF-8
+    check_utf8: bool,
 }
 
 fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
@@ -321,7 +335,7 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
 }
 
 impl<R: Read> Reader<R> {
-    pub(crate) fn new(r: R, chunk_size: usize, padding: usize) -> Self {
+    pub(crate) fn new(r: R, chunk_size: usize, padding: usize, check_utf8: bool) -> Self {
         let res = Reader {
             inner: r,
             buf: UniqueBuf::new(0).into_buf(),
@@ -332,8 +346,13 @@ impl<R: Read> Reader<R> {
             padding,
             state: ReaderState::OK,
             last_len: 0,
+            check_utf8,
         };
         res
+    }
+
+    pub(crate) fn check_utf8(&self) -> bool {
+        self.check_utf8
     }
 
     pub(crate) fn is_eof(&self) -> bool {
@@ -409,27 +428,30 @@ impl<R: Read> Reader<R> {
             done = true;
             bytes = &mut bytes[..bytes_read];
         }
-
-        let ulen = {
-            let opt = if done {
-                if is_utf8(bytes) {
-                    Some(bytes.len())
+        let mut ulen = bytes.len();
+        if self.check_utf8 {
+            ulen = {
+                let opt = if done {
+                    if is_utf8(bytes) {
+                        Some(bytes.len())
+                    } else {
+                        None
+                    }
                 } else {
-                    None
-                }
-            } else {
-                validate_utf8_clipped(bytes)
-            };
-            if let Some(u) = opt {
-                u
-            } else {
-                // Invalid utf8. Get the error.
-                return match std::str::from_utf8(bytes) {
-                    Ok(_) => err!("bug in UTF8 validation!"),
-                    Err(e) => err!("invalid utf8: {}", e),
+                    validate_utf8_clipped(bytes)
                 };
-            }
-        };
+                if let Some(u) = opt {
+                    u
+                } else {
+                    // Invalid utf8. Get the error.
+                    return match std::str::from_utf8(bytes) {
+                        Ok(_) => err!("bug in UTF8 validation!"),
+                        Err(e) => err!("invalid utf8: {}", e),
+                    };
+                }
+            };
+        }
+
         if done {
             self.state = ReaderState::EOF;
         }

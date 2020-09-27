@@ -1,17 +1,19 @@
 use crate::common::{Either, Result};
 use hashbrown::HashMap;
-use regex::Regex;
+use regex::bytes::Regex;
 use std::cell::{Cell, RefCell};
 use std::fs::File;
 use std::hash::Hash;
 use std::io;
 use std::iter::FromIterator;
 use std::rc::Rc;
+use std::str;
 
 pub mod float_parse;
 pub mod printf;
 pub mod splitter;
 pub mod str_impl;
+pub mod string_search;
 pub mod utf8;
 pub mod writers;
 
@@ -290,7 +292,7 @@ impl RegexCache {
         use crate::builtins::Variable;
         // We use the awk semantics for `match`. If we match
         let (start, len) = self.with_regex(pat, |re| {
-            s.with_str(|s| match re.find(s) {
+            s.with_bytes(|bs| match re.find(bs) {
                 Some(m) => {
                     let start = m.start() as Int;
                     let end = m.end() as Int;
@@ -305,7 +307,7 @@ impl RegexCache {
     }
 
     pub(crate) fn is_regex_match(&mut self, pat: &Str, s: &Str) -> Result<bool> {
-        self.with_regex(pat, |re| s.with_str(|s| re.is_match(s)))
+        self.with_regex(pat, |re| s.with_bytes(|bs| re.is_match(bs)))
     }
 }
 
@@ -320,10 +322,10 @@ impl Default for FileWrite {
 
 impl FileWrite {
     pub(crate) fn flush_stdout(&mut self) -> Result<()> {
-        self.0.get_handle(None).flush()
+        self.0.get_handle(None)?.flush()
     }
     pub(crate) fn close(&mut self, path: &Str) -> Result<()> {
-        self.0.get_handle(Some(path)).close()
+        self.0.get_handle(Some(path))?.close()
     }
     pub(crate) fn new(ff: impl writers::FileFactory) -> FileWrite {
         FileWrite(writers::Registry::from_factory(ff))
@@ -340,22 +342,22 @@ impl FileWrite {
         pa: &[printf::FormatArg],
     ) -> Result<()> {
         let (handle, append) = if let Some((out_file, append)) = path {
-            (self.0.get_handle(Some(out_file)), append)
+            (self.0.get_handle(Some(out_file))?, append)
         } else {
-            (self.0.get_handle(None), true)
+            (self.0.get_handle(None)?, true)
         };
         let mut text = str_impl::DynamicBuf::default();
-        spec.with_str(|spec| printf::printf(&mut text, spec, pa))?;
+        spec.with_bytes(|spec| printf::printf(&mut text, spec, pa))?;
         let s = unsafe { text.into_str() };
         handle.write(&s, append)
     }
 
     pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
-        self.0.get_handle(None).write(s, /*append=*/ true)
+        self.0.get_handle(None)?.write(s, /*append=*/ true)
     }
 
     pub(crate) fn write_str(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
-        self.0.get_handle(Some(path)).write(s, append)
+        self.0.get_handle(Some(path))?.write(s, append)
     }
 }
 
@@ -415,10 +417,16 @@ impl<LR: LineReader> FileRead<LR> {
         path: &Str<'a>,
         f: impl FnMut(&mut RegexSplitter<File>) -> Result<R>,
     ) -> Result<R> {
+        let check_utf8 = self.stdin.check_utf8();
         self.files.get_fallible(
             path,
             |s| match File::open(s) {
-                Ok(f) => Ok(RegexSplitter::new(f, CHUNK_SIZE, path.clone().unmoor())),
+                Ok(f) => Ok(RegexSplitter::new(
+                    f,
+                    CHUNK_SIZE,
+                    path.clone().unmoor(),
+                    check_utf8,
+                )),
                 Err(e) => err!("failed to open file '{}': {}", s, e),
             },
             f,
@@ -466,8 +474,12 @@ impl<T> Registry<T> {
         match self.cached.entry(k_str) {
             Entry::Occupied(mut o) => getter(o.get_mut()),
             Entry::Vacant(v) => {
-                let (val, res) = v.key().with_str(|raw_str| {
-                    let mut val = new(raw_str)?;
+                let (val, res) = v.key().with_bytes(|raw_str| {
+                    let s = match str::from_utf8(raw_str) {
+                        Ok(s) => s,
+                        Err(e) => return err!("invalid UTF-8 for file or regex: {}", e),
+                    };
+                    let mut val = new(s)?;
                     let res = getter(&mut val);
                     Ok((val, res))
                 })?;
@@ -508,22 +520,22 @@ impl<'a> Convert<Float, Str<'a>> for _Carrier {
 }
 impl<'a> Convert<Str<'a>, Float> for _Carrier {
     fn convert(s: Str<'a>) -> Float {
-        s.with_str(strtod)
+        s.with_bytes(strtod)
     }
 }
 impl<'a> Convert<Str<'a>, Int> for _Carrier {
     fn convert(s: Str<'a>) -> Int {
-        s.with_str(strtoi)
+        s.with_bytes(strtoi)
     }
 }
 impl<'b, 'a> Convert<&'b Str<'a>, Float> for _Carrier {
     fn convert(s: &'b Str<'a>) -> Float {
-        s.with_str(strtod)
+        s.with_bytes(strtod)
     }
 }
 impl<'b, 'a> Convert<&'b Str<'a>, Int> for _Carrier {
     fn convert(s: &'b Str<'a>) -> Int {
-        s.with_str(strtoi)
+        s.with_bytes(strtoi)
     }
 }
 

@@ -42,6 +42,8 @@ use std::sync::{
     Arc, Mutex,
 };
 
+// TODO: get_handle() should return an error on failure to parse UTF8
+
 // NB we only require mpsc semantics, but at time of writing there are a few open bugs on
 // std::sync::mpsc, while crossbeam_channel is seeing more attention.
 use crossbeam_channel::{bounded, Receiver, Sender};
@@ -146,21 +148,24 @@ impl Registry {
         }
     }
 
-    pub fn get_handle<'a>(&mut self, name: Option<&Str<'a>>) -> &mut FileHandle {
+    pub fn get_handle<'a>(&mut self, name: Option<&Str<'a>>) -> Result<&mut FileHandle> {
         match name {
             Some(path) => {
                 use hashbrown::hash_map::Entry;
                 // borrowed by with_str closure.
                 let global = &self.global;
                 match self.local.entry(path.clone().unmoor()) {
-                    Entry::Occupied(o) => o.into_mut(),
+                    Entry::Occupied(o) => Ok(o.into_mut()),
                     Entry::Vacant(v) => {
-                        let raw = path.with_str(|s| global.get_handle(s));
-                        v.insert(raw.into_handle())
+                        let raw = path.with_bytes(|bs| match std::str::from_utf8(bs) {
+                            Ok(s) => Ok(global.get_handle(s)),
+                            Err(e) => err!("invalid UTF8 in filename: {}", e),
+                        })?;
+                        Ok(v.insert(raw.into_handle()))
                     }
                 }
             }
-            None => &mut self.stdout,
+            None => Ok(&mut self.stdout),
         }
     }
 
@@ -743,7 +748,7 @@ mod tests {
         let fs = FakeFs::default();
         let mut reg = Registry::from_factory(fs.clone());
         {
-            let handle = reg.get_handle(/*stdout*/ None);
+            let handle = reg.get_handle(/*stdout*/ None).unwrap();
             handle.write(&s1, /*append=*/ true).unwrap();
             handle.write(&s2, /*append=*/ true).unwrap();
             handle.flush().unwrap();
@@ -764,7 +769,7 @@ mod tests {
         let fs = FakeFs::default();
         let mut reg = Registry::from_factory(fs.clone());
         {
-            let handle = reg.get_handle(Some(&fname));
+            let handle = reg.get_handle(Some(&fname)).unwrap();
             handle.write(&s1, /*append=*/ true).unwrap();
             handle.write(&s2, /*append=*/ true).unwrap();
             handle.flush().unwrap();
@@ -772,7 +777,7 @@ mod tests {
             handle.write(&s2, /*append=*/ true).unwrap();
         }
         {
-            let handle = reg.get_handle(Some(&fname));
+            let handle = reg.get_handle(Some(&fname)).unwrap();
             handle.close().unwrap();
             handle.write(&s1, /*append=*/ false).unwrap();
             handle.write(&s2, /*append=*/ false).unwrap();
@@ -801,7 +806,7 @@ mod tests {
                     let fbad = Str::from("/fake/BAD");
                     for i in 0..WRITES_PER_THREAD {
                         {
-                            let h1 = treg.get_handle(Some(&fa));
+                            let h1 = treg.get_handle(Some(&fa)).unwrap();
                             h1.write(&a, /*append=*/ true).unwrap();
                             if (t + i) % 100 == 0 {
                                 h1.close().unwrap();
@@ -809,7 +814,7 @@ mod tests {
                         }
                         {
                             // We do not close file b, so append=false should not matter.
-                            let h2 = treg.get_handle(Some(&fb));
+                            let h2 = treg.get_handle(Some(&fb)).unwrap();
                             h2.write(&b, /*append=*/ false).unwrap();
                             if (t + i) % 105 == 0 {
                                 h2.flush().unwrap();
@@ -817,7 +822,7 @@ mod tests {
                         }
 
                         {
-                            let h3 = treg.get_handle(Some(&fbad));
+                            let h3 = treg.get_handle(Some(&fbad)).unwrap();
                             // These won't all be errors.
                             let _ = h3.write(&a, /*append=*/ true);
                             if (t + i) % 103 == 0 {

@@ -330,9 +330,9 @@ BaseTerm: &'a Expr<'a,'a, &'a str> = {
   Ident,
   Index,
   StrLit,
-  "INT" => arena.alloc_v(Expr::ILit(strtoi(<>))),
-  "HEX" => arena.alloc_v(Expr::ILit(hextoi(<>))),
-  "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>))),
+  "INT" => arena.alloc_v(Expr::ILit(strtoi(<>.as_bytes()))),
+  "HEX" => arena.alloc_v(Expr::ILit(hextoi(<>.as_bytes()))),
+  "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>.as_bytes()))),
   "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
   <i:"CALLSTART"> <args:Args?> ")" =>
         arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),

@@ -9,7 +9,7 @@
 use crate::pushdown::FieldSet;
 use crate::runtime::{Float, Int};
 
-use regex::Regex;
+use regex::bytes::Regex;
 use smallvec::SmallVec;
 
 use std::alloc::{alloc_zeroed, dealloc, realloc, Layout};
@@ -410,7 +410,7 @@ impl<'a> Str<'a> {
         if self.is_empty() {
             return;
         }
-        self.with_str(|s| {
+        self.with_bytes(|s| {
             let mut prev = 0;
             let mut cur_field = 1;
             for m in pat.find_iter(s) {
@@ -444,13 +444,13 @@ impl<'a> Str<'a> {
     }
 
     pub fn subst_first(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, bool) {
-        self.with_str(|s| {
-            subst.with_str(|subst| {
+        self.with_bytes(|s| {
+            subst.with_bytes(|subst| {
                 if let Some(m) = pat.find(s) {
                     let mut buf = DynamicBuf::new(s.len());
-                    buf.write(&s.as_bytes()[0..m.start()]).unwrap();
-                    buf.write(subst.as_bytes()).unwrap();
-                    buf.write(&s.as_bytes()[m.end()..s.len()]).unwrap();
+                    buf.write(&s[0..m.start()]).unwrap();
+                    buf.write(subst).unwrap();
+                    buf.write(&s[m.end()..s.len()]).unwrap();
                     (unsafe { buf.into_str() }, true)
                 } else {
                     (self.clone(), false)
@@ -460,21 +460,21 @@ impl<'a> Str<'a> {
     }
 
     pub fn subst_all(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, Int) {
-        self.with_str(|s| {
-            subst.with_str(|subst| {
+        self.with_bytes(|s| {
+            subst.with_bytes(|subst| {
                 let mut buf = DynamicBuf::new(0);
                 let mut prev = 0;
                 let mut count = 0;
                 for m in pat.find_iter(s) {
-                    buf.write(&s.as_bytes()[prev..m.start()]).unwrap();
-                    buf.write(subst.as_bytes()).unwrap();
+                    buf.write(&s[prev..m.start()]).unwrap();
+                    buf.write(subst).unwrap();
                     prev = m.end();
                     count += 1;
                 }
                 if count == 0 {
                     (self.clone(), count)
                 } else {
-                    buf.write(&s.as_bytes()[prev..s.len()]).unwrap();
+                    buf.write(&s[prev..s.len()]).unwrap();
                     (unsafe { buf.into_str() }, count)
                 }
             })
@@ -621,7 +621,6 @@ impl<'a> Str<'a> {
     pub fn slice(&self, from: usize, to: usize) -> Str<'a> {
         // TODO: consider returning a result here so we can error out in a more graceful way.
         {
-            use super::utf8::is_char_boundary;
             let bs = unsafe { &*self.get_bytes() };
             assert!(
                 (from == to && to == bs.len()) || from < bs.len(),
@@ -631,31 +630,23 @@ impl<'a> Str<'a> {
                 to,
             );
             assert!(to <= bs.len(), "internal error: invalid index");
-            assert!(
-                (from == to) || is_char_boundary(bs[from]),
-                "must take substring at char boundary"
-            );
-            assert!(
-                to == bs.len() || is_char_boundary(bs[to]),
-                "must take substring at char boundary"
-            );
         }
         unsafe { self.slice_internal(from, to) }
     }
 
-    // Why is [with_str] safe and [force] unsafe? Let's go case-by-case for the state of `self`
+    // Why is [with_bytes] safe and [force] unsafe? Let's go case-by-case for the state of `self`
     // EMPTY:  no data is passed into `f`.
     // BOXED:  The function signature ensures that no string references can "escape" `f`, and `self`
     //         will persist for the function body, which will keep the underlying buffer alive.
     // CONCAT: We `force` these strings, so they will be BOXED.
     // SHARED: This one is tricky. It may seem to be covered by the BOXED case, but the difference
     //         is that shared strings give up there references to the underlying buffer if they get
-    //         forced. So if we did s.with_str(|x| { /* force s */; *x}), then *x is a
+    //         forced. So if we did s.with_bytes(|x| { /* force s */; *x}), then *x is a
     //         use-after-free!
     //
     //         This is why [force] is unsafe. As written, no safe method will force a SHARED Str.
     //         If we add force to a public API (e.g. for garbage collection), we'll need to ensure
-    //         that we don't call with_str around it, or clone the string before forcing.
+    //         that we don't call with_bytes around it, or clone the string before forcing.
 
     unsafe fn force(&self) {
         let (tag, len) = {
@@ -741,14 +732,12 @@ impl<'a> Str<'a> {
             }
         }
     }
-    pub fn get_raw_str(&self) -> *const str {
-        unsafe { str::from_utf8_unchecked(&*self.get_bytes()) }
-    }
 
-    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
-        let raw = self.get_raw_str();
+    pub fn with_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        let raw = self.get_bytes();
         unsafe { f(&*raw) }
     }
+
     pub fn unmoor(self) -> Str<'static> {
         let rep = unsafe { self.rep_mut() };
         let tag = rep.get_tag();
@@ -788,7 +777,7 @@ impl<'a> PartialEq for Str<'a> {
             return true;
         }
         // TODO: we could intern these strings if they wind up equal.
-        self.with_str(|s1| other.with_str(|s2| s1 == s2))
+        self.with_bytes(|bs1| other.with_bytes(|bs2| bs1 == bs2))
     }
 }
 
@@ -796,30 +785,34 @@ impl<'a> Eq for Str<'a> {}
 
 impl<'a> Hash for Str<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.with_str(|s| s.hash(state))
+        self.with_bytes(|bs| bs.hash(state))
     }
 }
-
 impl<'a> From<&'a str> for Str<'a> {
     fn from(s: &'a str) -> Str<'a> {
-        if s.len() == 0 {
+        s.as_bytes().into()
+    }
+}
+impl<'a> From<&'a [u8]> for Str<'a> {
+    fn from(bs: &'a [u8]) -> Str<'a> {
+        if bs.len() == 0 {
             Default::default()
-        } else if s.len() <= MAX_INLINE_SIZE {
-            Str::from_rep(unsafe { Inline::from_raw(s.as_ptr(), s.len()).into() })
-        } else if s.as_ptr() as usize & 0x7 != 0 {
+        } else if bs.len() <= MAX_INLINE_SIZE {
+            Str::from_rep(unsafe { Inline::from_raw(bs.as_ptr(), bs.len()).into() })
+        } else if bs.as_ptr() as usize & 0x7 != 0 {
             // Strings are not guaranteed to be word aligned. Copy over strings that aren't. This
             // is more important for tests; most of the places that literals can come from in an
             // awk program will hand out aligned pointers.
-            let buf = Buf::read_from_str(s);
+            let buf = Buf::read_from_bytes(bs);
             let boxed = Boxed {
-                len: s.len() as u64,
+                len: bs.len() as u64,
                 buf,
             };
             Str::from_rep(boxed.into())
         } else {
             let literal = Literal {
-                len: s.len() as u64,
-                ptr: s.as_ptr(),
+                len: bs.len() as u64,
+                ptr: bs.as_ptr(),
                 _marker: PhantomData,
             };
             Str::from_rep(literal.into())
@@ -832,7 +825,7 @@ impl<'a> From<String> for Str<'a> {
         if s.len() == 0 {
             return Default::default();
         }
-        let buf = Buf::read_from_str(s.as_str());
+        let buf = Buf::read_from_bytes(s.as_bytes());
         let boxed = Boxed {
             len: s.len() as u64,
             buf,
@@ -1097,8 +1090,7 @@ impl UniqueBuf {
 }
 
 impl Buf {
-    // Unsafe because it assumes valid utf8.
-    pub unsafe fn into_str<'a>(self) -> Str<'a> {
+    pub fn into_str<'a>(self) -> Str<'a> {
         Str::from_rep(
             Boxed {
                 len: self.len() as u64,
@@ -1127,7 +1119,7 @@ impl Buf {
     }
 
     // Unsafe because `from` and `to` must point to the start of characters.
-    pub unsafe fn slice_to_str<'a>(&self, from: usize, to: usize) -> Str<'a> {
+    pub fn slice_to_str<'a>(&self, from: usize, to: usize) -> Str<'a> {
         debug_assert!(from <= self.len());
         debug_assert!(to <= self.len());
         debug_assert!(from <= to, "invalid slice [{}, {})", from, to);
@@ -1135,7 +1127,12 @@ impl Buf {
         if len == 0 {
             Str::default()
         } else if len <= MAX_INLINE_SIZE {
-            Str::from_rep(Inline::from_raw(self.as_ptr().offset(from as isize), len).into())
+            unsafe {
+                Str::from_rep(
+                    Inline::from_raw(self.as_ptr().offset(std::cmp::max(0, from as isize)), len)
+                        .into(),
+                )
+            }
         } else if std::intrinsics::likely(
             from <= u32::max_value() as usize && to <= u32::max_value() as usize,
         ) {
@@ -1158,9 +1155,8 @@ impl Buf {
         ubuf.into_buf()
     }
 
-    pub fn read_from_str(s: &str) -> Buf {
-        let res = unsafe { Buf::read_from_raw(s.as_ptr(), s.len()) };
-        res
+    pub fn read_from_bytes(s: &[u8]) -> Buf {
+        unsafe { Buf::read_from_raw(s.as_ptr(), s.len()) }
     }
     pub fn try_unique(self) -> Result<UniqueBuf, Buf> {
         if self.refcount() == 1 {
@@ -1191,24 +1187,24 @@ mod tests {
         assert_eq!(unsafe { s.rep().get_tag() }, StrTag::Inline);
         let s1 = s.slice(0, 1);
         assert_eq!(unsafe { s1.rep().get_tag() }, StrTag::Inline);
-        s1.with_str(|s1| assert_eq!(s1, "h"));
+        s1.with_bytes(|bs1| assert_eq!(bs1, b"h"));
     }
 
     #[test]
     fn basic_behavior() {
-        let base_1 = "hi there fellow";
-        let base_2 = "how are you?";
-        let base_3 = "hi there fellowhow are you?";
-        let s1 = Str::from(base_1);
-        let s2 = Str::from(base_2);
-        let s3 = Str::from(base_3);
-        s1.with_str(|s| assert_eq!(s, base_1));
-        s2.with_str(|s| assert_eq!(s, base_2, "{:?}", s2));
-        s3.with_str(|s| assert_eq!(s, base_3));
+        let base_1 = b"hi there fellow";
+        let base_2 = b"how are you?";
+        let base_3 = b"hi there fellowhow are you?";
+        let s1 = Str::from(&base_1[..]);
+        let s2 = Str::from(&base_2[..]);
+        let s3 = Str::from(&base_3[..]);
+        s1.with_bytes(|bs| assert_eq!(bs, base_1));
+        s2.with_bytes(|bs| assert_eq!(bs, base_2, "{:?}", s2));
+        s3.with_bytes(|bs| assert_eq!(bs, base_3));
 
         let s4 = Str::concat(s1, s2.clone());
         assert_eq!(s3, s4);
-        s4.with_str(|s| assert_eq!(s, base_3));
+        s4.with_bytes(|bs| assert_eq!(bs, base_3));
         let s5 = Str::concat(
             Str::concat(Str::from("hi"), Str::from(" there")),
             Str::concat(
@@ -1216,14 +1212,14 @@ mod tests {
                 Str::concat(Str::from("fel"), Str::from("low")),
             ),
         );
-        s5.with_str(|s| assert_eq!(s, base_1));
+        s5.with_bytes(|bs| assert_eq!(bs, base_1));
 
         // Do this multiple times to play with the refcount.
         assert_eq!(s2.slice(1, 4), s3.slice(16, 19));
         assert_eq!(s2.slice(2, 6), s3.slice(17, 21));
     }
 
-    fn test_str_split(pat: &Regex, base: &str) {
+    fn test_str_split(pat: &Regex, base: &[u8]) {
         let s = Str::from(base);
         let want = pat
             .split(base)
@@ -1241,7 +1237,7 @@ mod tests {
         let total_got = got.len();
         let total = want.len();
         for (g, w) in got.iter().cloned().zip(want.iter().cloned()) {
-            assert_eq!(g, Str::from(w));
+            assert_eq!(g, Str::from(std::str::from_utf8(w).unwrap()));
         }
         if total_got > total {
             // We want there to be trailing empty fields in this case.
@@ -1256,15 +1252,18 @@ mod tests {
     #[test]
     fn basic_splitting() {
         let pat0 = Regex::new(",").unwrap();
-        test_str_split(&pat0, "what,is,,,up,");
+        test_str_split(&pat0, b"what,is,,,up,");
         let pat = Regex::new(r#"[ \t]"#).unwrap();
-        test_str_split(&pat, "what is \t up ");
+        test_str_split(&pat, b"what is \t up ");
     }
 
     #[test]
     fn split_long_string() {
         let pat = Regex::new(r#"[ \t]"#).unwrap();
-        test_str_split(&pat, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+        test_str_split(
+            &pat,
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2.as_bytes(),
+        );
     }
 
     #[test]
@@ -1278,10 +1277,10 @@ mod tests {
         .unwrap();
         write!(&mut d, "And this is the second part").unwrap();
         let s = unsafe { d.into_str() };
-        s.with_str(|s| {
+        s.with_bytes(|bs| {
             assert_eq!(
-                s,
-                r#"This is the first part of the string with formatting and everything!
+                bs,
+                br#"This is the first part of the string with formatting and everything!
 And this is the second part"#
             )
         });
@@ -1294,7 +1293,7 @@ And this is the second part"#
         let re1 = Regex::new("n").unwrap();
         let (s3, n1) = s1.subst_all(&re1, &s2);
         assert_eq!(n1, 3);
-        s3.with_str(|s| assert_eq!(s, "Strimg mumber ome"));
+        s3.with_bytes(|bs| assert_eq!(bs, b"Strimg mumber ome"));
 
         let re2 = Regex::new("xxyz").unwrap();
         let (s4, n2) = s3.subst_all(&re2, &s2);
@@ -1308,7 +1307,7 @@ And this is the second part"#
 
         let s6: Str = "xxyz substituted into another xxyz".into();
         let (s7, subbed) = s6.subst_first(&re2, &s1);
-        s7.with_str(|s| assert_eq!(s, "String number one substituted into another xxyz"));
+        s7.with_bytes(|bs| assert_eq!(bs, b"String number one substituted into another xxyz"));
         assert!(subbed);
     }
 
@@ -1377,7 +1376,10 @@ mod formatting {
 
     impl<'a> Display for Str<'a> {
         fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-            self.with_str(|s| write!(f, "{}", s))
+            self.with_bytes(|bs| match std::str::from_utf8(bs) {
+                Ok(s) => write!(f, "{}", s),
+                Err(_) => write!(f, "{:?}", bs),
+            })
         }
     }
 

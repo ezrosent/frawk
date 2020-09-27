@@ -62,21 +62,21 @@ cfg_if! {
             inp: impl Into<String>,
             strat: ExecutionStrategy,
         ) -> impl llvm::IntoRuntime + runtime::LineReader {
-            CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, strat)
+            CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, /*check_utf8=*/ true,strat)
         }
 
         fn simulate_stdin_regex(
             inp: impl Into<String>
         ) -> impl llvm::IntoRuntime + runtime::LineReader {
             simulate_stdin(inp, |reader, name| {
-                RegexSplitter::new(reader, runtime::CHUNK_SIZE, name)
+                RegexSplitter::new(reader, runtime::CHUNK_SIZE, name, /*check_utf8=*/false )
             })
         }
 
         fn simulate_stdin_whitespace(
             inp: impl Into<String>,
         ) -> impl llvm::IntoRuntime + runtime::LineReader {
-            ByteReader::new_whitespace(split_stdin(inp.into()), runtime::CHUNK_SIZE, ExecutionStrategy::Serial)
+            ByteReader::new_whitespace(split_stdin(inp.into()), runtime::CHUNK_SIZE, /*check_utf8=*/true, ExecutionStrategy::Serial)
         }
 
         fn simulate_stdin_singlechar(
@@ -89,6 +89,7 @@ cfg_if! {
                 field_sep,
                 record_sep,
                 runtime::CHUNK_SIZE,
+                /*check_utf8=*/true,
                 ExecutionStrategy::Serial,
             )
         }
@@ -814,6 +815,8 @@ print w,z;
         "1 3 5 7 9 11 13 15 17 19\n"
     );
 
+    // NB: this test is "correct" if the lines are printed in either order. If this shows up too
+    // often we can consider making it possible to mark tests as "order independent".
     test_program!(
         mixed_map,
         r#"BEGIN {
@@ -823,7 +826,7 @@ m["hi"]=5
 for (k in m) {
     print k,k+0,  m[k]
 }}"#,
-        "1 1.0 3\nhi 0.0 5\n",
+        "hi 0.0 5\n1 1.0 3\n",
         @input "",
         @types [ m :: MapStrInt, k :: Str ]
     );

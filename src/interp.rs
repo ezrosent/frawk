@@ -646,7 +646,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         *self.get_mut(ir) = i;
                     }
                     HexStrToInt(ir, sr) => {
-                        let i = self.get(*sr).with_str(runtime::hextoi);
+                        let i = self.get(*sr).with_bytes(runtime::hextoi);
                         let ir = *ir;
                         *self.get_mut(ir) = i;
                     }
@@ -733,7 +733,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     NotStr(res, sr) => {
                         let res = *res;
                         let sr = *sr;
-                        let is_empty = self.get(sr).with_str(|s| s.len() == 0);
+                        let is_empty = self.get(sr).with_bytes(|bs| bs.len() == 0);
                         *self.get_mut(res) = is_empty as Int;
                     }
                     NegInt(res, ir) => {
@@ -800,9 +800,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let res = *res;
                         let s = index(&self.strs, s);
                         let t = index(&self.strs, t);
-                        *self.get_mut(res) = s
-                            .with_str(|s| t.with_str(|t| s.find(t).map(|x| x + 1).unwrap_or(0)))
-                            as Int;
+                        *self.get_mut(res) = runtime::string_search::index_substr(t, s);
                     }
                     LenStr(res, s) => {
                         let res = *res;
@@ -871,7 +869,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let res = *res;
                         let l = self.get(*l);
                         let r = self.get(*r);
-                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l < r)) as Int;
+                        *self.get_mut(res) = l.with_bytes(|l| r.with_bytes(|r| l < r)) as Int;
                     }
                     GTFloat(res, l, r) => {
                         let res = *res;
@@ -889,7 +887,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let res = *res;
                         let l = self.get(*l);
                         let r = self.get(*r);
-                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l > r)) as Int;
+                        *self.get_mut(res) = l.with_bytes(|l| r.with_bytes(|r| l > r)) as Int;
                     }
                     LTEFloat(res, l, r) => {
                         let res = *res;
@@ -907,7 +905,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let res = *res;
                         let l = self.get(*l);
                         let r = self.get(*r);
-                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l <= r)) as Int;
+                        *self.get_mut(res) = l.with_bytes(|l| r.with_bytes(|r| l <= r)) as Int;
                     }
                     GTEFloat(res, l, r) => {
                         let res = *res;
@@ -925,7 +923,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let res = *res;
                         let l = self.get(*l);
                         let r = self.get(*r);
-                        *self.get_mut(res) = l.with_str(|l| r.with_str(|r| l >= r)) as Int;
+                        *self.get_mut(res) = l.with_bytes(|l| r.with_bytes(|r| l >= r)) as Int;
                     }
                     EQFloat(res, l, r) => {
                         let res = *res;
@@ -1038,7 +1036,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         use runtime::str_impl::DynamicBuf;
                         let fmt_str = index(&self.strs, fmt);
                         let mut buf = DynamicBuf::new(0);
-                        fmt_str.with_str(|s| runtime::printf::printf(&mut buf, s, &scratch[..]))?;
+                        fmt_str
+                            .with_bytes(|bs| runtime::printf::printf(&mut buf, bs, &scratch[..]))?;
                         scratch.clear();
                         let res = unsafe { buf.into_str() };
                         let dst = *dst;

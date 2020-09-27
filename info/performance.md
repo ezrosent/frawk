@@ -38,6 +38,16 @@ believe it is  possible to parallelize the other programs using generic tools
 like `gnu parallel` without first partitioning the data-set into multiple
 sub-files.
 
+## UTF8
+
+All of the frawk numbers in this document include UTF-8 validation on all input.
+frawk has since been refactored to support non-UTF-8 data, with this validation
+made optional and not enabled by default. I have not re-run the benchmarks with
+UTF-8 validation turned off, but I'll just note that rerunning a subset of the
+benchmark commands suggests that frawk runs perhaps 0.2-0.4 seconds faster. That
+sort of difference should not substantially change the relative ordering or
+magnitude of the benchmark results.
+
 ### Test Data
 These benchmarks run on CSV and TSV versions of two data-sets:
 

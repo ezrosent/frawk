@@ -1,7 +1,14 @@
-/// This module implements much of printf in awk.
-///
-/// We lean heavily on ryu and the std::fmt machinery; as such, most of the work is parsing
-/// awk-style format strings and translating them to individual calls to write!.
+//! This module implements much of printf in awk.
+//!
+//! We lean heavily on ryu and the std::fmt machinery; as such, most of the work is parsing
+//! awk-style format strings and translating them to individual calls to write!.
+//!
+//! TODO: Originally, frawk enforced that all Strs contained valid UTF-8. We have since allowed
+//! strings to contain arbitrary byte sequences, but this module will eagerly replace invalid UTF8
+//! byte sequences with REPLACEMENT CHARACTER using String's from_utf8_lossy function. This means
+//! that users hoping to output raw bytes using `printf` (as may be necessary, given that print
+//! appends a newline) may find some bytes replaced inadvertently. We could solve this by adding a
+//! new print function that does not append a newline.
 use crate::common::Result;
 use crate::runtime::{convert, strtoi, Float, Int, Str};
 
@@ -30,7 +37,15 @@ impl Write for StackWriter {
         Ok(())
     }
 }
-#[derive(Clone)]
+
+struct DisplayBytes<'a>(&'a [u8]);
+impl<'a> fmt::Display for DisplayBytes<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&*std::string::String::from_utf8_lossy(self.0), fmt)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum FormatArg<'a> {
     S(Str<'a>),
     F(Float),
@@ -46,6 +61,12 @@ impl<'a> From<Str<'a>> for FormatArg<'a> {
 impl<'a> From<&'a str> for FormatArg<'a> {
     fn from(s: &'a str) -> FormatArg<'a> {
         FormatArg::S(s.into())
+    }
+}
+
+impl<'a> From<&'a [u8]> for FormatArg<'a> {
+    fn from(bs: &'a [u8]) -> FormatArg<'a> {
+        FormatArg::S(bs.into())
     }
 }
 
@@ -78,14 +99,14 @@ impl<'a> FormatArg<'a> {
             I(i) => *i,
         }
     }
-    fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+    fn with_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         use FormatArg::*;
         let s: Str<'a> = match self {
             S(s) => s.clone(),
             F(f) => convert::<_, Str>(*f),
             I(i) => convert::<_, Str>(*i),
         };
-        s.with_str(f)
+        s.with_bytes(f)
     }
 }
 
@@ -115,9 +136,9 @@ impl Default for FormatSpec {
     }
 }
 
-fn is_spec(c: char) -> bool {
+fn is_spec(c: u8) -> bool {
     match c {
-        'f' | 'c' | 'd' | 'e' | 'g' | 'o' | 's' | 'x' => true,
+        b'f' | b'c' | b'd' | b'e' | b'g' | b'o' | b's' | b'x' => true,
         _ => false,
     }
 }
@@ -166,8 +187,8 @@ fn process_spec(mut w: impl Write, fspec: &mut FormatSpec, arg: &FormatArg) -> R
             }
         };
     }
-    let res = match fspec.spec as char {
-        'f' => {
+    let res = match fspec.spec {
+        b'f' => {
             if !fspec.leading_zeros && fspec.lnum == 0 && fspec.rnum == usize::max_value() {
                 // Fast path: use Ryu, which today is more efficient than the standard library.
                 // NB Ryu prints some things a bit differently than most awk implementations.
@@ -178,8 +199,8 @@ fn process_spec(mut w: impl Write, fspec: &mut FormatSpec, arg: &FormatArg) -> R
                 match_for_spec!("", arg.to_float())
             }
         }
-        'e' => match_for_spec!("e", arg.to_float()),
-        'g' => {
+        b'e' => match_for_spec!("e", arg.to_float()),
+        b'g' => {
             let mut buf = StackWriter::default();
             // %g means "pick the shorter of standard and scientific notation". We do the obvious
             // thing of computing both and writing out the smaller one.
@@ -189,45 +210,44 @@ fn process_spec(mut w: impl Write, fspec: &mut FormatSpec, arg: &FormatArg) -> R
             fspec.spec = b'e';
             process_spec(&mut buf, fspec, arg)?;
             let l2 = buf.len() - l1;
-            if l1 < l2 {
-                write!(w, "{}", unsafe { str::from_utf8_unchecked(&buf.0[0..l1]) })
+            let bytes = if l1 < l2 {
+                &buf.0[0..l1]
             } else {
-                write!(w, "{}", unsafe {
-                    str::from_utf8_unchecked(&buf.0[l1..(l1 + l2)])
-                })
+                &buf.0[l1..(l1 + l2)]
+            };
+            return write_bytes(&mut w, bytes);
+        }
+        b'd' => match_for_spec!("", arg.to_int()),
+        b'o' => match_for_spec!("o", arg.to_int()),
+        b'x' => match_for_spec!("x", arg.to_int()),
+        b'c' => {
+            // First, see if we have something ascii/UTF8 here
+            match char::try_from(arg.to_int() as u32) {
+                Ok(ch) => match_for_spec!("", ch),
+                // TODO: Unclear what we should do here, write out the raw bytes? write out the
+                // character code? Awk may just write the raw bytes out, but it's hard to say
+                // (different behavior across implementations)
+                _ => match_for_spec!("", "?"),
             }
         }
-        'd' => match_for_spec!("", arg.to_int()),
-        'o' => match_for_spec!("o", arg.to_int()),
-        'x' => match_for_spec!("x", arg.to_int()),
-        'c' => match char::try_from(arg.to_int() as u32) {
-            Ok(ch) if ch.is_ascii() => match_for_spec!("", ch),
-            _ => arg.with_str(|s| {
-                if let Some(ch) = s.chars().next() {
-                    match_for_spec!("", ch)
-                } else {
-                    Ok(())
-                }
-            }),
-        },
-        's' => arg.with_str(|s| match_for_spec!("", s)),
+        b's' => arg.with_bytes(|bs| match_for_spec!("", DisplayBytes(bs))),
         x => return err!("unsupported format specifier: {}", x),
     };
     wrap_result(res)
 }
 
-fn wrap_result(r: std::result::Result<(), impl fmt::Display>) -> Result<()> {
+fn wrap_result<T>(r: std::result::Result<T, impl fmt::Display>) -> Result<()> {
     match r {
-        Ok(()) => Ok(()),
+        Ok(_) => Ok(()),
         Err(e) => err!("formatter: {}", e),
     }
 }
 
-fn write_str(mut w: impl Write, s: &str) -> Result<()> {
-    wrap_result(write!(w, "{}", s))
+fn write_bytes(mut w: impl Write, bs: &[u8]) -> Result<()> {
+    wrap_result(w.write(bs))
 }
 
-pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> Result<()> {
+pub(crate) fn printf(mut w: impl Write, spec: &[u8], mut args: &[FormatArg]) -> Result<()> {
     #[derive(Copy, Clone)]
     enum State {
         // Byte index of start of string
@@ -237,11 +257,11 @@ pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> R
     }
 
     use State::*;
-    let mut iter = spec.char_indices();
+    let mut iter = spec.iter().cloned().enumerate();
     macro_rules! next_state {
         ($e:expr) => {
             match $e {
-                Some((_, '%')) => Format(0),
+                Some((_, b'%')) => Format(0),
                 Some(_) => Raw(0),
                 None => return Ok(()),
             }
@@ -263,13 +283,13 @@ pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> R
         match state {
             Raw(start) => {
                 while let Some((ix, ch)) = iter.next() {
-                    if ch == '%' {
-                        write_str(&mut w, &spec[start..ix])?;
+                    if ch == b'%' {
+                        write_bytes(&mut w, &spec[start..ix])?;
                         state = Format(ix);
                         continue 'outer;
                     }
                 }
-                write_str(&mut w, &spec[start..])?;
+                write_bytes(&mut w, &spec[start..])?;
                 break 'outer;
             }
             Format(start) => {
@@ -293,7 +313,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> R
                         break;
                     }
                     match (ch, stage) {
-                        ('%', Begin) => {
+                        (b'%', Begin) => {
                             fs.spec = b'%';
                             process_spec(&mut w, &mut fs, next_arg())?;
                             state = Raw(ix + 1);
@@ -305,33 +325,33 @@ pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> R
                             state = Raw(ix + 1);
                             continue 'outer;
                         }
-                        ('-', Begin) => {
+                        (b'-', Begin) => {
                             stage = Lnum;
                             fs.minus = true;
                         }
-                        ('-', _) | ('%', _) => break,
+                        (b'-', _) | (b'%', _) => break,
                         (ch, Lnum) | (ch, Begin) => {
                             if fs.lnum != 0 {
                                 break;
                             }
                             buf.clear();
-                            if ch == '0' {
+                            if ch == b'0' {
                                 fs.leading_zeros = true;
-                            } else if ch == '.' {
+                            } else if ch == b'.' {
                                 stage = Rnum;
                                 continue;
                             } else {
-                                buf.push(ch as u8);
+                                buf.push(ch);
                             };
                             next = None;
                             while let Some((ix, ch)) = iter.next() {
-                                if !ch.is_digit(/*radix=*/ 10) {
+                                if !matches!(ch, b'0'..=b'9') {
                                     next = Some((ix, ch));
                                     break;
                                 }
-                                buf.push(ch as u8);
+                                buf.push(ch);
                             }
-                            let num = strtoi(str::from_utf8(&buf[..]).unwrap());
+                            let num = strtoi(&buf[..]);
                             if num < 0 {
                                 break;
                             }
@@ -343,20 +363,19 @@ pub(crate) fn printf(mut w: impl Write, spec: &str, mut args: &[FormatArg]) -> R
                             if fs.rnum != usize::max_value() {
                                 break;
                             }
-                            if ch != '.' {
+                            if ch != b'.' {
                                 break;
                             }
                             buf.clear();
                             next = None;
                             while let Some((ix, ch)) = iter.next() {
-                                if !ch.is_digit(/*radix=*/ 10) {
+                                if !matches!(ch, b'0'..=b'9') {
                                     next = Some((ix, ch));
                                     break;
                                 }
-                                buf.push(ch as u8);
+                                buf.push(ch);
                             }
-                            let buf_str = str::from_utf8(&buf[..]).unwrap();
-                            let num = strtoi(buf_str);
+                            let num = strtoi(&buf[..]);
                             if num < 0 {
                                 break;
                             }
@@ -399,7 +418,7 @@ mod tests {
         // We don't use the macro here to test the truncation semantics here.
         printf(
             w,
-            "Hi %s, to my %d friends %f percent of the time: %g!",
+            b"Hi %s, to my %d friends %f percent of the time: %g!",
             &[S("there".into()), F(2.5), I(1), F(1.25369E23)],
         )
         .expect("printf failed");
@@ -409,23 +428,23 @@ mod tests {
             "Hi there, to my 2 friends 1.0 percent of the time: 1.25369e23!"
         );
 
-        let s2 = sprintf!("%e %d ~~ %s", 12535, 3, "hi");
+        let s2 = sprintf!(b"%e %d ~~ %s", 12535, 3, "hi");
         assert_eq!(s2.as_str(), "1.2535e4 3 ~~ hi");
     }
 
     #[test]
     fn truncation_padding() {
-        let s1 = sprintf!("%06o |%-10.3s|", 98, "February");
+        let s1 = sprintf!(b"%06o |%-10.3s|", 98, "February");
         assert_eq!(s1.as_str(), "000142 |Feb       |");
-        let s2 = sprintf!("|%-10.");
+        let s2 = sprintf!(b"|%-10.");
         assert_eq!(s2.as_str(), "|%-10.");
     }
 
     #[test]
     fn float_rounding() {
-        let s1 = sprintf!("%02.2f", 2.375);
+        let s1 = sprintf!(b"%02.2f", 2.375);
         assert_eq!(s1.as_str(), "2.38");
-        let s2 = sprintf!("%.2f", 2.375);
+        let s2 = sprintf!(b"%.2f", 2.375);
         assert_eq!(s2.as_str(), "2.38");
     }
 }

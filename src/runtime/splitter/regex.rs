@@ -1,11 +1,10 @@
 //! Regex-based splitting routines
 use std::io::Read;
-use std::str;
 
 use crate::common::Result;
 use crate::pushdown::FieldSet;
 use crate::runtime::{LazyVec, Str};
-use regex::Regex;
+use regex::bytes::Regex;
 
 use super::{DefaultLine, LineReader, Reader, ReaderState};
 
@@ -22,6 +21,9 @@ impl<R: Read> LineReader for RegexSplitter<R> {
     type Line = DefaultLine;
     fn filename(&self) -> Str<'static> {
         self.name.clone()
+    }
+    fn check_utf8(&self) -> bool {
+        self.reader.check_utf8()
     }
 
     // The _reuse variant not only allows us to reuse the memory in the `fields` vec, it also
@@ -71,9 +73,9 @@ impl<R: Read> LineReader for RegexSplitter<R> {
 }
 
 impl<R: Read> RegexSplitter<R> {
-    pub fn new(r: R, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
+    pub fn new(r: R, chunk_size: usize, name: impl Into<Str<'static>>, check_utf8: bool) -> Self {
         RegexSplitter {
-            reader: Reader::new(r, chunk_size, /*padding=*/ 0),
+            reader: Reader::new(r, chunk_size, /*padding=*/ 0, check_utf8),
             name: name.into(),
             used_fields: FieldSet::all(),
             start: true,
@@ -92,11 +94,7 @@ impl<R: Read> RegexSplitter<R> {
             return (Str::default(), 0);
         }
         loop {
-            let s = unsafe {
-                str::from_utf8_unchecked(
-                    &self.reader.buf.as_bytes()[self.reader.start..self.reader.end],
-                )
-            };
+            let s = &self.reader.buf.as_bytes()[self.reader.start..self.reader.end];
             // Why this map invocation? Match objects hold a reference to the substring, which
             // makes it harder for us to call mutable methods like advance in the body, so just get
             // the start and end pointers.
@@ -104,11 +102,10 @@ impl<R: Read> RegexSplitter<R> {
                 // We need this check in case the regex matches across a chunk boundary.
                 Some((start, end)) if end + self.reader.start < self.reader.end => {
                     // Valid offsets guaranteed by correctness of regex `find`.
-                    let res = unsafe {
-                        self.reader
-                            .buf
-                            .slice_to_str(self.reader.start, self.reader.start + start)
-                    };
+                    let res = self
+                        .reader
+                        .buf
+                        .slice_to_str(self.reader.start, self.reader.start + start);
                     self.reader.start += end;
                     return (res, end);
                 }
@@ -117,11 +114,10 @@ impl<R: Read> RegexSplitter<R> {
                     return match self.reader.reset() {
                         Ok(true) => {
                             // EOF: yield the rest of the buffer
-                            let line = unsafe {
-                                self.reader
-                                    .buf
-                                    .slice_to_str(self.reader.start, self.reader.end)
-                            };
+                            let line = self
+                                .reader
+                                .buf
+                                .slice_to_str(self.reader.start, self.reader.end);
                             self.reader.start = self.reader.end;
                             (line, consumed)
                         }
@@ -155,11 +151,10 @@ impl<R: Read> RegexSplitter<R> {
                     return match self.reader.reset() {
                         Ok(true) => {
                             // Valid offsets guaranteed by correctness of regex `find`.
-                            let res = unsafe {
-                                self.reader
-                                    .buf
-                                    .slice_to_str(self.reader.start, self.reader.start + start)
-                            };
+                            let res = self
+                                .reader
+                                .buf
+                                .slice_to_str(self.reader.start, self.reader.start + start);
                             self.reader.start += end;
                             (res, end)
                         }
@@ -184,7 +179,7 @@ mod tests {
     extern crate test;
     use super::*;
     use lazy_static::lazy_static;
-    use regex::Regex;
+    use regex::bytes::Regex;
     use std::io::Cursor;
     use test::{black_box, Bencher};
     lazy_static! {
@@ -195,8 +190,8 @@ mod tests {
     }
 
     // Helps type inference along.
-    fn ref_str<'a>(s: &'a str) -> Str<'a> {
-        s.into()
+    fn ref_str<'a>(s: &'a [u8]) -> Str<'a> {
+        std::str::from_utf8(s).unwrap().into()
     }
 
     #[test]
@@ -210,14 +205,15 @@ mod tests {
         }
         let bs = String::from_utf8(buf).unwrap();
         let c = Cursor::new(bs.clone());
-        let mut rdr = RegexSplitter::new(c, /*chunk_size=*/ 512, "");
+        let mut rdr =
+            RegexSplitter::new(c, /*chunk_size=*/ 512, "", /*check_utf8=*/ false);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
             let line = rdr.read_line_regex(&*BS).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
-        let mut expected: Vec<_> = BS.split(bs.as_str()).map(ref_str).collect();
+        let mut expected: Vec<_> = BS.split(bs.as_bytes()).map(ref_str).collect();
         // remove trailing empty line
         assert_eq!(expected.pop(), Some(Str::default()));
         if lines != expected {
@@ -236,7 +232,7 @@ mod tests {
         let chunk_size = 1 << 9;
         let bs: String = crate::test_string_constants::PRIDE_PREJUDICE_CH2.into();
         let c = Cursor::new(bs.clone());
-        let mut rdr = RegexSplitter::new(c, chunk_size, "");
+        let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
             let line = rdr.read_line_regex(&*LINE).upcast();
@@ -244,7 +240,7 @@ mod tests {
             lines.push(line);
         }
 
-        let expected: Vec<_> = LINE.split(bs.as_str()).map(ref_str).collect();
+        let expected: Vec<_> = LINE.split(bs.as_bytes()).map(ref_str).collect();
         if lines != expected {
             eprintln!("lines.len={}, expected.len={}", lines.len(), expected.len());
             for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
@@ -273,14 +269,14 @@ mod tests {
 
         let s = String::from_utf8(bs).unwrap();
         let c = Cursor::new(s.clone());
-        let mut rdr = RegexSplitter::new(c, chunk_size, "");
+        let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
             let line = rdr.read_line_regex(&*LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
-        let expected: Vec<_> = LINE.split(s.as_str()).map(ref_str).collect();
+        let expected: Vec<_> = LINE.split(s.as_bytes()).map(ref_str).collect();
         if lines != expected {
             eprintln!("lines.len={}, expected.len={}", lines.len(), expected.len());
             for (i, (l, e)) in lines.iter().zip(expected.iter()).enumerate() {
@@ -309,14 +305,14 @@ mod tests {
 
             let s = String::from_utf8(bs).unwrap();
             let c = Cursor::new(s.clone());
-            let mut rdr = RegexSplitter::new(c, chunk_size, "");
+            let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
             let mut lines = Vec::new();
             while !rdr.reader.is_eof() {
                 let line = rdr.read_line_regex(&*LINE).upcast();
                 assert!(rdr.read_state() != -1);
                 lines.push(line);
             }
-            let expected: Vec<_> = LINE.split(s.as_str()).map(ref_str).collect();
+            let expected: Vec<_> = LINE.split(s.as_bytes()).map(ref_str).collect();
             if lines != expected {
                 eprintln!(
                     "Failed after {} runs. lines.len={}, expected.len={}",
@@ -336,7 +332,7 @@ mod tests {
 
     #[bench]
     fn bench_find_iter(b: &mut Bencher) {
-        let bs = STR.as_str();
+        let bs = STR.as_bytes();
         let line = &*LINE;
         let space = &*SPACE;
         b.iter(|| {
@@ -349,7 +345,7 @@ mod tests {
                 };
                 while cstart < start {
                     if let Some(m) = space.find_at(bs, cstart) {
-                        black_box(m.as_str());
+                        black_box(m.as_bytes());
                         cstart = m.end();
                     } else {
                         break;
@@ -389,7 +385,7 @@ mod tests {
 
     #[bench]
     fn bench_split_batched(b: &mut Bencher) {
-        let bs = STR.as_str();
+        let bs = STR.as_bytes();
         let line = &*LINE;
         let space = &*SPACE;
         b.iter(|| {
@@ -420,7 +416,7 @@ mod tests {
 
     #[bench]
     fn bench_split_by_line(b: &mut Bencher) {
-        let bs = STR.as_str();
+        let bs = STR.as_bytes();
         let line = &*LINE;
         let space = &*SPACE;
         b.iter(|| {
