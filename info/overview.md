@@ -296,14 +296,9 @@ if you find that the following are a serious hindrance:
   to integers. For example `if (0) { x = 5 }; printf "[%s]", x;` will print `[]`
   in Awk and will print `[0]` in frawk. This is the main pattern in which
   frawk's approach to types can "leak" into actual programs.
-* *UTF-8* frawk validates all input data as UTF-8. This makes it incomparable to
-  some Awk implementations in terms of what input it accepts. For example in
-  mawk, NUL characters are disallowed, but otherwise arbitrary byte sequences
-  can be provided as input. I did this early-on because it fit my use-cases and
-  allowed for UTF-8 in regex patterns, but I now think this functionality should
-  have been optional. However, refactoring the code to support arbitrary
-  byte-streams would be a lot of work, as the implementation uses Rust strings
-  throughout.
+* *UTF-8* frawk can accept arbitrary bytes, but regular expressions and printf
+  are UTF-8 aware. frawk does not validate input by default, but the `--utf8`
+  flag enables frawk's efficient UTF-8 validation on all input.
 * *Batching* frawk batches reading and writing data fairly aggressively compared
   with most Awk implementations that I have come across. This is done largely for
   performance reasons, and reflects the intended use-case of "batch" data-
