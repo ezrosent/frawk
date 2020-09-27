@@ -99,11 +99,10 @@ impl<R: Read> RegexSplitter<R> {
                 // We need this check in case the regex matches across a chunk boundary.
                 Some((start, end)) if end + self.reader.start < self.reader.end => {
                     // Valid offsets guaranteed by correctness of regex `find`.
-                    let res = unsafe {
-                        self.reader
-                            .buf
-                            .slice_to_str(self.reader.start, self.reader.start + start)
-                    };
+                    let res = self
+                        .reader
+                        .buf
+                        .slice_to_str(self.reader.start, self.reader.start + start);
                     self.reader.start += end;
                     return (res, end);
                 }
@@ -112,11 +111,10 @@ impl<R: Read> RegexSplitter<R> {
                     return match self.reader.reset() {
                         Ok(true) => {
                             // EOF: yield the rest of the buffer
-                            let line = unsafe {
-                                self.reader
-                                    .buf
-                                    .slice_to_str(self.reader.start, self.reader.end)
-                            };
+                            let line = self
+                                .reader
+                                .buf
+                                .slice_to_str(self.reader.start, self.reader.end);
                             self.reader.start = self.reader.end;
                             (line, consumed)
                         }
@@ -150,11 +148,11 @@ impl<R: Read> RegexSplitter<R> {
                     return match self.reader.reset() {
                         Ok(true) => {
                             // Valid offsets guaranteed by correctness of regex `find`.
-                            let res = unsafe {
+                            let res =
                                 self.reader
                                     .buf
                                     .slice_to_str(self.reader.start, self.reader.start + start)
-                            };
+                                    ;
                             self.reader.start += end;
                             (res, end)
                         }

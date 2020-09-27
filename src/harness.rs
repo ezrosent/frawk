@@ -814,6 +814,8 @@ print w,z;
         "1 3 5 7 9 11 13 15 17 19\n"
     );
 
+    // NB: this test is "correct" if the lines are printed in either order. If this shows up too
+    // often we can consider making it possible to mark tests as "order independent".
     test_program!(
         mixed_map,
         r#"BEGIN {
@@ -823,7 +825,7 @@ m["hi"]=5
 for (k in m) {
     print k,k+0,  m[k]
 }}"#,
-        "1 1.0 3\nhi 0.0 5\n",
+        "hi 0.0 5\n1 1.0 3\n",
         @input "",
         @types [ m :: MapStrInt, k :: Str ]
     );

@@ -9,8 +9,7 @@ mod slow_path;
 /// The simdjson repo has more optimizations to add for int parsing, but this is a big win over libc
 /// for the time being, if only because we do not have to copy `s` into a NUL-terminated
 /// representation.
-pub fn strtoi(s: &str) -> i64 {
-    let bs = s.as_bytes();
+pub fn strtoi(bs: &[u8]) -> i64 {
     if bs.len() == 0 {
         return 0;
     }
@@ -34,8 +33,7 @@ pub fn strtoi(s: &str) -> i64 {
 }
 
 /// Simple hexadecimal integer parser, similar in spirit to the strtoi implementation here.
-pub fn hextoi(s: &str) -> i64 {
-    let mut bs = s.as_bytes();
+pub fn hextoi(mut bs: &[u8]) -> i64 {
     let mut neg = false;
     if bs.len() == 0 {
         return 0;
@@ -202,11 +200,10 @@ fn compute_float_64(power: i64, mut i: u64, negative: bool) -> Option<f64> {
 }
 
 #[allow(unreachable_code)]
-pub fn strtod(s: &str) -> f64 {
-    if s.len() == 0 {
+pub fn strtod(bs: &[u8]) -> f64 {
+    if bs.len() == 0 {
         return 0.0;
     }
-    let bs = s.as_bytes();
     let mut cur = bs;
     // We iterate differently, because our strings are not null-terminated. That means we check for
     // length more often. There are some more sophisticated unrolling techniques we could try, but
@@ -249,7 +246,7 @@ pub fn strtod(s: &str) -> f64 {
         u: u64,
         neg: bool,
         digits: usize,
-        orig: &str,
+        orig: &[u8],
         start_digits: &[u8],
     ) -> f64 {
         if may_overflow(start_digits, digits) {
@@ -287,7 +284,7 @@ pub fn strtod(s: &str) -> f64 {
                 i,
                 negative,
                 start_digits.len() - cur.len(),
-                s,
+                bs,
                 start_digits
             ));
         }
@@ -297,7 +294,7 @@ pub fn strtod(s: &str) -> f64 {
                 i,
                 negative,
                 start_digits.len() - cur.len() - 1,
-                s,
+                bs,
                 start_digits
             ));
             loop {
@@ -332,7 +329,7 @@ pub fn strtod(s: &str) -> f64 {
                     exp_number = exp_number.wrapping_mul(10).wrapping_add(digit as i64);
                     if exp_number > 0x100000000 {
                         // Yikes! That's a big exponent. Let's just defer to the slow path.
-                        return slow_path::strtod(s);
+                        return slow_path::strtod(bs);
                     }
                     advance_or!(break);
                 }
@@ -341,14 +338,14 @@ pub fn strtod(s: &str) -> f64 {
             }
         }
         if unlikely(may_overflow(start_digits, digit_count)) {
-            return slow_path::strtod(s);
+            return slow_path::strtod(bs);
         }
         if unlikely(exponent < FASTFLOAT_SMALLEST_POWER || exponent > FASTFLOAT_LARGEST_POWER) {
-            return slow_path::strtod(s);
+            return slow_path::strtod(bs);
         }
         match compute_float_64(exponent, i, negative) {
             Some(f) => f,
-            None => slow_path::strtod(s),
+            None => slow_path::strtod(bs),
         }
     }
 }
@@ -362,15 +359,15 @@ mod tests {
     use super::*;
     #[test]
     fn basic_behavior() {
-        assert_eq!(strtod("1.234"), 1.234);
-        assert_eq!(strtod("1.234hello"), 1.234);
-        assert_eq!(strtod("1.234E70hello"), 1.234E70);
-        assert_eq!(strtod("752834029324532"), 752834029324532.0);
-        assert_eq!(strtod(""), 0.0);
+        assert_eq!(strtod(b"1.234"), 1.234);
+        assert_eq!(strtod(b"1.234hello"), 1.234);
+        assert_eq!(strtod(b"1.234E70hello"), 1.234E70);
+        assert_eq!(strtod(b"752834029324532"), 752834029324532.0);
+        assert_eq!(strtod(b""), 0.0);
         let imax = format!("{}", i64::max_value());
         let imin = format!("{}", i64::min_value());
-        assert_eq!(strtod(imax.as_str()), i64::max_value() as f64);
-        assert_eq!(strtod(imin.as_str()), i64::min_value() as f64);
+        assert_eq!(strtod(imax.as_bytes()), i64::max_value() as f64);
+        assert_eq!(strtod(imin.as_bytes()), i64::min_value() as f64);
     }
 }
 

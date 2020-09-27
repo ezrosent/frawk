@@ -728,7 +728,7 @@ pub unsafe extern "C" fn match_pat_loc(
 pub unsafe extern "C" fn substr_index(s: *mut U128, t: *mut U128) -> Int {
     let s = &*(s as *mut Str);
     let t = &*(t as *mut Str);
-    s.with_str(|s| t.with_str(|t| s.find(t).map(|x| x + 1).unwrap_or(0) as Int))
+    runtime::string_search::index_substr(/*needle*/ t, /*haystack*/ s)
 }
 
 #[no_mangle]
@@ -843,7 +843,7 @@ pub unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
 #[no_mangle]
 pub unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
-    let res = s.with_str(runtime::hextoi);
+    let res = s.with_bytes(runtime::hextoi);
     mem::forget(s);
     res
 }
@@ -935,7 +935,7 @@ macro_rules! str_compare_inner {
         pub unsafe extern "C" fn $name(s1: *mut c_void, s2: *mut c_void) -> Int {
             let s1 = &*(s1 as *mut Str);
             let s2 = &*(s2 as *mut Str);
-            let res = s1.with_str(|s1| s2.with_str(|s2| s1 $op s2)) as Int;
+            let res = s1.with_bytes(|bs1| s2.with_bytes(|bs2| bs1 $op bs2)) as Int;
             mem::forget((s1, s2));
             res
         }
@@ -1029,7 +1029,7 @@ pub unsafe extern "C" fn sprintf_impl(
     let rt = &mut *(rt as *mut _);
     let format_args = wrap_args(rt, args, tys, num_args);
     let spec = &*(spec as *mut Str);
-    if let Err(e) = spec.with_str(|s| printf(&mut buf, s, &format_args[..])) {
+    if let Err(e) = spec.with_bytes(|bs| printf(&mut buf, bs, &format_args[..])) {
         fail!(rt, "unexpected failure during sprintf: {}", e);
     }
     mem::transmute::<Str, U128>(buf.into_str())

@@ -39,6 +39,7 @@ extern crate lazy_static;
 extern crate libc;
 #[cfg(feature = "llvm_backend")]
 extern crate llvm_sys;
+extern crate memchr;
 extern crate num_cpus;
 extern crate petgraph;
 extern crate rand;
