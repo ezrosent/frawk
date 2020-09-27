@@ -1,17 +1,14 @@
-/// This module implements much of printf in awk.
-///
-/// We lean heavily on ryu and the std::fmt machinery; as such, most of the work is parsing
-/// awk-style format strings and translating them to individual calls to write!.
-///
-/// TODO: Originally, frawk enforced that all Strs contained valid UTF-8. We have since allowed
-/// strings to contain arbitrary byte sequences, but this module still only works with valid UTF-8
-/// because of the underlying dependence on the fmt module. We could try and implement printf "from
-/// scratch," but note that there are good reasons for fmt to assume UTF-8. For questions of
-/// "width" and "alignment," it's a little vague exactly what nonprintable or invalid UTF8
-/// sequences should have. I can see possible improvements we might explore in the future:
-///
-/// * Use some sort of "lossy" conversion for non-UTF8 byte sequences to UTF8.
-/// *
+//! This module implements much of printf in awk.
+//!
+//! We lean heavily on ryu and the std::fmt machinery; as such, most of the work is parsing
+//! awk-style format strings and translating them to individual calls to write!.
+//!
+//! TODO: Originally, frawk enforced that all Strs contained valid UTF-8. We have since allowed
+//! strings to contain arbitrary byte sequences, but this module will eagerly replace invalid UTF8
+//! byte sequences with REPLACEMENT CHARACTER using String's from_utf8_lossy function. This means
+//! that users hoping to output raw bytes using `printf` (as may be necessary, given that print
+//! appends a newline) may find some bytes replaced inadvertently. We could solve this by adding a
+//! new print function that does not append a newline.
 use crate::common::Result;
 use crate::runtime::{convert, strtoi, Float, Int, Str};
 
@@ -45,10 +42,6 @@ struct DisplayBytes<'a>(&'a [u8]);
 impl<'a> fmt::Display for DisplayBytes<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&*std::string::String::from_utf8_lossy(self.0), fmt)
-        // match std::str::from_utf8(self.0) {
-        //     Ok(s) => fmt::Display::fmt(s, fmt),
-        //     Err(_) => fmt.write_str("<invalid UTF-8>"),
-        // }
     }
 }
 
