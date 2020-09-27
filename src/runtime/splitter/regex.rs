@@ -22,6 +22,9 @@ impl<R: Read> LineReader for RegexSplitter<R> {
     fn filename(&self) -> Str<'static> {
         self.name.clone()
     }
+    fn check_utf8(&self) -> bool {
+        self.reader.check_utf8()
+    }
 
     // The _reuse variant not only allows us to reuse the memory in the `fields` vec, it also
     // allows us to reuse the old FieldSet, which may have been overwritten with all() if the more
@@ -70,9 +73,9 @@ impl<R: Read> LineReader for RegexSplitter<R> {
 }
 
 impl<R: Read> RegexSplitter<R> {
-    pub fn new(r: R, chunk_size: usize, name: impl Into<Str<'static>>) -> Self {
+    pub fn new(r: R, chunk_size: usize, name: impl Into<Str<'static>>, check_utf8: bool) -> Self {
         RegexSplitter {
-            reader: Reader::new(r, chunk_size, /*padding=*/ 0),
+            reader: Reader::new(r, chunk_size, /*padding=*/ 0, check_utf8),
             name: name.into(),
             used_fields: FieldSet::all(),
             start: true,
@@ -148,11 +151,10 @@ impl<R: Read> RegexSplitter<R> {
                     return match self.reader.reset() {
                         Ok(true) => {
                             // Valid offsets guaranteed by correctness of regex `find`.
-                            let res =
-                                self.reader
-                                    .buf
-                                    .slice_to_str(self.reader.start, self.reader.start + start)
-                                    ;
+                            let res = self
+                                .reader
+                                .buf
+                                .slice_to_str(self.reader.start, self.reader.start + start);
                             self.reader.start += end;
                             (res, end)
                         }
@@ -203,7 +205,8 @@ mod tests {
         }
         let bs = String::from_utf8(buf).unwrap();
         let c = Cursor::new(bs.clone());
-        let mut rdr = RegexSplitter::new(c, /*chunk_size=*/ 512, "");
+        let mut rdr =
+            RegexSplitter::new(c, /*chunk_size=*/ 512, "", /*check_utf8=*/ false);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
             let line = rdr.read_line_regex(&*BS).upcast();
@@ -229,7 +232,7 @@ mod tests {
         let chunk_size = 1 << 9;
         let bs: String = crate::test_string_constants::PRIDE_PREJUDICE_CH2.into();
         let c = Cursor::new(bs.clone());
-        let mut rdr = RegexSplitter::new(c, chunk_size, "");
+        let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
             let line = rdr.read_line_regex(&*LINE).upcast();
@@ -266,7 +269,7 @@ mod tests {
 
         let s = String::from_utf8(bs).unwrap();
         let c = Cursor::new(s.clone());
-        let mut rdr = RegexSplitter::new(c, chunk_size, "");
+        let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
             let line = rdr.read_line_regex(&*LINE).upcast();
@@ -302,7 +305,7 @@ mod tests {
 
             let s = String::from_utf8(bs).unwrap();
             let c = Cursor::new(s.clone());
-            let mut rdr = RegexSplitter::new(c, chunk_size, "");
+            let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
             let mut lines = Vec::new();
             while !rdr.reader.is_eof() {
                 let line = rdr.read_line_regex(&*LINE).upcast();

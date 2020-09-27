@@ -51,6 +51,7 @@ pub struct CSVReader<P> {
     field_set: FieldSet,
 
     empty_buf: Buf,
+    check_utf8: bool,
 }
 
 impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
@@ -58,12 +59,16 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     fn filename(&self) -> Str<'static> {
         Str::from(self.cur_chunk.get_name()).unmoor()
     }
+    fn check_utf8(&self) -> bool {
+        self.check_utf8
+    }
     fn request_handles(&self, size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
         let producers = self.prod.try_dyn_resize(size);
         let mut res = Vec::with_capacity(producers.len());
         let ifmt = self.ifmt;
         for p_factory in producers.into_iter() {
             let field_set = self.field_set.clone();
+            let check_utf8 = self.check_utf8;
             res.push(Box::new(move || {
                 let empty_buf = UniqueBuf::new(0).into_buf();
                 let cur_buf = empty_buf.clone();
@@ -77,6 +82,7 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                     last_len: 0,
                     ifmt,
                     field_set,
+                    check_utf8,
                 }
             }) as _)
         }
@@ -119,6 +125,7 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         rs: I,
         ifmt: InputFormat,
         chunk_size: usize,
+        check_utf8: bool,
         exec_strategy: ExecutionStrategy,
     ) -> Self
     where
@@ -127,11 +134,15 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
             ExecutionStrategy::Serial => Box::new(chunk::new_chained_offset_chunk_producer_csv(
-                rs, chunk_size, ifmt,
+                rs, chunk_size, ifmt, check_utf8,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
                 Box::new(ParallelChunkProducer::new(
-                    move || chunk::new_chained_offset_chunk_producer_csv(rs, chunk_size, ifmt),
+                    move || {
+                        chunk::new_chained_offset_chunk_producer_csv(
+                            rs, chunk_size, ifmt, check_utf8,
+                        )
+                    },
                     /*channel_size*/ x.num_workers() * 2,
                 ))
             }
@@ -144,6 +155,7 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                             name.as_str(),
                             ifmt,
                             i as u32 + 1,
+                            check_utf8,
                         )
                     }
                 });
@@ -162,6 +174,7 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             field_set: FieldSet::all(),
             ifmt,
             empty_buf,
+            check_utf8,
         }
     }
 }
@@ -1351,6 +1364,7 @@ pub struct ByteReader<P: ChunkProducer> {
     record_sep: u8,
 
     last_len: usize,
+    check_utf8: bool,
 }
 
 impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
@@ -1359,6 +1373,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         field_sep: u8,
         record_sep: u8,
         chunk_size: usize,
+        check_utf8: bool,
         exec_strategy: ExecutionStrategy,
     ) -> Self
     where
@@ -1367,13 +1382,13 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
             ExecutionStrategy::Serial => Box::new(chunk::new_chained_offset_chunk_producer_bytes(
-                rs, chunk_size, field_sep, record_sep,
+                rs, chunk_size, field_sep, record_sep, check_utf8,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
                 Box::new(ParallelChunkProducer::new(
                     move || {
                         chunk::new_chained_offset_chunk_producer_bytes(
-                            rs, chunk_size, field_sep, record_sep,
+                            rs, chunk_size, field_sep, record_sep, check_utf8,
                         )
                     },
                     /*channel_size*/ x.num_workers() * 2,
@@ -1389,6 +1404,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                             field_sep,
                             record_sep,
                             i as u32 + 1,
+                            check_utf8,
                         )
                     }
                 });
@@ -1404,26 +1420,34 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             record_sep,
             used_fields: FieldSet::all(),
             last_len: usize::max_value(),
+            check_utf8,
         }
     }
 }
 
 impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> {
-    pub fn new_whitespace<I, S>(rs: I, chunk_size: usize, exec_strategy: ExecutionStrategy) -> Self
+    pub fn new_whitespace<I, S>(
+        rs: I,
+        chunk_size: usize,
+        check_utf8: bool,
+        exec_strategy: ExecutionStrategy,
+    ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
         S: Read + Send + 'static,
     {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>> =
             match exec_strategy {
-                ExecutionStrategy::Serial => Box::new(
-                    chunk::new_chained_offset_chunk_producer_ascii_whitespace(rs, chunk_size),
-                ),
+                ExecutionStrategy::Serial => {
+                    Box::new(chunk::new_chained_offset_chunk_producer_ascii_whitespace(
+                        rs, chunk_size, check_utf8,
+                    ))
+                }
                 x @ ExecutionStrategy::ShardPerRecord => {
                     Box::new(ParallelChunkProducer::new(
                         move || {
                             chunk::new_chained_offset_chunk_producer_ascii_whitespace(
-                                rs, chunk_size,
+                                rs, chunk_size, check_utf8,
                             )
                         },
                         /*channel_size*/ x.num_workers() * 2,
@@ -1437,6 +1461,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
                                 chunk_size,
                                 name.as_str(),
                                 i as u32 + 1,
+                                check_utf8,
                             )
                         }
                     });
@@ -1452,6 +1477,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
             record_sep: 0, // unused
             used_fields: FieldSet::all(),
             last_len: usize::max_value(),
+            check_utf8,
         }
     }
 }
@@ -1464,12 +1490,16 @@ where
     fn filename(&self) -> Str<'static> {
         Str::from(self.cur_chunk.get_name()).unmoor()
     }
+    fn check_utf8(&self) -> bool {
+        self.check_utf8
+    }
     fn request_handles(&self, size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
         let producers = self.prod.try_dyn_resize(size);
         let mut res = Vec::with_capacity(producers.len());
         for p_factory in producers.into_iter() {
             let used_fields = self.used_fields.clone();
             let record_sep = self.record_sep;
+            let check_utf8 = self.check_utf8;
             res.push(Box::new(move || ByteReader {
                 prod: p_factory(),
                 cur_chunk: Default::default(),
@@ -1479,6 +1509,7 @@ where
                 record_sep,
                 last_len: usize::max_value(),
                 used_fields,
+                check_utf8,
             }) as _)
         }
         res
@@ -1828,6 +1859,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             once((reader, String::from("fake-stdin"))),
             InputFormat::TSV,
             /*chunk_size=*/ 512,
+            /*check_utf8=*/ true,
             ExecutionStrategy::Serial,
         );
         loop {
@@ -1896,6 +1928,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             fs,
             rs,
             1024,
+            /*check_utf8=*/ true,
             ExecutionStrategy::Serial,
         );
         let mut got_lines = Vec::new();
@@ -1999,6 +2032,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         let mut reader = ByteReader::new_whitespace(
             std::iter::once((reader, String::from("fake-stdin"))),
             1024,
+            /*check_utf8=*/ false,
             ExecutionStrategy::Serial,
         );
         let mut got_lines = Vec::new();

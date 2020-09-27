@@ -417,10 +417,16 @@ impl<LR: LineReader> FileRead<LR> {
         path: &Str<'a>,
         f: impl FnMut(&mut RegexSplitter<File>) -> Result<R>,
     ) -> Result<R> {
+        let check_utf8 = self.stdin.check_utf8();
         self.files.get_fallible(
             path,
             |s| match File::open(s) {
-                Ok(f) => Ok(RegexSplitter::new(f, CHUNK_SIZE, path.clone().unmoor())),
+                Ok(f) => Ok(RegexSplitter::new(
+                    f,
+                    CHUNK_SIZE,
+                    path.clone().unmoor(),
+                    check_utf8,
+                )),
                 Err(e) => err!("failed to open file '{}': {}", s, e),
             },
             f,

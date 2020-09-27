@@ -71,11 +71,12 @@ pub fn new_offset_chunk_producer_csv<R: Read>(
     name: &str,
     ifmt: InputFormat,
     start_version: u32,
+    check_utf8: bool,
 ) -> OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)> {
     let find_indexes = get_find_indexes(ifmt);
     OffsetChunkProducer {
         name: name.into(),
-        inner: Reader::new(r, chunk_size, /*padding=*/ 128),
+        inner: Reader::new(r, chunk_size, /*padding=*/ 128, check_utf8),
         find_indexes: move |bs: &[u8], offs: &mut Offsets| {
             unsafe { find_indexes(bs, offs, 0, 0) };
         },
@@ -92,11 +93,12 @@ pub fn new_offset_chunk_producer_bytes<R: Read>(
     field_sep: u8,
     record_sep: u8,
     start_version: u32,
+    check_utf8: bool,
 ) -> OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)> {
     let find_indexes = get_find_indexes_bytes();
     OffsetChunkProducer {
         name: name.into(),
-        inner: Reader::new(r, chunk_size, /*padding=*/ 128),
+        inner: Reader::new(r, chunk_size, /*padding=*/ 128, check_utf8),
         find_indexes: move |bs: &[u8], offs: &mut Offsets| unsafe {
             find_indexes(bs, offs, field_sep, record_sep)
         },
@@ -111,12 +113,13 @@ pub fn new_offset_chunk_producer_ascii_whitespace<R: Read>(
     chunk_size: usize,
     name: &str,
     start_version: u32,
+    check_utf8: bool,
 ) -> WhitespaceChunkProducer<R, impl FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> {
     let find_indexes = get_find_indexes_ascii_whitespace();
     WhitespaceChunkProducer(
         OffsetChunkProducer {
             name: name.into(),
-            inner: Reader::new(r, chunk_size, /*padding=*/ 128),
+            inner: Reader::new(r, chunk_size, /*padding=*/ 128, check_utf8),
             find_indexes: move |bs: &[u8], offs: &mut WhitespaceOffsets, start: u64| unsafe {
                 find_indexes(bs, offs, start)
             },
@@ -137,6 +140,7 @@ pub fn new_chained_offset_chunk_producer_csv<
     r: I,
     chunk_size: usize,
     ifmt: InputFormat,
+    check_utf8: bool,
 ) -> ChainedChunkProducer<OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)>> {
     ChainedChunkProducer::new(
         r.enumerate()
@@ -147,6 +151,7 @@ pub fn new_chained_offset_chunk_producer_csv<
                     name.borrow(),
                     ifmt,
                     /*start_version=*/ (i as u32).wrapping_add(1),
+                    check_utf8,
                 )
             })
             .collect(),
@@ -162,6 +167,7 @@ pub fn new_chained_offset_chunk_producer_bytes<
     chunk_size: usize,
     field_sep: u8,
     record_sep: u8,
+    check_utf8: bool,
 ) -> ChainedChunkProducer<OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)>> {
     ChainedChunkProducer::new(
         r.enumerate()
@@ -173,6 +179,7 @@ pub fn new_chained_offset_chunk_producer_bytes<
                     field_sep,
                     record_sep,
                     /*start_version=*/ (i as u32).wrapping_add(1),
+                    check_utf8,
                 )
             })
             .collect(),
@@ -186,6 +193,7 @@ pub fn new_chained_offset_chunk_producer_ascii_whitespace<
 >(
     r: I,
     chunk_size: usize,
+    check_utf8: bool,
 ) -> ChainedChunkProducer<
     WhitespaceChunkProducer<R, impl FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64>,
 > {
@@ -197,6 +205,7 @@ pub fn new_chained_offset_chunk_producer_ascii_whitespace<
                     chunk_size,
                     name.borrow(),
                     /*start_version=*/ (i as u32).wrapping_add(1),
+                    check_utf8,
                 )
             })
             .collect(),
