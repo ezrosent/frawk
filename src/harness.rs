@@ -139,14 +139,14 @@ cfg_if! {
             inp: impl Into<String>,
             strat: ExecutionStrategy,
         ) -> impl runtime::LineReader {
-            CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, strat)
+            CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, /*check_utf8=*/false, strat)
         }
 
         fn simulate_stdin_regex(
             inp: impl Into<String>
         ) -> impl runtime::LineReader {
             simulate_stdin(inp, |reader, name| {
-                RegexSplitter::new(reader, runtime::CHUNK_SIZE, name)
+                RegexSplitter::new(reader, runtime::CHUNK_SIZE, name, /*check_utf8=*/true)
             })
         }
     }

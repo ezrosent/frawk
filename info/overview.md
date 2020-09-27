@@ -268,6 +268,8 @@ surprised to discover there were bugs in frawk's parser.
   `lshift`, `rshift`, and  `xor` builtins. `frawk` also supports `rshiftl` for
   logical right shift. Unlike `gawk`, the `and`, `or` and `xor` functions are 
   not variadic.
+* frawk functions can return arrays, function calls can appear in the array
+  position for a for-each loop.
 
 ### What is different
 
