@@ -18,6 +18,9 @@ The info subdirectory has more in-depth information on frawk:
 * [Benchmarks](https://github.com/ezrosent/frawk/blob/master/info/performance.md):
   A sense of the relative performance of frawk and other tools when processing
   large CSV or TSV files.
+* [Builtin Functions Reference](https://github.com/ezrosent/frawk/blob/master/info/reference.md):
+  A list of builtin functions implemented by frawk, including some that are new
+  when compared with Awk.
 
 frawk is dual-licensed under MIT or Apache 2.0.
 
