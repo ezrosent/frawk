@@ -19,6 +19,7 @@ use hashbrown::HashMap;
 use llvm_sys::{
     self,
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
+    support::LLVMAddSymbol,
 };
 use rand::{self, Rng};
 use smallvec;
@@ -212,6 +213,7 @@ impl IntrinsicMap {
             Either::Left(ty) => *ty,
             Either::Right(v) => return *v,
         };
+        LLVMAddSymbol(intr.name, intr._func);
         let func = LLVMAddFunction(self.module, intr.name, ty);
         LLVMSetLinkage(func, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
         if intr.attrs.len() > 0 {
