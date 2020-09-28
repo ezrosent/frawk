@@ -96,10 +96,10 @@ could execute some subset of the benchmarks efficiently.
 We benchmark on CSV and TSV data. Some utilities are not equipped for all
 possible configurations, for example:
 
-* `tsv-utils` is explicitly optimized for TSV and not CSV. We only run it on the
-  TSV variants of these datasets, but note that the bundled `csv2tsv` takes
-  longer than many of the benchmark workloads (38s for TREE_GRM_ESTN and 24s for
-  all_train).
+* `tsv-utils` is explicitly optimized for TSV and not CSV. We only run it on
+  the TSV variants of these datasets, but note that the bundled `csv2tsv` takes
+  longer -though not that much longer- than many of the benchmark workloads
+  (28.7s for TREE_GRM_ESTN and 14.6s for all_train, with the new version v2.1.1).
 * Benchmarks for the `TREE_GRM_ESTN` dataset are not run on CSV input with
   `mawk` or `gawk`, as it contains quoted fields and these utilities do
   not handle CSV escaping out of the box. We still run them on the TSV versions
