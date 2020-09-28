@@ -1312,16 +1312,3 @@ slot_impl! {
     load_slot_strfloat, store_slot_strfloat, load_strfloat, store_strfloat, Map;
     load_slot_strstr, store_slot_strstr, load_strstr, store_strstr, Map;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_symbols_there() {
-        unsafe {
-            let sym = llvm_sys::support::LLVMSearchForAddressOfSymbol(c_str!("load_slot_int"));
-            assert_ne!(sym, std::ptr::null_mut());
-        }
-    }
-}
