@@ -31,7 +31,7 @@ installation of LLVM 10.0 on your machine. See [this
 site](https://apt.llvm.org/) for installation on Linux; `brew install llvm@10`
 or similar seem to work on Mac OS. Other versions of LLVM may work as well.
 Depending on where your package manager puts these libraries, you may need to
-poing `LLVM_SYS_100_PREFIX` at the llvm library installation (e.g.
+point `LLVM_SYS_100_PREFIX` at the llvm library installation (e.g.
 `/usr/lib/llvm-10`). While the LLVM backend is recommended, it is possible to
 build frawk only with support for its bytecode interpreter: to do so, build
 without the `llvm_backend` feature.
