@@ -1,0 +1,125 @@
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m30.692s
+user	0m28.976s
+sys	0m1.716s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m15.232s
+user	2m13.482s
+sys	0m1.749s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m28.025s
+user	0m25.905s
+sys	0m2.121s
++ frawk -icsv -pr -j3 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665563443e18
+
+real	0m9.796s
+user	0m34.502s
+sys	0m4.010s
++ set +x
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m30.590s
+user	0m28.806s
+sys	0m1.784s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m15.423s
+user	2m13.329s
+sys	0m2.092s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m28.162s
+user	0m26.082s
+sys	0m2.080s
++ frawk -icsv -pr -j3 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665563339e18
+
+real	0m9.699s
+user	0m34.252s
+sys	0m3.915s
++ set +x
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m30.094s
+user	0m28.761s
+sys	0m1.332s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m17.145s
+user	2m15.337s
+sys	0m1.800s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m28.123s
+user	0m26.035s
+sys	0m2.088s
++ frawk -icsv -pr -j3 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665563324e18
+
+real	0m9.735s
+user	0m34.543s
+sys	0m3.702s
++ set +x
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m30.654s
+user	0m28.773s
+sys	0m1.880s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m20.172s
+user	2m18.150s
+sys	0m2.020s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m28.128s
+user	0m26.048s
+sys	0m2.080s
++ frawk -icsv -pr -j3 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665563315e18
+
+real	0m10.012s
+user	0m34.772s
+sys	0m4.362s
++ set +x
++ ./complex_sum/target/release/complex_sum ../TREE_GRM_ESTN.csv
+4773723665564369000
+
+real	0m30.508s
+user	0m28.692s
+sys	0m1.816s
++ python3 ./complex_sum.py ../TREE_GRM_ESTN.csv
+4.773723665564369e+18
+
+real	2m15.318s
+user	2m13.013s
+sys	0m2.304s
++ frawk -icsv 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665564369e18
+
+real	0m27.968s
+user	0m25.728s
+sys	0m2.240s
++ frawk -icsv -pr -j3 'function max(x,y) { return x<y?y:x; } "GS" == $8 { accum += (0.5*$1+0.5*max($4+0,$5+0))/1000.0 } END { print accum; }' ../TREE_GRM_ESTN.csv
+4.773723665563339e18
+
+real	0m9.977s
+user	0m34.554s
+sys	0m4.437s
++ set +x
