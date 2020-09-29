@@ -27,9 +27,12 @@ frawk is dual-licensed under MIT or Apache 2.0.
 ## Installation
 
 In addition to [installing Rust](https://rustup.rs/), you will need an
-installation of LLVM 10.0 on your machine. See [this
-site](https://apt.llvm.org/) for installation on Linux; `brew install llvm@10`
-or similar seem to work on Mac OS. Other versions of LLVM may work as well.
+installation of LLVM 10.0 on your machine: 
+
+* See [this site](https://apt.llvm.org/) for installation instructions on some debian-based Linux distros.
+* On Arch `pacman -Sy llvm llvm-libs` and a C compiler (e.g. `clang`) are sufficient as of September 2020.
+* `brew install llvm@10` or similar seem to work on Mac OS.
+
 Depending on where your package manager puts these libraries, you may need to
 point `LLVM_SYS_100_PREFIX` at the llvm library installation (e.g.
 `/usr/lib/llvm-10`). While the LLVM backend is recommended, it is possible to
