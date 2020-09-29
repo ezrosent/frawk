@@ -84,18 +84,19 @@ as the SSD in the Mac. I do not think any of the benchmarks are IO-bound on this
 machine.
 
 While the results are varied from benchmark to benchmark, I tend to find that
-while frawk has good performance overall, it does noticeably better the newer
-hardware running MacOS. The absolute difference in these numbers are probably
-due to having a newer CPU with a much higher boost clock, but I am less sure
-about the relative  performance differences between frawk and tsv-utils. One
-contributing factor might be frawk's use of AVX2 driving the clock rate down to
-a greater degree on the Broadwell-E CPU in Linux than the more recent CPU on the
-Mac configuration.
+while frawk has good performance overall, it does noticeably better on the
+newer hardware running MacOS. The absolute difference in these numbers are
+probably due to having a newer CPU with a much higher boost clock, but I am
+less sure about the relative  performance differences between frawk and
+tsv-utils. One contributing factor might be frawk's use of AVX2 driving the
+clock rate down to a greater degree on the Broadwell-E CPU in Linux than the
+more recent CPU on the Mac configuration.
 
 ### Tools
+
 These benchmarks report values for a number of tools, each with slightly
-different intended use-cases and strengths. Not all of the tools are set up well
-to handle each intended task, but each makes an appearance in some subset of the
+different intended use-cases and strengths. Not all of the tools are set up
+well to handle each task, but each makes an appearance in some subset of the
 benchmarks. All benchmarks include `frawk`, of course; in this case both the
 `use_jemalloc` and `allow_avx2` features were enabled.
 
@@ -244,10 +245,10 @@ program.
 **Linux**
 | Program | Running Time | Throughput |
 | -- | -- | -- |
-| Python | CSV | 2m15.2s (2m13.5s + 1.7s) | 66.15 MB/s |
-| Rust | CSV | 30.1s (28.8s + 1.3s) | 297.25 MB/s |
-| frawk | CSV | 28.0s (25.7s + 2.2s) | 319.84 MB/s |
-| frawk (parallel) | CSV | 9.7s (34.3s + 3.9s) | 922.30 MB/s |
+| Python | 2m15.2s (2m13.5s + 1.7s) | 66.15 MB/s |
+| Rust | 30.1s (28.8s + 1.3s) | 297.25 MB/s |
+| frawk | 28.0s (25.7s + 2.2s) | 319.84 MB/s |
+| frawk (parallel) | 9.7s (34.3s + 3.9s) | 922.30 MB/s |
 
 frawk is a good deal faster than the other options, particularly on the newer
 hardware, or when run in parallel. Now, the Rust script could of course be
@@ -291,8 +292,8 @@ both configurations.
 | frawk (parallel) | CSV | 4.8s (22.6s + 1.3s) | 1863.6 MB/s | 2.0s (9.0s + 0.7s) | 2600.0 MB/s |
 
 **Linux**
-| Program | Running Time (TREE_GRM_ESTN) | Throughput (TREE_GRM_ESTN) | Running Time (all_train) | Throughput (all_train) |
-| -- | -- | -- | -- | -- |
+| Program | Format | Running Time (TREE_GRM_ESTN) | Throughput (TREE_GRM_ESTN) | Running Time (all_train) | Throughput (all_train) |
+| -- | -- | -- | -- | -- | -- |
 | mawk | TSV | 50.6s (49.0s + 1.6s) | 155.90 MB/s | 10.1s (8.9s + 1.3s) | 510.34 MB/s |
 | mawk | CSV | NA | NA | 9.9s (9.0s + 1.0s) | 521.76 MB/s |
 | gawk | TSV | 1m3.7s (1m2.2s + 1.5s) | 123.87 MB/s | 1m8.9s (1m7.8s + 1.1s) | 75.17 MB/s |
@@ -469,8 +470,8 @@ desktop using a single core and CSV format.
 | frawk (parallel) | CSV | 4.9s (22.8s + 1.2s) | 1825.6 MB/s |
 
 **Linux**
-| Program | Running Time | Throughput |
-| -- | -- | -- |
+| Program | Format | Running Time | Throughput |
+| -- | -- | -- | -- |
 | mawk | TSV | 1m17.0s (1m14.9s + 2.0s) | 102.53 MB/s |
 | gawk | TSV | 2m11.1s (2m9.2s + 1.9s) | 60.19 MB/s |
 | xsv | TSV | 31.6s (30.5s + 1.1s) | 249.40 MB/s |
@@ -519,8 +520,8 @@ while preserving the input's row ordering.
 | frawk (parallel) | CSV | 2.3s (11.0s + 1.1s) | 2260.9 MB/s |
 
 **Linux**
-| Program | Running Time | Throughput |
-| -- | -- | -- |
+| Program | Format | Running Time | Throughput |
+| -- | -- | -- | -- |
 | mawk | TSV | 7.8s (6.6s + 1.2s) | 660.43 MB/s |
 | mawk | CSV | 8.0s (6.8s + 1.3s) | 643.76 MB/s |
 | gawk | TSV | 1m10.8s (1m9.8s + 1.0s) | 73.18 MB/s |
@@ -567,8 +568,8 @@ of wall time on MacOS, and a still good deal slower in the Linux configuration.
 | frawk (parallel) | CSV | 2.2s (10.8s + 1.1s) | 2363.6 MB/s |
 
 **Linux**
-| Program | Running Time | Throughput |
-| -- | -- | -- |
+| Program | Format | Running Time | Throughput |
+| -- | -- | -- | -- |
 | mawk | TSV | 9.8s (8.6s + 1.2s) | 530.69 MB/s |
 | mawk | CSV | 9.8s (8.6s + 1.1s) | 531.12 MB/s |
 | gawk | TSV | 41.5s (40.4s + 1.1s) | 124.82 MB/s |
@@ -611,8 +612,8 @@ frawk, in all configurations, is faster at this task than mawk or gawk.
 | frawk (parallel) | CSV | 4.9s (23.3s + 1.2s) | 1825.6 MB/s |
 
 **Linux**
-| Program | Running Time | Throughput |
-| -- | -- | -- |
+| Program | Format | Running Time | Throughput |
+| -- | -- | -- | -- |
 | mawk | TSV | 48.0s (45.9s + 2.1s) | 164.46 MB/s |
 | gawk | TSV | 1m11.3s (1m9.7s + 1.6s) | 110.66 MB/s |
 | tsv-utils | TSV | 5.7s (4.6s + 1.1s) | 1390.35 MB/s |
