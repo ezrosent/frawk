@@ -30,13 +30,13 @@ reported as "2.5s (10.2s + 3.4s)".  We also report throughput numbers, which
 are computed as wall time divided by input file size.
 
 This doc includes measurements for both parallel and serial invocations of
-frawk. The parallel invocations launch 4 workers. XSV supports parallelism but I
-noticed no performance benefit from this feature without first building an index
-of the underlying CSV file (a process which can take longer than the benchmark
-task itself without amortizing the cost over multiple runs). Similarly, I do not
-believe it is  possible to parallelize the other programs using generic tools
-like `gnu parallel` without first partitioning the data-set into multiple
-sub-files.
+frawk. The parallel invocations launch 4 workers on MacOS and 3 workers on
+Linux. XSV supports parallelism but I noticed no performance benefit from this
+feature without first building an index of the underlying CSV file (a process
+which can take longer than the benchmark task itself without amortizing the
+cost over multiple runs). Similarly, I do not believe it is  possible to
+parallelize the other programs using generic tools like `gnu parallel` without
+first partitioning the data-set into multiple sub-files.
 
 ## UTF8
 
@@ -454,7 +454,7 @@ because it does not support the given summary statistics on string fields. All
 numbers are reported for TREE_GRM_ESTN.
 
 As can be seen below, frawk performed this task more quickly than any of the
-other benchmark programs, though the race is pretty with xsv on the Linux
+other benchmark programs, though the race is pretty close with xsv on the Linux
 desktop using a single core and CSV format.
 
 **MacOS**
