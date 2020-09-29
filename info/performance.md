@@ -71,17 +71,17 @@ section makes clear, the versions of the tools I used are all slightly
 different. Comparisons within the same configuration should be safe while
 comparisons across configurations are less so.
 
-**MacOS** This is a 16-inch Macbook Pro running MacOS Catalina 10.15.4 with an
-8-core i9 clocked at 2.3GHz, boosting up to 4.8GHz. One thing to keep in mind
-about newer Apple hardware is that the SSDs are very fast: read throughput can
-top 2.5GB/s. None of these benchmarks are IO-bound on this machine, although
-various portions of the input files might be cached by the OS.
+**MacOS (Newer Hardware)** This is a 16-inch Macbook Pro running MacOS Catalina
+10.15.4 with an 8-core i9 clocked at 2.3GHz, boosting up to 4.8GHz. One thing to
+keep in mind about newer Apple hardware is that the SSDs are very fast: read
+throughput can top 2.5GB/s. None of these benchmarks are IO-bound on this machine,
+although various portions of the input files might be cached by the OS.
 
-**Linux** This is a dual-socket workstation with 2 8-core Xeon 2620v4 CPUs
-clocked at 2.2 GHz or so and boosting up to 2.9GHz on a single core, with 64GB
-of RAM. Reads are serviced from an NVMe SSD that is pretty fast, but not as fast
-as the SSD in the Mac. I do not think any of the benchmarks are IO-bound on this
-machine.
+**Linux (Older Hardware)** This is a dual-socket workstation with 2 8-core Xeon
+2620v4 CPUs clocked at 2.2 GHz or so and boosting up to 2.9GHz on a single core,
+with 64GB of RAM. Reads are serviced from an NVMe SSD that is pretty fast, but
+not as fast as the SSD in the Mac. I do not think any of the benchmarks are IO-bound
+on this machine. The machine is running Ubuntu 18.04 with a 4.15 kernel.
 
 While the results are varied from benchmark to benchmark, I tend to find that
 while frawk has good performance overall, it does noticeably better on the
