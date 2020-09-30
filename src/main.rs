@@ -274,7 +274,7 @@ fn main() {
              .long("input-format")
              .short('i')
              .possible_values(&["csv", "tsv"])
-             .about("Input is split according to the rules of (csv|tsv|). $0 contains the unescaped line. Assigning to columns does nothing."))
+             .about("Input is split according to the rules of (csv|tsv). $0 contains the unescaped line. Assigning to columns does nothing."))
         .arg(Arg::new("var")
              .long("var")
              .short('v')
@@ -297,10 +297,13 @@ fn main() {
              .multiple(true))
         .arg(Arg::new("parallel-strategy")
              .about("Attempt to execute the script in parallel. Strategy r[ecord] parallelizes within and accross files. Strategy f[ile] parallelizes between input files.")
-             .long("parallel-strategy")
              .short('p')
              .possible_values(&["r", "record", "f", "file"]))
-        .arg("-j, --jobs=[N] 'Number or worker threads to launch when executing in parallel'");
+        .arg(Arg::new("jobs")
+                .about("Number or worker threads to launch when executing in parallel, requires '-p' flag to be set")
+                .short('j')
+                .requires("parallel-strategy")
+                .takes_value(true));
     cfg_if::cfg_if! {
         if #[cfg(feature = "llvm_backend")] {
             app = app.arg("--dump-llvm 'print LLVM-IR for the input program'");
