@@ -39,16 +39,20 @@ point `LLVM_SYS_100_PREFIX` at the llvm library installation (e.g.
 build frawk only with support for its bytecode interpreter: to do so, build
 without the `llvm_backend` feature.
 
+frawk currently requires a `nightly` compiler. Using `rustup default nightly`,
+or some other method to run a nightly compiler release is currently required to 
+build frawk.
+
 With those prerequesites, cloning this repository and a `cargo build --release`
-or `cargo install --path <frawk repo path>` will produce a binary that you can
+or `cargo [+nightly] install --path <frawk repo path>` will produce a binary that you can
 add to your `PATH` if you so choose:
 
 ```
 $ cd <frawk repo path>
 # With LLVM
-$ cargo install --path .
+$ cargo +nightly install --path .
 # Without LLVM, but with other recommended defaults
-$ cargo install --path . --no-default-features --features use_jemalloc,allow_avx2 
+$ cargo +nightly install --path . --no-default-features --features use_jemalloc,allow_avx2 
 ```
 
 frawk is now on [crates.io](https://crates.io/crates/frawk), so running 
