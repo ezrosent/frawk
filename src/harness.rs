@@ -1162,9 +1162,8 @@ this as well"#
         r#"BEGIN {
         s="this is a string";
         print(
-            sprintf("[%s]",
-            substr(s, 1, 1)),
-            substr(s, 6, 9),
+            sprintf("[%s]", substr(s, 1, 1)),
+            substr(s, 6, 4),
             substr(s, -20, 4),
             substr(s, 11, 100),
             substr(s, 11),

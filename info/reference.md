@@ -49,7 +49,8 @@ _Unary Operators:_
   matches, the `RSTART` variable is set with the start of the leftmost match of
   `re`, and `RLENGTH` is set with the length of this match. 
 * `substr(s, i[, j])`: The 1-indexed substring of string `s` starting from index `i`
-  and ending with the length of `s` or with index `j`, if provided.
+  and continuing for the next `j` characters or until the end of `s` if `i+j`
+  exceeds the length of `s` or if `s` is not provided.
 * `sub(re, t, s)`: Substitutes `t` for the first matching occurrence of regular
   expression `re` in the string `s`.
 * `gsub(re, t, s)`: Like `sub`, but with all occurrences substituted, not just

@@ -849,9 +849,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     Substr(res, base, l, r) => {
                         let base = index(&self.strs, base);
                         let len = base.len();
-                        let l = cmp::max(0, -1 + *index(&self.ints, l)) as usize;
-                        let r = cmp::min(len as Int, *index(&self.ints, r)) as usize;
-                        *index_mut(&mut self.strs, res) = base.slice(l, r);
+                        let l = cmp::max(0, -1 + *index(&self.ints, l));
+                        let r =
+                            cmp::min(len as Int, l.saturating_add(*index(&self.ints, r))) as usize;
+                        *index_mut(&mut self.strs, res) = base.slice(l as usize, r);
                     }
                     LTFloat(res, l, r) => {
                         let res = *res;
