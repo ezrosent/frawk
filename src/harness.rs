@@ -1224,6 +1224,13 @@ this as well"#
         @input "4"
     );
 
+    test_program!(
+        filter_newline,
+        "$1 == 2\n",
+        "2\n2\n",
+        @input "4\n3\n2\n3\n2\n3\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,

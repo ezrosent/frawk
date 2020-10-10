@@ -467,7 +467,8 @@ pub struct Error {
 impl<'a> Tokenizer<'a> {
     pub fn new(text: &'a str) -> Tokenizer<'a> {
         Tokenizer {
-            text,
+            // A hack to get around some programs failing to parse due to a trailing newline
+            text: text.trim_end_matches('\n'),
             cur: 0,
             prev_tok: None,
             lines: text
