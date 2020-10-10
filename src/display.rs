@@ -308,13 +308,13 @@ impl<'a> Display for lexer::Tok<'a> {
             Comma => ",",
             In => "in",
             Delete => "delete",
-            Function => "function",
             Return => "return",
 
             Ident(s) => return write!(fmt, "identifier({})", s),
             StrLit(s) => return write!(fmt, "{:?}", s),
             PatLit(s) => return write!(fmt, "/{}/", s),
             CallStart(s) => return write!(fmt, "{}(", s),
+            FunDec(s) => return write!(fmt, "function {}", s),
 
             ILit(s) | HexLit(s) | FLit(s) => return write!(fmt, "{}", s),
         };

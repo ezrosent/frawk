@@ -40,7 +40,7 @@ pub Prog: Prog<'a,'a,&'a str> = {
 }
 
 Function: FunDec<'a, 'a, &'a str> = {
-    "function" <name:"CALLSTART"> <args:FormalParams?> ")" <body:Block> =>
+    <name:"FUNDEC"> "(" <args:FormalParams?> ")" <body:Block> =>
         FunDec {
           name,
           body,
@@ -350,6 +350,7 @@ extern {
       "STRLIT" => Tok::StrLit(<&'a str>),
       "PATLIT" => Tok::PatLit(<&'a str>),
       "CALLSTART" => Tok::CallStart(<&'a str>),
+      "FUNDEC" => Tok::FunDec(<&'a str>),
       "BEGIN" =>  Tok::Begin,
       "PREPARE" => Tok::Prepare,
       "END" =>  Tok::End,
@@ -408,7 +409,6 @@ extern {
       ":" => Tok::COLON,
       "delete" => Tok::Delete,
       "in" => Tok::In,
-      "function" => Tok::Function,
       "return" => Tok::Return,
   }
 }

@@ -3,6 +3,7 @@
 //! This lexer is fairly rudamentary. It ought not be too slow, but it also has not been optimized
 //! very aggressively. Various edge cases still do not work.
 use hashbrown::HashMap;
+use lazy_static::lazy_static;
 use regex::Regex;
 use unicode_xid::UnicodeXID;
 
@@ -87,94 +88,123 @@ pub enum Tok<'a> {
     Comma,
     In,
     Delete,
-    Function,
     Return,
 
     Ident(&'a str),
     StrLit(&'a str),
     PatLit(&'a str),
     CallStart(&'a str),
+    FunDec(&'a str),
 
     ILit(&'a str),
     HexLit(&'a str),
     FLit(&'a str),
 }
 
-static_map!(
-    KEYWORDS<&'static str, Tok<'static>>,
-    ["PREPARE", Tok::Prepare],
-    ["BEGIN", Tok::Begin],
-    ["END", Tok::End],
-    ["break", Tok::Break],
-    ["continue", Tok::Continue],
-    ["next", Tok::Next],
-    ["nextfile", Tok::NextFile],
-    ["for", Tok::For],
-    ["if", Tok::If],
-    ["else", Tok::Else],
-    ["print", Tok::Print],
-    ["printf", Tok::Printf],
-    ["print(", Tok::PrintLP],
-    ["printf(", Tok::PrintfLP],
-    ["while", Tok::While],
-    ["do", Tok::Do],
-    ["{", Tok::LBrace],
-    ["}", Tok::RBrace],
-    ["[", Tok::LBrack],
-    ["]", Tok::RBrack],
-    ["(", Tok::LParen],
-    [")", Tok::RParen],
-    ["getline", Tok::Getline],
-    ["=", Tok::Assign],
-    ["+", Tok::Add],
-    ["+=", Tok::AddAssign],
-    ["-", Tok::Sub],
-    ["-=", Tok::SubAssign],
-    ["*", Tok::Mul],
-    ["*=", Tok::MulAssign],
-    ["/", Tok::Div],
-    ["/=", Tok::DivAssign],
-    ["^", Tok::Pow],
-    ["^=", Tok::PowAssign],
-    ["%", Tok::Mod],
-    ["%=", Tok::ModAssign],
-    ["~", Tok::Match],
-    ["!~", Tok::NotMatch],
-    ["==", Tok::EQ],
-    ["!=", Tok::NEQ],
-    ["<", Tok::LT],
-    ["<=", Tok::LTE],
-    [">", Tok::GT],
-    ["--", Tok::Decr],
-    ["++", Tok::Incr],
-    [">=", Tok::GTE],
-    [">>", Tok::Append],
-    [";", Tok::Semi],
-    ["\n", Tok::Newline],
-    ["\r\n", Tok::Newline],
-    [",", Tok::Comma],
-    // XXX: hack "in" must have whitespace after it.
-    ["in ", Tok::In],
-    ["in\t", Tok::In],
-    ["!", Tok::Not],
-    ["&&", Tok::AND],
-    ["||", Tok::OR],
-    ["?", Tok::QUESTION],
-    [":", Tok::COLON],
-    ["delete", Tok::Delete],
-    ["function", Tok::Function],
-    ["return", Tok::Return],
-    ["$", Tok::Dollar]
-);
+macro_rules! kw_inner {
+    ($m:expr, $k:expr, $v:expr) => {
+        $m.insert(&$k[..], ($v, Default::default()));
+    };
+    ($m:expr, $k:expr, $v1:expr, $v2:expr) => {
+        $m.insert(&$k[..], ($v1, Some($v2)));
+    };
+}
 
-use lazy_static::lazy_static;
+macro_rules! keyword_map {
+    ($name:ident<&'static [u8], ($vty1:ty, $vty2:ty)>, $([$($e:tt)*]),*) => {
+        $crate::lazy_static::lazy_static! {
+            pub(crate) static ref $name: hashbrown::HashMap<&'static [u8],($vty1, $vty2)> = {
+                let mut m = hashbrown::HashMap::new();
+                $(
+                    kw_inner!(m, $($e)*);
+                )*
+                m
+            };
+        }
+    }
+}
 
 lazy_static! {
+    static ref WS: Regex = Regex::new(r"^\s").unwrap();
+    static ref WS_BRACE: Regex = Regex::new(r"^[\s{}]").unwrap();
+    static ref WS_SEMI: Regex = Regex::new(r"^[\s;]").unwrap();
+    static ref WS_PAREN: Regex = Regex::new(r"^[\s()]").unwrap();
+}
+
+keyword_map!(
+    KEYWORDS<&'static [u8], (Tok<'static>, Option<Regex>)>,
+    [b"PREPARE", Tok::Prepare],
+    [b"BEGIN", Tok::Begin, WS_BRACE.clone()],
+    [b"END", Tok::End, WS_BRACE.clone()],
+    [b"break", Tok::Break, WS_SEMI.clone()],
+    [b"continue", Tok::Continue, WS_SEMI.clone()],
+    [b"next", Tok::Next],
+    [b"nextfile", Tok::NextFile],
+    [b"for", Tok::For, WS_PAREN.clone()],
+    [b"if", Tok::If],
+    [b"else", Tok::Else],
+    [b"print", Tok::Print],
+    [b"printf", Tok::Printf],
+    [b"print(", Tok::PrintLP],
+    [b"printf(", Tok::PrintfLP],
+    [b"while", Tok::While, WS_PAREN.clone()],
+    [b"do", Tok::Do, WS_BRACE.clone()],
+    [b"{", Tok::LBrace],
+    [b"}", Tok::RBrace],
+    [b"[", Tok::LBrack],
+    [b"]", Tok::RBrack],
+    [b"(", Tok::LParen],
+    [b")", Tok::RParen],
+    [b"getline", Tok::Getline, WS_SEMI.clone()],
+    [b"=", Tok::Assign],
+    [b"+", Tok::Add],
+    [b"+=", Tok::AddAssign],
+    [b"-", Tok::Sub],
+    [b"-=", Tok::SubAssign],
+    [b"*", Tok::Mul],
+    [b"*=", Tok::MulAssign],
+    [b"/", Tok::Div],
+    [b"/=", Tok::DivAssign],
+    [b"^", Tok::Pow],
+    [b"^=", Tok::PowAssign],
+    [b"%", Tok::Mod],
+    [b"%=", Tok::ModAssign],
+    [b"~", Tok::Match],
+    [b"!~", Tok::NotMatch],
+    [b"==", Tok::EQ],
+    [b"!=", Tok::NEQ],
+    [b"<", Tok::LT],
+    [b"<=", Tok::LTE],
+    [b">", Tok::GT],
+    [b"--", Tok::Decr],
+    [b"++", Tok::Incr],
+    [b">=", Tok::GTE],
+    [b">>", Tok::Append],
+    [b";", Tok::Semi],
+    [b"\n", Tok::Newline],
+    [b"\r\n", Tok::Newline],
+    [b",", Tok::Comma],
+    // XXX: hack "in" must have whitespace after it.
+    [b"in ", Tok::In],
+    [b"in\t", Tok::In],
+    [b"!", Tok::Not],
+    [b"&&", Tok::AND],
+    [b"||", Tok::OR],
+    [b"?", Tok::QUESTION],
+    [b":", Tok::COLON],
+    [b"delete", Tok::Delete, WS_PAREN.clone()],
+    [b"return", Tok::Return, WS_PAREN.clone()],
+    [b"$", Tok::Dollar]
+);
+
+lazy_static! {
+    // TODO: use a regex set for this instead. It'd be a bit faster and it would allow "must
+    // follow"-style issues to be handled in a clearer way.
     static ref KEYWORDS_BY_LEN: Vec<HashMap<&'static [u8], Tok<'static>>> = {
         let max_len = KEYWORDS.keys().map(|s| s.len()).max().unwrap();
         let mut res: Vec<HashMap<_, _>> = vec![Default::default(); max_len];
-        for (k, v) in KEYWORDS.iter() {
-            res[k.len() - 1].insert(k.as_bytes(), v.clone());
+        for (k, (v, _)) in KEYWORDS.iter() {
+            res[k.len() - 1].insert(*k, v.clone());
         }
         res
     };
@@ -286,8 +316,18 @@ impl<'a> Tokenizer<'a> {
             if remaining < len {
                 continue;
             }
-            if let Some(tok) = ks.get(&self.text.as_bytes()[start..start + len]) {
-                return Some((tok.clone(), len));
+            let text = &self.text.as_bytes()[start..start + len];
+            if let Some(tok) = ks.get(text) {
+                if start + len == self.text.len()
+                    || KEYWORDS
+                        .get(text)
+                        .unwrap()
+                        .1
+                        .as_ref()
+                        .map_or(true, |x| x.is_match(&self.text[start + len..]))
+                {
+                    return Some((tok.clone(), len));
+                }
             }
         }
         None
@@ -310,6 +350,21 @@ impl<'a> Tokenizer<'a> {
         } else if let Some(i) = INT_PATTERN.captures(text).and_then(|c| c.get(0)) {
             let is = i.as_str();
             Some((Tok::ILit(is), is.len()))
+        } else {
+            None
+        }
+    }
+
+    fn fundec(&self) -> Option<(Tok<'a>, usize)> {
+        lazy_static! {
+            static ref FN_PATTERN: Regex =
+                Regex::new(r"^(function\s+([a-zA-Z_][a-zA-Z_0-9]*))\(").unwrap();
+        }
+        let captures = FN_PATTERN.captures(&self.text[self.cur..])?;
+        let full = captures.get(1)?.as_str();
+        let name = captures.get(2)?.as_str();
+        if KEYWORDS.get(name.as_bytes()).is_none() {
+            Some((Tok::FunDec(name), full.len()))
         } else {
             None
         }
@@ -476,7 +531,10 @@ impl<'a> Iterator for Tokenizer<'a> {
                     self.spanned(ix, new_start, Tok::PatLit(re))
                 }
                 c => {
-                    if let Some((tok, len)) = self.keyword() {
+                    if let Some((tok, len)) = self.fundec() {
+                        self.cur += len;
+                        self.spanned(ix, self.cur, tok)
+                    } else if let Some((tok, len)) = self.keyword() {
                         self.cur += len;
                         self.spanned(ix, self.cur, tok)
                     } else if let Some((tok, len)) = self.num() {

@@ -938,6 +938,14 @@ for (k in m) {
     );
 
     test_program!(
+        function_keyword_overlap,
+        r#"
+        function down(i) { return i-1; } BEGIN { do { print down(3); } while(y--) ; }
+        "#,
+        "2\n"
+    );
+
+    test_program!(
         lengths,
         r#" BEGIN {
         h="12345"
