@@ -308,8 +308,8 @@ impl<'a, 'b> Generator<'a, 'b> {
 
     pub unsafe fn dump_module(&mut self) -> Result<String> {
         let mains = self.gen_main()?;
-        self.optimize(mains.iter().map(|(_, x)| x).cloned())?;
         self.verify()?;
+        self.optimize(mains.iter().map(|(_, x)| x).cloned())?;
         Ok(self.dump_module_inner())
     }
 
@@ -317,8 +317,8 @@ impl<'a, 'b> Generator<'a, 'b> {
     #[cfg(test)]
     pub unsafe fn compile_main(&mut self) -> Result<()> {
         let mains = self.gen_main()?;
-        self.optimize(mains.iter().map(|(_, x)| x).cloned())?;
         self.verify()?;
+        self.optimize(mains.iter().map(|(_, x)| x).cloned())?;
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
         ptr::read_volatile(&addr);
         Ok(())
@@ -339,8 +339,8 @@ impl<'a, 'b> Generator<'a, 'b> {
     ) -> Result<()> {
         let mut rt = stdin.into_runtime(ff, used_fields);
         let main = self.gen_main()?;
-        self.optimize(main.iter().map(|(_, x)| x).cloned())?;
         self.verify()?;
+        self.optimize(main.iter().map(|(_, x)| x).cloned())?;
         match main {
             Stage::Main((main_name, _)) => Ok(self.run_function(&mut rt, main_name)),
             Stage::Par {
@@ -1059,6 +1059,10 @@ impl<'a> View<'a> {
         );
         match val.1 {
             MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+                // TODO: this doesn't work for maps returned from functions (?)
+                // For those maps, we want some sort of alloca-style setup like we have for strings
+                // Maybe modify alloca to take this into account and merge this in? Only do it for
+                // LoadMapIntInt?
                 self.call("ref_map", &mut [to]);
             }
             Str => {
