@@ -12,13 +12,13 @@ use crate::{
 
 grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>, stage: &Stage<()>);
 
-
 pub VarDef: (&'a str, &'a Expr<'a, 'a, &'a str>) = {
     <id:"IDENT"> "=" <e:BaseTerm> => (id, e),
 }
 
 pub Prog: Prog<'a,'a,&'a str> = {
-    <fs:(NL <Function>)*> NL <begin:Begin?> <pats:PatAction*> <sa:Expr?> <prepare:Prepare?> <end:End?> =>
+    // TODO: functions anywhere
+    "\n"* <fs:Function*> <begin:Begin?> <pats:PatAction*> <sa:Expr?> <prepare:Prepare?> <end:End?> =>
         Prog {
             field_sep: None,
             output_sep: None,
@@ -40,7 +40,7 @@ pub Prog: Prog<'a,'a,&'a str> = {
 }
 
 Function: FunDec<'a, 'a, &'a str> = {
-    <name:"FUNDEC"> "(" <args:FormalParams?> ")" <body:Block> =>
+    <name:"FUNDEC"> "(" <args:FormalParams?> Rparen <body:Block> =>
         FunDec {
           name,
           body,
@@ -49,49 +49,72 @@ Function: FunDec<'a, 'a, &'a str> = {
 }
 
 FormalParams: Vec<&'a str> = {
-   NL <"IDENT"> => vec![<>],
-   <v:(NL <"IDENT"> ",")+> <iopt:(NL <"IDENT">)?> => match iopt {
+   <"IDENT"> => vec![<>],
+   <v:(<"IDENT"> ",")+> <iopt:(<"IDENT">)?> => match iopt {
       Some(e) => { let mut v = v; v.push(e); v }
       None => v,
    }
 }
 
 Begin: &'a Stmt<'a,'a,&'a str> = {
-    "BEGIN" NL <Block> NL => <>
+    "BEGIN" "\n"* <Block> => <>
 }
 
 Prepare: &'a Stmt<'a,'a,&'a str> = {
-    "PREPARE" NL <Block> NL => <>
+    "PREPARE" "\n"* <Block> => <>
 }
 
 End: &'a Stmt<'a,'a,&'a str> = {
-    "END" NL <Block> NL => <>
+    "END" "\n"* <Block> => <>
 }
 
 PatAction: (Pattern<'a,'a,&'a str>, Option<&'a Stmt<'a,'a,&'a str>>) = {
-   <p:Expr?> <b:Block> NL => (match p {
+   <p:Expr?> <b:Block> => (match p {
                    Some(e) => Pattern::Bool(e),
                    None => Pattern::Null,
               }, Some(b)),
-  <l:BaseTerm> "," <r:BaseTerm> <b:Block> NL => (Pattern::Comma(l, r), Some(b)),
+  <l:BaseTerm> "," <r:BaseTerm> <b:Block> => (Pattern::Comma(l, r), Some(b)),
 }
 
-Stmt: &'a Stmt<'a,'a,&'a str> = {
-    "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> "else" NL <s2:Stmt> =>
-           arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
-    "if" "(" <cond:Expr> ")" NL <s1:BaseStmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
-    "do" NL <body:BaseStmt> "while" "(" <cond:Expr> ")" => arena.alloc_v(Stmt::DoWhile(cond, body)),
-    "while" NL "(" <cond:Expr> ")" <body:BaseStmt> => arena.alloc_v(Stmt::While(false, cond, body)),
-    "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> ")" NL <body:BaseStmt> =>
+// Resolving if/else groupings courtesy of wikipedia
+
+Stmt: &'a Stmt<'a, 'a, &'a str> = {
+    OpenStmt,
+    ClosedStmt,
+}
+
+OpenStmt: &'a Stmt<'a,'a,&'a str> = {
+    "if" "(" <cond:Expr> Rparen <s1:ClosedStmt> Else <s2:OpenStmt> => arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
+    "if" "(" <cond:Expr> Rparen <s1:Stmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
+    "while" "(" <cond:Expr> Rparen <body:OpenStmt> => arena.alloc_v(Stmt::While(false, cond, body)),
+    "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> Rparen <body:OpenStmt> =>
         arena.alloc_v(Stmt::For(
                 init.map(|x| arena.alloc_v(Stmt::Expr(x))),
                 cond,
                 update.map(|x| arena.alloc_v(Stmt::Expr(x))),
                 body
         )),
-    "for" "(" <id:"IDENT"> "in" <arr:Expr> ")" NL <body: BaseStmt> =>
+    "for" "(" <id:"IDENT"> "in" <arr:Expr> Rparen <body:OpenStmt> =>
         arena.alloc_v(Stmt::ForEach(id, arr, body)),
+}
+
+ClosedStmt: &'a Stmt<'a,'a,&'a str> = {
     BaseStmt,
+    "if" "(" <cond:Expr> Rparen <s1:ClosedStmt> Else <s2:ClosedStmt> =>
+           arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
+    "while" "(" <cond:Expr> Rparen <body:ClosedStmt> => arena.alloc_v(Stmt::While(false, cond, body)),
+    "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> Rparen <body:ClosedStmt> =>
+        arena.alloc_v(Stmt::For(
+                init.map(|x| arena.alloc_v(Stmt::Expr(x))),
+                cond,
+                update.map(|x| arena.alloc_v(Stmt::Expr(x))),
+                body
+        )),
+    "for" "(" <id:"IDENT"> "in" <arr:Expr> Rparen <body:ClosedStmt> =>
+        arena.alloc_v(Stmt::ForEach(id, arr, body)),
+
+
+    Do <body:BaseStmt> "while" "(" <cond:Expr> ")" Sep => arena.alloc_v(Stmt::DoWhile(cond, body)),
 }
 
 Redirect: (&'a Expr<'a, 'a, &'a str>, bool) = {
@@ -99,35 +122,38 @@ Redirect: (&'a Expr<'a, 'a, &'a str>, bool) = {
     ">>" <BaseTerm> => (<>, true),
 }
 
+BaseStmt: &'a Stmt<'a, 'a, &'a str> = {
+   <LeafStmt> Sep => <>,
+   Block,
+}
 
-BaseStmt: &'a Stmt<'a,'a,&'a str> = {
+LeafStmt: &'a Stmt<'a, 'a, &'a str> = {
     <e: Expr> => arena.alloc_v(Stmt::Expr(e)),
     "delete" <i: IndexBase> =>
         arena.alloc_v(Stmt::Expr(arena.alloc_v(Expr::Call(Either::Right(Function::Delete), vec![i.0, i.1])))),
     "print" <pa:PrintArgs?> <re:Redirect?> =>
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
-    "print(" <pa:(<Args?>)> ")" <re:Redirect?> =>
+    "print(" "\n"* <pa:(<Args?>)> ")" <re:Redirect?> =>
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "printf" <spec:PrecAdd> <pa: ("," <PrintArgs>)?> <re:Redirect?> =>
         arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
-    "printf(" <spec:Expr> <pa: ("," <Args>)?> ")" <re:Redirect?> =>
+    "printf(" "\n"* <spec:Expr> <pa: ("," <Args>)?> ")" <re:Redirect?> =>
         arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
     "break" => arena.alloc_v(Stmt::Break),
     "continue" => arena.alloc_v(Stmt::Continue),
     "next" => arena.alloc_v(Stmt::Next),
     "nextfile" => arena.alloc_v(Stmt::NextFile),
     "return" <Expr?> => arena.alloc_v(Stmt::Return(<>)),
-    Block,
 }
 
 Block: &'a Stmt<'a,'a,&'a str> = {
-    "{" NL "}" => arena.alloc_v(Stmt::Block(vec![])),
-    "{" NL <Stmt> "}" => <>,
-    "{" NL  <BlockInner> "}" => arena.alloc_v(Stmt::Block(<>)),
+    Lbrace Rbrace SemiSep? => arena.alloc_v(Stmt::Block(vec![])),
+    Lbrace <LeafStmt> Rbrace SemiSep? => <>,
+    Lbrace <BlockInner> Rbrace SemiSep? => arena.alloc_v(Stmt::Block(<>)),
 }
 
 BlockInner: Vec<&'a Stmt<'a,'a,&'a str>> = {
-    <v:(<Stmt> Sep)+> <e:Stmt?> => match e {
+    <v:(<Stmt>)+> <e:LeafStmt?> => match e {
         None => v,
         Some(e) => {
             let mut v = v;
@@ -154,8 +180,8 @@ PrintArgs: Vec<&'a Expr<'a,'a,&'a str>> = {
 Args: Vec<&'a Expr<'a,'a,&'a str>> = {
     // To avoid ambiguities with expressions including ">" we jump down the precedence hierarchy
     // past the comparison operators.
-    NL <Expr> => vec![<>],
-    <v:(NL <Expr> ",")+> <e:(NL <Expr?>)> => match e {
+    <Expr> => vec![<>],
+    <v:(<Expr> "," "\n"*)+> <e:(<Expr> "\n"*)?> => match e {
         None => v,
         Some(e) => {
             let mut v = v;
@@ -164,15 +190,6 @@ Args: Vec<&'a Expr<'a,'a,&'a str>> = {
         }
     }
 }
-
-#[inline]
-NL: () = "\n"*;
-
-Sep: () = {
-    SepBase+
-}
-
-SepBase: () = { ";", "\n" }
 
 Expr: &'a Expr<'a,'a,&'a str> = {
     "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
@@ -196,12 +213,12 @@ PrecTern: &'a Expr<'a, 'a, &'a str> = {
 }
 
 PrecOr: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecAnd> "||" <r: PrecOr> => arena.alloc_v(Expr::Or(l, r)),
+    <l: PrecAnd> Or <r: PrecOr> => arena.alloc_v(Expr::Or(l, r)),
     PrecAnd,
 }
 
 PrecAnd: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecIn> "&&" <r: PrecAnd> => arena.alloc_v(Expr::And(l, r)),
+    <l: PrecIn> And <r: PrecAnd> => arena.alloc_v(Expr::And(l, r)),
     PrecIn,
 }
 
@@ -236,12 +253,12 @@ PrecTernNoIn: &'a Expr<'a, 'a, &'a str> = {
 }
 
 PrecOrNoIn: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecAndNoIn> "||" <r: PrecOrNoIn> => arena.alloc_v(Expr::Or(l, r)),
+    <l: PrecAndNoIn> Or <r: PrecOrNoIn> => arena.alloc_v(Expr::Or(l, r)),
     PrecAndNoIn,
 }
 
 PrecAndNoIn: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecMatch> "&&" <r: PrecAndNoIn> => arena.alloc_v(Expr::And(l, r)),
+    <l: PrecMatch> And <r: PrecAndNoIn> => arena.alloc_v(Expr::And(l, r)),
     PrecMatch,
 }
 
@@ -334,9 +351,24 @@ BaseTerm: &'a Expr<'a,'a, &'a str> = {
   "HEX" => arena.alloc_v(Expr::ILit(hextoi(<>.as_bytes()))),
   "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>.as_bytes()))),
   "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
-  <i:"CALLSTART"> <args:Args?> ")" =>
+  // TODO: not Rparen for these next two?
+  <i:CallStart> <args:Args?> ")" =>
         arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
   "(" <e:Expr> ")" => e,
+}
+
+And: () = { "&&" "\n"* }
+Or: () = { "||" "\n"* }
+Do: () = { "do" "\n"* }
+Else: () = { "else" "\n"* }
+Lbrace: () = { "{" "\n"* }
+Rbrace: () = { "}" "\n"* }
+#[inline]
+Rparen: () = { ")" "\n"* }
+SemiSep: () = { ";" "\n"* }
+Sep: () = { "\n"+, ";" "\n"* }
+CallStart: &'a str = {
+   <"CALLSTART"> "\n"*
 }
 
 extern {
