@@ -9,16 +9,88 @@ use crate::{
   runtime::{strtoi,strtod,hextoi},
   lexer::{self, Tok},
 };
+use lalrpop_util::ParseError;
 
-grammar<'a, 'outer>(arena: &'a Arena<'outer>, buf: &mut Vec<u8>, stage: &Stage<()>);
+grammar<'a, 'outer>(
+  arena: &'a Arena<'outer>,
+  buf: &mut Vec<u8>,
+  stage: &Stage<()>,
+  prog: &mut Prog<'a, 'a, &'a str>,
+);
 
 pub VarDef: (&'a str, &'a Expr<'a, 'a, &'a str>) = {
     <id:"IDENT"> "=" <e:BaseTerm> => (id, e),
 }
 
-pub Prog: Prog<'a,'a,&'a str> = {
+ToplevelBase: () = {
+   <Begin> =>? {
+     if prog.begin.is_some() {
+       Err(ParseError::User{ error: "Only one BEGIN block allowed".into() })
+     } else {
+       prog.begin = Some(<>);
+       Ok(())
+     }
+   },
+
+   <End> =>? {
+     if prog.end.is_some() {
+       Err(ParseError::User{ error: "Only one END block allowed".into() })
+     } else {
+       prog.end = Some(<>);
+       Ok(())
+     }
+   },
+
+   <Prepare> =>? {
+     if prog.prepare.is_some() {
+       Err(ParseError::User{ error: "Only one PREPARE block allowed".into() })
+     } else {
+       prog.prepare = Some(<>);
+       Ok(())
+     }
+   },
+
+   <Function> => prog.decs.push(<>),
+}
+
+ToplevelBraced: () = {
+  ToplevelBase,
+  <PatAction> => prog.pats.push(<>),
+}
+
+UnbracedPattern: () = {
+  <Expr> "\n"+ => prog.pats.push((Pattern::Bool(<>), None)),
+  <e1:BaseTerm> "," <e2:BaseTerm> "\n"+ => prog.pats.push((Pattern::Comma(e1, e2), None)),
+}
+
+Prog2p1: () = {
+  UnbracedPattern,
+  ToplevelBraced,
+  Prog2p1 ToplevelBraced,
+  Prog2p1 UnbracedPattern,
+}
+
+Prog2p2: () = {
+  UnbracedPattern,
+  Prog2p2 UnbracedPattern,
+  Prog2p2 ToplevelBase,
+}
+
+// TODO: migrate rest of code to new grammar, clean up old if it works
+
+pub Prog2: () = {
+  "\n"* Prog2p1? // Prog2p2?
+}
+
+Prog: Prog<'a,'a,&'a str> = {
     // TODO: functions anywhere
-    "\n"* <fs:Function*> <begin:Begin?> <pats:PatAction*> <sa:Expr?> <prepare:Prepare?> <end:End?> =>
+    "\n"*
+    <fs:Function*>
+    <begin:Begin?>
+    <pats:PatAction*>
+    // <sa:Expr?>
+    <prepare:Prepare?>
+    <end:End?> =>
         Prog {
             field_sep: None,
             output_sep: None,
@@ -30,11 +102,12 @@ pub Prog: Prog<'a,'a,&'a str> = {
             prepare,
             stage: stage.clone(),
             pats: {
-                let mut pats = pats;
-                if let Some(sa) = sa {
-                    pats.push((Pattern::Bool(sa), None));
-                }
                 pats
+                // let mut pats = pats;
+                // if let Some(sa) = sa {
+                //     pats.push((Pattern::Bool(sa), None));
+                // }
+                // pats
             }
         }
 }
@@ -69,7 +142,7 @@ End: &'a Stmt<'a,'a,&'a str> = {
 }
 
 PatAction: (Pattern<'a,'a,&'a str>, Option<&'a Stmt<'a,'a,&'a str>>) = {
-   <p:Expr?> <b:Block> => (match p {
+  <p:Expr?> <b:Block> => (match p {
                    Some(e) => Pattern::Bool(e),
                    None => Pattern::Null,
               }, Some(b)),
@@ -103,14 +176,14 @@ ClosedStmt: &'a Stmt<'a,'a,&'a str> = {
     "if" "(" <cond:Expr> Rparen <s1:ClosedStmt> Else <s2:ClosedStmt> =>
            arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
     "while" "(" <cond:Expr> Rparen <body:ClosedStmt> => arena.alloc_v(Stmt::While(false, cond, body)),
-    "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> Rparen <body:ClosedStmt> =>
+    "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> Rparen <body:ClosedLoopBody> =>
         arena.alloc_v(Stmt::For(
                 init.map(|x| arena.alloc_v(Stmt::Expr(x))),
                 cond,
                 update.map(|x| arena.alloc_v(Stmt::Expr(x))),
                 body
         )),
-    "for" "(" <id:"IDENT"> "in" <arr:Expr> Rparen <body:ClosedStmt> =>
+    "for" "(" <id:"IDENT"> "in" <arr:Expr> Rparen <body:ClosedLoopBody> =>
         arena.alloc_v(Stmt::ForEach(id, arr, body)),
 
 
@@ -118,8 +191,13 @@ ClosedStmt: &'a Stmt<'a,'a,&'a str> = {
 }
 
 Redirect: (&'a Expr<'a, 'a, &'a str>, bool) = {
-    ">" <BaseTerm> => (<>, false),
-    ">>" <BaseTerm> => (<>, true),
+    ">" <Expr> => (<>, false),
+    ">>" <Expr> => (<>, true),
+}
+
+ClosedLoopBody: &'a Stmt<'a, 'a, &'a str> = {
+    SemiSep => arena.alloc_v(Stmt::Block(vec![])),
+    ClosedStmt,
 }
 
 BaseStmt: &'a Stmt<'a, 'a, &'a str> = {
@@ -167,14 +245,7 @@ PrintArgs: Vec<&'a Expr<'a,'a,&'a str>> = {
     // To avoid ambiguities with expressions including ">" we jump down the precedence hierarchy
     // past the comparison operators.
     <PrecAdd> => vec![<>],
-    <v:(<PrecAdd> ",")+> <e:PrecAdd?> => match e {
-        None => v,
-        Some(e) => {
-            let mut v = v;
-            v.push(e);
-            v
-        }
-    }
+    <v:(<PrecAdd> "," "\n"*)+> <e:PrecAdd> => { let mut v = v; v.push(e); v },
 }
 
 Args: Vec<&'a Expr<'a,'a,&'a str>> = {
@@ -228,6 +299,14 @@ PrecIn: &'a Expr<'a,'a,&'a str> = {
     PrecMatch,
 }
 
+PrecMatch: &'a Expr<'a,'a,&'a str> = {
+    <l: PrecMatch> "~" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::IsMatch, l, r)),
+    <l: PrecMatch> "!~" <r: PrecCmp> => arena.alloc_v(Expr::Unop(
+            Unop::Not,
+            arena.alloc_v(Expr::Binop(Binop::IsMatch, l, r)))),
+    PrecCmp,
+}
+
 // XXX Replicate the first two layers of the precedence hierarchy to skip "in" expressions to avoid
 // ambiguity between beginning of for loop and foreach loop. This is a hack; we should find a way
 // to tell LALRPOP the right thing here.
@@ -262,13 +341,6 @@ PrecAndNoIn: &'a Expr<'a, 'a, &'a str> = {
     PrecMatch,
 }
 
-PrecMatch: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecMatch> "~" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::IsMatch, l, r)),
-    <l: PrecMatch> "!~" <r: PrecCmp> => arena.alloc_v(Expr::Unop(
-            Unop::Not,
-            arena.alloc_v(Expr::Binop(Binop::IsMatch, l, r)))),
-    PrecCmp,
-}
 
 PrecCmp: &'a Expr<'a,'a,&'a str> = {
     <l: PrecAdd> "<" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::LT, l, r)),
@@ -297,8 +369,8 @@ PrecPow: &'a Expr<'a, 'a, &'a str> = {
     <l: PrecUnop> "^" <r: PrecPow> => arena.alloc_v(Expr::Binop(Binop::Pow, l, r)),
     PrecUnop
 }
-PrecUnop: &'a Expr<'a,'a,&'a str> = {
 
+PrecUnop: &'a Expr<'a,'a,&'a str> = {
     "-" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Neg, e)),
     "+" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Pos, e)),
     "!" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Not, e)),
@@ -343,7 +415,14 @@ IndexBase: (&'a Expr<'a,'a,&'a str>, &'a Expr<'a,'a,&'a str>) = {
   <arr:BaseTerm> "[" <e:Expr> "]" => (arr, e),
 }
 
+
+
 BaseTerm: &'a Expr<'a,'a, &'a str> = {
+  LeafTerm,
+  "(" <e:Expr> ")" => e,
+}
+
+LeafTerm: &'a Expr<'a,'a, &'a str> = {
   Ident,
   Index,
   StrLit,
@@ -354,8 +433,9 @@ BaseTerm: &'a Expr<'a,'a, &'a str> = {
   // TODO: not Rparen for these next two?
   <i:CallStart> <args:Args?> ")" =>
         arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
-  "(" <e:Expr> ")" => e,
 }
+
+
 
 And: () = { "&&" "\n"* }
 Or: () = { "||" "\n"* }
