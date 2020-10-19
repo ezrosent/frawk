@@ -263,7 +263,7 @@ Args: Vec<&'a Expr<'a,'a,&'a str>> = {
 }
 
 Expr: &'a Expr<'a,'a,&'a str> = {
-    "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
+    "getline" <into:BaseTerm?> <from:("<" <Expr>)?> => arena.alloc_v(Expr::Getline{ into, from}),
     PrecAsgn
 };
 

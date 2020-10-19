@@ -722,8 +722,8 @@ impl<'a, 'b> Generator<'a, 'b> {
                         view.gen_hl_inst(hl)?;
                         match hl {
                             Ret(_, _) => exits.push((i, j)),
-                            Phi(_, _, _) => phis.push((i, j)),
-                            DropIter(_, _) | Call { .. } => {}
+                            Phi(_, ty, _) if ty != &Ty::Null => phis.push((i, j)),
+                            Phi(_,_,_) | DropIter(_, _) | Call { .. } => {}
                         }
                     }
                 }
@@ -1938,6 +1938,9 @@ impl<'a> View<'a> {
                 self.bind_val((*dst_reg, *dst_ty), resv);
             }
             Phi(reg, ty, _preds) => {
+                if let Ty::Null = ty {
+                    return Ok(());
+                }
                 self.f.skip_drop.insert((*reg, *ty));
                 let res = LLVMBuildPhi(
                     self.f.builder,
