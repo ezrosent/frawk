@@ -464,6 +464,15 @@ pub struct Error {
     pub desc: &'static str,
 }
 
+impl From<&'static str> for Error {
+    fn from(s: &'static str) -> Error {
+        Error {
+            location: Default::default(),
+            desc: s,
+        }
+    }
+}
+
 impl<'a> Tokenizer<'a> {
     pub fn new(text: &'a str) -> Tokenizer<'a> {
         Tokenizer {
@@ -557,8 +566,10 @@ impl<'a> Iterator for Tokenizer<'a> {
                     }
                 }
             }
-        } else {
+        } else if let Some(Tok::Newline) = self.prev_tok {
             return None;
+        } else {
+            self.spanned(self.cur, self.cur, Tok::Newline)
         };
         self.prev_tok = Some(span.1.clone());
         Some(Ok(span))
@@ -660,7 +671,8 @@ and the third"#;
                 Ident("z"),
                 Semi,
                 Newline,
-                RBrace
+                RBrace,
+                Newline,
             ]
         );
     }

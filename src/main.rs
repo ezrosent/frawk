@@ -118,7 +118,8 @@ fn get_vars<'a, 'b>(
         let var = a.alloc_str(var);
         let lexer = lexer::Tokenizer::new(var);
         let parser = parsing::syntax::VarDefParser::new();
-        match parser.parse(a, buf, &Stage::Main(()), lexer) {
+        let mut _prog = ast::Prog::from_stage(Stage::Main(()));
+        match parser.parse(a, buf, &mut _prog, lexer) {
             Ok(stmt) => stmts.push(stmt),
             Err(e) => fail!(
                 "failed to parse var at index {}:\n{}\nerror:{:?}",
@@ -162,13 +163,14 @@ fn get_context<'a>(
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = parsing::syntax::ProgParser::new();
-    let stmt = match parser.parse(a, &mut buf, &prelude.stage, lexer) {
-        Ok(mut program) => {
-            program.field_sep = prelude.field_sep;
-            program.prelude_vardecs = prelude.var_decs;
-            program.output_sep = prelude.output_sep;
-            program.output_record_sep = prelude.output_record_sep;
-            a.alloc_v(program)
+    let mut prog = ast::Prog::from_stage(prelude.stage.clone());
+    let stmt = match parser.parse(a, &mut buf, &mut prog, lexer) {
+        Ok(()) => {
+            prog.field_sep = prelude.field_sep;
+            prog.prelude_vardecs = prelude.var_decs;
+            prog.output_sep = prelude.output_sep;
+            prog.output_record_sep = prelude.output_record_sep;
+            a.alloc_v(prog)
         }
         Err(e) => {
             fail!("{}", e);

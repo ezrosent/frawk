@@ -68,6 +68,20 @@ pub struct Prog<'a, 'b, I> {
 }
 
 impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
+    pub(crate) fn from_stage(stage: Stage<()>) -> Self {
+        Prog {
+            field_sep: None,
+            prelude_vardecs: Default::default(),
+            output_sep: None,
+            output_record_sep: None,
+            decs: Default::default(),
+            begin: None,
+            prepare: None,
+            end: None,
+            pats: Default::default(),
+            stage,
+        }
+    }
     pub(crate) fn desugar_stage<'outer>(
         &self,
         arena: &'a Arena<'outer>,
