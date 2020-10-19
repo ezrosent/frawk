@@ -213,9 +213,9 @@ LeafStmt: &'a Stmt<'a, 'a, &'a str> = {
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "print(" "\n"* <pa:(<Args?>)> ")" <re:Redirect?> =>
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
-    "printf" <spec:PrecAdd> <pa: ("," <PrintArgs>)?> <re:Redirect?> =>
+    "printf" <spec:PrecAdd> <pa: ("," "\n"* <PrintArgs>)?> <re:Redirect?> =>
         arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
-    "printf(" "\n"* <spec:Expr> <pa: ("," <Args>)?> ")" <re:Redirect?> =>
+    "printf(" "\n"* <spec:(<Expr> "\n"*)> <pa: ("," "\n"* <Args>)?> ")" <re:Redirect?> =>
         arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
     "break" => arena.alloc_v(Stmt::Break),
     "continue" => arena.alloc_v(Stmt::Continue),
@@ -414,8 +414,6 @@ Index: &'a Expr<'a,'a,&'a str> = {
 IndexBase: (&'a Expr<'a,'a,&'a str>, &'a Expr<'a,'a,&'a str>) = {
   <arr:BaseTerm> "[" <e:Expr> "]" => (arr, e),
 }
-
-
 
 BaseTerm: &'a Expr<'a,'a, &'a str> = {
   LeafTerm,

@@ -723,7 +723,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                         match hl {
                             Ret(_, _) => exits.push((i, j)),
                             Phi(_, ty, _) if ty != &Ty::Null => phis.push((i, j)),
-                            Phi(_,_,_) | DropIter(_, _) | Call { .. } => {}
+                            Phi(_, _, _) | DropIter(_, _) | Call { .. } => {}
                         }
                     }
                 }
