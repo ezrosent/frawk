@@ -271,8 +271,8 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let mut program = ast::Prog::from_stage(strat.stage());
-    let parser = syntax::Prog2Parser::new();
-    match parser.parse(a, &mut buf, &strat.stage(), &mut program, lexer) {
+    let parser = syntax::ProgParser::new();
+    match parser.parse(a, &mut buf, &mut program, lexer) {
         Ok(()) => {
             match esc {
                 Escaper::CSV => program.output_sep = Some(","),

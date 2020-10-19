@@ -5,7 +5,7 @@ use crate::{
   arena::Arena,
   ast::{Pattern, Expr, Stmt, Binop, Unop, Prog, FunDec},
   builtins::Function,
-  common::{Either, Stage},
+  common::Either,
   runtime::{strtoi,strtod,hextoi},
   lexer::{self, Tok},
 };
@@ -14,7 +14,6 @@ use lalrpop_util::ParseError;
 grammar<'a, 'outer>(
   arena: &'a Arena<'outer>,
   buf: &mut Vec<u8>,
-  stage: &Stage<()>,
   prog: &mut Prog<'a, 'a, &'a str>,
 );
 
@@ -63,53 +62,15 @@ UnbracedPattern: () = {
   <e1:BaseTerm> "," <e2:BaseTerm> "\n"+ => prog.pats.push((Pattern::Comma(e1, e2), None)),
 }
 
-Prog2p1: () = {
+ProgInner: () = {
   UnbracedPattern,
   ToplevelBraced,
-  Prog2p1 ToplevelBraced,
-  Prog2p1 UnbracedPattern,
+  ProgInner ToplevelBraced,
+  ProgInner UnbracedPattern,
 }
 
-Prog2p2: () = {
-  UnbracedPattern,
-  Prog2p2 UnbracedPattern,
-  Prog2p2 ToplevelBase,
-}
-
-// TODO: migrate rest of code to new grammar, clean up old if it works
-
-pub Prog2: () = {
-  "\n"* Prog2p1? // Prog2p2?
-}
-
-Prog: Prog<'a,'a,&'a str> = {
-    // TODO: functions anywhere
-    "\n"*
-    <fs:Function*>
-    <begin:Begin?>
-    <pats:PatAction*>
-    // <sa:Expr?>
-    <prepare:Prepare?>
-    <end:End?> =>
-        Prog {
-            field_sep: None,
-            output_sep: None,
-            output_record_sep: None,
-            prelude_vardecs: Default::default(),
-            decs: fs,
-            begin,
-            end,
-            prepare,
-            stage: stage.clone(),
-            pats: {
-                pats
-                // let mut pats = pats;
-                // if let Some(sa) = sa {
-                //     pats.push((Pattern::Bool(sa), None));
-                // }
-                // pats
-            }
-        }
+pub Prog: () = {
+  "\n"* ProgInner?
 }
 
 Function: FunDec<'a, 'a, &'a str> = {

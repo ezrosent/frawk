@@ -119,7 +119,7 @@ fn get_vars<'a, 'b>(
         let lexer = lexer::Tokenizer::new(var);
         let parser = parsing::syntax::VarDefParser::new();
         let mut _prog = ast::Prog::from_stage(Stage::Main(()));
-        match parser.parse(a, buf, &Stage::Main(()), &mut _prog, lexer) {
+        match parser.parse(a, buf, &mut _prog, lexer) {
             Ok(stmt) => stmts.push(stmt),
             Err(e) => fail!(
                 "failed to parse var at index {}:\n{}\nerror:{:?}",
@@ -162,9 +162,9 @@ fn get_context<'a>(
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
-    let parser = parsing::syntax::Prog2Parser::new();
+    let parser = parsing::syntax::ProgParser::new();
     let mut prog = ast::Prog::from_stage(prelude.stage.clone());
-    let stmt = match parser.parse(a, &mut buf, &prelude.stage, &mut prog, lexer) {
+    let stmt = match parser.parse(a, &mut buf, &mut prog, lexer) {
         Ok(()) => {
             prog.field_sep = prelude.field_sep;
             prog.prelude_vardecs = prelude.var_decs;
