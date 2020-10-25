@@ -106,10 +106,7 @@ fn open_file_read(f: &str) -> impl io::BufRead {
     }
 
     impl<R, F: FnMut() -> io::Result<R>> LazyReader<F, R> {
-        fn delegate<'a, T: 'a>(
-            &'a mut self,
-            next: impl FnOnce(&'a mut R) -> io::Result<T>,
-        ) -> io::Result<T> {
+        fn delegate<T>(&mut self, next: impl FnOnce(&mut R) -> io::Result<T>) -> io::Result<T> {
             match self {
                 LazyReader::Uninit(f) => {
                     *self = LazyReader::Init(f()?);
@@ -126,20 +123,11 @@ fn open_file_read(f: &str) -> impl io::BufRead {
             self.delegate(|r| r.read(buf))
         }
     }
-    impl<R: io::BufRead, F: FnMut() -> io::Result<R>> io::BufRead for LazyReader<F, R> {
-        fn fill_buf<'a>(&'a mut self) -> io::Result<&'a [u8]> {
-            self.delegate(io::BufRead::fill_buf)
-        }
-        fn consume(&mut self, amt: usize) {
-            // consume is meant to be used after a "fill_buf" call, we ignore it if it's called
-            // with Uninit.
-            if let LazyReader::Init(r) = self {
-                r.consume(amt);
-            }
-        }
-    }
+
     let filename = String::from(f);
-    LazyReader::Uninit(move || Ok(BufReader::new(File::open(filename.as_str())?)))
+    BufReader::new(LazyReader::Uninit(move || {
+        Ok(File::open(filename.as_str())?)
+    }))
 }
 
 fn chained<LR: LineReader>(lr: LR) -> ChainedReader<LR> {
