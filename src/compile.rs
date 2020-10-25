@@ -96,6 +96,7 @@ impl Ty {
         }
     }
 
+    #[cfg(feature = "llvm_backend")]
     pub(crate) fn is_array(self) -> bool {
         use Ty::*;
         match self {
