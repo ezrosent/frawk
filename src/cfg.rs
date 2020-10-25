@@ -1396,7 +1396,7 @@ where
         if self.f.loop_ctx.len() == 1 && self.f.toplevel_header.is_some() {
             return err!("{} statement must be inside a loop", name);
         }
-        match self.f.loop_ctx.pop() {
+        match self.f.loop_ctx.last().cloned() {
             Some((header, footer)) => {
                 // Break statements unconditionally jump to the end of the loop.
                 // Continue statements jump to the beginning.

@@ -666,6 +666,12 @@ it has one more line"#
     );
 
     test_program!(
+        break_in_begin,
+        r#" BEGIN { while(1) { i++; if (i > 6) break; } print i }"#,
+        "7\n"
+    );
+
+    test_program!(
         basic_next,
         r#"{
         if ((NR%2) == 0) { next; };
