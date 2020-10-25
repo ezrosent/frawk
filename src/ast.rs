@@ -65,6 +65,7 @@ pub struct Prog<'a, 'b, I> {
     pub end: Option<&'a Stmt<'a, 'b, I>>,
     pub pats: Vec<(Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
     pub stage: Stage<()>,
+    pub argv: Vec<&'b str>,
 }
 
 impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
@@ -79,6 +80,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             prepare: None,
             end: None,
             pats: Default::default(),
+            argv: Default::default(),
             stage,
         }
     }
@@ -119,6 +121,22 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                 arena.alloc_v(Assign(arena.alloc_v(Var(ident.clone())), exp)),
             )));
         }
+
+        // Set argc, argv
+        if self.argv.len() > 0 {
+            begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
+                arena.alloc_v(Var("ARGC".into())),
+                arena.alloc_v(ILit(self.argv.len() as i64)),
+            )))));
+            let argv = arena.alloc_v(Var("ARGV".into()));
+            for (ix, arg) in self.argv.iter().enumerate() {
+                let arg = arena.alloc_v(StrLit(*arg));
+                let ix = arena.alloc_v(ILit(ix as i64));
+                let arr_exp = arena.alloc_v(Index(argv, ix));
+                begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(arr_exp, arg)))));
+            }
+        }
+
         if let Some(begin_block) = self.begin {
             begin.push(begin_block);
         }

@@ -79,6 +79,7 @@ macro_rules! fail {
 }
 
 struct RawPrelude {
+    argv: Vec<String>,
     var_decs: Vec<String>,
     field_sep: Option<String>,
     output_sep: Option<&'static str>,
@@ -92,15 +93,53 @@ struct Prelude<'a> {
     field_sep: Option<&'a str>,
     output_sep: Option<&'a str>,
     output_record_sep: Option<&'a str>,
+    argv: Vec<&'a str>,
     escaper: Escaper,
     stage: Stage<()>,
 }
 
-fn open_file_read(f: &str) -> io::BufReader<File> {
-    match File::open(f) {
-        Ok(f) => BufReader::new(f),
-        Err(e) => fail!("failed to open file {}: {}", f, e),
+// TODO: make file reading lazy
+fn open_file_read(f: &str) -> impl io::BufRead {
+    enum LazyReader<F, R> {
+        Uninit(F),
+        Init(R),
     }
+
+    impl<R, F: FnMut() -> io::Result<R>> LazyReader<F, R> {
+        fn delegate<'a, T: 'a>(
+            &'a mut self,
+            next: impl FnOnce(&'a mut R) -> io::Result<T>,
+        ) -> io::Result<T> {
+            match self {
+                LazyReader::Uninit(f) => {
+                    *self = LazyReader::Init(f()?);
+                    return self.delegate(next);
+                }
+                LazyReader::Init(r) => next(r),
+            }
+        }
+    }
+
+    // TODO: delegate other methods on read.
+    impl<R: io::Read, F: FnMut() -> io::Result<R>> io::Read for LazyReader<F, R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.delegate(|r| r.read(buf))
+        }
+    }
+    impl<R: io::BufRead, F: FnMut() -> io::Result<R>> io::BufRead for LazyReader<F, R> {
+        fn fill_buf<'a>(&'a mut self) -> io::Result<&'a [u8]> {
+            self.delegate(io::BufRead::fill_buf)
+        }
+        fn consume(&mut self, amt: usize) {
+            // consume is meant to be used after a "fill_buf" call, we ignore it if it's called
+            // with Uninit.
+            if let LazyReader::Init(r) = self {
+                r.consume(amt);
+            }
+        }
+    }
+    let filename = String::from(f);
+    LazyReader::Uninit(move || Ok(BufReader::new(File::open(filename.as_str())?)))
 }
 
 fn chained<LR: LineReader>(lr: LR) -> ChainedReader<LR> {
@@ -151,19 +190,21 @@ fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
         output_sep,
         output_record_sep,
         stage: raw.stage.clone(),
+        argv: raw.argv.iter().map(|s| a.alloc_str(s.as_str())).collect(),
     }
 }
 
 fn get_context<'a>(
     prog: &str,
     a: &'a Arena,
-    prelude: Prelude<'a>,
+    mut prelude: Prelude<'a>,
 ) -> cfg::ProgramContext<'a, &'a str> {
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = parsing::syntax::ProgParser::new();
     let mut prog = ast::Prog::from_stage(prelude.stage.clone());
+    prog.argv = std::mem::replace(&mut prelude.argv, Default::default());
     let stmt = match parser.parse(a, &mut buf, &mut prog, lexer) {
         Ok(()) => {
             prog.field_sep = prelude.field_sep;
@@ -334,6 +375,16 @@ fn main() {
         },
         None => exec_strategy.num_workers(),
     };
+    let argv: Vec<String> = std::env::args()
+        .next()
+        .into_iter()
+        .chain(
+            matches
+                .values_of("input-files")
+                .into_iter()
+                .flat_map(|x| x.map(String::from)),
+        )
+        .collect();
     let mut input_files: Vec<String> = matches
         .values_of("input-files")
         .map(|x| x.map(String::from).collect())
@@ -376,6 +427,7 @@ fn main() {
         escaper,
         output_record_sep,
         stage: exec_strategy.stage(),
+        argv,
     };
     let mut opt_level: i32 = match matches.value_of("opt-level") {
         Some("3") => 3,
