@@ -609,6 +609,18 @@ mod tests {
     );
 
     test_program!(
+        map_join_points_1,
+        r#"BEGIN { if (1) { m1[1]=3; y=m1; } else { m2[2]=5; y=m2}; print y[1], y[2]; }"#,
+        "3 0\n"
+    );
+
+    test_program!(
+        map_join_points_2,
+        r#"{ if ($1) { y=ARGV; print y[1];} }"#,
+        ""
+    );
+
+    test_program!(
         rand_basics,
         r#" BEGIN {
         srand(1234);

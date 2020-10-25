@@ -96,6 +96,14 @@ impl Ty {
         }
     }
 
+    pub(crate) fn is_array(self) -> bool {
+        use Ty::*;
+        match self {
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => true,
+            Null | Int | Float | Str | IterInt | IterStr => false,
+        }
+    }
+
     pub(crate) fn key(self) -> Result<Ty> {
         use Ty::*;
         match self {
@@ -376,13 +384,15 @@ fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
 
 fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
-    instrs.push(match ty {
-        Null => return Ok(()),
+    match ty {
+        Null => Ok(()),
         Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
-        | MapStrStr => LL::Push(ty, reg),
-        IterInt | IterStr => return err!("invalid argument type: {:?}", ty),
-    });
-    Ok(())
+        | MapStrStr => {
+            instrs.push(LL::Push(ty, reg));
+            Ok(())
+        }
+        IterInt | IterStr => err!("invalid argument type: {:?}", ty),
+    }
 }
 
 fn alloc_local<'a>(dst_reg: NumTy, dst_ty: Ty) -> Option<LL<'a>> {
@@ -451,6 +461,8 @@ impl<'a> Typer<'a> {
             &self.used_fields,
         ))
     }
+
+    // At initialization time, we generate Either<LL, HL>, this function lowers the HL into LL.
     fn to_bytecode(&mut self) -> Result<Vec<Vec<LL<'a>>>> {
         let mut res = vec![vec![]; self.frames.len()];
         let ret_regs: Vec<_> = (0..self.frames.len())

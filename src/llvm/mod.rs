@@ -177,6 +177,7 @@ unsafe fn alloc_local(
 ) -> Result<LLVMValueRef> {
     use Ty::*;
     let val = match ty {
+        // NB do we really need the NULL here? or could we omit calls
         Null | Int => LLVMConstInt(tmap.get_ty(Int), 0, /*sign_extend=*/ 1),
         Float => LLVMConstReal(tmap.get_ty(Float), 0.0),
         Str => {
@@ -196,13 +197,17 @@ unsafe fn alloc_local(
                 MapStrStr => "alloc_strstr",
                 _ => unreachable!(),
             };
-            LLVMBuildCall(
+            let map_ty = tmap.get_ty(ty);
+            let v = LLVMBuildCall(
                 builder,
                 intrinsics.get(fname),
                 ptr::null_mut(),
                 0,
                 c_str!(""),
-            )
+            );
+            let v_loc = LLVMBuildAlloca(builder, map_ty, c_str!(""));
+            LLVMBuildStore(builder, v, v_loc);
+            v_loc
         }
         IterInt | IterStr => return err!("we should not be default-allocating any iterators"),
     };
@@ -554,14 +559,6 @@ impl<'a, 'b> Generator<'a, 'b> {
         main_offset: usize,
         name: *const libc::c_char,
     ) -> Result<(*const libc::c_char, LLVMValueRef)> {
-        // TODO: return a Stage<LLVMValueRef>, where we _always_ synthesize BEGIN with the
-        // allocation code for globals.
-        //
-        // hmmm wait how would that work?
-        //
-        // No. we need global allocation code for each stage that is populated.
-        // Optimize all decls. and then do the aggregation "out of band". See what can be done
-        // about factoring out the core logic here.
         let ty = LLVMFunctionType(
             LLVMVoidTypeInContext(self.ctx),
             &mut self.type_map.runtime_ty,
@@ -580,7 +577,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         let mut args: SmallVec<_> = smallvec![ptr::null_mut(); main_info.num_args];
         for ((_reg, ty), arg_ix) in main_info.globals.iter() {
             let local = self.alloc_local(builder, *ty)?;
-            let param = if let Ty::Str = ty {
+            let param = if ty.is_array() || matches!(ty, Ty::Str) {
                 // Already a pointer; we're good to go!
                 local
             } else {
@@ -643,7 +640,12 @@ impl<'a, 'b> Generator<'a, 'b> {
         );
         let res = if code != 0 {
             let err_str = CStr::from_ptr(error).to_string_lossy().into_owned();
-            err!("Module verification failed: {}", err_str)
+            let prog_str = self.dump_module_inner();
+            err!(
+                "Module verification failed: {}\nFull Module: {}",
+                err_str,
+                prog_str
+            )
         } else {
             Ok(())
         };
@@ -668,10 +670,20 @@ impl<'a, 'b> Generator<'a, 'b> {
             bbs.push(bb);
         }
         LLVMPositionBuilderAtEnd(builder, bbs[0]);
+        // handle arguments
+        let enum_args: SmallVec<_> = self.funcs[func_id]
+            .args
+            .iter()
+            .cloned()
+            .enumerate()
+            .collect();
+        let arg_set: HashSet<_> = enum_args.iter().map(|(_, x)| *x).collect();
         for (local, (reg, ty)) in frame.locals.iter() {
             // implicitly-declared locals are just the ones with a subscript of 0.
-            if local.sub == 0 {
-                let val = self.alloc_local(self.funcs[func_id].builder, *ty)?;
+            // Args are handled separately, skip them for now.
+            if local.sub == 0 && !arg_set.contains(&(*reg, *ty)) {
+                // For maps, we need these to go in entry
+                let val = self.alloc_local(entry_builder, *ty)?;
                 self.funcs[func_id].locals.insert((*reg, *ty), val);
             }
         }
@@ -693,12 +705,17 @@ impl<'a, 'b> Generator<'a, 'b> {
             drop_str: self.drop_str,
             entry_builder,
         };
-        // handle arguments
-        for (i, arg) in view.f.args.iter().cloned().enumerate() {
+        for (i, arg) in enum_args.into_iter() {
             let argv = LLVMGetParam(view.f.val, i as libc::c_uint);
             // We insert into `locals` directly because we know these aren't globals, and we want
-            // to avoid the extra ref/drop for string params.
-            view.f.locals.insert(arg, argv);
+            // to avoid the extra ref/drop for string params. We _do_ use bind_val on array
+            // parameters because they may need to be alloca'd here. Strings have an alloca path in
+            // bind_val, but it isn't needed for params because strings are passed by pointer.
+            if arg.1.is_array() {
+                view.bind_val(arg, argv);
+            } else {
+                view.f.locals.insert(arg, argv);
+            }
             view.f.skip_drop.insert(arg);
         }
         // Why use DFS? The main issue we want to avoid is encountering registers that we haven't
@@ -767,7 +784,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                 // function. It probably means this function is "void"; but because you can assign
                 // to the result of a void function we need to allocate something here.
                 let ty = var.1;
-                let val = alloc_local(view.f.builder, ty, &self.type_map, &self.intrinsics)?;
+                let val = alloc_local(view.entry_builder, ty, &self.type_map, &self.intrinsics)?;
                 view.ret_val(val, ty)?
             }
         }
@@ -777,9 +794,9 @@ impl<'a, 'b> Generator<'a, 'b> {
         let mut blocks = SmallVec::new();
         for (phi_bb, phi_inst) in phis.into_iter() {
             if let Either::Right(Phi(reg, ty, ps)) = node_weight(phi_bb, phi_inst) {
-                let phi_node = view.get_local((*reg, *ty))?;
+                let phi_node = view.get_local_raw((*reg, *ty))?;
                 for (pred_bb, pred_reg) in ps.iter() {
-                    preds.push(view.get_local((*pred_reg, *ty))?);
+                    preds.push(view.get_local_raw((*pred_reg, *ty))?);
                     blocks.push(bbs[pred_bb.index()]);
                 }
                 LLVMAddIncoming(
@@ -805,7 +822,7 @@ impl<'a> View<'a> {
         self.f.locals.get(&var).is_some() || self.decls[self.f.id].globals.get(&var).is_some()
     }
     // TODO: rename this; it gets globals too :)
-    unsafe fn get_local_inner(&self, local: (NumTy, Ty)) -> Option<LLVMValueRef> {
+    unsafe fn get_local_inner(&self, local: (NumTy, Ty), array_ptr: bool) -> Option<LLVMValueRef> {
         if local.1 == Ty::Null {
             // Null values, while largely erased from the picture, are occasionally loaded for
             // returns and for parameter passing. We could (as we do in the bytecode interpreter)
@@ -821,7 +838,11 @@ impl<'a> View<'a> {
                 /*sign_extend=*/ 0,
             ))
         } else if let Some(v) = self.f.locals.get(&local) {
-            Some(*v)
+            if local.1.is_array() && !array_ptr {
+                Some(LLVMBuildLoad(self.f.builder, *v, c_str!("")))
+            } else {
+                Some(*v)
+            }
         } else if let Some(ix) = self.decls[self.f.id].globals.get(&local) {
             let gv = LLVMGetParam(self.f.val, *ix as libc::c_uint);
             Some(if let Ty::Str = local.1 {
@@ -829,6 +850,9 @@ impl<'a> View<'a> {
                 gv
             } else {
                 // XXX: do we need to ref maps here?
+                // NB: depends on what we do when calling UDFs that take maps as arguments.
+                //     but either way, no.
+                //     We _should_ clarify calling convention re: maps though.
                 LLVMBuildLoad(self.f.builder, gv, c_str!(""))
             })
         } else {
@@ -836,7 +860,7 @@ impl<'a> View<'a> {
         }
     }
     unsafe fn get_param(&mut self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
-        if let Some(v) = self.get_local_inner(local) {
+        if let Some(v) = self.get_local_inner(local, /*array_ptr=*/ false) {
             Ok(v)
         } else {
             // Some parameters are never mentioned in the source program, but are just added in as
@@ -853,8 +877,22 @@ impl<'a> View<'a> {
             Ok(v)
         }
     }
+
+    // This is used for phi nodes with maps.
+    // get_local_inner will load values by default, but that's the wrong thing to do because phi
+    // nodes contain the pointers themselves. The output is the same as get_local for non-array
+    // types.
+    unsafe fn get_local_raw(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
+        match self.get_local_inner(local, /*array_ptr=*/ true) {
+            Some(v) => Ok(v),
+            None => err!(
+                "unbound variable {:?} (must call bind_val on it before)",
+                local
+            ),
+        }
+    }
     unsafe fn get_local(&self, local: (NumTy, Ty)) -> Result<LLVMValueRef> {
-        match self.get_local_inner(local) {
+        match self.get_local_inner(local, /*array_ptr=*/ false) {
             Some(v) => Ok(v),
             None => err!(
                 "unbound variable {:?} (must call bind_val on it before)",
@@ -902,15 +940,25 @@ impl<'a> View<'a> {
             c_str!(""),
         )
     }
-    unsafe fn call(&mut self, func: &'static str, args: &mut [LLVMValueRef]) -> LLVMValueRef {
+
+    unsafe fn call_at(
+        &mut self,
+        builder: LLVMBuilderRef,
+        func: &'static str,
+        args: &mut [LLVMValueRef],
+    ) -> LLVMValueRef {
         let f = self.intrinsics.get(func);
         LLVMBuildCall(
-            self.f.builder,
+            builder,
             f,
             args.as_mut_ptr(),
             args.len() as libc::c_uint,
             c_str!(""),
         )
+    }
+
+    unsafe fn call(&mut self, func: &'static str, args: &mut [LLVMValueRef]) -> LLVMValueRef {
+        self.call_at(self.f.builder, func, args)
     }
 
     unsafe fn bind_reg<T>(&mut self, r: &bytecode::Reg<T>, to: LLVMValueRef)
@@ -920,12 +968,31 @@ impl<'a> View<'a> {
         self.bind_val(r.reflect(), to);
     }
 
-    unsafe fn alloca(&mut self, ty: Ty) -> LLVMValueRef {
-        let ty = self.tmap.get_ty(ty);
-        let res = LLVMBuildAlloca(self.entry_builder, ty, c_str!(""));
-        let v = LLVMConstInt(ty, 0, /*sign_extend=*/ 0);
+    unsafe fn alloca(&mut self, ty: Ty) -> Result<LLVMValueRef> {
+        let alloc_fn = match ty {
+            Ty::Int | Ty::Float | Ty::Str => {
+                let ty = self.tmap.get_ty(ty);
+                let res = LLVMBuildAlloca(self.entry_builder, ty, c_str!(""));
+                let v = LLVMConstInt(ty, 0, /*sign_extend=*/ 0);
+                LLVMBuildStore(self.entry_builder, v, res);
+                return Ok(res);
+            }
+            Ty::IterInt | Ty::Null | Ty::IterStr => {
+                return err!("unexpected type passed to alloca: {:?}", ty);
+            }
+            // map
+            Ty::MapIntInt => "alloc_intint",
+            Ty::MapIntFloat => "alloc_intfloat",
+            Ty::MapIntStr => "alloc_intstr",
+            Ty::MapStrInt => "alloc_strint",
+            Ty::MapStrFloat => "alloc_strfloat",
+            Ty::MapStrStr => "alloc_strstr",
+        };
+        let llty = self.tmap.get_ty(ty);
+        let res = LLVMBuildAlloca(self.entry_builder, llty, c_str!(""));
+        let v = self.call_at(self.entry_builder, alloc_fn, &mut []);
         LLVMBuildStore(self.entry_builder, v, res);
-        res
+        Ok(res)
     }
 
     unsafe fn iter_begin(&mut self, dst: (NumTy, Ty), arr: (NumTy, Ty)) -> Result<()> {
@@ -942,7 +1009,7 @@ impl<'a> View<'a> {
         };
 
         let iter_ptr = self.call(begin_fn, &mut [arrv]);
-        let cur_index = self.alloca(Ty::Int);
+        let cur_index = self.alloca(Ty::Int)?;
         let len = self.call(len_fn, &mut [arrv]);
         let _old = self.f.iters.insert(
             dst,
@@ -1017,7 +1084,6 @@ impl<'a> View<'a> {
                 assert_eq!(LLVMGetTypeKind(LLVMTypeOf(to)), LLVMIntegerTypeKind);
             }
         }
-
         if val.1 == Ty::Null {
             // We do not store null values explicitly
             return;
@@ -1037,7 +1103,6 @@ impl<'a> View<'a> {
                 MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
                     let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
                     self.drop_val(prev_global, val.1);
-                    self.call("ref_map", &mut [new_global]);
                     LLVMBuildStore(self.f.builder, new_global, param);
                 }
                 Str => {
@@ -1059,14 +1124,22 @@ impl<'a> View<'a> {
         );
         match val.1 {
             MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
-                // TODO: this doesn't work for maps returned from functions (?)
-                // For those maps, we want some sort of alloca-style setup like we have for strings
-                // Maybe modify alloca to take this into account and merge this in? Only do it for
-                // LoadMapIntInt?
-                self.call("ref_map", &mut [to]);
+                // alloca only fails with an iterator or null type; but we have checked the type
+                // already.
+                let loc = self.alloca(val.1).unwrap();
+                let prev = LLVMBuildLoad(self.f.builder, loc, c_str!(""));
+                self.drop_val(prev, val.1);
+                LLVMBuildStore(self.f.builder, to, loc);
+                // NB: we used to have this here, but it leaked. See a segfault? It's possible we
+                // are missing some refs elsewhere.
+                //   self.call("ref_map", &mut [to]);
+                // We had this for globals as well.
+                self.f.locals.insert(val, loc);
+                return;
             }
             Str => {
-                let loc = self.alloca(Ty::Str);
+                // unwrap justified like the above case for maps.
+                let loc = self.alloca(Ty::Str).unwrap();
                 self.drop_val(loc, Ty::Str);
                 LLVMBuildStore(self.f.builder, to, loc);
                 self.f.locals.insert(val, loc);
@@ -1854,7 +1927,11 @@ impl<'a> View<'a> {
                     let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
                     self.bind_val((*dst, Ty::Str), loaded)
                 } else {
-                    self.bind_val((*dst, *ty), self.get_local((*src, *ty))?)
+                    let sv = self.get_local((*src, *ty))?;
+                    if ty.is_array() {
+                        self.call("ref_map", &mut [sv]);
+                    }
+                    self.bind_val((*dst, *ty), sv)
                 }
             }
             IterBegin { map_ty, map, dst } => {
@@ -1882,13 +1959,22 @@ impl<'a> View<'a> {
     }
 
     unsafe fn ret_val(&mut self, to_return: LLVMValueRef, ty: Ty) -> Result<()> {
-        let locals = mem::replace(&mut self.f.locals, Default::default());
-        for ((reg, ty), llval) in locals.iter() {
-            let (reg, ty) = (*reg, *ty);
-            if self.f.skip_drop.contains(&(reg, ty)) || llval == &to_return {
+        // We can't iterate over self.f.locals directly because drop_val borrows all of `self`.
+        let locals: SmallVec<_> = self
+            .f
+            .locals
+            .iter()
+            .map(|((reg, ty), _)| (*reg, *ty))
+            .collect();
+        for l in locals.into_iter() {
+            if self.f.skip_drop.contains(&l) {
                 continue;
             }
-            self.drop_val(*llval, ty);
+            let llval = self.get_local(l)?;
+            if llval == to_return {
+                continue;
+            }
+            self.drop_val(llval, l.1);
         }
         if let Ty::Str = ty {
             let loaded = LLVMBuildLoad(self.f.builder, to_return, c_str!(""));
@@ -1896,8 +1982,6 @@ impl<'a> View<'a> {
         } else {
             LLVMBuildRet(self.f.builder, to_return);
         }
-        let _old_locals = mem::replace(&mut self.f.locals, locals);
-        debug_assert_eq!(_old_locals.len(), 0);
         Ok(())
     }
     unsafe fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
@@ -1944,7 +2028,7 @@ impl<'a> View<'a> {
                 self.f.skip_drop.insert((*reg, *ty));
                 let res = LLVMBuildPhi(
                     self.f.builder,
-                    if ty == &Ty::Str {
+                    if ty.is_array() || ty == &Ty::Str {
                         self.tmap.get_ptr_ty(*ty)
                     } else {
                         self.tmap.get_ty(*ty)
