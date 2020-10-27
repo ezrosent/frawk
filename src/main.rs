@@ -31,6 +31,7 @@ extern crate clap;
 extern crate crossbeam;
 extern crate crossbeam_channel;
 extern crate elsa;
+extern crate grep_cli;
 extern crate hashbrown;
 #[cfg(feature = "use_jemalloc")]
 extern crate jemallocator;
@@ -47,6 +48,7 @@ extern crate regex;
 extern crate ryu;
 extern crate smallvec;
 extern crate stable_deref_trait;
+extern crate termcolor;
 extern crate unicode_xid;
 
 use clap::{App, Arg};

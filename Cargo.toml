@@ -34,6 +34,8 @@ crossbeam = "0.7.3"
 num_cpus = "1.13.0"
 cfg-if = "0.1"
 memchr = "2.3.3"
+grep-cli = "0.1"
+termcolor = "1.1"
 
 [features]
 default = ["use_jemalloc", "allow_avx2", "llvm_backend"]

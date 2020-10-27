@@ -76,12 +76,12 @@ impl<W: io::Write, T: Fn(&str, bool) -> io::Result<W> + Clone + 'static + Send +
     for T
 {
     type Output = W;
-    type Stdout = std::io::Stdout;
+    type Stdout = grep_cli::StandardStream;
     fn build(&self, path: &str, append: bool) -> io::Result<W> {
         (&self)(path, append)
     }
     fn stdout(&self) -> Self::Stdout {
-        std::io::stdout()
+        grep_cli::stdout(termcolor::ColorChoice::Auto)
     }
 }
 
@@ -119,12 +119,19 @@ pub fn factory_from_file(fname: &str) -> io::Result<impl FileFactory> {
     Ok(FileStdout(fname.into()))
 }
 
-fn build_handle<W: io::Write, F: Fn(bool) -> io::Result<W> + Send + 'static>(f: F) -> RawHandle {
+fn build_handle<W: io::Write, F: Fn(bool) -> io::Result<W> + Send + 'static>(
+    f: F,
+    is_stdout: bool,
+) -> RawHandle {
     let (sender, receiver) = bounded(IO_CHAN_SIZE);
     let error = Arc::new(Mutex::new(None));
     let receiver_error = error.clone();
     std::thread::spawn(move || receive_thread(receiver, receiver_error, f));
-    RawHandle { error, sender }
+    RawHandle {
+        error,
+        sender,
+        line_buffer: is_stdout && grep_cli::is_tty_stdout(),
+    }
 }
 
 /// Registry is a thread-local handle on all files we have ever interacted with.
@@ -207,7 +214,10 @@ struct RootImpl<F> {
 impl<F: FileFactory> RootImpl<F> {
     fn from_factory(file_factory: F) -> RootImpl<F> {
         let local_factory = file_factory.clone();
-        let stdout_raw = build_handle(move |_append| Ok(local_factory.stdout()));
+        let stdout_raw = build_handle(
+            move |_append| Ok(local_factory.stdout()),
+            /*is_stdout*/ true,
+        );
         RootImpl {
             handles: Default::default(),
             stdout_raw,
@@ -225,7 +235,10 @@ impl<F: FileFactory> Root for RootImpl<F> {
         let local_factory = self.file_factory.clone();
         let local_name = String::from(fname);
         let global_name = local_name.clone();
-        let handle = build_handle(move |append| local_factory.build(local_name.as_str(), append));
+        let handle = build_handle(
+            move |append| local_factory.build(local_name.as_str(), append),
+            /*is_stdout=*/ false,
+        );
         handles.insert(global_name, handle.clone());
         handle
     }
@@ -298,13 +311,19 @@ impl FileHandle {
         }
     }
 
-    fn clear_batch(&mut self) -> Result<()> {
+    fn clear_batch(&mut self, upto: Option<usize>) -> Result<()> {
         if self.cur_batch.data.len() == 0 {
             return Ok(());
         }
+        let (flush, upto) = if let Some(ix) = upto {
+            (true, ix)
+        } else {
+            (false, self.cur_batch.data.len())
+        };
         self.clear_guards()?;
         let mut next_batch = self.guard();
-        let req = self.cur_batch.request();
+        self.cur_batch.peel(upto, &mut *next_batch);
+        let req = self.cur_batch.request(flush);
         self.raw.sender.send(req).unwrap();
         std::mem::swap(&mut next_batch, &mut self.cur_batch);
         self.guards.push_back(next_batch);
@@ -312,16 +331,22 @@ impl FileHandle {
     }
 
     pub fn write<'a>(&mut self, s: &Str<'a>, append: bool) -> Result<()> {
+        let cur_len = self.cur_batch.data.len();
         let bs = unsafe { &*s.get_bytes() };
-        if bs.len() + self.cur_batch.data.len() > BUFFER_SIZE {
-            self.clear_batch()?;
-        }
         self.cur_batch.extend(&*bs, append);
+        if self.raw.line_buffer {
+            if let Some(ix) = memchr::memchr(b'\n', bs) {
+                // +1 to include the newline
+                self.clear_batch(Some(cur_len + ix + 1))?;
+            }
+        } else if bs.len() + cur_len > BUFFER_SIZE {
+            self.clear_batch(None)?;
+        }
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.clear_batch()?;
+        self.clear_batch(None)?;
         let (n, req) = Request::flush();
         self.raw.sender.send(req).unwrap();
         n.1.wait();
@@ -334,7 +359,7 @@ impl FileHandle {
     }
 
     pub fn close(&mut self) -> Result<()> {
-        self.clear_batch()?;
+        self.clear_batch(None)?;
         self.raw.sender.send(Request::Close).unwrap();
         Ok(())
     }
@@ -394,6 +419,7 @@ enum Request {
         data: *const [u8],
         status: *const ErrorCode,
         append: bool,
+        flush: bool,
     },
     Flush(Arc<(ErrorCode, Notification)>),
     Close,
@@ -461,11 +487,19 @@ impl WriteGuard {
         self.append = append;
     }
 
-    fn request(&self) -> Request {
+    fn peel(&mut self, bytes: usize, next: &mut WriteGuard) {
+        if bytes < self.data.len() {
+            next.data.extend(self.data[bytes..].iter().cloned());
+            self.data.truncate(bytes);
+        }
+    }
+
+    fn request(&self, flush: bool) -> Request {
         Request::Write {
             data: &self.data[..],
             status: &self.status,
             append: self.append,
+            flush,
         }
     }
 
@@ -491,6 +525,7 @@ impl Drop for WriteGuard {
 struct RawHandle {
     error: Arc<Mutex<Option<CompileError>>>,
     sender: Sender<Request>,
+    line_buffer: bool,
 }
 
 impl RawHandle {
@@ -520,10 +555,7 @@ impl WriteBatch {
         self.n_writes
     }
     fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
-        let e = w.write_all_vectored(&mut self.io_vec[..]);
-        if let Err(e) = e {
-            return Err(e);
-        }
+        w.write_all_vectored(&mut self.io_vec[..])?;
         if self.flush || self.close {
             w.flush()?;
         }
@@ -541,11 +573,12 @@ impl WriteBatch {
     }
     fn push(&mut self, req: Request) -> bool {
         match &req {
-            Request::Write { data, .. } => {
+            Request::Write { data, flush, .. } => {
                 // TODO: this does not handle payloads larger than 4GB on windows, see
                 // documentation for IoSlice. Should be an easy fix if this comes up.
                 self.io_vec.push(io::IoSlice::new(unsafe { &**data }));
                 self.n_writes += 1;
+                self.flush = *flush;
             }
             Request::Flush(_) => self.flush = true,
             Request::Close => self.close = true,
@@ -608,6 +641,10 @@ fn receive_loop<W: io::Write>(
         //
         // To simplify matters, we cut a batch short if we receive a "flush" or "close" request
         // (signaled by batch.push returning true).
+        //
+        // NB: this batching is redundant when writing to stdout (in which case grep_cli gives us a
+        // buffered version of the writer), but we want it for the file IO case, where this
+        // approach permits us fewer copies than the BufWriter approach.
         let mut batch_bytes = req.size();
         if !batch.push(req) {
             while let Ok(req) = receiver.try_recv() {
