@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
 use crate::builtins::{Bitwise, FloatFunc, Variable};
-use crate::common::NumTy;
+use crate::common::{FileSpec,NumTy};
 use crate::compile::{self, Ty};
 use crate::interp::{index, index_mut, Storage};
 use crate::runtime::{self, Float, Int, Str, UniqueStr};
@@ -197,7 +197,7 @@ pub(crate) enum Instr<'a> {
         args: Vec<(NumTy, Ty)>,
     },
     Printf {
-        output: Option<(Reg<Str<'a>>, bool)>,
+        output: Option<(Reg<Str<'a>>, FileSpec)>,
         fmt: Reg<Str<'a>>,
         args: Vec<(NumTy, Ty)>,
     },
@@ -205,7 +205,7 @@ pub(crate) enum Instr<'a> {
     Print(
         Reg<Str<'a>>, /*text*/
         Reg<Str<'a>>, /*output*/
-        bool,         /*append*/
+        FileSpec,     /*append*/
     ),
     Close(Reg<Str<'a>>),
 

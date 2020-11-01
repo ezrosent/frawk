@@ -1,4 +1,4 @@
-use crate::common::{Either, Result};
+use crate::common::{Either, FileSpec, Result};
 use hashbrown::HashMap;
 use regex::bytes::Regex;
 use std::cell::{Cell, RefCell};
@@ -30,7 +30,6 @@ pub use splitter::{
     ChainedReader, Line, LineReader,
 };
 pub use str_impl::{Str, UniqueStr};
-pub use writers::FileSpec;
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.
@@ -324,10 +323,10 @@ impl Default for FileWrite {
 
 impl FileWrite {
     pub(crate) fn flush_stdout(&mut self) -> Result<()> {
-        self.0.get_handle(None)?.flush()
+        self.0.get_file(None)?.flush()
     }
     pub(crate) fn close(&mut self, path: &Str) -> Result<()> {
-        self.0.get_handle(Some(path))?.close()
+        self.0.close(path)
     }
     pub(crate) fn new(ff: impl writers::FileFactory) -> FileWrite {
         FileWrite(writers::Registry::from_factory(ff))
@@ -344,9 +343,12 @@ impl FileWrite {
         pa: &[printf::FormatArg],
     ) -> Result<()> {
         let (handle, fspec) = if let Some((out_file, fspec)) = path {
-            (self.0.get_handle(Some(out_file))?, fspec)
+            (self.0.get_handle(Some(out_file), fspec)?, fspec)
         } else {
-            (self.0.get_handle(None)?, FileSpec::Append)
+            (
+                self.0.get_handle(None, FileSpec::default())?,
+                FileSpec::default(),
+            )
         };
         let mut text = str_impl::DynamicBuf::default();
         spec.with_bytes(|spec| printf::printf(&mut text, spec, pa))?;
@@ -356,12 +358,12 @@ impl FileWrite {
 
     pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
         self.0
-            .get_handle(None)?
+            .get_handle(None, FileSpec::default())?
             .write(s, /*append=*/ FileSpec::Append)
     }
 
     pub(crate) fn write_str(&mut self, path: &Str, s: &Str, spec: FileSpec) -> Result<()> {
-        self.0.get_handle(Some(path))?.write(s, spec)
+        self.0.get_handle(Some(path), spec)?.write(s, spec)
     }
 }
 

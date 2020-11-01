@@ -1792,7 +1792,7 @@ impl<'a> View<'a> {
                 if let Some((path, append)) = output {
                     arg_vs.push(self.get_local(path.reflect())?);
                     let int_ty = self.tmap.get_ty(Ty::Int);
-                    arg_vs.push(LLVMConstInt(int_ty, if *append { 1 } else { 0 }, 0));
+                    arg_vs.push(LLVMConstInt(int_ty, *append as u64, 0));
                 }
                 LLVMBuildCall(
                     self.f.builder,

@@ -3,7 +3,7 @@ use crate::bytecode::{Get, Instr, Label, Reg};
 use crate::common::{NumTy, Result, Stage};
 use crate::compile::{self, Ty};
 use crate::pushdown::FieldSet;
-use crate::runtime::{self, FileSpec, Float, Int, Line, LineReader, Str, UniqueStr};
+use crate::runtime::{self, Float, Int, Line, LineReader, Str, UniqueStr};
 
 use crossbeam::scope;
 use crossbeam_channel::bounded;
@@ -1027,15 +1027,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     Print(txt, out, append) => {
                         let txt = index(&self.strs, txt);
                         let out = index(&self.strs, out);
-                        self.core.write_files.write_str(
-                            out,
-                            txt,
-                            if *append {
-                                FileSpec::Append
-                            } else {
-                                FileSpec::Trunc
-                            },
-                        )?
+                        self.core.write_files.write_str(out, txt, *append)?
                     }
                     Sprintf { dst, fmt, args } => {
                         debug_assert_eq!(scratch.len(), 0);
@@ -1058,15 +1050,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             scratch.push(self.format_arg(*a)?);
                         }
                         let fmt_str = index(&self.strs, fmt);
-                        let res = if let Some((out_path_reg, append)) = output {
-                            let fspec = if *append {
-                                FileSpec::Append
-                            } else {
-                                FileSpec::Trunc
-                            };
+                        let res = if let Some((out_path_reg, fspec)) = output {
                             let out_path = index(&self.strs, out_path_reg);
                             self.core.write_files.printf(
-                                Some((out_path, fspec)),
+                                Some((out_path, *fspec)),
                                 fmt_str,
                                 &scratch[..],
                             )

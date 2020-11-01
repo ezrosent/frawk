@@ -308,6 +308,36 @@ impl Notification {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+#[repr(i64)]
+pub enum FileSpec {
+    Trunc = 0,
+    Append = 1,
+    Cmd = 2,
+}
+
+impl std::convert::TryFrom<i64> for FileSpec {
+    type Error = ();
+    fn try_from(i: i64) -> std::result::Result<FileSpec, ()> {
+        // uglier than a match, but stays in sync with the enum more easily.
+        if i == FileSpec::Trunc as i64 {
+            Ok(FileSpec::Trunc)
+        } else if i == FileSpec::Append as i64 {
+            Ok(FileSpec::Append)
+        } else if i == FileSpec::Cmd as i64 {
+            Ok(FileSpec::Cmd)
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl Default for FileSpec {
+    fn default() -> FileSpec {
+        FileSpec::Append
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

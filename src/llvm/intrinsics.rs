@@ -1,6 +1,6 @@
 use super::attr::{self, FunctionAttr};
 use crate::builtins::Variable;
-use crate::common::Either;
+use crate::common::{Either, FileSpec};
 use crate::compile::Ty;
 use crate::libc::c_void;
 use crate::pushdown::FieldSet;
@@ -12,7 +12,7 @@ use crate::runtime::{
         chunk::{ChunkProducer, OffsetChunk},
         regex::RegexSplitter,
     },
-    ChainedReader, FileRead, FileSpec, Float, Int, IntMap, Line, LineReader, Str, StrMap,
+    ChainedReader, FileRead, Float, Int, IntMap, Line, LineReader, Str, StrMap,
 };
 
 use hashbrown::HashMap;
@@ -533,11 +533,7 @@ pub unsafe extern "C" fn print(
         .write_str(
             out,
             txt,
-            if append != 0 {
-                FileSpec::Append
-            } else {
-                FileSpec::Trunc
-            },
+            FileSpec::try_from(append).expect("invalid filespec"),
         )
         .is_err()
     {
@@ -1016,11 +1012,7 @@ pub unsafe extern "C" fn printf_impl_file(
 ) {
     let output_wrapped = Some((
         &*(output as *mut Str),
-        if append != 0 {
-            FileSpec::Append
-        } else {
-            FileSpec::Trunc
-        },
+        FileSpec::try_from(append).expect("invalid filespec!"),
     ));
     let format_args = wrap_args(&mut *(rt as *mut _), args, tys, num_args);
     let rt = rt as *mut Runtime;

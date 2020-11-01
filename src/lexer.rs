@@ -79,6 +79,7 @@ pub enum Tok<'a> {
     OR,
     QUESTION,
     COLON,
+    Pipe,
 
     Append, // >>
 
@@ -156,6 +157,7 @@ keyword_map!(
     [b"(", Tok::LParen],
     [b")", Tok::RParen],
     [b"getline", Tok::Getline, WS_SEMI.clone()],
+    [b"|", Tok::Pipe],
     [b"=", Tok::Assign],
     [b"+", Tok::Add],
     [b"+=", Tok::AddAssign],

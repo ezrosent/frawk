@@ -1,5 +1,5 @@
 use std::io;
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 
 fn prepare_command(bs: &[u8]) -> io::Result<Command> {
     let prog = match std::str::from_utf8(bs) {
@@ -17,7 +17,7 @@ fn prepare_command(bs: &[u8]) -> io::Result<Command> {
     }
 }
 
-pub fn command_for_write(bs: &[u8]) -> io::Result<impl io::Write> {
+pub fn command_for_write(bs: &[u8]) -> io::Result<ChildStdin> {
     let mut cmd = prepare_command(bs)?;
     let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::inherit()).spawn()?;
     Ok(child.stdin.take().unwrap())

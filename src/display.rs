@@ -2,6 +2,7 @@
 use crate::ast::{Binop, Unop};
 use crate::builtins::{Function, Variable};
 use crate::cfg::{BasicBlock, Ident, PrimExpr, PrimStmt, PrimVal, Transition};
+use crate::common::FileSpec;
 use crate::lexer;
 use std::fmt::{self, Display, Formatter};
 
@@ -51,7 +52,12 @@ impl<'a> Display for PrimStmt<'a> {
                 }
                 write!(f, ")")?;
                 if let Some((out, ap)) = out {
-                    write!(f, " {} {}", out, if *ap { ">>" } else { ">" })?;
+                    let redirect = match ap {
+                        FileSpec::Trunc => ">",
+                        FileSpec::Append => ">>",
+                        FileSpec::Cmd => "|",
+                    };
+                    write!(f, " {} {}", out, redirect)?;
                 }
                 Ok(())
             }
@@ -269,6 +275,7 @@ impl<'a> Display for lexer::Tok<'a> {
             RParen => ")",
 
             Getline => "getline",
+            Pipe => "|",
             Assign => "=",
             Add => "+",
             AddAssign => "+=",
