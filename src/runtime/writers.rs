@@ -58,6 +58,18 @@ const IO_CHAN_SIZE: usize = 16;
 /// The size of client-side batches.
 const BUFFER_SIZE: usize = 8 << 10;
 
+#[derive(Copy, Clone)]
+pub enum FileSpec {
+    Trunc,
+    Append,
+}
+
+impl Default for FileSpec {
+    fn default() -> FileSpec {
+        FileSpec::Append
+    }
+}
+
 /// FileFactory abstracts over the portions of the file system used for the output of a frawk
 /// program. It includes "file objects" as well as "stdout", which both implement the io::Write
 /// trait.
@@ -67,18 +79,18 @@ const BUFFER_SIZE: usize = 8 << 10;
 pub trait FileFactory: Clone + 'static + Send + Sync {
     type Output: io::Write;
     type Stdout: io::Write;
-    fn build(&self, path: &str, append: bool) -> io::Result<Self::Output>;
+    fn build(&self, path: &str, spec: FileSpec) -> io::Result<Self::Output>;
     // TODO maybe we shold support this returning an error.
     fn stdout(&self) -> Self::Stdout;
 }
 
-impl<W: io::Write, T: Fn(&str, bool) -> io::Result<W> + Clone + 'static + Send + Sync> FileFactory
-    for T
+impl<W: io::Write, T: Fn(&str, FileSpec) -> io::Result<W> + Clone + 'static + Send + Sync>
+    FileFactory for T
 {
     type Output = W;
     type Stdout = grep_cli::StandardStream;
-    fn build(&self, path: &str, append: bool) -> io::Result<W> {
-        (&self)(path, append)
+    fn build(&self, path: &str, spec: FileSpec) -> io::Result<W> {
+        (&self)(path, spec)
     }
     fn stdout(&self) -> Self::Stdout {
         grep_cli::stdout(termcolor::ColorChoice::Auto)
@@ -87,11 +99,14 @@ impl<W: io::Write, T: Fn(&str, bool) -> io::Result<W> + Clone + 'static + Send +
 
 type FileWriter = std::fs::File;
 
-fn open_file(path: &str, append: bool) -> io::Result<FileWriter> {
+fn open_file(path: &str, spec: FileSpec) -> io::Result<FileWriter> {
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .append(append)
+        .append(match spec {
+            FileSpec::Trunc => false,
+            FileSpec::Append => true,
+        })
         .open(path)?;
     Ok(file)
 }
@@ -102,24 +117,24 @@ pub fn default_factory() -> impl FileFactory {
 
 pub fn factory_from_file(fname: &str) -> io::Result<impl FileFactory> {
     // Do a test open+truncate of the file.
-    let _file = open_file(fname, /*append=*/ false)?;
+    let _file = open_file(fname, FileSpec::Trunc)?;
 
     #[derive(Clone)]
     struct FileStdout(String);
     impl FileFactory for FileStdout {
         type Output = FileWriter;
         type Stdout = FileWriter;
-        fn build(&self, path: &str, append: bool) -> io::Result<Self::Output> {
-            open_file(path, append)
+        fn build(&self, path: &str, spec: FileSpec) -> io::Result<Self::Output> {
+            open_file(path, spec)
         }
         fn stdout(&self) -> Self::Stdout {
-            open_file(self.0.as_str(), /*append=*/ true).expect("failed to open stdout")
+            open_file(self.0.as_str(), FileSpec::Append).expect("failed to open stdout")
         }
     }
     Ok(FileStdout(fname.into()))
 }
 
-fn build_handle<W: io::Write, F: Fn(bool) -> io::Result<W> + Send + 'static>(
+fn build_handle<W: io::Write, F: Fn(FileSpec) -> io::Result<W> + Send + 'static>(
     f: F,
     is_stdout: bool,
 ) -> RawHandle {
@@ -330,10 +345,10 @@ impl FileHandle {
         Ok(())
     }
 
-    pub fn write<'a>(&mut self, s: &Str<'a>, append: bool) -> Result<()> {
+    pub fn write<'a>(&mut self, s: &Str<'a>, spec: FileSpec) -> Result<()> {
         let cur_len = self.cur_batch.data.len();
         let bs = unsafe { &*s.get_bytes() };
-        self.cur_batch.extend(&*bs, append);
+        self.cur_batch.extend(&*bs, spec);
         if self.raw.line_buffer {
             if let Some(ix) = memchr::memchr(b'\n', bs) {
                 // +1 to include the newline
@@ -418,7 +433,7 @@ enum Request {
     Write {
         data: *const [u8],
         status: *const ErrorCode,
-        append: bool,
+        spec: FileSpec,
         flush: bool,
     },
     Flush(Arc<(ErrorCode, Notification)>),
@@ -478,13 +493,13 @@ impl Drop for Request {
 struct WriteGuard {
     data: Vec<u8>,
     status: ErrorCode,
-    append: bool,
+    spec: FileSpec,
 }
 
 impl WriteGuard {
-    fn extend(&mut self, bs: &[u8], append: bool) {
+    fn extend(&mut self, bs: &[u8], spec: FileSpec) {
         self.data.extend(bs);
-        self.append = append;
+        self.spec = spec;
     }
 
     fn peel(&mut self, bytes: usize, next: &mut WriteGuard) {
@@ -498,7 +513,7 @@ impl WriteGuard {
         Request::Write {
             data: &self.data[..],
             status: &self.status,
-            append: self.append,
+            spec: self.spec,
             flush,
         }
     }
@@ -509,7 +524,7 @@ impl WriteGuard {
 
     fn activate(&mut self) {
         self.status = ErrorCode::default();
-        self.append = false;
+        self.spec = FileSpec::Trunc;
         self.data.clear();
     }
 }
@@ -563,13 +578,13 @@ impl WriteBatch {
         self.clear();
         Ok(close)
     }
-    fn is_append(&self) -> bool {
+    fn get_spec(&self) -> FileSpec {
         for req in self.requests.iter() {
-            if let Request::Write { append, .. } = req {
-                return *append;
+            if let Request::Write { spec, .. } = req {
+                return *spec;
             }
         }
-        false
+        Default::default()
     }
     fn push(&mut self, req: Request) -> bool {
         match &req {
@@ -606,7 +621,7 @@ impl WriteBatch {
 fn receive_thread<W: io::Write>(
     receiver: Receiver<Request>,
     error: Arc<Mutex<Option<CompileError>>>,
-    f: impl Fn(bool) -> io::Result<W>,
+    f: impl Fn(FileSpec) -> io::Result<W>,
 ) {
     let mut batch = WriteBatch::default();
     if let Err(e) = receive_loop(&receiver, &mut batch, f) {
@@ -627,7 +642,7 @@ fn receive_thread<W: io::Write>(
 fn receive_loop<W: io::Write>(
     receiver: &Receiver<Request>,
     batch: &mut WriteBatch,
-    f: impl Fn(bool) -> io::Result<W>,
+    f: impl Fn(FileSpec) -> io::Result<W>,
 ) -> io::Result<()> {
     const MAX_BATCH_BYTES: usize = 1 << 20;
     const MAX_BATCH_SIZE: usize = 1 << 10;
@@ -666,7 +681,7 @@ fn receive_loop<W: io::Write>(
             }
             // We need to (re)open the file, the first write request will tell us whether or not
             // this is an append request.
-            writer = Some(f(batch.is_append())?);
+            writer = Some(f(batch.get_spec())?);
         }
         if batch.issue(writer.as_mut().unwrap())? {
             writer = None;
@@ -694,10 +709,10 @@ pub mod testing {
     impl FileFactory for FakeFs {
         type Output = FakeFile;
         type Stdout = FakeFile;
-        fn build(&self, path: &str, append: bool) -> io::Result<Self::Output> {
+        fn build(&self, path: &str, spec: FileSpec) -> io::Result<Self::Output> {
             let mut named = self.named.lock().unwrap();
             if let Some(file) = named.get(path) {
-                file.reopen(append);
+                file.reopen(spec);
                 return Ok(file.clone());
             }
             let new_file = FakeFile::default();
@@ -739,8 +754,8 @@ pub mod testing {
         pub fn read_data(&self) -> Vec<u8> {
             (*self.0.data.lock().unwrap()).clone()
         }
-        pub fn reopen(&self, append: bool) {
-            if !append {
+        pub fn reopen(&self, spec: FileSpec) {
+            if !matches!(spec, FileSpec::Append) {
                 self.clear();
             }
         }
@@ -786,11 +801,11 @@ mod tests {
         let mut reg = Registry::from_factory(fs.clone());
         {
             let handle = reg.get_handle(/*stdout*/ None).unwrap();
-            handle.write(&s1, /*append=*/ true).unwrap();
-            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.write(&s1, FileSpec::Append).unwrap();
+            handle.write(&s2, FileSpec::Append).unwrap();
             handle.flush().unwrap();
-            handle.write(&s1, /*append=*/ true).unwrap();
-            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.write(&s1, FileSpec::Append).unwrap();
+            handle.write(&s2, FileSpec::Append).unwrap();
             handle.flush().unwrap();
         }
         let data = fs.stdout.read_data();
@@ -807,17 +822,17 @@ mod tests {
         let mut reg = Registry::from_factory(fs.clone());
         {
             let handle = reg.get_handle(Some(&fname)).unwrap();
-            handle.write(&s1, /*append=*/ true).unwrap();
-            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.write(&s1, FileSpec::Append).unwrap();
+            handle.write(&s2, FileSpec::Append).unwrap();
             handle.flush().unwrap();
-            handle.write(&s1, /*append=*/ true).unwrap();
-            handle.write(&s2, /*append=*/ true).unwrap();
+            handle.write(&s1, FileSpec::Append).unwrap();
+            handle.write(&s2, FileSpec::Append).unwrap();
         }
         {
             let handle = reg.get_handle(Some(&fname)).unwrap();
             handle.close().unwrap();
-            handle.write(&s1, /*append=*/ false).unwrap();
-            handle.write(&s2, /*append=*/ false).unwrap();
+            handle.write(&s1, FileSpec::Trunc).unwrap();
+            handle.write(&s2, FileSpec::Trunc).unwrap();
             handle.flush().unwrap();
         }
         let data = fs.get_handle(fname_str).unwrap().read_data();
@@ -829,7 +844,9 @@ mod tests {
         const N_THREADS: usize = 100;
         const WRITES_PER_THREAD: usize = 1000;
         let fs = FakeFs::default();
-        fs.build("/fake/BAD", false).unwrap().set_poison(true);
+        fs.build("/fake/BAD", FileSpec::Trunc)
+            .unwrap()
+            .set_poison(true);
         let mut threads = Vec::with_capacity(N_THREADS);
         {
             let reg = Registry::from_factory(fs.clone());
@@ -844,7 +861,7 @@ mod tests {
                     for i in 0..WRITES_PER_THREAD {
                         {
                             let h1 = treg.get_handle(Some(&fa)).unwrap();
-                            h1.write(&a, /*append=*/ true).unwrap();
+                            h1.write(&a, FileSpec::Append).unwrap();
                             if (t + i) % 100 == 0 {
                                 h1.close().unwrap();
                             }
@@ -852,7 +869,7 @@ mod tests {
                         {
                             // We do not close file b, so append=false should not matter.
                             let h2 = treg.get_handle(Some(&fb)).unwrap();
-                            h2.write(&b, /*append=*/ false).unwrap();
+                            h2.write(&b, FileSpec::Trunc).unwrap();
                             if (t + i) % 105 == 0 {
                                 h2.flush().unwrap();
                             }
@@ -861,7 +878,7 @@ mod tests {
                         {
                             let h3 = treg.get_handle(Some(&fbad)).unwrap();
                             // These won't all be errors.
-                            let _ = h3.write(&a, /*append=*/ true);
+                            let _ = h3.write(&a, FileSpec::Append);
                             if (t + i) % 103 == 0 {
                                 // But all of these will be
                                 assert!(h3.flush().is_err())

@@ -9,6 +9,7 @@ use std::iter::FromIterator;
 use std::rc::Rc;
 use std::str;
 
+mod command;
 pub mod float_parse;
 pub mod printf;
 pub mod splitter;
@@ -29,6 +30,7 @@ pub use splitter::{
     ChainedReader, Line, LineReader,
 };
 pub use str_impl::{Str, UniqueStr};
+pub use writers::FileSpec;
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.
@@ -337,27 +339,29 @@ impl FileWrite {
 
     pub(crate) fn printf(
         &mut self,
-        path: Option<(&Str, bool)>,
+        path: Option<(&Str, FileSpec)>,
         spec: &Str,
         pa: &[printf::FormatArg],
     ) -> Result<()> {
-        let (handle, append) = if let Some((out_file, append)) = path {
-            (self.0.get_handle(Some(out_file))?, append)
+        let (handle, fspec) = if let Some((out_file, fspec)) = path {
+            (self.0.get_handle(Some(out_file))?, fspec)
         } else {
-            (self.0.get_handle(None)?, true)
+            (self.0.get_handle(None)?, FileSpec::Append)
         };
         let mut text = str_impl::DynamicBuf::default();
         spec.with_bytes(|spec| printf::printf(&mut text, spec, pa))?;
         let s = unsafe { text.into_str() };
-        handle.write(&s, append)
+        handle.write(&s, fspec)
     }
 
     pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
-        self.0.get_handle(None)?.write(s, /*append=*/ true)
+        self.0
+            .get_handle(None)?
+            .write(s, /*append=*/ FileSpec::Append)
     }
 
-    pub(crate) fn write_str(&mut self, path: &Str, s: &Str, append: bool) -> Result<()> {
-        self.0.get_handle(Some(path))?.write(s, append)
+    pub(crate) fn write_str(&mut self, path: &Str, s: &Str, spec: FileSpec) -> Result<()> {
+        self.0.get_handle(Some(path))?.write(s, spec)
     }
 }
 
