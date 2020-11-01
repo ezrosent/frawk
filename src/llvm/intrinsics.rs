@@ -12,7 +12,7 @@ use crate::runtime::{
         chunk::{ChunkProducer, OffsetChunk},
         regex::RegexSplitter,
     },
-    ChainedReader, FileRead, Float, Int, IntMap, Line, LineReader, Str, StrMap,
+    ChainedReader, FileRead, FileSpec, Float, Int, IntMap, Line, LineReader, Str, StrMap,
 };
 
 use hashbrown::HashMap;
@@ -530,7 +530,15 @@ pub unsafe extern "C" fn print(
     if runtime
         .core
         .write_files
-        .write_str(out, txt, append != 0)
+        .write_str(
+            out,
+            txt,
+            if append != 0 {
+                FileSpec::Append
+            } else {
+                FileSpec::Trunc
+            },
+        )
         .is_err()
     {
         exit!(runtime);
@@ -1006,7 +1014,14 @@ pub unsafe extern "C" fn printf_impl_file(
     output: *mut U128,
     append: Int,
 ) {
-    let output_wrapped = Some((&*(output as *mut Str), append != 0));
+    let output_wrapped = Some((
+        &*(output as *mut Str),
+        if append != 0 {
+            FileSpec::Append
+        } else {
+            FileSpec::Trunc
+        },
+    ));
     let format_args = wrap_args(&mut *(rt as *mut _), args, tys, num_args);
     let rt = rt as *mut Runtime;
     try_abort!(
