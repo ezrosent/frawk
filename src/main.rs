@@ -4,11 +4,13 @@
 #![feature(write_all_vectored)]
 #[macro_use]
 pub mod common;
+
 pub mod arena;
 pub mod ast;
 pub mod builtins;
 pub mod bytecode;
 pub mod cfg;
+mod input_taint;
 pub mod compile;
 pub mod cross_stage;
 mod display;
