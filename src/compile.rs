@@ -1,7 +1,7 @@
 use crate::builtins;
 use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
-use crate::common::{Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
+use crate::common::{Either, FileSpec, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
 #[cfg(feature = "llvm_backend")]
 use crate::llvm;
@@ -13,6 +13,7 @@ use crate::types;
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
 
 use std::collections::VecDeque;
+use std::convert::TryFrom;
 use std::mem;
 
 pub(crate) const UNUSED: u32 = u32::max_value();
@@ -1414,7 +1415,11 @@ impl<'a, 'b> View<'a, 'b> {
                 // XXX this imports a specific assumption on how the PrimStmt is generated, we may
                 // want to make the bool parameter to Print dynamic.
                 if let cfg::PrimVal::ILit(i) = &args[2] {
-                    self.pushl(LL::Print(conv_regs[0].into(), conv_regs[1].into(), *i != 0));
+                    self.pushl(LL::Print(
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                        FileSpec::try_from(*i).unwrap(),
+                    ));
                     return Ok(());
                 } else {
                     return err!("must pass constant append parameter to print");
@@ -1726,7 +1731,7 @@ impl<'a, 'b> View<'a, 'b> {
                 let out_reg = if let Some((out, append)) = out {
                     let (mut out_reg, out_ty) = self.get_reg(out)?;
                     out_reg = self.ensure_ty(out_reg, out_ty, Ty::Str)?;
-                    Some((out_reg.into(), *append))
+                    Some((out_reg.into(), FileSpec::try_from(*append as i64).unwrap()))
                 } else {
                     None
                 };

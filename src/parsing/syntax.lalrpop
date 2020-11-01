@@ -5,7 +5,7 @@ use crate::{
   arena::Arena,
   ast::{Pattern, Expr, Stmt, Binop, Unop, Prog, FunDec},
   builtins::Function,
-  common::Either,
+  common::{FileSpec, Either},
   runtime::{strtoi,strtod,hextoi},
   lexer::{self, Tok},
 };
@@ -151,9 +151,10 @@ ClosedStmt: &'a Stmt<'a,'a,&'a str> = {
     Do <body:BaseStmt> "while" "(" <cond:Expr> ")" Sep => arena.alloc_v(Stmt::DoWhile(cond, body)),
 }
 
-Redirect: (&'a Expr<'a, 'a, &'a str>, bool) = {
-    ">" <Expr> => (<>, false),
-    ">>" <Expr> => (<>, true),
+Redirect: (&'a Expr<'a, 'a, &'a str>, FileSpec) = {
+    ">" <Expr> => (<>, FileSpec::Trunc),
+    ">>" <Expr> => (<>, FileSpec::Append),
+    "|" <Expr> => (<>, FileSpec::Cmd),
 }
 
 ClosedLoopBody: &'a Stmt<'a, 'a, &'a str> = {
@@ -445,6 +446,7 @@ extern {
       "(" =>  Tok::LParen,
       ")" =>  Tok::RParen,
       "getline" =>  Tok::Getline,
+      "|" => Tok::Pipe,
       "=" =>  Tok::Assign,
       "+" =>  Tok::Add,
       "+=" =>  Tok::AddAssign,

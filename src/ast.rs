@@ -21,7 +21,7 @@
 ///    patterns are _not sparse_ in the input.
 use crate::arena::Arena;
 use crate::builtins::Function;
-use crate::common::{Either, Stage};
+use crate::common::{Either, FileSpec, Stage};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Unop {
@@ -342,13 +342,13 @@ pub enum Stmt<'a, 'b, I> {
     Block(Vec<&'a Stmt<'a, 'b, I>>),
     Print(
         Vec<&'a Expr<'a, 'b, I>>,
-        Option<(&'a Expr<'a, 'b, I>, bool /*append*/)>,
+        Option<(&'a Expr<'a, 'b, I>, FileSpec)>,
     ),
     // Unlike print, printf must have at least one argument.
     Printf(
         &'a Expr<'a, 'b, I>,
         Vec<&'a Expr<'a, 'b, I>>,
-        Option<(&'a Expr<'a, 'b, I>, bool /*append*/)>,
+        Option<(&'a Expr<'a, 'b, I>, FileSpec)>,
     ),
     If(
         &'a Expr<'a, 'b, I>,

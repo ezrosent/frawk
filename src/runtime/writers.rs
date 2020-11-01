@@ -37,6 +37,7 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::process::ChildStdin;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
@@ -49,26 +50,14 @@ use std::sync::{
 use crossbeam_channel::{bounded, Receiver, Sender};
 use hashbrown::HashMap;
 
-use crate::common::{CompileError, Notification, Result};
-use crate::runtime::Str;
+use crate::common::{CompileError, Notification, Result, FileSpec};
+use crate::runtime::{command::command_for_write, Str};
 
 /// The maximum number of pending requests in the per-file channels.
 const IO_CHAN_SIZE: usize = 16;
 
 /// The size of client-side batches.
 const BUFFER_SIZE: usize = 8 << 10;
-
-#[derive(Copy, Clone)]
-pub enum FileSpec {
-    Trunc,
-    Append,
-}
-
-impl Default for FileSpec {
-    fn default() -> FileSpec {
-        FileSpec::Append
-    }
-}
 
 /// FileFactory abstracts over the portions of the file system used for the output of a frawk
 /// program. It includes "file objects" as well as "stdout", which both implement the io::Write
@@ -79,6 +68,10 @@ impl Default for FileSpec {
 pub trait FileFactory: Clone + 'static + Send + Sync {
     type Output: io::Write;
     type Stdout: io::Write;
+    // TODO: make ChildStdin an associated type, to permit better testing
+    fn cmd(&self, cmd: &[u8]) -> io::Result<ChildStdin> {
+        command_for_write(cmd)
+    }
     fn build(&self, path: &str, spec: FileSpec) -> io::Result<Self::Output>;
     // TODO maybe we shold support this returning an error.
     fn stdout(&self) -> Self::Stdout;
@@ -103,10 +96,7 @@ fn open_file(path: &str, spec: FileSpec) -> io::Result<FileWriter> {
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .append(match spec {
-            FileSpec::Trunc => false,
-            FileSpec::Append => true,
-        })
+        .append(matches!(spec, FileSpec::Append))
         .open(path)?;
     Ok(file)
 }
@@ -155,7 +145,8 @@ fn build_handle<W: io::Write, F: Fn(FileSpec) -> io::Result<W> + Send + 'static>
 /// to run and listen for new requests that might trigger a reopen.
 pub struct Registry {
     global: Arc<dyn Root>,
-    local: HashMap<Str<'static>, FileHandle>,
+    files: HashMap<Str<'static>, FileHandle>,
+    cmds: HashMap<Str<'static>, FileHandle>,
     stdout: FileHandle,
 }
 
@@ -165,18 +156,62 @@ impl Registry {
         let stdout = root_impl.get_stdout().into_handle();
         Registry {
             global: Arc::new(root_impl),
-            local: Default::default(),
+            files: Default::default(),
+            cmds: Default::default(),
             stdout,
         }
     }
 
-    pub fn get_handle<'a>(&mut self, name: Option<&Str<'a>>) -> Result<&mut FileHandle> {
+    pub fn get_handle<'a>(
+        &mut self,
+        name: Option<&Str<'a>>,
+        fspec: FileSpec,
+    ) -> Result<&mut FileHandle> {
+        let name = if let Some(s) = name {
+            s
+        } else {
+            return self.get_file(None);
+        };
+        match fspec {
+            FileSpec::Cmd => self.get_cmd(name),
+            FileSpec::Trunc | FileSpec::Append => self.get_file(Some(name)),
+        }
+    }
+
+    pub fn close<'a>(&mut self, path_or_cmd: &Str<'a>) -> Result<()> {
+        // TODO: implement a newtype for heterogeneous lookup. We shouldn't have to do the clone or
+        // the unmoor here, but we need to because we cannot implement Borrow<Str<'a>> for
+        // Borrow<Str<'static>> (conflicts with the blanket impl for Borrow).
+        if let Some(fh) = self.files.get_mut(&path_or_cmd.clone().unmoor()) {
+            fh.close()?;
+            return Ok(());
+        }
+        if let Some(ch) = self.cmds.get_mut(&path_or_cmd.clone().unmoor()) {
+            ch.close()?;
+            return Ok(());
+        }
+        path_or_cmd.with_bytes(|bs| self.global.close(bs))
+    }
+
+    pub fn get_cmd<'a>(&mut self, cmd: &Str<'a>) -> Result<&mut FileHandle> {
+        use hashbrown::hash_map::Entry;
+        // borrowed by with_bytes closure.
+        let global = &self.global;
+        match self.cmds.entry(cmd.clone().unmoor()) {
+            Entry::Occupied(o) => Ok(o.into_mut()),
+            Entry::Vacant(v) => {
+                Ok(v.insert(cmd.with_bytes(|bs| global.get_command(bs)).into_handle()))
+            }
+        }
+    }
+
+    pub fn get_file<'a>(&mut self, name: Option<&Str<'a>>) -> Result<&mut FileHandle> {
         match name {
             Some(path) => {
                 use hashbrown::hash_map::Entry;
-                // borrowed by with_str closure.
+                // borrowed by with_bytes closure.
                 let global = &self.global;
-                match self.local.entry(path.clone().unmoor()) {
+                match self.files.entry(path.clone().unmoor()) {
                     Entry::Occupied(o) => Ok(o.into_mut()),
                     Entry::Vacant(v) => {
                         let raw = path.with_bytes(|bs| match std::str::from_utf8(bs) {
@@ -193,7 +228,7 @@ impl Registry {
 
     pub fn destroy_and_flush_all_files(&mut self) -> Result<()> {
         let mut last_error = Ok(());
-        for (_, mut fh) in self.local.drain() {
+        for (_, mut fh) in self.files.drain().chain(self.cmds.drain()) {
             let res = fh.flush();
             if res.is_err() {
                 last_error = res;
@@ -207,7 +242,8 @@ impl Clone for Registry {
     fn clone(&self) -> Registry {
         Registry {
             global: self.global.clone(),
-            local: HashMap::new(),
+            files: Default::default(),
+            cmds: Default::default(),
             stdout: self.stdout.raw().into_handle(),
         }
     }
@@ -216,12 +252,16 @@ impl Clone for Registry {
 // We place Root behind a trait so that we can maintain static dispatch at the level of the
 // receiver threads, while still avoiding an extra type parameter all the way up the stack.
 trait Root: 'static + Send + Sync {
+    fn get_command(&self, cmd: &[u8]) -> RawHandle;
     fn get_handle(&self, fname: &str) -> RawHandle;
     fn get_stdout(&self) -> RawHandle;
+    // closes a file or command with name `fname`.
+    fn close(&self, fname: &[u8]) -> Result<()>;
 }
 
 struct RootImpl<F> {
     handles: Mutex<HashMap<String, RawHandle>>,
+    commands: Mutex<HashMap<Box<[u8]>, RawHandle>>,
     stdout_raw: RawHandle,
     file_factory: F,
 }
@@ -235,6 +275,7 @@ impl<F: FileFactory> RootImpl<F> {
         );
         RootImpl {
             handles: Default::default(),
+            commands: Default::default(),
             stdout_raw,
             file_factory,
         }
@@ -242,6 +283,54 @@ impl<F: FileFactory> RootImpl<F> {
 }
 
 impl<F: FileFactory> Root for RootImpl<F> {
+    fn close(&self, fname: &[u8]) -> Result<()> {
+        let mut handle = None;
+        {
+            let cmds = self.commands.lock().unwrap();
+            if let Some(h) = cmds.get(fname) {
+                // We do this extra song and dance to avoid calling close with the lock held.
+                handle = Some(h.clone());
+            }
+        }
+        if let Some(h) = handle.take() {
+            h.into_handle().close()?;
+            return Ok(());
+        }
+        {
+            let fname = if let Ok(s) = std::str::from_utf8(fname) {
+                s
+            } else {
+                // If this file name is invalid UTF8, we haven't opened it; no need to return an
+                // error.
+                return Ok(());
+            };
+            let files = self.handles.lock().unwrap();
+            if let Some(h) = files.get(fname) {
+                handle = Some(h.clone());
+            }
+        }
+        if let Some(h) = handle.take() {
+            h.into_handle().close()?;
+            return Ok(());
+        }
+        Ok(())
+    }
+    fn get_command(&self, cmd: &[u8]) -> RawHandle {
+        let mut cmds = self.commands.lock().unwrap();
+        if let Some(h) = cmds.get(cmd) {
+            return h.clone();
+        }
+        let local_factory = self.file_factory.clone();
+        let local_name = Box::<[u8]>::from(cmd);
+        let global_name = local_name.clone();
+        let handle = build_handle(
+            move |_| local_factory.cmd(&*local_name),
+            // TODO: reconsider this?
+            /*is_stdout=*/ false,
+        );
+        cmds.insert(global_name, handle.clone());
+        handle
+    }
     fn get_handle(&self, fname: &str) -> RawHandle {
         let mut handles = self.handles.lock().unwrap();
         if let Some(h) = handles.get(fname) {
@@ -800,7 +889,9 @@ mod tests {
         let fs = FakeFs::default();
         let mut reg = Registry::from_factory(fs.clone());
         {
-            let handle = reg.get_handle(/*stdout*/ None).unwrap();
+            let handle = reg
+                .get_handle(/*stdout*/ None, FileSpec::default())
+                .unwrap();
             handle.write(&s1, FileSpec::Append).unwrap();
             handle.write(&s2, FileSpec::Append).unwrap();
             handle.flush().unwrap();
@@ -821,7 +912,7 @@ mod tests {
         let fs = FakeFs::default();
         let mut reg = Registry::from_factory(fs.clone());
         {
-            let handle = reg.get_handle(Some(&fname)).unwrap();
+            let handle = reg.get_handle(Some(&fname), FileSpec::default()).unwrap();
             handle.write(&s1, FileSpec::Append).unwrap();
             handle.write(&s2, FileSpec::Append).unwrap();
             handle.flush().unwrap();
@@ -829,7 +920,7 @@ mod tests {
             handle.write(&s2, FileSpec::Append).unwrap();
         }
         {
-            let handle = reg.get_handle(Some(&fname)).unwrap();
+            let handle = reg.get_handle(Some(&fname), FileSpec::default()).unwrap();
             handle.close().unwrap();
             handle.write(&s1, FileSpec::Trunc).unwrap();
             handle.write(&s2, FileSpec::Trunc).unwrap();
@@ -860,7 +951,7 @@ mod tests {
                     let fbad = Str::from("/fake/BAD");
                     for i in 0..WRITES_PER_THREAD {
                         {
-                            let h1 = treg.get_handle(Some(&fa)).unwrap();
+                            let h1 = treg.get_handle(Some(&fa), FileSpec::default()).unwrap();
                             h1.write(&a, FileSpec::Append).unwrap();
                             if (t + i) % 100 == 0 {
                                 h1.close().unwrap();
@@ -868,7 +959,7 @@ mod tests {
                         }
                         {
                             // We do not close file b, so append=false should not matter.
-                            let h2 = treg.get_handle(Some(&fb)).unwrap();
+                            let h2 = treg.get_handle(Some(&fb), FileSpec::default()).unwrap();
                             h2.write(&b, FileSpec::Trunc).unwrap();
                             if (t + i) % 105 == 0 {
                                 h2.flush().unwrap();
@@ -876,7 +967,7 @@ mod tests {
                         }
 
                         {
-                            let h3 = treg.get_handle(Some(&fbad)).unwrap();
+                            let h3 = treg.get_handle(Some(&fbad), FileSpec::default()).unwrap();
                             // These won't all be errors.
                             let _ = h3.write(&a, FileSpec::Append);
                             if (t + i) % 103 == 0 {

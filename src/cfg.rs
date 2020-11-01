@@ -1,7 +1,7 @@
 use crate::arena;
 use crate::ast::{self, Expr, Stmt, Unop};
 use crate::builtins::{self, IsSprintf};
-use crate::common::{Either, Graph, NodeIx, NumTy, Result, Stage};
+use crate::common::{Either, FileSpec, Graph, NodeIx, NumTy, Result, Stage};
 use crate::dom;
 
 use hashbrown::{HashMap, HashSet};
@@ -185,7 +185,7 @@ pub(crate) enum PrimStmt<'a> {
     Printf(
         /*spec*/ PrimVal<'a>,
         /* args */ SmallVec<PrimVal<'a>>,
-        /* output */ Option<(PrimVal<'a>, /* append */ bool)>,
+        /* output */ Option<(PrimVal<'a>, FileSpec)>,
     ),
 }
 
@@ -778,10 +778,10 @@ where
                     arg_vs.push(arg_v);
                     current_open = next;
                 }
-                let out_v = if let Some((out, append)) = out {
+                let out_v = if let Some((out, spec)) = out {
                     let (next, out_v) = self.convert_val(out, current_open)?;
                     current_open = next;
-                    Some((out_v, *append))
+                    Some((out_v, *spec))
                 } else {
                     None
                 };
@@ -800,9 +800,9 @@ where
                     )?;
                     PrimVal::Var(ors)
                 };
-                let (next, out) = if let Some((o, append)) = out {
+                let (next, out) = if let Some((o, spec)) = out {
                     let (next, e) = self.convert_val(o, current_open)?;
-                    (next, Some((e, append)))
+                    (next, Some((e, spec)))
                 } else {
                     (current_open, None)
                 };
