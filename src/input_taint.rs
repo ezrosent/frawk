@@ -1,5 +1,6 @@
 //! TODO: comment on what we allow and what we don't, emphasize that we're starting things off
 //! pretty conservative.
+use crate::builtins::Variable;
 use crate::bytecode::{Accum, Instr};
 use crate::common::{FileSpec, Graph, NodeIx, NumTy, WorkList};
 use crate::compile::{HighLevel, Ty};
@@ -11,6 +12,8 @@ use petgraph::Direction;
 enum Key {
     Reg(NumTy, Ty),
     Rng,
+    Var(Variable, Ty),
+    Slot(i64, Ty),
 }
 
 impl<'a, T: Accum> From<&'a T> for Key {
@@ -29,6 +32,24 @@ pub struct TaintedStringAnalysis {
 }
 
 impl TaintedStringAnalysis {
+    pub(crate) fn visit_hl(&mut self, inst: &HighLevel) {
+        use HighLevel::*;
+        match inst {
+            Call {
+                func_id,
+                dst_reg,
+                dst_ty,
+                args,
+            } => unimplemented!(),
+            Ret(..) => unimplemented!(),
+            Phi(reg, ty, preds) => {
+                for (_, pred_reg) in preds.iter() {
+                    self.add_dep(Key::Reg(*reg, *ty), Key::Reg(*pred_reg, *ty));
+                }
+            }
+            DropIter(..) => unimplemented!(),
+        }
+    }
     pub(crate) fn visit_ll<'a>(&mut self, inst: &Instr<'a>) {
         use Instr::*;
         match inst {
@@ -154,9 +175,45 @@ impl TaintedStringAnalysis {
                 ..
             } => self.queries.push(cmd.into()),
             Print(_, out, FileSpec::Cmd) => self.queries.push(out.into()),
-            // NEXT UP: here
-            Lookup{map_ty, dst, map, key } => unimplemented!(),
-            Printf { .. }
+            Lookup {
+                map_ty,
+                dst,
+                map,
+                ..
+            } => self.add_dep(
+                Key::Reg(*dst, map_ty.val().unwrap()),
+                Key::Reg(*map, *map_ty),
+            ),
+            Len { map_ty, dst, map } => self.add_dep(Key::Reg(*dst, Ty::Int), Key::Reg(*map, *map_ty)),
+            Store { map_ty, map, key, val } => {
+                self.add_dep(Key::Reg(*map, *map_ty), Key::Reg(*key, map_ty.key().unwrap()));
+                self.add_dep(Key::Reg(*map, *map_ty), Key::Reg(*val, map_ty.val().unwrap()));
+            }
+            IterBegin { map_ty, dst, map } => {
+                self.add_dep(Key::Reg(*dst, map_ty.key_iter().unwrap()), Key::Reg(*map, *map_ty));
+            }
+            IterGetNext{iter_ty, dst, iter} => {
+                self.add_dep(Key::Reg(*dst, iter_ty.iter().unwrap()), Key::Reg(*iter, *iter_ty));
+            }
+            LoadVarStr(dst, v) => self.add_dep(dst, Key::Var(*v, Ty::Str)),
+            LoadVarInt(dst, v) => self.add_dep(dst, Key::Var(*v, Ty::Int)),
+            LoadVarIntMap(dst, v) => self.add_dep(dst, Key::Var(*v, Ty::MapIntStr)),
+            StoreVarStr(v, src) => self.add_dep(Key::Var(*v, Ty::Str), src),
+            StoreVarInt(v, src) => self.add_dep(Key::Var(*v, Ty::Int), src),
+            StoreVarIntMap(v, src) => self.add_dep(Key::Var(*v, Ty::MapIntStr), src),
+            LoadSlot{ty,slot,dst} => self.add_dep(Key::Reg(*dst, *ty), Key::Slot(*slot, *ty)),
+            StoreSlot{ty,slot,src} => self.add_dep(Key::Slot(*slot, *ty), Key::Reg(*src, *ty)),
+            Delete{..}
+            | Contains{..} // 0 or 1
+            | IterHasNext{..}
+            |JmpIf(..)
+            |Jmp(_)
+            | Halt
+            | Push(..)
+            | Pop(..)
+            | Call(_)
+            | Ret
+            | Printf { .. }
             | PrintStdout(_)
             | Print(..)
             | Close(_)
@@ -164,7 +221,6 @@ impl TaintedStringAnalysis {
             | NextFile()
             | SetColumn(_, _)
             | AllocMap(_, _) => {}
-            _ => unimplemented!(),
         }
     }
     fn get_node(&mut self, k: Key) -> NodeIx {
