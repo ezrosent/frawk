@@ -3,9 +3,10 @@ use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{Either, FileSpec, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
+use crate::input_taint::TaintedStringAnalysis;
 #[cfg(feature = "llvm_backend")]
 use crate::llvm;
-use crate::pushdown::{self, FieldSet};
+use crate::pushdown::{FieldSet, UsedFieldAnalysis};
 use crate::runtime::{self, Str};
 use crate::smallvec::{self, smallvec};
 use crate::types;
@@ -127,6 +128,41 @@ impl Ty {
                 err!("attempt to get val of non-map type: {:?}", self)
             }
         }
+    }
+}
+
+fn visit_used_fields<'a>(stmt: &Instr<'a>, ufa: &mut UsedFieldAnalysis) {
+    match stmt {
+        Either::Left(LL::StoreConstInt(dst, i)) if *i >= 0 => ufa.add_field(*dst, *i as usize),
+        Either::Left(LL::Mov(Ty::Int, dst, src)) => {
+            ufa.add_dep(
+                /*from_reg=*/ (*src).into(),
+                /*to_reg=*/ (*dst).into(),
+            );
+        }
+        Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
+        Either::Left(LL::JoinCSV(_, start, end))
+        | Either::Left(LL::JoinTSV(_, start, end))
+        | Either::Left(LL::JoinColumns(_, start, end, _)) => {
+            ufa.add_join(*start, *end);
+        }
+        Either::Right(HighLevel::Phi(dst, Ty::Int, preds)) => {
+            for (_, pred_reg) in preds.iter() {
+                use bytecode::Reg;
+                ufa.add_dep(
+                    /*from_reg=*/ Reg::from(*pred_reg),
+                    /*to_reg=*/ Reg::from(*dst),
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn visit_taint_analysis<'a>(stmt: &Instr<'a>, func_id: NumTy, tsa: &mut TaintedStringAnalysis) {
+    match stmt {
+        Either::Left(ll) => tsa.visit_ll(ll),
+        Either::Right(hl) => tsa.visit_hl(func_id, hl),
     }
 }
 
@@ -281,6 +317,8 @@ pub(crate) struct Typer<'a> {
 
     // For projection pushdown
     used_fields: FieldSet,
+    // For rejecting suspcicious programs with commands.
+    taint_analysis: Option<TaintedStringAnalysis>,
     // Not used for bytecode generation.
     callgraph: Graph<HashSet<(NumTy, Ty)>, ()>,
 
@@ -636,6 +674,9 @@ impl<'a> Typer<'a> {
         // and global variables.
 
         let mut gen = Typer::default();
+        if !pc.allow_arbitrary_commands {
+            gen.taint_analysis = Some(Default::default());
+        }
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
         let local_globals = pc.local_globals();
         macro_rules! init_entry {
@@ -711,49 +752,33 @@ impl<'a> Typer<'a> {
             }
             .process_function(&pc.funcs[src_func])?;
         }
-        gen.compute_used_fields();
+        gen.run_analyses()?;
         gen.mark_used_frames();
         gen.add_slots()?;
         Ok(gen)
     }
 
-    fn compute_used_fields(&mut self) {
-        let mut ufa = pushdown::UsedFieldAnalysis::default();
+    fn run_analyses(&mut self) -> Result<()> {
+        let mut ufa = UsedFieldAnalysis::default();
         for frame in self.frames.iter() {
             for bb in frame.cfg.raw_nodes() {
                 for stmt in bb.weight.iter() {
                     // not tracking function calls
-                    match stmt {
-                        Either::Left(LL::StoreConstInt(dst, i)) if *i >= 0 => {
-                            ufa.add_field(*dst, *i as usize)
-                        }
-                        Either::Left(LL::Mov(Ty::Int, dst, src)) => {
-                            ufa.add_dep(
-                                /*from_reg=*/ (*src).into(),
-                                /*to_reg=*/ (*dst).into(),
-                            );
-                        }
-                        Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
-                        Either::Left(LL::JoinCSV(_, start, end))
-                        | Either::Left(LL::JoinTSV(_, start, end))
-                        | Either::Left(LL::JoinColumns(_, start, end, _)) => {
-                            ufa.add_join(*start, *end);
-                        }
-                        Either::Right(HighLevel::Phi(dst, Ty::Int, preds)) => {
-                            for (_, pred_reg) in preds.iter() {
-                                use bytecode::Reg;
-                                ufa.add_dep(
-                                    /*from_reg=*/ Reg::from(*pred_reg),
-                                    /*to_reg=*/ Reg::from(*dst),
-                                );
-                            }
-                        }
-                        _ => {}
+                    visit_used_fields(stmt, &mut ufa);
+                    if let Some(tsa) = &mut self.taint_analysis {
+                        visit_taint_analysis(stmt, frame.cur_ident, tsa)
                     }
                 }
             }
         }
         self.used_fields = ufa.solve();
+        if let Some(tsa) = &mut self.taint_analysis {
+            if !tsa.ok() {
+                // TODO: provide instructions to opt out.
+                return err!("command potentially containing interpolated user input detected");
+            }
+        }
+        Ok(())
     }
 
     fn mark_used_frames(&mut self) {

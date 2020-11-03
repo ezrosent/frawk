@@ -275,6 +275,8 @@ pub(crate) struct ProgramContext<'a, I> {
     // table at construction time (in the func_table passed to View).
     pub funcs: Vec<Function<'a, I>>,
     main_offset: Stage<usize>,
+    // Permit arbitrary strings to be passed to a subshell, skips any taint analysis of the script.
+    pub allow_arbitrary_commands: bool,
 }
 
 impl<'a, I> ProgramContext<'a, I> {
@@ -538,6 +540,7 @@ where
             shared,
             funcs,
             main_offset,
+            allow_arbitrary_commands: false,
         })
     }
 }

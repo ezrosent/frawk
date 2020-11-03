@@ -14,6 +14,7 @@ enum Key {
     Rng,
     Var(Variable, Ty),
     Slot(i64, Ty),
+    Func(NumTy),
 }
 
 impl<'a, T: Accum> From<&'a T> for Key {
@@ -32,7 +33,16 @@ pub struct TaintedStringAnalysis {
 }
 
 impl TaintedStringAnalysis {
-    pub(crate) fn visit_hl(&mut self, inst: &HighLevel) {
+    pub(crate) fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
+        // A little on how this handles functions. We do not implement a call-sensitive analysis.
+        // Instead, we ask "is the return value of a function always tainted by user input?" when
+        // analyzing the function body and "are any of the arguments tainted by user input" at the
+        // call site. This is a bit simplistic, i.e. it rules out scripts like:
+        //
+        // function cmd(x, y) { return ($0) ? x : y; }
+        // { print "X" | cmd("tee non-empty-line", "tee empty-line") }
+        //
+        // Which should be safe.
         use HighLevel::*;
         match inst {
             Call {
@@ -40,17 +50,30 @@ impl TaintedStringAnalysis {
                 dst_reg,
                 dst_ty,
                 args,
-            } => unimplemented!(),
-            Ret(..) => unimplemented!(),
+            } => {
+                let dst_key = Key::Reg(*dst_reg, *dst_ty);
+                self.add_dep(dst_key.clone(), Key::Func(*func_id));
+                for (reg, ty) in args.iter().cloned() {
+                    self.add_dep(dst_key.clone(), Key::Reg(reg, ty));
+                }
+            }
+            Ret(reg, ty) => {
+                self.add_dep(Key::Func(cur_fn_id), Key::Reg(*reg, *ty));
+            }
             Phi(reg, ty, preds) => {
                 for (_, pred_reg) in preds.iter() {
                     self.add_dep(Key::Reg(*reg, *ty), Key::Reg(*pred_reg, *ty));
                 }
             }
-            DropIter(..) => unimplemented!(),
+            DropIter(..) => {}
         }
     }
     pub(crate) fn visit_ll<'a>(&mut self, inst: &Instr<'a>) {
+        // NB: this analysis currently tracks taint even in string-to-integer operations. I cannot
+        // currently think of any security issues around interpolating an arbitrary integer (or
+        // float, though perhaps that is more plausible) into a shell command. It's a easy and
+        // mechanical fix to break the chain of infection on integer boundaries like this, but we
+        // should read up on the potential attack surface first.
         use Instr::*;
         match inst {
             StoreConstStr(dst, _) => self.add_src(dst, /*tainted=*/ false),
@@ -211,6 +234,8 @@ impl TaintedStringAnalysis {
             | Halt
             | Push(..)
             | Pop(..)
+            // We consume high-level instructions, so calls and returns are handled by visit_hl
+            // above
             | Call(_)
             | Ret
             | Printf { .. }
@@ -235,9 +260,6 @@ impl TaintedStringAnalysis {
             })
             .clone()
     }
-    fn get_reg(&mut self, (reg, ty): (NumTy, Ty)) -> NodeIx {
-        self.get_node(Key::Reg(reg, ty))
-    }
     fn add_dep(&mut self, dst_reg: impl Into<Key>, src_reg: impl Into<Key>) {
         let src_node = self.get_node(src_reg.into());
         let dst_node = self.get_node(dst_reg.into());
@@ -252,10 +274,18 @@ impl TaintedStringAnalysis {
         }
     }
 
-    fn query(&mut self, reg: (NumTy, Ty)) -> bool {
+    pub(crate) fn ok(&mut self) -> bool {
+        // TODO: add context to the "false" case here.
+        if self.queries.len() == 0 {
+            return true;
+        }
         self.solve();
-        let ix = self.get_reg(reg);
-        *self.flows.node_weight(ix).unwrap()
+        for q in self.queries.iter() {
+            if *self.flows.node_weight(self.regs[q]).unwrap() {
+                return false;
+            }
+        }
+        true
     }
 
     fn solve(&mut self) {
