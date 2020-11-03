@@ -10,13 +10,13 @@ pub mod ast;
 pub mod builtins;
 pub mod bytecode;
 pub mod cfg;
-mod input_taint;
 pub mod compile;
 pub mod cross_stage;
 mod display;
 pub mod dom;
 #[cfg(test)]
 pub mod harness;
+mod input_taint;
 pub mod interp;
 pub mod lexer;
 #[cfg(feature = "llvm_backend")]
@@ -88,6 +88,7 @@ struct RawPrelude {
     field_sep: Option<String>,
     output_sep: Option<&'static str>,
     output_record_sep: Option<&'static str>,
+    arbitrary_shell: bool,
     escaper: Escaper,
     stage: Stage<()>,
 }
@@ -98,6 +99,7 @@ struct Prelude<'a> {
     output_sep: Option<&'a str>,
     output_record_sep: Option<&'a str>,
     argv: Vec<&'a str>,
+    arbitrary_shell: bool,
     escaper: Escaper,
     stage: Stage<()>,
 }
@@ -181,6 +183,7 @@ fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
         escaper: raw.escaper,
         output_sep,
         output_record_sep,
+        arbitrary_shell: raw.arbitrary_shell,
         stage: raw.stage.clone(),
         argv: raw.argv.iter().map(|s| a.alloc_str(s.as_str())).collect(),
     }
@@ -210,7 +213,10 @@ fn get_context<'a>(
         }
     };
     match cfg::ProgramContext::from_prog(a, stmt, prelude.escaper) {
-        Ok(ctx) => ctx,
+        Ok(mut ctx) => {
+            ctx.allow_arbitrary_commands = prelude.arbitrary_shell;
+            ctx
+        }
         Err(e) => fail!("failed to create program context: {}", e),
     }
 }
@@ -334,6 +340,11 @@ fn main() {
              .about("Attempt to execute the script in parallel. Strategy r[ecord] parallelizes within and accross files. Strategy f[ile] parallelizes between input files.")
              .short('p')
              .possible_values(&["r", "record", "f", "file"]))
+        .arg(Arg::new("arbitrary-shell")
+             .about("")
+             .short('A')
+             .long("arbitrary-shell")
+             .takes_value(false))
         .arg(Arg::new("jobs")
                 .about("Number or worker threads to launch when executing in parallel, requires '-p' flag to be set")
                 .short('j')
@@ -409,6 +420,7 @@ fn main() {
         ),
         None => (Escaper::Identity, None, None),
     };
+    let arbitrary_shell = matches.is_present("arbitrary-shell");
     let raw = RawPrelude {
         field_sep: matches.value_of("field-separator").map(String::from),
         var_decs: matches
@@ -417,6 +429,7 @@ fn main() {
             .unwrap_or_else(Vec::new),
         output_sep,
         escaper,
+        arbitrary_shell,
         output_record_sep,
         stage: exec_strategy.stage(),
         argv,

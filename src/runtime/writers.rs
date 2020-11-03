@@ -50,7 +50,7 @@ use std::sync::{
 use crossbeam_channel::{bounded, Receiver, Sender};
 use hashbrown::HashMap;
 
-use crate::common::{CompileError, Notification, Result, FileSpec};
+use crate::common::{CompileError, FileSpec, Notification, Result};
 use crate::runtime::{command::command_for_write, Str};
 
 /// The maximum number of pending requests in the per-file channels.
@@ -325,8 +325,7 @@ impl<F: FileFactory> Root for RootImpl<F> {
         let global_name = local_name.clone();
         let handle = build_handle(
             move |_| local_factory.cmd(&*local_name),
-            // TODO: reconsider this?
-            /*is_stdout=*/ false,
+            /*is_stdout=*/ true,
         );
         cmds.insert(global_name, handle.clone());
         handle
