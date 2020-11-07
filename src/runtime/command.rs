@@ -1,6 +1,8 @@
 use std::io;
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 
+use crate::runtime::Int;
+
 fn prepare_command(bs: &[u8]) -> io::Result<Command> {
     let prog = match std::str::from_utf8(bs) {
         Ok(s) => s,
@@ -14,6 +16,20 @@ fn prepare_command(bs: &[u8]) -> io::Result<Command> {
         let mut cmd = Command::new("sh");
         cmd.args(&["-c", prog]);
         Ok(cmd)
+    }
+}
+
+pub fn run_command(bs: &[u8]) -> Int {
+    fn wrap_err(e: Option<i32>) -> Int {
+        e.map(Int::from).unwrap_or(1)
+    }
+    fn run_command_inner(bs: &[u8]) -> io::Result<Int> {
+        let status = prepare_command(bs)?.status()?;
+        Ok(wrap_err(status.code()))
+    }
+    match run_command_inner(bs) {
+        Ok(i) => i,
+        Err(e) => wrap_err(e.raw_os_error()),
     }
 }
 

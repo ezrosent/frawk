@@ -162,6 +162,7 @@ impl Display for Function {
             Rand => write!(f, "rand"),
             Srand => write!(f, "srand"),
             ReseedRng => write!(f, "srand_reseed"),
+            System => write!(f, "system"),
         }
     }
 }

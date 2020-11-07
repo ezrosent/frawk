@@ -208,6 +208,7 @@ pub(crate) enum Instr<'a> {
         FileSpec,     /*append*/
     ),
     Close(Reg<Str<'a>>),
+    RunCmd(Reg<Int>, Reg<Str<'a>>),
 
     // Map operations
     Lookup {
@@ -657,6 +658,7 @@ impl<'a> Instr<'a> {
                 out.accum(&mut f)
             }
             Close(file) => file.accum(&mut f),
+            RunCmd(dst, cmd) => { dst.accum(&mut f); cmd.accum(&mut f); },
             Lookup {
                 map_ty,
                 dst,

@@ -31,6 +31,7 @@ pub use splitter::{
     ChainedReader, Line, LineReader,
 };
 pub use str_impl::{Str, UniqueStr};
+pub use command::run_command;
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.

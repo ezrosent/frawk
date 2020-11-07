@@ -774,7 +774,7 @@ impl<'a> Typer<'a> {
         self.used_fields = ufa.solve();
         if let Some(tsa) = &mut self.taint_analysis {
             if !tsa.ok() {
-                return err!("command potentially containing interpolated user input detected. If this is a false positive, you can pass the -A flag to bypass this check.");
+                return err!("command potentially containing interpolated user input detected.\nIf this is a false positive, you can pass the -A flag to bypass this check.");
             }
         }
         Ok(())
@@ -1312,6 +1312,12 @@ impl<'a, 'b> View<'a, 'b> {
                         }
                     }
                 }
+            }
+            System => {
+                if res_reg == UNUSED {
+                    res_reg = self.regs.stats.reg_of_ty(res_ty);
+                }
+                self.pushl(LL::RunCmd(res_reg.into(), conv_regs[0].into()))
             }
             ReadErr => {
                 if res_reg != UNUSED {

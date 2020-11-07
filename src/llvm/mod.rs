@@ -1810,6 +1810,11 @@ impl<'a> View<'a> {
                 let filev = self.get_local(file.reflect())?;
                 self.call("close_file", &mut [self.runtime_val(), filev]);
             }
+            RunCmd(dst, cmd) => {
+                let cmd = self.get_local(cmd.reflect())?;
+                let resv = self.call("run_system", &mut [cmd]);
+                self.bind_reg(dst, resv);
+            }
             Print(txt, out, append) => {
                 let int_ty = self.tmap.get_ty(Ty::Int);
                 let appv = LLVMConstInt(int_ty, *append as u64, /*sign_extend=*/ 1);
