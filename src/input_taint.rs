@@ -318,3 +318,94 @@ impl TaintedStringAnalysis {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::common::Result;
+
+    fn compiles(p: &str, allow_arbitrary: bool) -> Result<()> {
+        use crate::arena::Arena;
+        use crate::ast;
+        use crate::cfg;
+        use crate::common::{ExecutionStrategy, Stage};
+        use crate::compile;
+        use crate::lexer::Tokenizer;
+        use crate::parsing::syntax::ProgParser;
+        use crate::runtime::{
+            self,
+            splitter::batch::{CSVReader, InputFormat},
+        };
+
+        use std::io;
+        let a = Arena::default();
+        let prog = a.alloc_str(p);
+        let lexer = Tokenizer::new(prog);
+        let mut buf = Vec::new();
+        let parser = ProgParser::new();
+        let mut prog = ast::Prog::from_stage(Stage::Main(()));
+        if let Err(e) = parser.parse(&a, &mut buf, &mut prog, lexer) {
+            return err!("parse failure: {}", e);
+        }
+        let mut ctx = cfg::ProgramContext::from_prog(&a, a.alloc_v(prog), cfg::Escaper::default())?;
+        ctx.allow_arbitrary_commands = allow_arbitrary;
+        let fake_inp: Box<dyn io::Read + Send> = Box::new(std::io::Cursor::new(vec![]));
+        compile::bytecode(
+            &mut ctx,
+            CSVReader::new(
+                std::iter::once((fake_inp, String::from("unused"))),
+                InputFormat::CSV,
+                /*chunk_size=*/ 1024,
+                /*check_utf8=*/ false,
+                ExecutionStrategy::Serial,
+            ),
+            runtime::writers::default_factory(),
+            /*num_workers=*/ 1,
+        )?;
+        Ok(())
+    }
+
+    fn assert_analysis_reject(p: &str) {
+        compiles(p, /*allow_arbitrary=*/ true)
+            .expect(format!("program should compile without taint checks prog=[{}]", p).as_str());
+        assert!(compiles(p, /*allow_arbitrary=*/ false).is_err());
+    }
+
+    fn assert_analysis_accept(p: &str) {
+        compiles(p, /*allow_arbitrary=*/ true)
+            .expect(format!("program should compile without taint checks prog=[{}]", p).as_str());
+        compiles(p, /*allow_arbitrary=*/ false).expect("taint analysis should pass");
+    }
+
+    #[test]
+    fn rules_out() {
+        let progs: &[&str] = &[
+            "BEGIN { print $1 | $2; }",
+            "BEGIN { while ($1 | getline) print; }",
+            "BEGIN { while (length($1) | getline) print; }",
+            r#"BEGIN { while (getline x) print y | ("echo " x); }"#,
+            "BEGIN { if ($2) { j = $1 3; x=j;} print y | x }",
+            r#"function x(a, b) { return $2 a b; }
+            BEGIN { while (x(2, 3) | getline) print; }"#,
+            r#"function x(a, b) { return a b; }
+            BEGIN {  print "hello" | x($2, "dog"); }"#,
+        ];
+
+        for p in progs.iter() {
+            assert_analysis_reject(*p);
+        }
+    }
+
+    #[test]
+    fn rules_in() {
+        let progs: &[&str] = &[
+            r#"BEGIN { print "hello" | "command"; }"#,
+            r#"BEGIN { while ("command" | getline) print; }"#,
+            r#"BEGIN { if ($1) x=5; else y="hi"; print "should work" | x; }"#,
+            r#"function x(a, b) { print $2; return a b;}
+            BEGIN { while(x("echo ", "hi") | getline) print; }"#,
+        ];
+        for p in progs.iter() {
+            assert_analysis_accept(*p);
+        }
+    }
+}
