@@ -201,6 +201,8 @@ their values stop changing. Primary examples of this in frawk are:
 * Determining [which global
   variables](https://github.com/ezrosent/frawk/blob/0cf6bd7554ba14193f32337ea54bd1a8f1401f1f/src/compile.rs#L694)
   are referenced by a function, and the functions that it calls.
+* [Ruling out](https://github.com/ezrosent/frawk/blob/master/src/input_taint.rs)
+  potentially insecure invocations of the shell.
 
 These were all implemented with the help of the very useful
 [petgraph](https://github.com/petgraph/petgraph) library.
@@ -221,14 +223,7 @@ surprised to discover there were bugs in frawk's parser.
 
 ### What is missing
 
-* frawk does not currently support piping output to separate commands, or the
-  `system` function. From what I understand, functions like this (where an
-  arbitrary string is passed wholesale to a shell) are considered anti-patterns,
-  and have been deprecated [in some
-  languages](https://www.python.org/dev/peps/pep-0324/#id14). I'd be open to
-  alternative interfaces: e.g. only opening pipes to a set of strings known at
-  compile time, or passing arguments and commands separately, if anyone was
-  interested.
+
 * By default, frawk uses the [ryu](https://github.com/dtolnay/ryu) crate to
   print floating point numbers, rather than the `CONVFMT` variable. Explicitly
   changing the precision of floating point output requires an appropriate
@@ -266,7 +261,7 @@ surprised to discover there were bugs in frawk's parser.
   parallel](https://github.com/ezrosent/frawk/blob/master/info/parallelism.md).
 * Following `gawk`, bitwise operators are supported via the `and`, `or`, `compl`,
   `lshift`, `rshift`, and  `xor` builtins. `frawk` also supports `rshiftl` for
-  logical right shift. Unlike `gawk`, the `and`, `or` and `xor` functions are 
+  logical right shift. Unlike `gawk`, the `and`, `or` and `xor` functions are
   not variadic.
 * frawk functions can return arrays, function calls can appear in the array
   position for a for-each loop.
@@ -305,3 +300,18 @@ if you find that the following are a serious hindrance:
   with most Awk implementations that I have come across. This is done largely for
   performance reasons, and reflects the intended use-case of "batch" data-
   processing scripts.
+* frawk supports spawning a subshell via the `<string> | getline`, `print[f] ...
+  | <string>` syntax as well as the `system` builtin function.  `system`
+  function. From what I understand, functions like this (where an arbitrary
+  string is passed wholesale to a shell) are considered anti-patterns, and have
+  been deprecated [in some
+  languages](https://www.python.org/dev/peps/pep-0324/#id14) because they make
+  it easy for unsanitized user input to make it into a subshell, potentially
+  doing nefarious or unwanted things with the user's machine. To help mitigate
+  this, frawk implements a [static taint
+  analysis](https://github.com/ezrosent/frawk/blob/master/src/input_taint.rs)
+  that substantially limits the set of strings that can bepassed to the shell.
+  frawk also provides an escape hatch for cases where the input is trusted or
+  the analysis is to conservative: the `-A` flag opts users out of the taint
+  analysis. I am open to feedback on extensions or modifications to this
+  feature.

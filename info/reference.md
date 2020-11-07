@@ -33,13 +33,13 @@ _Unary Operators:_
   seed.
 * Bitwise operations. All of these operations coerce their operands to integers
   before being evaluated.
-	* `compl(x)`: Bitwise complement.
-	* `and(x, y)`: Bitwise and.
-	* `or(x, y)`: Bitwise or.
-	* `xor(x, y)`: Bitwise xor.
-	* `lshift(x, y)`: Shift `x` left by `y` bits.
-	* `rshift(x, y)`: Arithmetic right shift of `x` by `y` bits.
-	* `rshiftl(x, y)`: Logical right shift of `x` by `y` bits.
+  * `compl(x)`: Bitwise complement.
+  * `and(x, y)`: Bitwise and.
+  * `or(x, y)`: Bitwise or.
+  * `xor(x, y)`: Bitwise xor.
+  * `lshift(x, y)`: Shift `x` left by `y` bits.
+  * `rshift(x, y)`: Arithmetic right shift of `x` by `y` bits.
+  * `rshiftl(x, y)`: Logical right shift of `x` by `y` bits.
 
 ## String Operations
 
@@ -47,7 +47,7 @@ _Unary Operators:_
 * `s !~ re`: Equivalent to negating the result of `s ~ re`.
 * `match(s, re)`: 1 if string `s` matches the regular expression in `re`. If `s`
   matches, the `RSTART` variable is set with the start of the leftmost match of
-  `re`, and `RLENGTH` is set with the length of this match. 
+  `re`, and `RLENGTH` is set with the length of this match.
 * `substr(s, i[, j])`: The 1-indexed substring of string `s` starting from index `i`
   and continuing for the next `j` characters or until the end of `s` if `i+j`
   exceeds the length of `s` or if `s` is not provided.
@@ -95,4 +95,7 @@ _Unary Operators:_
 * `close(s)` flushes all pending output to file `s` and then closes it.
 * `length(x)` returns the length of `x`, where `x` can be either a string or an
   array.
+* `system(s)` runs the command contained in the string `s` in a subshell,
+  returning the error code, or the integer `1` if an error code was
+  unavailable. The string `s` is subject to taint analysis by default.
 
