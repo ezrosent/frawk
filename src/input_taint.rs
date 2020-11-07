@@ -32,7 +32,7 @@
 //!
 //! Even though the returned command only contains "static" components found in the program.
 //!
-//! * Map inserts that contain user inputs taint all of that map's keys.
+//! * Map inserts that contain user inputs taint all of that map's keys and values.
 //! * The analysis is flow-insensitive, the following programs may be rejected (though you may get
 //!   lucky, depending on SSA), even though a dynamic analysis would probably run them program
 //!   without issue:
@@ -82,8 +82,8 @@ impl TaintedStringAnalysis {
         // analyzing the function body and "are any of the arguments tainted by user input" at the
         // call site. This is a bit simplistic, i.e. it rules out scripts like:
         //
-        // function cmd(x, y) { return ($0) ? x : y; }
-        // { print "X" | cmd("tee non-empty-line", "tee empty-line") }
+        // function cmd(x, y) { print $x; return y; }
+        // { print "X" | cmd(2, "tee empty-line") }
         //
         // Which should be safe.
         use HighLevel::*;
@@ -437,6 +437,8 @@ mod tests {
             BEGIN {  print "hello" | x($2, "dog"); }"#,
             r#"function x(a, b) { return a b; }
             BEGIN {  system(x($2, "dog")); }"#,
+            r#"BEGIN { for (i=1; i<10; i++) m[i]=$i; system(m[3]); }"#,
+            r#"BEGIN { for (i=1; i<10; i++) m[$i]=i; for (i in m) system(i); }"#,
         ];
 
         for p in progs.iter() {
