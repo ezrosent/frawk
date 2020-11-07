@@ -22,9 +22,11 @@ pub enum Function {
     PrintStdout,
     Close,
     ReadErr,
+    ReadErrCmd,
     Nextline,
     ReadErrStdin,
     NextlineStdin,
+    NextlineCmd,
     ReadLineStdinFused,
     NextFile,
     Setcol,
@@ -421,8 +423,8 @@ impl Function {
             }
             Print => (smallvec![Str, Str, Int], Int),
             PrintStdout => (smallvec![Str], Int),
-            Nextline => (smallvec![Str], Str),
-            ReadErr => (smallvec![Str], Int),
+            NextlineCmd | Nextline => (smallvec![Str], Str),
+            ReadErrCmd | ReadErr => (smallvec![Str], Int),
             NextFile | ReadLineStdinFused => (smallvec![], Int),
             NextlineStdin => (smallvec![], Str),
             ReadErrStdin => (smallvec![], Int),
@@ -454,7 +456,7 @@ impl Function {
             IntFunc(bw) => bw.arity(),
             Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
             Srand | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length | ReadErr
-            | Nextline | PrintStdout | Unop(_) => 1,
+            | ReadErrCmd | Nextline | NextlineCmd | PrintStdout | Unop(_) => 1,
             SubstrIndex | Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
             JoinCols | Substr | Sub | GSub | Print | Split => 3,
@@ -491,11 +493,12 @@ impl Function {
             Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
             SubstrIndex | Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT)
             | Binop(GT) | Binop(LTE) | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr
-            | ReadErrStdin | Contains | Delete | Match | Sub | GSub | ToInt | HexToInt => {
-                Ok(Scalar(BaseTy::Int).abs())
-            }
+            | ReadErrCmd | ReadErrStdin | Contains | Delete | Match | Sub | GSub | ToInt
+            | HexToInt => Ok(Scalar(BaseTy::Int).abs()),
             JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column)
-            | Binop(Concat) | Nextline | NextlineStdin => Ok(Scalar(BaseTy::Str).abs()),
+            | Binop(Concat) | Nextline | NextlineCmd | NextlineStdin => {
+                Ok(Scalar(BaseTy::Str).abs())
+            }
             NextFile | ReadLineStdinFused | Close => Ok(None),
         }
     }

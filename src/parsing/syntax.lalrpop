@@ -151,6 +151,13 @@ ClosedStmt: &'a Stmt<'a,'a,&'a str> = {
     Do <body:BaseStmt> "while" "(" <cond:Expr> ")" Sep => arena.alloc_v(Stmt::DoWhile(cond, body)),
 }
 
+Getline : &'a Expr<'a, 'a, &'a str> = {
+    "getline" <into:BaseTerm?> <from:("<" <Expr>)?> =>
+      arena.alloc_v(Expr::Getline{into, from, is_file: true}),
+    <from:BaseTerm> "|" "getline" <into:BaseTerm?> =>
+      arena.alloc_v(Expr::Getline{into, from: Some(from), is_file: false}),
+}
+
 Redirect: (&'a Expr<'a, 'a, &'a str>, FileSpec) = {
     ">" <Expr> => (<>, FileSpec::Trunc),
     ">>" <Expr> => (<>, FileSpec::Append),
@@ -225,7 +232,7 @@ Args: Vec<&'a Expr<'a,'a,&'a str>> = {
 }
 
 Expr: &'a Expr<'a,'a,&'a str> = {
-    "getline" <into:BaseTerm?> <from:("<" <Expr>)?> => arena.alloc_v(Expr::Getline{ into, from}),
+    Getline,
     PrecAsgn
 };
 
@@ -273,7 +280,7 @@ PrecMatch: &'a Expr<'a,'a,&'a str> = {
 // ambiguity between beginning of for loop and foreach loop. This is a hack; we should find a way
 // to tell LALRPOP the right thing here.
 ExprNoIn: &'a Expr<'a,'a,&'a str> = {
-    "getline" <into:BaseTerm?> <from:("<" <BaseTerm>)?> => arena.alloc_v(Expr::Getline{ into, from}),
+    Getline,
     PrecAsgnNoIn
 };
 

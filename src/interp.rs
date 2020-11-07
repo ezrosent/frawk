@@ -516,7 +516,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         // For handling the worker portion, we want to transfer the current stdin progress to a
         // worker thread, but to withold any progress on other files open for read. We'll swap
         // these back in when we execute the `end` block, if there is one.
-        let mut old_read_files = mem::replace(&mut self.read_files.files, Default::default());
+        let mut old_read_files = mem::replace(&mut self.read_files.inputs, Default::default());
         fn wrap_error<T, S>(r: std::result::Result<Result<T>, S>) -> Result<T> {
             match r {
                 Ok(Ok(t)) => Ok(t),
@@ -583,7 +583,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         });
         wrap_error(scope_res)?;
         if let Some(end) = end {
-            mem::swap(&mut self.read_files.files, &mut old_read_files);
+            mem::swap(&mut self.read_files.inputs, &mut old_read_files);
             self.run_at(end)?;
         }
         Ok(())
@@ -1141,19 +1141,24 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     AllocMap(ty, reg) => self.alloc_map(*ty, *reg),
 
                     // TODO add error logging for these errors perhaps?
-                    ReadErr(dst, file) => {
+                    ReadErr(dst, file, is_file) => {
                         let dst = *dst;
                         let file = index(&self.strs, file);
-                        let res = self.read_files.read_err(file)?;
+                        let res = if *is_file {
+                            self.read_files.read_err(file)?
+                        } else {
+                            self.read_files.read_err_cmd(file)?
+                        };
                         *self.get_mut(dst) = res;
                     }
-                    NextLine(dst, file) => {
+                    NextLine(dst, file, is_file) => {
                         let dst = *dst;
                         let file = index(&self.strs, file);
                         match self.core.regexes.get_line(
                             file,
                             &self.core.vars.rs,
                             &mut self.read_files,
+                            *is_file,
                         ) {
                             Ok(l) => *self.get_mut(dst) = l,
                             Err(_) => *self.get_mut(dst) = "".into(),

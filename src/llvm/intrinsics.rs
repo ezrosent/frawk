@@ -303,9 +303,9 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         printf_impl_file(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty, str_ref_ty, int_ty);
         printf_impl_stdout(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty);
         close_file(rt_ty, str_ref_ty);
-        read_err(rt_ty, str_ref_ty) -> int_ty;
+        read_err(rt_ty, str_ref_ty, int_ty) -> int_ty;
         read_err_stdin(rt_ty) -> int_ty;
-        next_line(rt_ty, str_ref_ty) -> str_ty;
+        next_line(rt_ty, str_ref_ty, int_ty) -> str_ty;
         next_line_stdin(rt_ty) -> str_ty;
         next_line_stdin_fused(rt_ty);
         next_file(rt_ty);
@@ -425,12 +425,17 @@ pub unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void) -> Int {
+pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void, is_file: Int) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         runtime,
         with_input!(&mut runtime.input_data, |(_, read_files)| {
-            read_files.read_err(&*(file as *mut Str))
+            let file = &*(file as *mut Str);
+            if is_file == 0 {
+                read_files.read_err_cmd(file)
+            } else {
+                read_files.read_err(file)
+            }
         }),
         "unexpected error when reading error status of file:"
     );
@@ -493,14 +498,14 @@ pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void) -> U128 {
+pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_file: Int) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let file = &*(file as *mut Str);
     let res = with_input!(&mut runtime.input_data, |(_, read_files)| {
         runtime
             .core
             .regexes
-            .get_line(file, &runtime.core.vars.rs, read_files)
+            .get_line(file, &runtime.core.vars.rs, read_files, is_file != 0)
     });
     match res {
         Ok(res) => mem::transmute::<Str, U128>(res),

@@ -6,6 +6,7 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io;
 use std::iter::FromIterator;
+use std::process::ChildStdout;
 use std::rc::Rc;
 use std::str;
 
@@ -173,25 +174,29 @@ impl RegexCache {
                 Ok(r) => Ok(r),
                 Err(e) => err!("{}", e),
             },
+            // eta-expansion required to get this compiling..
             |x| f(x),
         )
     }
-    // TODO: build constructor, CLI options for the interp path, see that it works.
-    // TODO: build the same path and implement handling for LLVM (no polymorphism, just do an
-    // Either<> of either the CSV or legacy paths).
-    // TODO: add tests for the CSV path (including plumbing in harness to get all of that working).
+
     pub(crate) fn get_line<'a, LR: LineReader>(
         &mut self,
         file: &Str<'a>,
         pat: &Str<'a>,
         reg: &mut FileRead<LR>,
+        is_file: bool,
     ) -> Result<Str<'a>> {
-        Ok(reg
-            .with_file(file, |reader| {
+        Ok(if is_file {
+            reg.with_file(file, |reader| {
                 self.with_regex(pat, |re| reader.read_line_regex(re))
             })?
-            .clone()
-            .upcast())
+        } else {
+            reg.with_cmd(file, |reader| {
+                self.with_regex(pat, |re| reader.read_line_regex(re))
+            })?
+        }
+        .clone()
+        .upcast())
     }
 
     // This only gets used if getline is invoked explicitly without an input file argument.
@@ -369,8 +374,14 @@ impl FileWrite {
 
 pub const CHUNK_SIZE: usize = 8 << 10;
 
+#[derive(Default)]
+pub(crate) struct Inputs {
+    files: Registry<RegexSplitter<File>>,
+    commands: Registry<RegexSplitter<ChildStdout>>,
+}
+
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
-    pub(crate) files: Registry<RegexSplitter<File>>,
+    pub(crate) inputs: Inputs,
     stdin: LR,
 }
 
@@ -381,7 +392,7 @@ impl<LR: LineReader> FileRead<LR> {
             .into_iter()
             .map(|x| {
                 move || FileRead {
-                    files: Default::default(),
+                    inputs: Default::default(),
                     stdin: x(),
                 }
             })
@@ -389,12 +400,12 @@ impl<LR: LineReader> FileRead<LR> {
     }
 
     pub(crate) fn close(&mut self, path: &Str) {
-        self.files.remove(path);
+        self.inputs.files.remove(path);
     }
 
     pub(crate) fn new(stdin: LR, used_fields: &FieldSet) -> FileRead<LR> {
         let mut res = FileRead {
-            files: Default::default(),
+            inputs: Default::default(),
             stdin,
         };
         res.stdin.set_used_fields(used_fields);
@@ -412,10 +423,34 @@ impl<LR: LineReader> FileRead<LR> {
     pub(crate) fn read_err<'a>(&mut self, path: &Str<'a>) -> Result<Int> {
         self.with_file(path, |reader| Ok(reader.read_state()))
     }
+    pub(crate) fn read_err_cmd<'a>(&mut self, cmd: &Str<'a>) -> Result<Int> {
+        self.with_cmd(cmd, |reader| Ok(reader.read_state()))
+    }
 
     pub(crate) fn next_file(&mut self) -> Result<()> {
         let _ = self.stdin.next_file()?;
         Ok(())
+    }
+
+    fn with_cmd<'a, R>(
+        &mut self,
+        cmd: &Str<'a>,
+        f: impl FnMut(&mut RegexSplitter<ChildStdout>) -> Result<R>,
+    ) -> Result<R> {
+        let check_utf8 = self.stdin.check_utf8();
+        self.inputs.commands.get_fallible(
+            cmd,
+            |s| match command::command_for_read(s.as_bytes()) {
+                Ok(r) => Ok(RegexSplitter::new(
+                    r,
+                    CHUNK_SIZE,
+                    cmd.clone().unmoor(),
+                    check_utf8,
+                )),
+                Err(e) => err!("failed to crate command for reading: {}", e),
+            },
+            f,
+        )
     }
 
     fn with_file<'a, R>(
@@ -424,7 +459,7 @@ impl<LR: LineReader> FileRead<LR> {
         f: impl FnMut(&mut RegexSplitter<File>) -> Result<R>,
     ) -> Result<R> {
         let check_utf8 = self.stdin.check_utf8();
-        self.files.get_fallible(
+        self.inputs.files.get_fallible(
             path,
             |s| match File::open(s) {
                 Ok(f) => Ok(RegexSplitter::new(
