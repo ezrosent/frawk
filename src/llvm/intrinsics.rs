@@ -297,6 +297,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         seed_rng(rt_ty, int_ty) -> int_ty;
         reseed_rng(rt_ty) -> int_ty;
 
+        run_system(str_ref_ty) -> int_ty;
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
         sprintf_impl(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
@@ -404,6 +405,12 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         store_slot_strstr(rt_ty, int_ty, map_ty);
     };
     table
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn run_system(cmd: *mut U128) -> Int {
+    let s: &Str = &*(cmd as *mut Str);
+    s.with_bytes(runtime::run_command)
 }
 
 #[no_mangle]

@@ -49,6 +49,7 @@ pub enum Function {
     Rand,
     Srand,
     ReseedRng,
+    System,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -283,7 +284,8 @@ static_map!(
     ["escape_tsv", Function::EscapeTSV],
     ["rand", Function::Rand],
     ["srand", Function::Srand],
-    ["index", Function::SubstrIndex]
+    ["index", Function::SubstrIndex],
+    ["system", Function::System]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -406,7 +408,7 @@ impl Function {
                 _ => return err!("invalid input spec fo Delete: {:?}", &incoming[..]),
             },
             Srand => (smallvec![Int], Int),
-            HexToInt => (smallvec![Str], Int),
+            System | HexToInt => (smallvec![Str], Int),
             ReseedRng => (smallvec![], Int),
             Rand => (smallvec![], Float),
             ToInt => {
@@ -455,8 +457,8 @@ impl Function {
             FloatFunc(ff) => ff.arity(),
             IntFunc(bw) => bw.arity(),
             Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
-            Srand | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length | ReadErr
-            | ReadErrCmd | Nextline | NextlineCmd | PrintStdout | Unop(_) => 1,
+            Srand | System | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length
+            | ReadErr | ReadErrCmd | Nextline | NextlineCmd | PrintStdout | Unop(_) => 1,
             SubstrIndex | Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
             JoinCols | Substr | Sub | GSub | Print | Split => 3,
@@ -494,7 +496,7 @@ impl Function {
             SubstrIndex | Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT)
             | Binop(GT) | Binop(LTE) | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr
             | ReadErrCmd | ReadErrStdin | Contains | Delete | Match | Sub | GSub | ToInt
-            | HexToInt => Ok(Scalar(BaseTy::Int).abs()),
+            | System | HexToInt => Ok(Scalar(BaseTy::Int).abs()),
             JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column)
             | Binop(Concat) | Nextline | NextlineCmd | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())

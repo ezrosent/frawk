@@ -251,6 +251,10 @@ impl TaintedStringAnalysis {
                 ..
             } => self.queries.push(cmd.into()),
             Print(_, out, FileSpec::Cmd) => self.queries.push(out.into()),
+            RunCmd(dst, cmd) => {
+                self.queries.push(cmd.into());
+                self.add_src(dst, true);
+            }
             Lookup {
                 map_ty,
                 dst,
@@ -431,6 +435,8 @@ mod tests {
             BEGIN { while (x(2, 3) | getline) print; }"#,
             r#"function x(a, b) { return a b; }
             BEGIN {  print "hello" | x($2, "dog"); }"#,
+            r#"function x(a, b) { return a b; }
+            BEGIN {  system(x($2, "dog")); }"#,
         ];
 
         for p in progs.iter() {
@@ -446,6 +452,8 @@ mod tests {
             r#"BEGIN { if ($1) x=5; else y="hi"; print "should work" | x; }"#,
             r#"function x(a, b) { print $2; return a b;}
             BEGIN { while(x("echo ", "hi") | getline) print; }"#,
+            r#"function x(a, b) { return a b; }
+            BEGIN {  system(x($2, "dog") ? "echo hello" : "echo goodbye"); }"#,
         ];
         for p in progs.iter() {
             assert_analysis_accept(*p);

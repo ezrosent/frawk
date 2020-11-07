@@ -1074,6 +1074,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.core.write_files.close(file)?;
                         self.read_files.close(file);
                     }
+                    RunCmd(dst, cmd) => {
+                        *index_mut(&mut self.ints, dst) = index(&self.strs, cmd).with_bytes(runtime::run_command);
+                    }
                     Lookup {
                         map_ty,
                         dst,
