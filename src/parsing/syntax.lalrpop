@@ -154,7 +154,7 @@ ClosedStmt: &'a Stmt<'a,'a,&'a str> = {
 Getline : &'a Expr<'a, 'a, &'a str> = {
     "getline" <into:BaseTerm?> <from:("<" <Expr>)?> =>
       arena.alloc_v(Expr::Getline{into, from, is_file: true}),
-    <from:BaseTerm> "|" "getline" <into:BaseTerm?> =>
+    <from:PrecFieldRef> "|" "getline" <into:BaseTerm?> =>
       arena.alloc_v(Expr::Getline{into, from: Some(from), is_file: false}),
 }
 
