@@ -1,5 +1,48 @@
-//! TODO: comment on what we allow and what we don't, emphasize that we're starting things off
-//! pretty conservative.
+//! This module performs a static _taint analysis_ of a (typed) frawk program.
+//!
+//! The goal is to detect any strings that are passed to the system shell whose content is
+//! "tainted" by user input. At a high level, we want to allow executing string constants and
+//! concatentations of multiple string constants, but we don't want to allow anything that has
+//! "touched" user input. We do this to avoid scripts being unexpectedly hijacked based on user
+//! input abusing (e.g.) shell escaping rules in an unexpected way. "tainted", a term we borrow
+//! from Perl's taint checking, essentially means "whose contents are derived from". For example:
+//!
+//! >  x = "dog" $1;
+//!
+//! Taints the variable `x`, because it contains text from user input ($1).  For the time being,
+//! numbers derived from user input also count, so `x` is tainted in this case as well:
+//!
+//! > x = "dup" length($1);
+//!
+//! On the other hand:
+//!
+//! > if ($1 ~ "dog) { x = "echo" } else { x = "tee" }
+//!
+//! Does not taint `x`, because while `x`'s value depends on user input, the set of possible values
+//! `x` might take on dynamically remains the same regardless of what values are passed as input.
+//! Note that unlike Perl's taint checking, frawk's is (a) on by default and (b) is checked
+//! statically. The static nature of the analysis drastically limits the overhead of the checking,
+//! but it does mean we have to be conservative at points. Some of these limitations are inherent,
+//! some are a product of the simplicity of the analysis:
+//!
+//! * We do not handle functions in all generality. We reject programs like:
+//!
+//! > function x(a, b) { print $b; return "echo " a; }
+//! > BEGIN { while (x("hi", 0) | getline) print; }
+//!
+//! Even though the returned command only contains "static" components found in the program.
+//!
+//! * Map inserts that contain user inputs taint all of that map's keys.
+//! * The analysis is flow-insensitive, the following programs may be rejected (though you may get
+//!   lucky, depending on SSA), even though a dynamic analysis would probably run them program
+//!   without issue:
+//!
+//! > BEGIN { x= "tee /tmp/out"; print "TEST" | x; x=$1; }
+//! > BEGIN { x= 1?"tee /tmp/out":$1; print "TEST" | x;}
+//!
+//! Users that wish to execute a script they believe is safe, but is rejected by the analysis
+//! (either because the analysis is too conservative, or because they trust user input) can opt out
+//! of taint analysis using the -A flag.
 use crate::builtins::Variable;
 use crate::bytecode::{Accum, Instr};
 use crate::common::{FileSpec, Graph, NodeIx, NumTy, WorkList};
@@ -348,7 +391,7 @@ mod tests {
         }
         let mut ctx = cfg::ProgramContext::from_prog(&a, a.alloc_v(prog), cfg::Escaper::default())?;
         ctx.allow_arbitrary_commands = allow_arbitrary;
-        let fake_inp: Box<dyn io::Read + Send> = Box::new(std::io::Cursor::new(vec![]));
+        let fake_inp: Box<dyn io::Read + Send> = Box::new(io::Cursor::new(vec![]));
         compile::bytecode(
             &mut ctx,
             CSVReader::new(
