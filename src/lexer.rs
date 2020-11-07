@@ -129,6 +129,7 @@ lazy_static! {
     static ref WS: Regex = Regex::new(r"^\s").unwrap();
     static ref WS_BRACE: Regex = Regex::new(r"^[\s{}]").unwrap();
     static ref WS_SEMI: Regex = Regex::new(r"^[\s;]").unwrap();
+    static ref WS_SEMI_RPAREN: Regex = Regex::new(r"^[\s;)]").unwrap();
     static ref WS_PAREN: Regex = Regex::new(r"^[\s()]").unwrap();
 }
 
@@ -156,7 +157,7 @@ keyword_map!(
     [b"]", Tok::RBrack],
     [b"(", Tok::LParen],
     [b")", Tok::RParen],
-    [b"getline", Tok::Getline, WS_SEMI.clone()],
+    [b"getline", Tok::Getline, WS_SEMI_RPAREN.clone()],
     [b"|", Tok::Pipe],
     [b"=", Tok::Assign],
     [b"+", Tok::Add],

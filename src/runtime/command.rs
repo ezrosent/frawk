@@ -1,5 +1,5 @@
 use std::io;
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 
 fn prepare_command(bs: &[u8]) -> io::Result<Command> {
     let prog = match std::str::from_utf8(bs) {
@@ -23,7 +23,7 @@ pub fn command_for_write(bs: &[u8]) -> io::Result<ChildStdin> {
     Ok(child.stdin.take().unwrap())
 }
 
-pub fn command_for_read(bs: &[u8]) -> io::Result<impl io::Read> {
+pub fn command_for_read(bs: &[u8]) -> io::Result<ChildStdout> {
     let mut cmd = prepare_command(bs)?;
     let mut child = cmd.stdin(Stdio::inherit()).stdout(Stdio::piped()).spawn()?;
     Ok(child.stdout.take().unwrap())

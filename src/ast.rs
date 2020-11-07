@@ -327,6 +327,7 @@ pub enum Expr<'a, 'b, I> {
     Getline {
         into: Option<&'a Expr<'a, 'b, I>>,
         from: Option<&'a Expr<'a, 'b, I>>,
+        is_file: bool,
     },
     ReadStdin,
     // Used for comma patterns

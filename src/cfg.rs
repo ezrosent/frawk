@@ -1160,7 +1160,11 @@ where
                     current_open,
                 );
             }
-            Getline { from, into } => {
+            Getline {
+                from,
+                into,
+                is_file,
+            } => {
                 // If we had a `getline` call before assigning to `FS` or `RS` in the BEGIN block,
                 // we want to disable any optimizations around field splitting.
                 self.f
@@ -1177,7 +1181,11 @@ where
                 //  getline < file => getline $0 < file
                 //  getline var => getline var < stdin
                 //  getline => getline $0
-                use builtins::Function::{Nextline, NextlineStdin, ReadErr, ReadErrStdin};
+                use builtins::Function::{
+                    Nextline, NextlineCmd, NextlineStdin, ReadErr, ReadErrCmd, ReadErrStdin,
+                };
+                let next_line = if *is_file { Nextline } else { NextlineCmd };
+                let read_err = if *is_file { ReadErr } else { ReadErrCmd };
                 match (from, into) {
                     // an unadorned `getline` is uses the "fused" stdin construct, which in turn
                     // enables some optimizations.
@@ -1189,6 +1197,7 @@ where
                             &ast::Expr::Getline {
                                 from: from.clone(),
                                 into: Some(&Unop(ast::Unop::Column, &ast::Expr::ILit(0))),
+                                is_file: *is_file,
                             },
                             current_open,
                         )
@@ -1197,12 +1206,12 @@ where
                         let (next, _) = self.convert_expr(
                             &ast::Expr::Assign(
                                 into,
-                                &ast::Expr::Call(Either::Right(Nextline), vec![from]),
+                                &ast::Expr::Call(Either::Right(next_line), vec![from]),
                             ),
                             current_open,
                         )?;
                         return self.convert_expr(
-                            &ast::Expr::Call(Either::Right(ReadErr), vec![from]),
+                            &ast::Expr::Call(Either::Right(read_err), vec![from]),
                             next,
                         );
                     }

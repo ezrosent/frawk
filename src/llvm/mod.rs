@@ -396,7 +396,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                         .collect();
                     with_input!(&mut rt.input_data, |(_, read_files)| {
                         let old_read_files =
-                            mem::replace(&mut read_files.files, Default::default());
+                            mem::replace(&mut read_files.inputs, Default::default());
                         let main_addr = LLVMGetFunctionAddress(self.engine, main_loop.unwrap().0);
                         let main_func =
                             mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(main_addr);
@@ -422,7 +422,7 @@ impl<'a, 'b> Generator<'a, 'b> {
                                 }
                                 rt.concurrent = false;
                                 if let Some((end_name, _)) = end {
-                                    read_files.files = old_read_files;
+                                    read_files.inputs = old_read_files;
                                     self.run_function(&mut rt, end_name);
                                 }
                             });
@@ -1818,14 +1818,18 @@ impl<'a> View<'a> {
                 self.call("print", &mut [self.runtime_val(), txtv, outv, appv]);
             }
 
-            ReadErr(dst, file) => {
+            ReadErr(dst, file, is_file) => {
                 let filev = self.get_local(file.reflect())?;
-                let resv = self.call("read_err", &mut [self.runtime_val(), filev]);
+                let int_ty = self.tmap.get_ty(Ty::Int);
+                let is_filev = LLVMConstInt(int_ty, *is_file as u64, /*sign_extend=*/ 1);
+                let resv = self.call("read_err", &mut [self.runtime_val(), filev, is_filev]);
                 self.bind_reg(dst, resv);
             }
-            NextLine(dst, file) => {
+            NextLine(dst, file, is_file) => {
                 let filev = self.get_local(file.reflect())?;
-                let resv = self.call("next_line", &mut [self.runtime_val(), filev]);
+                let int_ty = self.tmap.get_ty(Ty::Int);
+                let is_filev = LLVMConstInt(int_ty, *is_file as u64, /*sign_extend=*/ 1);
+                let resv = self.call("next_line", &mut [self.runtime_val(), filev, is_filev]);
                 self.bind_reg(dst, resv);
             }
             ReadErrStdin(dst) => {

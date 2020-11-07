@@ -171,9 +171,19 @@ impl TaintedStringAnalysis {
                 self.add_dep(dst, z);
             }
             // maybe a bit paranoid, but may as well.
-            ReadErr(dst, _) => self.add_src(dst, true),
+            ReadErr(dst, cmd, is_file) => {
+                self.add_src(dst, true);
+                if !*is_file {
+                    self.queries.push(cmd.into());
+                }
+            },
+            NextLine(dst, cmd, is_file) => {
+                self.add_src(dst, true);
+                if !*is_file {
+                    self.queries.push(cmd.into())
+                }
+            },
             ReadErrStdin(dst) => self.add_src(dst, true),
-            NextLine(dst, _) => self.add_src(dst, true),
             NextLineStdin(dst) => self.add_src(dst, true),
             SplitInt(dst1, src1, dst2, src2) => {
                 self.add_dep(dst1, src1);

@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
 use crate::builtins::{Bitwise, FloatFunc, Variable};
-use crate::common::{FileSpec,NumTy};
+use crate::common::{FileSpec, NumTy};
 use crate::compile::{self, Ty};
 use crate::interp::{index, index_mut, Storage};
 use crate::runtime::{self, Float, Int, Str, UniqueStr};
@@ -169,8 +169,8 @@ pub(crate) enum Instr<'a> {
     ),
 
     // File reading.
-    ReadErr(Reg<Int>, Reg<Str<'a>>),
-    NextLine(Reg<Str<'a>>, Reg<Str<'a>>),
+    ReadErr(Reg<Int>, Reg<Str<'a>>, /*is_file=*/ bool),
+    NextLine(Reg<Str<'a>>, Reg<Str<'a>>, /*is_file=*/ bool),
     ReadErrStdin(Reg<Int>),
     NextLineStdin(Reg<Str<'a>>),
     // Fetches line directly into $0.
@@ -725,11 +725,11 @@ impl<'a> Instr<'a> {
                 f(*src, *ty);
             }
             AllocMap(ty, reg) => f(*reg, *ty),
-            ReadErr(dst, file) => {
+            ReadErr(dst, file, _) => {
                 dst.accum(&mut f);
                 file.accum(&mut f)
             }
-            NextLine(dst, file) => {
+            NextLine(dst, file, _) => {
                 dst.accum(&mut f);
                 file.accum(&mut f)
             }

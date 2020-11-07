@@ -774,8 +774,7 @@ impl<'a> Typer<'a> {
         self.used_fields = ufa.solve();
         if let Some(tsa) = &mut self.taint_analysis {
             if !tsa.ok() {
-                // TODO: provide instructions to opt out.
-                return err!("command potentially containing interpolated user input detected");
+                return err!("command potentially containing interpolated user input detected. If this is a false positive, you can pass the -A flag to bypass this check.");
             }
         }
         Ok(())
@@ -1316,10 +1315,32 @@ impl<'a, 'b> View<'a, 'b> {
             }
             ReadErr => {
                 if res_reg != UNUSED {
-                    self.pushl(LL::ReadErr(res_reg.into(), conv_regs[0].into()))
+                    self.pushl(LL::ReadErr(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        /*is_file=*/ true,
+                    ))
                 }
             }
-            Nextline => self.pushl(LL::NextLine(res_reg.into(), conv_regs[0].into())),
+            ReadErrCmd => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::ReadErr(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        /*is_file=*/ false,
+                    ))
+                }
+            }
+            Nextline => self.pushl(LL::NextLine(
+                res_reg.into(),
+                conv_regs[0].into(),
+                /*is_file=*/ true,
+            )),
+            NextlineCmd => self.pushl(LL::NextLine(
+                res_reg.into(),
+                conv_regs[0].into(),
+                /*is_file=*/ false,
+            )),
             ReadErrStdin => {
                 if res_reg != UNUSED {
                     self.pushl(LL::ReadErrStdin(res_reg.into()))
