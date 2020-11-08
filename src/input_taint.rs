@@ -33,14 +33,14 @@
 //! Even though the returned command only contains "static" components found in the program.
 //!
 //! * Map inserts that contain user inputs taint all of that map's keys and values.
-//! * The analysis is flow-insensitive, the following programs may be rejected (though you may get
+//! * The analysis is flow-insensitive; the following programs may be rejected (though you may get
 //!   lucky, depending on SSA), even though a dynamic analysis would probably run them program
 //!   without issue:
 //!
 //! > BEGIN { x= "tee /tmp/out"; print "TEST" | x; x=$1; }
 //! > BEGIN { x= 1?"tee /tmp/out":$1; print "TEST" | x;}
 //!
-//! Users that wish to execute a script they believe is safe, but is rejected by the analysis
+//! Users who wish to execute a script they believe is safe, but is rejected by the analysis
 //! (either because the analysis is too conservative, or because they trust user input) can opt out
 //! of taint analysis using the -A flag.
 use crate::builtins::Variable;
