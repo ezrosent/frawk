@@ -658,7 +658,10 @@ impl<'a> Instr<'a> {
                 out.accum(&mut f)
             }
             Close(file) => file.accum(&mut f),
-            RunCmd(dst, cmd) => { dst.accum(&mut f); cmd.accum(&mut f); },
+            RunCmd(dst, cmd) => {
+                dst.accum(&mut f);
+                cmd.accum(&mut f);
+            }
             Lookup {
                 map_ty,
                 dst,
