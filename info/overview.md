@@ -301,8 +301,8 @@ if you find that the following are a serious hindrance:
   performance reasons, and reflects the intended use-case of "batch" data-
   processing scripts.
 * frawk supports spawning a subshell via the `<string> | getline`, `print[f] ...
-  | <string>` syntax as well as the `system` builtin function.  `system`
-  function. From what I understand, functions like this (where an arbitrary
+  | <string>` syntax as well as the `system` builtin function. From what I
+  understand, functions like this (where an arbitrary
   string is passed wholesale to a shell) are considered anti-patterns, and have
   been deprecated [in some
   languages](https://www.python.org/dev/peps/pep-0324/#id14) because they make
