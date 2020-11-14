@@ -301,6 +301,22 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                         debug_assert_eq!(new_len, 0);
                         true
                     };
+                    // chunk.len is a bit tricky. There are two signals that we have to take into
+                    // account:
+                    // 1) Is this the last buffer? (is_eof)
+                    // 2) Does this buffer contain a record separator? (!is_partial)
+                    //
+                    // If it is the last buffer then we should set chunk.len to self.inner.end,
+                    // which is all of the bytes that were returned by the underlying reader. This
+                    // is true regardless of whether or not there's a record separator in the
+                    // input.
+                    //
+                    // If this is _not_ the last buffer and we do have a record separator, we need
+                    // to adjust the length of the chunk to only encompass the buffer's contents up
+                    // through the last record separator (target.unwrap()).
+                    //
+                    // Lastly, if it is not the last buffer and we do not have a record separator,
+                    // we simply repeat this entire loop.
                     chunk.len = self.inner.end;
                     let is_eof = self.inner.reset()?;
                     return match (is_partial, is_eof) {
@@ -308,6 +324,7 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                             // Yield buffer, stay in main.
                             chunk.buf = Some(buf.try_unique().unwrap());
                             chunk.off.fields.truncate(new_len);
+                            chunk.len = target.unwrap();
                             Ok(false)
                         }
                         (false, true) | (true, true) => {
@@ -358,9 +375,10 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                     let bs = buf.as_bytes();
                     self.1 = (self.0.find_indexes)(bs, &mut chunk.off, self.1);
                     // Find the last newline in the buffer, if there is one.
-                    let (is_partial, truncate_to) =
+                    let (is_partial, truncate_to, len_if_not_last) =
                         if let Some(nl_off) = chunk.off.nl.fields.last().cloned() {
-                            self.0.inner.start = nl_off as usize + 1;
+                            let buf_end = nl_off as usize + 1;
+                            self.0.inner.start = buf_end;
                             let mut start = chunk.off.ws.fields.len() as isize - 1;
                             while start > 0 {
                                 if chunk.off.ws.fields[start as usize] > nl_off as u64 {
@@ -373,10 +391,11 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                                     break;
                                 }
                             }
-                            (false, start as usize)
+                            (false, start as usize, buf_end)
                         } else {
-                            (true, 0)
+                            (true, 0, 0)
                         };
+                    // See comments in get_chunk for OffsetChunkProducer<R, F>
                     chunk.len = self.0.inner.end;
                     let is_eof = self.0.inner.reset()?;
                     return match (is_partial, is_eof) {
@@ -384,6 +403,7 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                             // Yield buffer, stay in main.
                             chunk.buf = Some(buf.try_unique().unwrap());
                             chunk.off.ws.fields.truncate(truncate_to);
+                            chunk.len = len_if_not_last;
                             Ok(false)
                         }
                         (false, true) | (true, true) => {

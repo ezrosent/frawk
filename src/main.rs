@@ -371,6 +371,9 @@ fn main() {
             x
         ),
     };
+
+    // NB: do we want this to be a command-line param?
+    let chunk_size = CHUNK_SIZE;
     let num_workers = match matches.value_of("jobs") {
         Some(s) => match s.parse::<usize>() {
             Ok(u) => u,
@@ -494,7 +497,7 @@ fn main() {
                         let $inp = CSVReader::new(
                             once((_reader, String::from("-"))),
                             ifmt,
-                            CHUNK_SIZE,
+                            chunk_size,
                             check_utf8,
                             exec_strategy,
                         );
@@ -513,7 +516,7 @@ fn main() {
                             if field_sep == " " && record_sep == "\n" {
                                 let $inp = ByteReader::new_whitespace(
                                     once((_reader, String::from("-"))),
-                                    CHUNK_SIZE,
+                                    chunk_size,
                                     check_utf8,
                                     exec_strategy,
                                 );
@@ -523,7 +526,7 @@ fn main() {
                                     once((io::stdin(), String::from("-"))),
                                     field_sep.as_bytes()[0],
                                     record_sep.as_bytes()[0],
-                                    CHUNK_SIZE,
+                                    chunk_size,
                                     check_utf8,
                                     exec_strategy,
                                 );
@@ -531,13 +534,13 @@ fn main() {
                             }
                         } else {
                             let $inp =
-                                chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-", check_utf8));
+                                chained(RegexSplitter::new(_reader, chunk_size, "-", check_utf8));
                             $body
                         }
                     }
                     (None, cfg::SepAssign::Unsure) => {
                         let $inp =
-                            chained(RegexSplitter::new(_reader, CHUNK_SIZE, "-", check_utf8));
+                            chained(RegexSplitter::new(_reader, chunk_size, "-", check_utf8));
                         $body
                     }
                 }
@@ -550,7 +553,7 @@ fn main() {
                 let $inp = CSVReader::new(
                     file_handles.into_iter(),
                     ifmt,
-                    CHUNK_SIZE,
+                    chunk_size,
                     check_utf8,
                     exec_strategy,
                 );
@@ -572,7 +575,7 @@ fn main() {
                             if field_sep == " " && record_sep == "\n" {
                                 let $inp = ByteReader::new_whitespace(
                                     file_handles.into_iter(),
-                                    CHUNK_SIZE,
+                                    chunk_size,
                                     check_utf8,
                                     exec_strategy,
                                 );
@@ -582,7 +585,7 @@ fn main() {
                                     file_handles.into_iter(),
                                     field_sep.as_bytes()[0],
                                     record_sep.as_bytes()[0],
-                                    CHUNK_SIZE,
+                                    chunk_size,
                                     check_utf8,
                                     exec_strategy,
                                 );
@@ -592,7 +595,7 @@ fn main() {
                             let iter = input_files.iter().cloned().map(|file| {
                                 let reader: Box<dyn io::Read + Send> =
                                     Box::new(open_file_read(file.as_str()));
-                                RegexSplitter::new(reader, CHUNK_SIZE, file, check_utf8)
+                                RegexSplitter::new(reader, chunk_size, file, check_utf8)
                             });
                             let $inp = ChainedReader::new(iter);
                             $body
@@ -602,7 +605,7 @@ fn main() {
                         let iter = input_files.iter().cloned().map(|file| {
                             let reader: Box<dyn io::Read + Send> =
                                 Box::new(open_file_read(file.as_str()));
-                            RegexSplitter::new(reader, CHUNK_SIZE, file, check_utf8)
+                            RegexSplitter::new(reader, chunk_size, file, check_utf8)
                         });
                         let $inp = ChainedReader::new(iter);
                         $body

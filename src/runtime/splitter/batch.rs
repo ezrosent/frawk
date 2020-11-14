@@ -1669,7 +1669,13 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
         let offs = &mut self.cur_chunk.off;
         for index in &offs.fields[offs.start..] {
             let index = *index as usize;
-            debug_assert!(index < self.buf_len);
+            debug_assert!(
+                index < self.buf_len,
+                "buf_len={} index={}, off.fields={:?}",
+                self.buf_len,
+                index,
+                &offs.fields[offs.start..]
+            );
 
             offs.start += 1;
             let is_record_sep = *bytes.get_unchecked(index) == self.record_sep;
@@ -1787,8 +1793,8 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
 mod tests {
     use super::*;
     use crate::runtime::LazyVec;
-
-    use std::iter::once;
+    use std::io;
+    use std::iter;
 
     fn smoke_test<V: generic::Vector>() {
         let text: &'static str = r#"This,is,"a line with a quoted, comma",and
@@ -1856,7 +1862,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         let mut got = Vec::with_capacity(corpus.len());
         let reader = std::io::Cursor::new(corpus);
         let mut reader = CSVReader::new(
-            once((reader, String::from("fake-stdin"))),
+            iter::once((reader, String::from("fake-stdin"))),
             InputFormat::TSV,
             /*chunk_size=*/ 512,
             /*check_utf8=*/ true,
@@ -1924,7 +1930,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
 
         let reader = std::io::Cursor::new(corpus);
         let mut reader = ByteReader::new(
-            once((reader, String::from("fake-stdin"))),
+            iter::once((reader, String::from("fake-stdin"))),
             fs,
             rs,
             1024,
@@ -2005,6 +2011,93 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
     #[test]
     fn bytes_splitter_trailing() {
         bytes_split(b' ', b'\n', "   leading whitespace   \n and some    more\n");
+    }
+
+    fn multithreaded_count<LR: LineReader + 'static>(
+        corpus: &'static str,
+        n_threads: usize,
+        make_br: impl Fn(io::Cursor<&'static str>) -> LR,
+    ) {
+        use crate::common::Notification;
+        use std::sync::Arc;
+        use std::thread;
+        let mut expected: usize = corpus.split('\n').count();
+        let notify = Arc::new(Notification::default());
+
+        // For buffers that end in "\n" we don't want a trailing empty field.
+        if corpus.as_bytes().last() == Some(&b'\n') {
+            expected = expected.checked_sub(1).unwrap();
+        }
+        let reader = make_br(std::io::Cursor::new(corpus));
+        let others = reader.request_handles(n_threads);
+        assert_eq!(others.len(), n_threads);
+        let mut threads = Vec::new();
+        for t in others.into_iter() {
+            let n = notify.clone();
+            threads.push(thread::spawn(move || {
+                let mut _cache = RegexCache::default();
+                let _pat = Str::default();
+                let mut got = 0;
+                n.wait();
+                let mut reader = t();
+                loop {
+                    let (_, _line) = reader
+                        .read_line(&_pat, &mut _cache)
+                        .expect("failed to read line");
+                    if reader.read_state() != 1 {
+                        break;
+                    }
+                    got += 1;
+                }
+                got
+            }));
+        }
+        notify.notify();
+        let mut got_total = 0;
+        for thr in threads.into_iter() {
+            got_total += thr.join().expect("thread died unexpectedly");
+        }
+        assert_eq!(expected, got_total);
+    }
+
+    #[test]
+    fn br_multithreaded_count() {
+        fn make_br_ws(reader: impl io::Read + Send + 'static) -> impl LineReader {
+            ByteReader::new_whitespace(
+                iter::once((reader, String::from("fake-stdin"))),
+                /*chunk_size=*/ 1024,
+                /*check_utf8=*/ false,
+                ExecutionStrategy::ShardPerRecord,
+            )
+        }
+        fn make_br(reader: impl io::Read + Send + 'static) -> impl LineReader {
+            ByteReader::new(
+                iter::once((reader, String::from("fake-stdin"))),
+                /*field_sep=*/ b' ',
+                /*record_sep=*/ b'\n',
+                /*chunk_size=*/ 1024,
+                /*check_utf8=*/ false,
+                ExecutionStrategy::ShardPerRecord,
+            )
+        }
+        multithreaded_count(
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2,
+            4,
+            make_br_ws,
+        );
+        multithreaded_count(crate::test_string_constants::VIRGIL, 4, make_br_ws);
+        multithreaded_count(
+            "   leading whitespace   \n and some    more\n",
+            2,
+            make_br_ws,
+        );
+        multithreaded_count(
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2,
+            4,
+            make_br,
+        );
+        multithreaded_count(crate::test_string_constants::VIRGIL, 4, make_br);
+        multithreaded_count("   leading whitespace   \n and some    more\n", 2, make_br);
     }
 
     fn whitespace_split(corpus: &'static str) {
