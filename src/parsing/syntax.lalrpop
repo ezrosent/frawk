@@ -248,11 +248,15 @@ PrecAsgn: &'a Expr<'a,'a,&'a str> = {
     PrecTern,
 }
 
-LookupList: Vec<&'a Expr<'a, 'a, &'a str>> = {
+LookupList: &'a Expr<'a, 'a, &'a str> = {
     <first:PrecMatch> <rest:("," <PrecMatch>)+> => {
-      let mut rest = rest;
-      rest.insert(0, first);
-      rest
+      let mut res = first;
+      let subsep = arena.alloc_v(Expr::Var("SUBSEP"));
+      for dim in rest.into_iter() {
+        res = arena.alloc_v(Expr::Binop(Binop::Concat, res, subsep));
+        res = arena.alloc_v(Expr::Binop(Binop::Concat, res, dim));
+      }
+      res
    }
 }
 
@@ -274,7 +278,8 @@ PrecAnd: &'a Expr<'a, 'a, &'a str> = {
 PrecIn: &'a Expr<'a,'a,&'a str> = {
     <l: PrecMatch> "in" <r: PrecMatch> =>
         arena.alloc_v(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
-    "(" <l: LookupList> Rparen "in" <r: PrecMatch> => unimplemented!(),
+    "(" <l: LookupList> Rparen "in" <r: PrecMatch> =>
+        arena.alloc_v(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
     PrecMatch,
 }
 
@@ -383,7 +388,7 @@ Ident: &'a Expr<'a,'a,&'a str> = {
 }
 
 StrLit: &'a Expr<'a,'a,&'a str> = {
-  "STRLIT" => arena.alloc_v(Expr::StrLit(lexer::parse_string_literal(<>, &arena, buf))),
+  "STRLIT" => arena.alloc_v(Expr::StrLit(lexer::parse_string_literal(<>, &arena, buf).as_bytes())),
 }
 
 Index: &'a Expr<'a,'a,&'a str> = {
@@ -392,7 +397,7 @@ Index: &'a Expr<'a,'a,&'a str> = {
 
 IndexBase: (&'a Expr<'a,'a,&'a str>, &'a Expr<'a,'a,&'a str>) = {
   <arr:BaseTerm> "[" <e:Expr> "]" => (arr, e),
-  <arr:BaseTerm> "[" <ll:LookupList> "]" => unimplemented!(),
+  <arr:BaseTerm> "[" <ll:LookupList> "]" => (arr, ll),
 }
 
 BaseTerm: &'a Expr<'a,'a, &'a str> = {
@@ -407,7 +412,7 @@ LeafTerm: &'a Expr<'a,'a, &'a str> = {
   "INT" => arena.alloc_v(Expr::ILit(strtoi(<>.as_bytes()))),
   "HEX" => arena.alloc_v(Expr::ILit(hextoi(<>.as_bytes()))),
   "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>.as_bytes()))),
-  "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
+  "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf).as_bytes())),
   // TODO: not Rparen for these next two?
   <i:CallStart> <args:Args?> ")" =>
         arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),

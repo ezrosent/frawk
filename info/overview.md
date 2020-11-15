@@ -228,17 +228,15 @@ surprised to discover there were bugs in frawk's parser.
   print floating point numbers, rather than the `CONVFMT` variable. Explicitly
   changing the precision of floating point output requires an appropriate
   invocation of `printf` or `sprintf`.
-* frawk does not support the `m[k, v]` syntactic sugar for `m[k SUBSEP v]`. This
-  is because I wanted to hold open the possibility of having true tuples as keys
-  for maps in frawk.
 * `next`,  or `nextfile` are supported in frawk, but they can only be invoked
   from the main loop. I haven't come across any Awk scripts that use either of
   these commands from within a function, and it's a major simplification to just
   disallow this case. Again, let me know if this is an important use-case for
   you.
-* Some basic Awk commands are missing (e.g. `exit`), because I have not gotten
-  to them yet. Many of the extensions in gawk (e.g. co-processes,
-  multidimensional arrays) are also not implemented.
+* Some basic Awk commands are missing (e.g. `exit` is not present, though
+  `nextfile` is and suffices in many cases), because I have not gotten to them
+  yet. Many of the extensions in gawk (e.g. co-processes, multidimensional
+  arrays) are also not implemented.
 * While it has never been tried, I sincerely doubt that frawk will run at all
   well --- or at all --- on a 32-bit platform. I suspect it would run much
   slower on a 64-bit non-x86 architecture.
@@ -300,11 +298,11 @@ if you find that the following are a serious hindrance:
   with most Awk implementations that I have come across. This is done largely for
   performance reasons, and reflects the intended use-case of "batch" data-
   processing scripts.
-* frawk supports spawning a subshell via the `<string> | getline`, `print[f] ...
-  | <string>` syntax as well as the `system` builtin function. From what I
-  understand, functions like this (where an arbitrary
-  string is passed wholesale to a shell) are considered anti-patterns, and have
-  been deprecated [in some
+* frawk supports spawning a subshell via the `<string> | getline`,
+  `print[f] ...  | <string>` syntax as well as the `system` builtin function.
+  From what I understand, functions like this (where an arbitrary string is
+  passed wholesale to a shell) are considered anti-patterns, and have been
+  deprecated [in some
   languages](https://www.python.org/dev/peps/pep-0324/#id14) because they make
   it easy for unsanitized user input to make it into a subshell, potentially
   doing nefarious or unwanted things with the user's machine. To help mitigate

@@ -149,7 +149,7 @@ pub(crate) enum PrimVal<'a> {
     Var(Ident),
     ILit(i64),
     FLit(f64),
-    StrLit(&'a str),
+    StrLit(&'a [u8]),
 }
 
 #[derive(Debug, Clone)]
@@ -310,8 +310,8 @@ impl<'a> ProgramContext<'a, &'a str> {
 #[derive(Debug)]
 pub enum SepAssign<'a> {
     Potential {
-        field_sep: Option<&'a str>,
-        record_sep: Option<&'a str>,
+        field_sep: Option<&'a [u8]>,
+        record_sep: Option<&'a [u8]>,
     },
     Unsure,
 }
@@ -618,7 +618,7 @@ pub(crate) struct Function<'a, I> {
 
     // Variable assignments, used to extract fast paths for splitting.
     // None indicates a call to `getline`.
-    vars: HashMap<Option<builtins::Variable>, Vec<(usize, Option<&'a str>)>>,
+    vars: HashMap<Option<builtins::Variable>, Vec<(usize, Option<&'a [u8]>)>>,
 
     // Dominance information about `cfg`.
     dt: dom::Tree,
@@ -1275,7 +1275,7 @@ where
         &mut self,
         v: &'c Expr<'c, 'b, I>,
         to: impl FnOnce(&PrimVal<'b>) -> PrimExpr<'b>,
-        str_lit: Option<&'b str>,
+        str_lit: Option<&'b [u8]>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
         use ast::Expr::*;
