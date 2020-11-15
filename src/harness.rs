@@ -104,16 +104,17 @@ cfg_if! {
                         field_sep,
                         record_sep,
                     } => {
-                        let field_sep = field_sep.unwrap_or(" ");
-                        let record_sep = record_sep.unwrap_or("\n");
+                        // TODO: unify this code with the code in main.
+                        let field_sep = field_sep.unwrap_or(b" ");
+                        let record_sep = record_sep.unwrap_or(b"\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
-                            if field_sep == " " && record_sep == "\n" {
+                            if field_sep == b" " && record_sep == b"\n" {
                                 let $id = simulate_stdin_whitespace($inp);
                                 $body
                             } else  {
                                 let $id = simulate_stdin_singlechar(
-                                    field_sep.as_bytes()[0],
-                                    record_sep.as_bytes()[0],
+                                    field_sep[0],
+                                    record_sep[0],
                                     $inp,
                                 );
                                 $body
@@ -1214,6 +1215,12 @@ this as well"#
         print y, z, 0XFea6, -0x63abc, hex("0xFFww"), hex("DEADBEEF");
     }"#,
         "125 126 65190 -408252 255 3735928559\n"
+    );
+
+    test_program!(
+        basic_subsep,
+        "BEGIN { m[1,2] = 3; for (k in m) { split(k, arr, SUBSEP); print arr[1], arr[2], m[k]; } }",
+        "1 2 3\n"
     );
 
     test_program!(

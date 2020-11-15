@@ -99,22 +99,28 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         if let Some(sep) = self.field_sep {
             begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("FS".into())),
-                arena.alloc_v(StrLit(sep)),
+                arena.alloc_v(StrLit(sep.as_bytes())),
             )))));
         }
         // Support "output csv/tsv" mode
         if let Some(sep) = self.output_sep {
             begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("OFS".into())),
-                arena.alloc_v(StrLit(sep)),
+                arena.alloc_v(StrLit(sep.as_bytes())),
             )))));
         }
         if let Some(sep) = self.output_record_sep {
             begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("ORS".into())),
-                arena.alloc_v(StrLit(sep)),
+                arena.alloc_v(StrLit(sep.as_bytes())),
             )))));
         }
+
+        // Assign SUBSEP, which we treat as a normal variable
+        begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
+            arena.alloc_v(Var("SUBSEP".into())),
+            arena.alloc_v(StrLit(&[0o034u8])),
+        )))));
         // Desugar -v flags
         for (ident, exp) in self.prelude_vardecs.iter() {
             begin.push(arena.alloc_v(Expr(
@@ -130,7 +136,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             )))));
             let argv = arena.alloc_v(Var("ARGV".into()));
             for (ix, arg) in self.argv.iter().enumerate() {
-                let arg = arena.alloc_v(StrLit(*arg));
+                let arg = arena.alloc_v(StrLit(arg.as_bytes()));
                 let ix = arena.alloc_v(ILit(ix as i64));
                 let arr_exp = arena.alloc_v(Index(argv, ix));
                 begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(arr_exp, arg)))));
@@ -300,8 +306,8 @@ static_map!(
 pub enum Expr<'a, 'b, I> {
     ILit(i64),
     FLit(f64),
-    StrLit(&'b str),
-    PatLit(&'b str),
+    StrLit(&'b [u8]),
+    PatLit(&'b [u8]),
     Unop(Unop, &'a Expr<'a, 'b, I>),
     Binop(Binop, &'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
     Call(Either<I, Function>, Vec<&'a Expr<'a, 'b, I>>),

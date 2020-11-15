@@ -118,7 +118,7 @@ impl<'a> Display for PrimVal<'a> {
             Var(id) => write!(f, "{}", Wrap(*id)),
             ILit(n) => write!(f, "{}@int", *n),
             FLit(n) => write!(f, "{}@float", *n),
-            StrLit(s) => write!(f, "\"{}\"", s),
+            StrLit(s) => write!(f, "\"{}\"", std::string::String::from_utf8_lossy(s)),
         }
     }
 }

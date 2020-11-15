@@ -510,10 +510,10 @@ fn main() {
                             record_sep,
                         },
                     ) => {
-                        let field_sep = field_sep.unwrap_or(" ");
-                        let record_sep = record_sep.unwrap_or("\n");
+                        let field_sep = field_sep.unwrap_or(b" ");
+                        let record_sep = record_sep.unwrap_or(b"\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
-                            if field_sep == " " && record_sep == "\n" {
+                            if field_sep == b" " && record_sep == b"\n" {
                                 let $inp = ByteReader::new_whitespace(
                                     once((_reader, String::from("-"))),
                                     chunk_size,
@@ -524,8 +524,8 @@ fn main() {
                             } else {
                                 let $inp = ByteReader::new(
                                     once((io::stdin(), String::from("-"))),
-                                    field_sep.as_bytes()[0],
-                                    record_sep.as_bytes()[0],
+                                    field_sep[0],
+                                    record_sep[0],
                                     chunk_size,
                                     check_utf8,
                                     exec_strategy,
@@ -564,15 +564,15 @@ fn main() {
                         field_sep,
                         record_sep,
                     } => {
-                        let field_sep = field_sep.unwrap_or(" ");
-                        let record_sep = record_sep.unwrap_or("\n");
+                        let field_sep = field_sep.unwrap_or(b" ");
+                        let record_sep = record_sep.unwrap_or(b"\n");
                         if field_sep.len() == 1 && record_sep.len() == 1 {
                             let file_handles: Vec<_> = input_files
                                 .iter()
                                 .cloned()
                                 .map(move |file| (open_file_read(file.as_str()), file))
                                 .collect();
-                            if field_sep == " " && record_sep == "\n" {
+                            if field_sep == b" " && record_sep == b"\n" {
                                 let $inp = ByteReader::new_whitespace(
                                     file_handles.into_iter(),
                                     chunk_size,
@@ -583,8 +583,8 @@ fn main() {
                             } else {
                                 let $inp = ByteReader::new(
                                     file_handles.into_iter(),
-                                    field_sep.as_bytes()[0],
-                                    record_sep.as_bytes()[0],
+                                    field_sep[0],
+                                    record_sep[0],
                                     chunk_size,
                                     check_utf8,
                                     exec_strategy,
