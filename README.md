@@ -43,7 +43,7 @@ frawk currently requires a `nightly` compiler. Using `rustup default nightly`,
 or some other method to run a nightly compiler release is currently required to 
 build frawk.
 
-With those prerequesites, cloning this repository and a `cargo build --release`
+With those prerequisites, cloning this repository and a `cargo build --release`
 or `cargo [+nightly] install --path <frawk repo path>` will produce a binary that you can
 add to your `PATH` if you so choose:
 
