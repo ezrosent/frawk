@@ -28,7 +28,7 @@ frawk addresses two primary shortcomings I have found in Awk.
 1. Lack of support for structured CSV input data.
 2. Sometimes-lackluster performance.
 
-We can take each of these in turn, and then move on to how Awk is implemented.
+We can take each of these in turn, and then move on to how frawk is implemented.
 Before getting too far into the weeds, I want to clarify that my main goal in
 starting this project was to learn something new: I wanted to write a small
 compiler, I wanted to learn about LLVM, and I wanted to do some basic static
@@ -81,7 +81,7 @@ etc.  may not work if the input is an escaped CSV file. In practice, I've found
 that I can't trust Awk to work on a large CSV file where I cannot manually
 verify that no fields contain embedded `,`s. frawk with the `-i csv` option will
 properly parse and escape CSV data. Awk is a sufficiently expressive language
-that one could parse the CSV manually, but doing so is both difficult and
+that one could parse the CSV manually, but doing so is both cumbersome and
 inefficient.
 
 ## Efficiency, and Purpose-Built Tools
@@ -209,20 +209,19 @@ These were all implemented with the help of the very useful
 
 ## Differences from AWK
 
-frawk's structure and language are borrowed almost wholesale from AWK; using
+frawk's structure and language are borrowed almost wholesale from Awk; using
 frawk feels very similar to using mawk, nawk, or gawk. frawk also supports many
 of the more difficult Awk features to implement, like printf, and user-defined
-functions. While many common idioms from AWK are supported in frawk, some
+functions. While many common idioms from Awk are supported in frawk, some
 features are missing while still others provide subtly incompatible semantics.
 Please file a feature request if a particular piece of behavior that you rely on
 is missing; nothing in frawk's implementation precludes features from the
-standard AWK language, though some might be troublesome to implement.
+standard Awk language, though some might be troublesome to implement.
 
 This list of differences is not exhaustive. In particular, I would not be at all
 surprised to discover there were bugs in frawk's parser.
 
 ### What is missing
-
 
 * By default, frawk uses the [ryu](https://github.com/dtolnay/ryu) crate to
   print floating point numbers, rather than the `CONVFMT` variable. Explicitly
@@ -308,7 +307,7 @@ if you find that the following are a serious hindrance:
   doing nefarious or unwanted things with the user's machine. To help mitigate
   this, frawk implements a [static taint
   analysis](https://github.com/ezrosent/frawk/blob/master/src/input_taint.rs)
-  that substantially limits the set of strings that can bepassed to the shell.
+  that substantially limits the set of strings that can be passed to the shell.
   frawk also provides an escape hatch for cases where the input is trusted or
   the analysis is to conservative: the `-A` flag opts users out of the taint
   analysis. I am open to feedback on extensions or modifications to this
