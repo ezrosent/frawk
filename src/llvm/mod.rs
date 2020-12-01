@@ -1010,6 +1010,10 @@ impl<'a> View<'a> {
 
         let iter_ptr = self.call(begin_fn, &mut [arrv]);
         let cur_index = self.alloca(Ty::Int)?;
+
+        let ty = self.tmap.get_ty(Ty::Int);
+        let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
+        LLVMBuildStore(self.f.builder, zero, cur_index);
         let len = self.call(len_fn, &mut [arrv]);
         let _old = self.f.iters.insert(
             dst,

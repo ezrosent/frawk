@@ -1207,6 +1207,12 @@ this as well"#
     );
 
     test_program!(
+        nested_loops,
+        "BEGIN { m[0]=0; m[1]=1; m[2]=2; for (i in m) for (j in m) print i,j; }",
+        "0 0\n0 1\n0 2\n1 0\n1 1\n1 2\n2 0\n2 1\n2 2\n"
+    );
+
+    test_program!(
         int_conversions,
         r#"BEGIN {
         x="123.456"
