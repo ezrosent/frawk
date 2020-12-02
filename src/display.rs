@@ -5,6 +5,7 @@ use crate::cfg::{BasicBlock, Ident, PrimExpr, PrimStmt, PrimVal, Transition};
 use crate::common::FileSpec;
 use crate::lexer;
 use std::fmt::{self, Display, Formatter};
+use std::string::String;
 
 pub(crate) struct Wrap(pub Ident);
 
@@ -118,7 +119,7 @@ impl<'a> Display for PrimVal<'a> {
             Var(id) => write!(f, "{}", Wrap(*id)),
             ILit(n) => write!(f, "{}@int", *n),
             FLit(n) => write!(f, "{}@float", *n),
-            StrLit(s) => write!(f, "\"{}\"", std::string::String::from_utf8_lossy(s)),
+            StrLit(s) => write!(f, "\"{}\"", String::from_utf8_lossy(s)),
         }
     }
 }

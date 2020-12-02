@@ -53,12 +53,12 @@ pub enum Pattern<'a, 'b, I> {
 
 pub struct Prog<'a, 'b, I> {
     // FS
-    pub field_sep: Option<&'b str>,
+    pub field_sep: Option<&'b [u8]>,
     pub prelude_vardecs: Vec<(I, &'a Expr<'a, 'b, I>)>,
     // OFS
-    pub output_sep: Option<&'b str>,
+    pub output_sep: Option<&'b [u8]>,
     // ORS
-    pub output_record_sep: Option<&'b str>,
+    pub output_record_sep: Option<&'b [u8]>,
     pub decs: Vec<FunDec<'a, 'b, I>>,
     pub begin: Option<&'a Stmt<'a, 'b, I>>,
     pub prepare: Option<&'a Stmt<'a, 'b, I>>,
@@ -99,20 +99,20 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         if let Some(sep) = self.field_sep {
             begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("FS".into())),
-                arena.alloc_v(StrLit(sep.as_bytes())),
+                arena.alloc_v(StrLit(sep)),
             )))));
         }
         // Support "output csv/tsv" mode
         if let Some(sep) = self.output_sep {
             begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("OFS".into())),
-                arena.alloc_v(StrLit(sep.as_bytes())),
+                arena.alloc_v(StrLit(sep)),
             )))));
         }
         if let Some(sep) = self.output_record_sep {
             begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
                 arena.alloc_v(Var("ORS".into())),
-                arena.alloc_v(StrLit(sep.as_bytes())),
+                arena.alloc_v(StrLit(sep)),
             )))));
         }
 

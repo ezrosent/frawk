@@ -95,9 +95,9 @@ struct RawPrelude {
 
 struct Prelude<'a> {
     var_decs: Vec<(&'a str, &'a ast::Expr<'a, 'a, &'a str>)>,
-    field_sep: Option<&'a str>,
-    output_sep: Option<&'a str>,
-    output_record_sep: Option<&'a str>,
+    field_sep: Option<&'a [u8]>,
+    output_sep: Option<&'a [u8]>,
+    output_record_sep: Option<&'a [u8]>,
     argv: Vec<&'a str>,
     arbitrary_shell: bool,
     escaper: Escaper,

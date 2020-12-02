@@ -388,7 +388,7 @@ Ident: &'a Expr<'a,'a,&'a str> = {
 }
 
 StrLit: &'a Expr<'a,'a,&'a str> = {
-  "STRLIT" => arena.alloc_v(Expr::StrLit(lexer::parse_string_literal(<>, &arena, buf).as_bytes())),
+  "STRLIT" => arena.alloc_v(Expr::StrLit(lexer::parse_string_literal(<>, &arena, buf))),
 }
 
 Index: &'a Expr<'a,'a,&'a str> = {
@@ -412,7 +412,7 @@ LeafTerm: &'a Expr<'a,'a, &'a str> = {
   "INT" => arena.alloc_v(Expr::ILit(strtoi(<>.as_bytes()))),
   "HEX" => arena.alloc_v(Expr::ILit(hextoi(<>.as_bytes()))),
   "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>.as_bytes()))),
-  "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf).as_bytes())),
+  "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
   // TODO: not Rparen for these next two?
   <i:CallStart> <args:Args?> ")" =>
         arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),

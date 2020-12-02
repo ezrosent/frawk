@@ -276,8 +276,8 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     match parser.parse(a, &mut buf, &mut program, lexer) {
         Ok(()) => {
             match esc {
-                Escaper::CSV => program.output_sep = Some(","),
-                Escaper::TSV => program.output_sep = Some("\t"),
+                Escaper::CSV => program.output_sep = Some(b","),
+                Escaper::TSV => program.output_sep = Some(b"\t"),
                 Escaper::Identity => {}
             };
             Ok(a.alloc_v(program))

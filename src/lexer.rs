@@ -238,7 +238,7 @@ pub(crate) fn parse_string_literal<'a, 'outer>(
     lit: &str,
     arena: &'a Arena<'outer>,
     buf: &mut Vec<u8>,
-) -> &'a str {
+) -> &'a [u8] {
     // assumes we just saw a '"'
     buf.clear();
     let mut is_escape = false;
@@ -272,14 +272,14 @@ pub(crate) fn parse_string_literal<'a, 'outer>(
             }
         }
     }
-    std::str::from_utf8(arena.alloc_bytes(&buf[..])).unwrap()
+    arena.alloc_bytes(&buf[..])
 }
 
 pub(crate) fn parse_regex_literal<'a, 'outer>(
     lit: &str,
     arena: &'a Arena<'outer>,
     buf: &mut Vec<u8>,
-) -> &'a str {
+) -> &'a [u8] {
     buf.clear();
     let mut is_escape = false;
     for c in lit.chars() {
@@ -307,7 +307,7 @@ pub(crate) fn parse_regex_literal<'a, 'outer>(
             }
         }
     }
-    std::str::from_utf8(arena.alloc_bytes(&buf[..])).unwrap()
+    arena.alloc_bytes(&buf[..])
 }
 
 impl<'a> Tokenizer<'a> {
@@ -711,7 +711,7 @@ and the third"#;
         );
         let mut buf = Vec::new();
         let a = Arena::default();
-        assert_eq!(parse_string_literal(s1, &a, &mut buf), "\"hi\tthere\n");
-        assert_eq!(parse_regex_literal(s2, &a, &mut buf), "hows it /going");
+        assert_eq!(parse_string_literal(s1, &a, &mut buf), b"\"hi\tthere\n");
+        assert_eq!(parse_regex_literal(s2, &a, &mut buf), b"hows it /going");
     }
 }
