@@ -234,45 +234,119 @@ fn push_char(buf: &mut Vec<u8>, c: char) {
     c.encode_utf8(&mut buf[start..]);
 }
 
+fn parse_literal<'a, 'outer>(
+    lit: &str,
+    arena: &'a Arena<'outer>,
+    buf: &mut Vec<u8>,
+    escape_slash: bool,
+) -> &'a [u8] {
+    fn hex_digit(c: char) -> Option<u8> {
+        match c {
+            '0'..='9' => Some((c as u8) - b'0'),
+            'a'..='f' => Some(10 + (c as u8) - b'a'),
+            'A'..='F' => Some(10 + (c as u8) - b'A'),
+            _ => None,
+        }
+    }
+    fn octal_digit(c: char) -> Option<u8> {
+        match c {
+            '0'..='7' => Some((c as u8) - b'0'),
+            _ => None,
+        }
+    }
+    // assumes we just saw a '"'
+    buf.clear();
+    let mut is_escape = false;
+    let mut iter = lit.chars();
+    'top: while let Some(mut c) = iter.next() {
+        'mid: loop {
+            if is_escape {
+                match c {
+                    'a' => buf.push(0x07), // BEL
+                    'b' => buf.push(0x08), // BS
+                    'f' => buf.push(0x0C), // FF
+                    'v' => buf.push(0x0B), // VT
+                    '\\' => buf.push(b'\\'),
+                    'n' => buf.push(b'\n'),
+                    'r' => buf.push(b'\r'),
+                    't' => buf.push(b'\t'),
+                    '"' => buf.push(b'"'),
+                    // 1 or 2 hex digits
+                    'x' => {
+                        let mut n = if let Some(x) = iter.next() {
+                            if let Some(d) = hex_digit(x) {
+                                d
+                            } else {
+                                // no digits, push \x and repeat.
+                                buf.push(b'\\');
+                                buf.push(b'x');
+                                c = x;
+                                is_escape = false;
+                                continue;
+                            }
+                        } else {
+                            buf.push(b'\\');
+                            buf.push(b'x');
+                            break 'top;
+                        };
+                        if let Some(x) = iter.next() {
+                            if let Some(d) = hex_digit(x) {
+                                // We cannot overflow
+                                n *= 16;
+                                n += d;
+                            } else {
+                                buf.push(n);
+                                is_escape = false;
+                                c = x;
+                                continue;
+                            }
+                        }
+                        buf.push(n)
+                    }
+                    // 1 to 3 octal digits
+                    '0'..='7' => {
+                        let mut n = octal_digit(c).unwrap();
+                        for _ in 0..2 {
+                            if let Some(x) = iter.next() {
+                                if let Some(d) = hex_digit(x) {
+                                    // saturate on overflow
+                                    n = n.saturating_mul(8);
+                                    n = n.saturating_add(d);
+                                } else {
+                                    buf.push(n);
+                                    is_escape = false;
+                                    c = x;
+                                    continue 'mid;
+                                }
+                            }
+                        }
+                        buf.push(n);
+                    }
+                    '/' if escape_slash => buf.push(b'/'),
+                    _ => {
+                        buf.push(b'\\');
+                        push_char(buf, c);
+                    }
+                };
+                is_escape = false;
+            } else {
+                match c {
+                    '\\' => is_escape = true,
+                    c => push_char(buf, c),
+                }
+            }
+            break;
+        }
+    }
+    arena.alloc_bytes(&buf[..])
+}
+
 pub(crate) fn parse_string_literal<'a, 'outer>(
     lit: &str,
     arena: &'a Arena<'outer>,
     buf: &mut Vec<u8>,
 ) -> &'a [u8] {
-    // assumes we just saw a '"'
-    buf.clear();
-    let mut is_escape = false;
-    for c in lit.chars() {
-        if is_escape {
-            match c {
-                'a' => buf.push(0x07), // BEL
-                'b' => buf.push(0x08), // BS
-                'f' => buf.push(0x0C), // FF
-                'v' => buf.push(0x0B), // VT
-                '\\' => buf.push(b'\\'),
-                'n' => buf.push(b'\n'),
-                'r' => buf.push(b'\r'),
-                't' => buf.push(b'\t'),
-                '"' => buf.push(b'"'),
-                c => {
-                    buf.push(b'\\');
-                    push_char(buf, c);
-                }
-            };
-            is_escape = false;
-        } else {
-            match c {
-                '\\' => {
-                    is_escape = true;
-                    continue;
-                }
-                c => {
-                    push_char(buf, c);
-                }
-            }
-        }
-    }
-    arena.alloc_bytes(&buf[..])
+    parse_literal(lit, arena, buf, /*escape_slash=*/ false)
 }
 
 pub(crate) fn parse_regex_literal<'a, 'outer>(
@@ -280,34 +354,7 @@ pub(crate) fn parse_regex_literal<'a, 'outer>(
     arena: &'a Arena<'outer>,
     buf: &mut Vec<u8>,
 ) -> &'a [u8] {
-    buf.clear();
-    let mut is_escape = false;
-    for c in lit.chars() {
-        if is_escape {
-            match c {
-                '/' => buf.push(b'/'),
-                c => {
-                    buf.push(b'\\');
-                    push_char(buf, c);
-                }
-            };
-            is_escape = false;
-        } else {
-            match c {
-                '\\' => {
-                    is_escape = true;
-                    continue;
-                }
-                '/' => {
-                    break;
-                }
-                c => {
-                    push_char(buf, c);
-                }
-            }
-        }
-    }
-    arena.alloc_bytes(&buf[..])
+    parse_literal(lit, arena, buf, /*escape_slash=*/ true)
 }
 
 impl<'a> Tokenizer<'a> {
@@ -713,5 +760,17 @@ and the third"#;
         let a = Arena::default();
         assert_eq!(parse_string_literal(s1, &a, &mut buf), b"\"hi\tthere\n");
         assert_eq!(parse_regex_literal(s2, &a, &mut buf), b"hows it /going");
+        assert_eq!(
+            parse_string_literal(r#"are you there \77\x3f"#, &a, &mut buf),
+            b"are you there ??"
+        );
+        assert_eq!(
+            parse_string_literal(r#"are you there \77\x"#, &a, &mut buf),
+            b"are you there ?\\x"
+        );
+        assert_eq!(
+            parse_string_literal(r#"are you there \77\xh"#, &a, &mut buf),
+            b"are you there ?\\xh"
+        );
     }
 }
