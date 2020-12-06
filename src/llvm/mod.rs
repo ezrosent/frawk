@@ -25,12 +25,14 @@ use llvm_sys::{
     target::*,
 };
 use petgraph::visit::Dfs;
+use regex::bytes::Regex;
 
 use intrinsics::IntrinsicMap;
 
 use std::ffi::{CStr, CString};
 use std::mem::{self, MaybeUninit};
 use std::ptr;
+use std::sync::Arc;
 
 type Pred = llvm_sys::LLVMIntPredicate;
 type FPred = llvm_sys::LLVMRealPredicate;
@@ -65,6 +67,7 @@ struct FuncInfo {
 struct View<'a> {
     f: &'a mut Function,
     decls: &'a Vec<FuncInfo>,
+    regexes: &'a mut Vec<Arc<Regex>>,
     tmap: &'a TypeMap,
     intrinsics: &'a IntrinsicMap,
     ctx: LLVMContextRef,
@@ -155,6 +158,9 @@ pub(crate) struct Generator<'a, 'b> {
     type_map: TypeMap,
     intrinsics: IntrinsicMap,
     printfs: HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
+    // We pass raw regex pointers in the generated code. These ensure we do not free them
+    // before the code is run.
+    regexes: Vec<Arc<Regex>>,
     cfg: Config,
 
     // Specialized implementation of string destruction.
@@ -287,6 +293,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             engine,
             decls: Vec::with_capacity(nframes),
             funcs: Vec::with_capacity(nframes),
+            regexes: Default::default(),
             type_map: TypeMap::new(ctx),
             intrinsics: intrinsics::register(module, ctx),
             printfs: Default::default(),
@@ -696,6 +703,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         let f = &mut self.funcs[func_id];
         let mut view = View {
             f,
+            regexes: &mut self.regexes,
             tmap: &self.type_map,
             intrinsics: &self.intrinsics,
             decls: &self.decls,
@@ -1579,17 +1587,19 @@ impl<'a> View<'a> {
                 self.bind_reg(res, resv);
             }
             MatchConst(res, src, pat) => {
-                let srcv = self.get_local(src.reflect())?;
-                let patv = self.get_ptr(&*pat);
-                let resv = self.call("match_const_pat", &mut [srcv, patv]);
-                self.bind_reg(res, resv);
-            }
-            IsMatchConst(res, src, pat) => {
                 let rt = self.runtime_val();
                 let srcv = self.get_local(src.reflect())?;
-                let patv = self.get_ptr(&*pat);
+                let patv = self.get_ptr(&**pat);
                 let resv = self.call("match_const_pat_loc", &mut [rt, srcv, patv]);
                 self.bind_reg(res, resv);
+                self.regexes.push(pat.clone());
+            }
+            IsMatchConst(res, src, pat) => {
+                let srcv = self.get_local(src.reflect())?;
+                let patv = self.get_ptr(&**pat);
+                let resv = self.call("match_const_pat", &mut [srcv, patv]);
+                self.bind_reg(res, resv);
+                self.regexes.push(pat.clone());
             }
             SubstrIndex(res, s, t) => {
                 let sv = self.get_local(s.reflect())?;

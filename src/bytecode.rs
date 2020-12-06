@@ -1,5 +1,6 @@
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use crate::builtins::{Bitwise, FloatFunc, Variable};
 use crate::common::{FileSpec, NumTy};
@@ -113,9 +114,9 @@ pub(crate) enum Instr<'a> {
     // String processing
     Concat(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Str<'a>>),
     IsMatch(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
-    IsMatchConst(Reg<Int>, Reg<Str<'a>>, Box<Regex>),
+    IsMatchConst(Reg<Int>, Reg<Str<'a>>, Arc<Regex>),
     Match(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
-    MatchConst(Reg<Int>, Reg<Str<'a>>, Box<Regex>),
+    MatchConst(Reg<Int>, Reg<Str<'a>>, Arc<Regex>),
     // index(s, t) returns index of substring t in s, 0 if it does not appear.
     SubstrIndex(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     LenStr(Reg<Int>, Reg<Str<'a>>),

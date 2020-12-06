@@ -101,7 +101,7 @@ impl<'a> StringConstantAnalysis<'a> {
             Match(_, _, pat) | IsMatch(_, _, pat) if query_regex => {
                 self.add_query(pat.reflect().0);
             }
-            _ => unimplemented!(),
+            _ => {}
         }
     }
     pub(crate) fn visit_hl(&mut self, inst: &HighLevel) {

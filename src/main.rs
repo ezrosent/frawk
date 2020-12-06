@@ -90,6 +90,7 @@ struct RawPrelude {
     output_sep: Option<&'static str>,
     output_record_sep: Option<&'static str>,
     arbitrary_shell: bool,
+    fold_regexes: bool,
     escaper: Escaper,
     stage: Stage<()>,
 }
@@ -101,6 +102,7 @@ struct Prelude<'a> {
     output_record_sep: Option<&'a [u8]>,
     argv: Vec<&'a str>,
     arbitrary_shell: bool,
+    fold_regexes: bool,
     escaper: Escaper,
     stage: Stage<()>,
 }
@@ -185,6 +187,7 @@ fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
         output_sep,
         output_record_sep,
         arbitrary_shell: raw.arbitrary_shell,
+        fold_regexes: raw.fold_regexes,
         stage: raw.stage.clone(),
         argv: raw.argv.iter().map(|s| a.alloc_str(s.as_str())).collect(),
     }
@@ -216,6 +219,7 @@ fn get_context<'a>(
     match cfg::ProgramContext::from_prog(a, stmt, prelude.escaper) {
         Ok(mut ctx) => {
             ctx.allow_arbitrary_commands = prelude.arbitrary_shell;
+            ctx.fold_regex_constants = prelude.fold_regexes;
             ctx
         }
         Err(e) => fail!("failed to create program context: {}", e),
@@ -425,6 +429,16 @@ fn main() {
         None => (Escaper::Identity, None, None),
     };
     let arbitrary_shell = matches.is_present("arbitrary-shell");
+
+    let mut opt_level: i32 = match matches.value_of("opt-level") {
+        Some("3") => 3,
+        Some("2") => 2,
+        Some("1") => 1,
+        Some("0") => 0,
+        Some("-1") => -1,
+        None => DEFAULT_OPT_LEVEL,
+        Some(x) => panic!("this case should be covered by clap argument validation: found unexpected opt-level value {}", x),
+    };
     let raw = RawPrelude {
         field_sep: matches.value_of("field-separator").map(String::from),
         var_decs: matches
@@ -434,18 +448,10 @@ fn main() {
         output_sep,
         escaper,
         arbitrary_shell,
+        fold_regexes: opt_level >= 3,
         output_record_sep,
         stage: exec_strategy.stage(),
         argv,
-    };
-    let mut opt_level: i32 = match matches.value_of("opt-level") {
-        Some("3") => 3,
-        Some("2") => 2,
-        Some("1") => 1,
-        Some("0") => 0,
-        Some("-1") => -1,
-        None => DEFAULT_OPT_LEVEL,
-        Some(x) =>panic!("this case should be covered by clap argument validation: found unexpected opt-level value {}", x),
     };
     let opt_dump_bytecode = matches.is_present("dump-bytecode");
     let opt_dump_cfg = matches.is_present("dump-cfg");

@@ -20,6 +20,7 @@ use regex::bytes::Regex;
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::mem;
+use std::sync::Arc;
 
 pub(crate) const UNUSED: u32 = u32::max_value();
 pub(crate) const NULL_REG: u32 = UNUSED - 1;
@@ -812,7 +813,7 @@ impl<'a> Typer<'a> {
                     let text = std::str::from_utf8(&strs[0]).map_err(|e| {
                         CompileError(format!("invalid UTF8 for regex literal: {}", e))
                     })?;
-                    let re = Box::new(Regex::new(text).map_err(|err| {
+                    let re = Arc::new(Regex::new(text).map_err(|err| {
                         CompileError(format!("regex parse error during compilation: {}", err))
                     })?);
                     let inst = self.frames[frame]
