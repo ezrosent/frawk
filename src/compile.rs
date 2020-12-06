@@ -814,7 +814,7 @@ impl<'a> Typer<'a> {
                     continue;
                 }
                 let text = std::str::from_utf8(&strs[0])
-                    .map_err(|e| CompileError(format!("invalid UTF8 for regex literal: {}", e)))?;
+                    .map_err(|e| CompileError(format!("regex patterns must be valid UTF-8: {}", e)))?;
                 let re = Arc::new(Regex::new(text).map_err(|err| {
                     CompileError(format!("regex parse error during compilation: {}", err))
                 })?);
