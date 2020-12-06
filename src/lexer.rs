@@ -234,11 +234,10 @@ fn push_char(buf: &mut Vec<u8>, c: char) {
     c.encode_utf8(&mut buf[start..]);
 }
 
-fn parse_literal<'a, 'outer>(
+pub(crate) fn parse_string_literal<'a, 'outer>(
     lit: &str,
     arena: &'a Arena<'outer>,
     buf: &mut Vec<u8>,
-    escape_slash: bool,
 ) -> &'a [u8] {
     fn hex_digit(c: char) -> Option<u8> {
         match c {
@@ -322,7 +321,6 @@ fn parse_literal<'a, 'outer>(
                         }
                         buf.push(n);
                     }
-                    '/' if escape_slash => buf.push(b'/'),
                     _ => {
                         buf.push(b'\\');
                         push_char(buf, c);
@@ -341,20 +339,44 @@ fn parse_literal<'a, 'outer>(
     arena.alloc_bytes(&buf[..])
 }
 
-pub(crate) fn parse_string_literal<'a, 'outer>(
-    lit: &str,
-    arena: &'a Arena<'outer>,
-    buf: &mut Vec<u8>,
-) -> &'a [u8] {
-    parse_literal(lit, arena, buf, /*escape_slash=*/ false)
-}
-
 pub(crate) fn parse_regex_literal<'a, 'outer>(
     lit: &str,
     arena: &'a Arena<'outer>,
     buf: &mut Vec<u8>,
 ) -> &'a [u8] {
-    parse_literal(lit, arena, buf, /*escape_slash=*/ true)
+    // Regexes have their own escaping rules, let them apply them. The only think we look to do is
+    // replace "\/" with "/".
+    // NB: Awk escaping rules are a subset of Rust's regex escape rule syntax, but if we applied
+    // Awk's rewrites here, we might create a pattern that is invalid UTF-8, which will cause a
+    // failure when we try and compile the regular expression.
+    buf.clear();
+    let mut is_escape = false;
+    for c in lit.chars() {
+        if is_escape {
+            match c {
+                '/' => buf.push(b'/'),
+                c => {
+                    buf.push(b'\\');
+                    push_char(buf, c);
+                }
+            };
+            is_escape = false;
+        } else {
+            match c {
+                '\\' => {
+                    is_escape = true;
+                    continue;
+                }
+                '/' => {
+                    break;
+                }
+                c => {
+                    push_char(buf, c);
+                }
+            }
+        }
+    }
+    arena.alloc_bytes(&buf[..])
 }
 
 impl<'a> Tokenizer<'a> {
