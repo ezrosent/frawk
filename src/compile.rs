@@ -808,37 +808,37 @@ impl<'a> Typer<'a> {
             // Fold any regex pattern constants that we see
             let mut strs = Vec::new();
             for (frame, bb, stmt, reg) in refs.into_iter() {
-                sca.possible_strings(reg, &mut strs);
-                if strs.len() == 1 {
-                    let text = std::str::from_utf8(&strs[0]).map_err(|e| {
-                        CompileError(format!("invalid UTF8 for regex literal: {}", e))
-                    })?;
-                    let re = Arc::new(Regex::new(text).map_err(|err| {
-                        CompileError(format!("regex parse error during compilation: {}", err))
-                    })?);
-                    let inst = self.frames[frame]
-                        .cfg
-                        .node_weight_mut(NodeIx::new(bb))
-                        .unwrap()
-                        .get_mut(stmt)
-                        .unwrap();
-                    let new_inst: Instr = match inst {
-                        Either::Left(LL::IsMatch(dst, s, _)) => {
-                            Either::Left(LL::IsMatchConst(*dst, *s, re))
-                        }
-                        Either::Left(LL::Match(dst, s, _)) => {
-                            Either::Left(LL::MatchConst(*dst, *s, re))
-                        }
-                        _ => {
-                            return err!(
-                                "unexpected instruction during regex constant folding: {:?}",
-                                inst
-                            )
-                        }
-                    };
-                    *inst = new_inst;
-                }
                 strs.clear();
+                sca.possible_strings(reg, &mut strs);
+                if strs.len() != 1 {
+                    continue;
+                }
+                let text = std::str::from_utf8(&strs[0])
+                    .map_err(|e| CompileError(format!("invalid UTF8 for regex literal: {}", e)))?;
+                let re = Arc::new(Regex::new(text).map_err(|err| {
+                    CompileError(format!("regex parse error during compilation: {}", err))
+                })?);
+                let inst = self.frames[frame]
+                    .cfg
+                    .node_weight_mut(NodeIx::new(bb))
+                    .unwrap()
+                    .get_mut(stmt)
+                    .unwrap();
+                let new_inst: Instr = match inst {
+                    Either::Left(LL::IsMatch(dst, s, _)) => {
+                        Either::Left(LL::IsMatchConst(*dst, *s, re))
+                    }
+                    Either::Left(LL::Match(dst, s, _)) => {
+                        Either::Left(LL::MatchConst(*dst, *s, re))
+                    }
+                    _ => {
+                        return err!(
+                            "unexpected instruction during regex constant folding: {:?}",
+                            inst
+                        )
+                    }
+                };
+                *inst = new_inst;
             }
         }
         Ok(())

@@ -211,6 +211,7 @@ cfg_if! {
             let a = Arena::default();
             let stmt = parse_program(prog, &a, esc, strat)?;
             let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+            ctx.fold_regex_constants = true;
             let sep_analysis = ctx.analyze_sep_assignments();
             if _PRINT_DEBUG_INFO {
                 let mut buf = Vec::<u8>::new();
