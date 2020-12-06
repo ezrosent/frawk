@@ -1,3 +1,8 @@
+//! A simple data-flow analysis for finding string constants.
+//!
+//! This analysis is currently used to perform constant folding on regular expressions, but it may
+//! be used for more things in the future. It largely follows the structure of the analysis in
+//! `pushdown.rs`.
 use crate::bytecode::{Accum, Instr};
 use crate::common::{Graph, NodeIx, NumTy, WorkList};
 use crate::compile::{HighLevel, Ty};
@@ -52,11 +57,6 @@ impl Default for ApproximateSet {
         ApproximateSet(Some(Default::default()))
     }
 }
-
-// TODO: implement hash set operations
-// TODO: implement "extract" operation
-// TODO: implement public "extract" function
-// TODO: implement visitor.
 
 pub struct StringConstantAnalysis<'a> {
     intern_l: HashMap<&'a [u8], usize>,
