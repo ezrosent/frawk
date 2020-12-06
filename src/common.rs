@@ -226,7 +226,7 @@ macro_rules! static_map {
 
 pub(crate) struct WorkList<T> {
     set: HashSet<T>,
-    // TODO: switch back to Vec?
+    // TODO: switch back to Vec? That would probably help string_constants converge faster.
     mem: VecDeque<T>,
 }
 
@@ -255,6 +255,9 @@ impl<T: Clone + Hash + Eq> WorkList<T> {
         let _was_there = self.set.remove(&next);
         debug_assert!(_was_there);
         Some(next)
+    }
+    pub(crate) fn iter(&mut self) -> impl Iterator<Item = T> + '_ {
+        self.mem.iter().cloned()
     }
 }
 
@@ -337,7 +340,6 @@ impl Default for FileSpec {
         FileSpec::Append
     }
 }
-
 
 #[cfg(test)]
 mod tests {

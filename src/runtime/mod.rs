@@ -24,6 +24,7 @@ use splitter::regex::RegexSplitter;
 
 // TODO: remove the pub use for Variables here.
 pub(crate) use crate::builtins::Variables;
+pub use command::run_command;
 pub(crate) use float_parse::{hextoi, strtod, strtoi};
 pub(crate) use printf::FormatArg;
 pub use splitter::{
@@ -31,7 +32,6 @@ pub use splitter::{
     ChainedReader, Line, LineReader,
 };
 pub use str_impl::{Str, UniqueStr};
-pub use command::run_command;
 
 // TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
 // specialize the IntMap implementation.
@@ -179,6 +179,21 @@ impl RegexCache {
             |x| f(x),
         )
     }
+    pub(crate) fn with_regex_fallible<T>(
+        &mut self,
+        pat: &Str,
+        mut f: impl FnMut(&Regex) -> Result<T>,
+    ) -> Result<T> {
+        self.0.get_fallible(
+            pat,
+            |s| match Regex::new(s) {
+                Ok(r) => Ok(r),
+                Err(e) => err!("{}", e),
+            },
+            // eta-expansion required to get this compiling..
+            |x| f(x),
+        )
+    }
 
     pub(crate) fn get_line<'a, LR: LineReader>(
         &mut self,
@@ -290,31 +305,35 @@ impl RegexCache {
         })
     }
 
+    pub(crate) fn regex_const_match_loc(vars: &mut Variables, re: &Regex, s: &Str) -> Result<Int> {
+        use crate::builtins::Variable;
+        let (start, len) = s.with_bytes(|bs| match re.find(bs) {
+            Some(m) => {
+                let start = m.start() as Int;
+                let end = m.end() as Int;
+                (start + 1, end - start)
+            }
+            None => (0, -1),
+        });
+        vars.store_int(Variable::RSTART, start)?;
+        vars.store_int(Variable::RLENGTH, len)?;
+        Ok(start)
+    }
     pub(crate) fn regex_match_loc(
         &mut self,
         vars: &mut Variables,
         pat: &Str,
         s: &Str,
     ) -> Result<Int> {
-        use crate::builtins::Variable;
-        // We use the awk semantics for `match`. If we match
-        let (start, len) = self.with_regex(pat, |re| {
-            s.with_bytes(|bs| match re.find(bs) {
-                Some(m) => {
-                    let start = m.start() as Int;
-                    let end = m.end() as Int;
-                    (start + 1, end - start)
-                }
-                None => (0, -1),
-            })
-        })?;
-        vars.store_int(Variable::RSTART, start)?;
-        vars.store_int(Variable::RLENGTH, len)?;
-        Ok(start)
+        self.with_regex_fallible(pat, |re| Self::regex_const_match_loc(vars, re, s))
+    }
+
+    pub(crate) fn regex_const_match(pat: &Regex, s: &Str) -> bool {
+        s.with_bytes(|bs| pat.is_match(bs))
     }
 
     pub(crate) fn is_regex_match(&mut self, pat: &Str, s: &Str) -> Result<bool> {
-        self.with_regex(pat, |re| s.with_bytes(|bs| re.is_match(bs)))
+        self.with_regex(pat, |re| Self::regex_const_match(re, s))
     }
 }
 

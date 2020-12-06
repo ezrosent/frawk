@@ -310,6 +310,10 @@ impl<'a> UniqueStr<'a> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+    pub fn literal_bytes(&self) -> &'a [u8] {
+        assert!(self.0.drop_is_trivial());
+        unsafe { &*self.0.get_bytes() }
+    }
     pub fn clone_str(&self) -> Str<'a> {
         let rep = unsafe { self.0.rep_mut() };
         match rep.get_tag() {

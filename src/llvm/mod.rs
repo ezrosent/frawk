@@ -821,6 +821,13 @@ impl<'a> View<'a> {
     unsafe fn has_var(&self, var: (NumTy, Ty)) -> bool {
         self.f.locals.get(&var).is_some() || self.decls[self.f.id].globals.get(&var).is_some()
     }
+
+    unsafe fn get_ptr<T>(&self, ptr: &T) -> LLVMValueRef {
+        let voidp = self.tmap.runtime_ty;
+        let int_ty = self.tmap.get_ty(Ty::Int);
+        let bits = LLVMConstInt(int_ty, ptr as *const T as u64, /*sign_extend=*/ 0);
+        LLVMBuildIntToPtr(self.f.builder, bits, voidp, c_str!(""))
+    }
     // TODO: rename this; it gets globals too :)
     unsafe fn get_local_inner(&self, local: (NumTy, Ty), array_ptr: bool) -> Option<LLVMValueRef> {
         if local.1 == Ty::Null {
@@ -1569,6 +1576,19 @@ impl<'a> View<'a> {
                 let rv = self.get_local(r.reflect())?;
                 let rt = self.runtime_val();
                 let resv = self.call("match_pat", &mut [rt, lv, rv]);
+                self.bind_reg(res, resv);
+            }
+            MatchConst(res, src, pat) => {
+                let srcv = self.get_local(src.reflect())?;
+                let patv = self.get_ptr(&*pat);
+                let resv = self.call("match_const_pat", &mut [srcv, patv]);
+                self.bind_reg(res, resv);
+            }
+            IsMatchConst(res, src, pat) => {
+                let rt = self.runtime_val();
+                let srcv = self.get_local(src.reflect())?;
+                let patv = self.get_ptr(&*pat);
+                let resv = self.call("match_const_pat_loc", &mut [rt, srcv, patv]);
                 self.bind_reg(res, resv);
             }
             SubstrIndex(res, s, t) => {

@@ -9,6 +9,7 @@ use crossbeam::scope;
 use crossbeam_channel::bounded;
 use hashbrown::HashMap;
 use rand::{self, rngs::StdRng, Rng, SeedableRng};
+use regex::bytes::Regex;
 
 use std::cmp;
 use std::mem;
@@ -216,6 +217,10 @@ impl<'a> Core<'a> {
 
     pub fn match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<Int> {
         self.regexes.regex_match_loc(&mut self.vars, pat, s)
+    }
+
+    pub fn match_const_regex(&mut self, s: &Str<'a>, pat: &Regex) -> Result<Int> {
+        runtime::RegexCache::regex_const_match_loc(&mut self.vars, pat, s)
     }
 
     pub fn is_match_regex(&mut self, s: &Str<'a>, pat: &Str<'a>) -> Result<bool> {
@@ -796,6 +801,15 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             .is_match_regex(index(&self.strs, l), index(&self.strs, r))?
                             as Int;
                     }
+                    MatchConst(res, x, pat) => {
+                        *index_mut(&mut self.ints, res) =
+                            runtime::RegexCache::regex_const_match(&*pat, index(&self.strs, x))
+                                as Int;
+                    }
+                    IsMatchConst(res, x, pat) => {
+                        *index_mut(&mut self.ints, res) =
+                            self.core.match_const_regex(index(&self.strs, x), &*pat)?;
+                    }
                     SubstrIndex(res, s, t) => {
                         let res = *res;
                         let s = index(&self.strs, s);
@@ -1075,7 +1089,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         self.read_files.close(file);
                     }
                     RunCmd(dst, cmd) => {
-                        *index_mut(&mut self.ints, dst) = index(&self.strs, cmd).with_bytes(runtime::run_command);
+                        *index_mut(&mut self.ints, dst) =
+                            index(&self.strs, cmd).with_bytes(runtime::run_command);
                     }
                     Lookup {
                         map_ty,

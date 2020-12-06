@@ -7,6 +7,8 @@ use crate::compile::{self, Ty};
 use crate::interp::{index, index_mut, Storage};
 use crate::runtime::{self, Float, Int, Str, UniqueStr};
 
+use regex::bytes::Regex;
+
 pub(crate) use crate::interp::Interp;
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
@@ -111,7 +113,9 @@ pub(crate) enum Instr<'a> {
     // String processing
     Concat(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Str<'a>>),
     IsMatch(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
+    IsMatchConst(Reg<Int>, Reg<Str<'a>>, Box<Regex>),
     Match(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
+    MatchConst(Reg<Int>, Reg<Str<'a>>, Box<Regex>),
     // index(s, t) returns index of substring t in s, 0 if it does not appear.
     SubstrIndex(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     LenStr(Reg<Int>, Reg<Str<'a>>),
@@ -504,6 +508,10 @@ impl<'a> Instr<'a> {
                 res.accum(&mut f);
                 l.accum(&mut f);
                 r.accum(&mut f);
+            }
+            MatchConst(res, src, _) | IsMatchConst(res, src, _) => {
+                res.accum(&mut f);
+                src.accum(&mut f);
             }
             SubstrIndex(res, s, t) => {
                 res.accum(&mut f);

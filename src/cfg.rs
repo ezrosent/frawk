@@ -277,6 +277,9 @@ pub(crate) struct ProgramContext<'a, I> {
     main_offset: Stage<usize>,
     // Permit arbitrary strings to be passed to a subshell, skips any taint analysis of the script.
     pub allow_arbitrary_commands: bool,
+    // Lower certain regular expression instructions to direct invocations of a given pattern,
+    // rather than dynamic lookups
+    pub fold_regex_constants: bool,
 }
 
 impl<'a, I> ProgramContext<'a, I> {
@@ -541,6 +544,7 @@ where
             funcs,
             main_offset,
             allow_arbitrary_commands: false,
+            fold_regex_constants: false,
         })
     }
 }

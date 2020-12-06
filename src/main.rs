@@ -25,6 +25,7 @@ pub mod llvm;
 pub mod parsing;
 pub mod pushdown;
 pub mod runtime;
+mod string_constants;
 #[cfg(test)]
 mod test_string_constants;
 pub mod types;

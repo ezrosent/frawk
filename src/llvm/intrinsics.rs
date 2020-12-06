@@ -12,7 +12,7 @@ use crate::runtime::{
         chunk::{ChunkProducer, OffsetChunk},
         regex::RegexSplitter,
     },
-    ChainedReader, FileRead, Float, Int, IntMap, Line, LineReader, Str, StrMap,
+    ChainedReader, FileRead, Float, Int, IntMap, Line, LineReader, RegexCache, Str, StrMap,
 };
 
 use hashbrown::HashMap;
@@ -22,6 +22,7 @@ use llvm_sys::{
     support::LLVMAddSymbol,
 };
 use rand::{self, Rng};
+use regex::bytes::Regex;
 use smallvec;
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
@@ -279,7 +280,9 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         [ReadOnly] str_len(str_ref_ty) -> int_ty;
         concat(str_ref_ty, str_ref_ty) -> str_ty;
         [ReadOnly] match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] match_const_pat(str_ref_ty, rt_ty) -> int_ty;
         [ReadOnly] match_pat_loc(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        [ReadOnly] match_const_pat_loc(rt_ty, str_ref_ty, rt_ty) -> int_ty;
         [ReadOnly] substr_index(str_ref_ty, str_ref_ty) -> int_ty;
         subst_first(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_all(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
@@ -725,6 +728,13 @@ pub unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *m
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn match_const_pat(s: *mut c_void, pat: *mut c_void) -> Int {
+    let s = &*(s as *mut Str);
+    let pat = &*(pat as *const Regex);
+    RegexCache::regex_const_match(pat, s) as Int
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn match_pat_loc(
     runtime: *mut c_void,
     s: *mut c_void,
@@ -740,6 +750,22 @@ pub unsafe extern "C" fn match_pat_loc(
     );
     mem::forget((s, pat));
     res as Int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn match_const_pat_loc(
+    runtime: *mut c_void,
+    s: *mut c_void,
+    pat: *mut c_void,
+) -> Int {
+    let runtime = runtime as *mut Runtime;
+    let s = &*(s as *mut Str);
+    let pat = &*(pat as *const Regex);
+    try_abort!(
+        runtime,
+        (*runtime).core.match_const_regex(s, pat),
+        "match_const_pat_loc:"
+    )
 }
 
 #[no_mangle]

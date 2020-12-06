@@ -1,7 +1,9 @@
 use crate::builtins;
-use crate::bytecode;
+use crate::bytecode::{self, Accum};
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
-use crate::common::{Either, FileSpec, Graph, NodeIx, NumTy, Result, Stage, WorkList};
+use crate::common::{
+    CompileError, Either, FileSpec, Graph, NodeIx, NumTy, Result, Stage, WorkList,
+};
 use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
 #[cfg(feature = "llvm_backend")]
@@ -9,9 +11,11 @@ use crate::llvm;
 use crate::pushdown::{FieldSet, UsedFieldAnalysis};
 use crate::runtime::{self, Str};
 use crate::smallvec::{self, smallvec};
+use crate::string_constants::StringConstantAnalysis;
 use crate::types;
 
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
+use regex::bytes::Regex;
 
 use std::collections::VecDeque;
 use std::convert::TryFrom;
@@ -163,6 +167,13 @@ fn visit_taint_analysis<'a>(stmt: &Instr<'a>, func_id: NumTy, tsa: &mut TaintedS
     match stmt {
         Either::Left(ll) => tsa.visit_ll(ll),
         Either::Right(hl) => tsa.visit_hl(func_id, hl),
+    }
+}
+
+fn visit_string_constant_analysis<'a>(stmt: &Instr<'a>, sca: &mut StringConstantAnalysis<'a>) {
+    match stmt {
+        Either::Left(ll) => sca.visit_ll(ll, /*is_regex=*/ true),
+        Either::Right(hl) => sca.visit_hl(hl),
     }
 }
 
@@ -319,6 +330,9 @@ pub(crate) struct Typer<'a> {
     used_fields: FieldSet,
     // For rejecting suspcicious programs with commands.
     taint_analysis: Option<TaintedStringAnalysis>,
+    // For analysis passes that introspect into the set of constant string values that will
+    // dynamically be assigned to a register
+    string_constants: Option<StringConstantAnalysis<'a>>,
     // Not used for bytecode generation.
     callgraph: Graph<HashSet<(NumTy, Ty)>, ()>,
 
@@ -677,6 +691,9 @@ impl<'a> Typer<'a> {
         if !pc.allow_arbitrary_commands {
             gen.taint_analysis = Some(Default::default());
         }
+        if pc.fold_regex_constants {
+            gen.string_constants = Some(Default::default());
+        }
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
         let local_globals = pc.local_globals();
         macro_rules! init_entry {
@@ -760,13 +777,22 @@ impl<'a> Typer<'a> {
 
     fn run_analyses(&mut self) -> Result<()> {
         let mut ufa = UsedFieldAnalysis::default();
-        for frame in self.frames.iter() {
-            for bb in frame.cfg.raw_nodes() {
-                for stmt in bb.weight.iter() {
+        let mut refs = SmallVec::new();
+        for (fix, frame) in self.frames.iter().enumerate() {
+            for (bbix, bb) in frame.cfg.raw_nodes().iter().enumerate() {
+                for (stmtix, stmt) in bb.weight.iter().enumerate() {
                     // not tracking function calls
                     visit_used_fields(stmt, &mut ufa);
                     if let Some(tsa) = &mut self.taint_analysis {
                         visit_taint_analysis(stmt, frame.cur_ident, tsa)
+                    }
+                    if let Some(sca) = &mut self.string_constants {
+                        if let Either::Left(LL::IsMatch(_, _, pat))
+                        | Either::Left(LL::Match(_, _, pat)) = stmt
+                        {
+                            refs.push((fix, bbix, stmtix, pat.reflect().0));
+                        }
+                        visit_string_constant_analysis(stmt, sca)
                     }
                 }
             }
@@ -775,6 +801,43 @@ impl<'a> Typer<'a> {
         if let Some(tsa) = &mut self.taint_analysis {
             if !tsa.ok() {
                 return err!("command potentially containing interpolated user input detected.\nIf this is a false positive, you can pass the -A flag to bypass this check.");
+            }
+        }
+        if let Some(sca) = &mut self.string_constants {
+            // Fold any regex pattern constants that we see
+            let mut strs = Vec::new();
+            for (frame, bb, stmt, reg) in refs.into_iter() {
+                sca.possible_strings(reg, &mut strs);
+                if strs.len() == 1 {
+                    let text = std::str::from_utf8(&strs[0]).map_err(|e| {
+                        CompileError(format!("invalid UTF8 for regex literal: {}", e))
+                    })?;
+                    let re = Box::new(Regex::new(text).map_err(|err| {
+                        CompileError(format!("regex parse error during compilation: {}", err))
+                    })?);
+                    let inst = self.frames[frame]
+                        .cfg
+                        .node_weight_mut(NodeIx::new(bb))
+                        .unwrap()
+                        .get_mut(stmt)
+                        .unwrap();
+                    let new_inst: Instr = match inst {
+                        Either::Left(LL::IsMatch(dst, s, _)) => {
+                            Either::Left(LL::IsMatchConst(*dst, *s, re))
+                        }
+                        Either::Left(LL::Match(dst, s, _)) => {
+                            Either::Left(LL::MatchConst(*dst, *s, re))
+                        }
+                        _ => {
+                            return err!(
+                                "unexpected instruction during regex constant folding: {:?}",
+                                inst
+                            )
+                        }
+                    };
+                    *inst = new_inst;
+                }
+                strs.clear();
             }
         }
         Ok(())
