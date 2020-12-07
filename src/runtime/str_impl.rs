@@ -17,6 +17,12 @@ use std::cell::{Cell, UnsafeCell};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::marker::PhantomData;
+
+#[cfg(feature = "unstable")]
+use std::intrinsics::likely;
+#[cfg(not(feature = "unstable"))]
+fn likely(b: bool) -> bool { b }
+
 use std::mem;
 use std::ptr;
 use std::rc::Rc;
@@ -1137,7 +1143,7 @@ impl Buf {
                         .into(),
                 )
             }
-        } else if std::intrinsics::likely(
+        } else if likely(
             from <= u32::max_value() as usize && to <= u32::max_value() as usize,
         ) {
             Str::from_rep(

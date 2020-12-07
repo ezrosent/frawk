@@ -2,7 +2,12 @@
 //! semantics (no failures, just 0s and stopping early). Mistakes are surely my own.
 //!
 //! TODO: rename to num_parse
+
+#[cfg(feature = "unstable")]
 use std::intrinsics::unlikely;
+#[cfg(not(feature = "unstable"))]
+fn unlikely(b: bool) -> bool { b }
+
 use std::mem;
 mod slow_path;
 

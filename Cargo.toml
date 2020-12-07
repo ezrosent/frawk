@@ -38,7 +38,7 @@ grep-cli = "0.1"
 termcolor = "1.1"
 
 [features]
-default = ["use_jemalloc", "allow_avx2", "llvm_backend", "unstable"]
+default = ["use_jemalloc", "allow_avx2", "llvm_backend"]
 use_jemalloc = ["jemallocator"]
 # Certain features leverage the AVX2 instruction set, but AVX2 can often make
 # the entire application slightly slower, even on chips that support it. As a
