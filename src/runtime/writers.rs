@@ -43,6 +43,12 @@ use std::sync::{
     Arc, Mutex,
 };
 
+#[cfg(not(feature = "unstable"))]
+use crate::lazy_static::__Deref;
+
+#[cfg(not(feature = "unstable"))]
+use itertools::Itertools;
+
 // TODO: get_handle() should return an error on failure to parse UTF8
 
 // NB we only require mpsc semantics, but at time of writing there are a few open bugs on
@@ -653,12 +659,29 @@ struct WriteBatch {
     close: bool,
 }
 
+#[cfg(feature = "unstable")]
+fn write_all(batch: &mut WriteBatch, w: &mut impl Write) -> io::Result</*close=*/ bool> {
+    w.write_all_vectored(&mut batch.io_vec[..]).map(|_| true)
+}
+
+#[cfg(not(feature = "unstable"))]
+fn write_all(batch: &mut WriteBatch, w: &mut impl Write) -> io::Result</*close=*/ bool> {
+    batch
+        .io_vec
+        .iter()
+        .map(|slice| {
+            let buf: &[u8] = slice.deref();
+            w.write_all(buf)
+        })
+        .fold_results(true, |a, _| a)
+}
+
 impl WriteBatch {
     fn n_writes(&self) -> usize {
         self.n_writes
     }
     fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
-        w.write_all_vectored(&mut self.io_vec[..])?;
+        write_all(self, w)?;
         if self.flush || self.close {
             w.flush()?;
         }
