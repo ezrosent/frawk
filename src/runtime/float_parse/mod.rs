@@ -6,7 +6,9 @@
 #[cfg(feature = "unstable")]
 use std::intrinsics::unlikely;
 #[cfg(not(feature = "unstable"))]
-fn unlikely(b: bool) -> bool { b }
+fn unlikely(b: bool) -> bool {
+    b
+}
 
 use std::mem;
 mod slow_path;

@@ -21,7 +21,9 @@ use std::marker::PhantomData;
 #[cfg(feature = "unstable")]
 use std::intrinsics::likely;
 #[cfg(not(feature = "unstable"))]
-fn likely(b: bool) -> bool { b }
+fn likely(b: bool) -> bool {
+    b
+}
 
 use std::mem;
 use std::ptr;
@@ -1143,9 +1145,7 @@ impl Buf {
                         .into(),
                 )
             }
-        } else if likely(
-            from <= u32::max_value() as usize && to <= u32::max_value() as usize,
-        ) {
+        } else if likely(from <= u32::max_value() as usize && to <= u32::max_value() as usize) {
             Str::from_rep(
                 Shared {
                     buf: self.clone(),
@@ -1318,7 +1318,6 @@ And this is the second part"#
         s7.with_bytes(|bs| assert_eq!(bs, b"String number one substituted into another xxyz"));
         assert!(subbed);
     }
-
 }
 
 #[cfg(all(feature = "unstable", test))]

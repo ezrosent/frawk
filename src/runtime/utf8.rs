@@ -197,7 +197,6 @@ mod tests {
         }
         res
     }
-
 }
 
 #[cfg(all(feature = "unstable", test))]
@@ -313,7 +312,6 @@ mod bench {
         }
         res
     }
-
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
