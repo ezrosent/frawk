@@ -1175,9 +1175,7 @@ impl Buf {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
     use super::*;
-    use test::{black_box, Bencher};
 
     #[test]
     fn inline_basics() {
@@ -1314,6 +1312,14 @@ And this is the second part"#
         s7.with_bytes(|bs| assert_eq!(bs, b"String number one substituted into another xxyz"));
         assert!(subbed);
     }
+
+}
+
+#[cfg(all(feature = "unstable", test))]
+mod bench {
+    extern crate test;
+    use super::*;
+    use test::{black_box, Bencher};
 
     #[bench]
     fn bench_get_bytes_drop_empty(b: &mut Bencher) {

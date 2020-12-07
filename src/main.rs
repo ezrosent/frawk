@@ -1,6 +1,6 @@
 #![recursion_limit = "256"]
 #![feature(core_intrinsics)]
-#![feature(test)]
+#![cfg_attr(feature = "unstable", feature(test))]
 #![feature(write_all_vectored)]
 #[macro_use]
 pub mod common;

@@ -404,9 +404,7 @@ pub(crate) fn run_prog<'a>(
 }
 
 mod tests {
-    extern crate test;
     use super::*;
-    use test::{black_box, Bencher};
 
     macro_rules! test_program_parallel {
         ($desc:ident, $strat:tt, $e:expr, $in:expr, $out:expr) => {
@@ -1265,6 +1263,13 @@ this as well"#
     );
 
     // TODO test more operators, consider more edge cases around functions
+}
+
+#[cfg(all(feature = "unstable", test))]
+mod bench {
+    extern crate test;
+    use super::*;
+    use test::{black_box, Bencher};
 
     // TODO if we ever want to benchmark stdin, the program_only benchmarks here will not work,
     // because "reset" does not work on stdin today.

@@ -133,9 +133,7 @@ pub(crate) fn is_utf8(mut bs: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
     use lazy_static::lazy_static;
-    use test::{black_box, Bencher};
 
     fn parse_utf8_fallback(bs: &[u8]) -> Option<&str> {
         super::validate_utf8_fallback(bs)
@@ -198,6 +196,21 @@ mod tests {
             }
         }
         res
+    }
+
+}
+
+#[cfg(all(feature = "unstable", test))]
+mod bench {
+    extern crate test;
+    use lazy_static::lazy_static;
+    use test::{black_box, Bencher};
+
+    const LEN: usize = 50_000;
+
+    lazy_static! {
+        static ref ASCII: String = String::from_utf8(bytes(LEN, 0.0)).unwrap();
+        static ref UTF8: String = String::from_utf8(bytes(LEN, 1.0)).unwrap();
     }
 
     #[bench]
@@ -279,6 +292,28 @@ mod tests {
             black_box(std::str::from_utf8(&bs[..]).is_ok());
         })
     }
+
+    fn bytes(n: usize, utf8_pct: f64) -> Vec<u8> {
+        let mut res = Vec::with_capacity(n);
+        use rand::distributions::{Distribution, Uniform};
+        let ascii = Uniform::new_inclusive(0u8, 127u8);
+        let between = Uniform::new_inclusive(0.0, 1.0);
+        let mut rng = rand::thread_rng();
+        for _ in 0..n {
+            if between.sample(&mut rng) < utf8_pct {
+                let c = rand::random::<char>();
+                let ix = res.len();
+                for _ in 0..c.len_utf8() {
+                    res.push(0);
+                }
+                c.encode_utf8(&mut res[ix..]);
+            } else {
+                res.push(ascii.sample(&mut rng))
+            }
+        }
+        res
+    }
+
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
