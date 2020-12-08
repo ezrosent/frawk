@@ -205,7 +205,7 @@ pub(crate) fn dump_llvm<'a>(
     }
 }
 
-#[cfg(all(test, feature = "llvm_backend"))]
+#[cfg(all(feature = "llvm_backend", feature = "unstable"))]
 pub(crate) fn compile_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
     cfg: llvm::Config,

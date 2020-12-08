@@ -1,9 +1,10 @@
 //! Some utility functions for running AWK programs from Rust code. It is primarily used to test
 //! "everything but main" end to end; there's a test suite at the end.
+#[cfg(feature = "unstable")]
+use crate::bytecode::Interp;
 use crate::{
     arena::Arena,
     ast,
-    bytecode::Interp,
     cfg::{self, Escaper},
     common::{ExecutionStrategy, Result},
     compile, lexer,
@@ -182,19 +183,23 @@ pub(crate) fn run_program<'a>(
 }
 
 cfg_if! {
+    if #[cfg(all(feature="llvm_backend", feature="unstable"))] {
+        pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
+            let a = Arena::default();
+            let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
+            let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+            compile::compile_llvm(&mut ctx, LLVM_CONFIG)
+        }
+    }
+}
+
+cfg_if! {
     if #[cfg(feature="llvm_backend")] {
         pub(crate) fn dump_llvm(prog: &str, esc: Escaper) -> Result<String> {
             let a = Arena::default();
             let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
             let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
             compile::dump_llvm(&mut ctx, LLVM_CONFIG)
-        }
-
-        pub(crate) fn compile_llvm(prog: &str, esc: Escaper) -> Result<()> {
-            let a = Arena::default();
-            let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
-            let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
-            compile::compile_llvm(&mut ctx, LLVM_CONFIG)
         }
 
         // The run_llvm path implements a subset of the logic in main that specializes the input
@@ -243,6 +248,7 @@ cfg_if! {
     }
 }
 
+#[cfg(feature = "unstable")]
 pub(crate) fn bench_program(
     prog: &str,
     stdin: impl Into<String>,
@@ -295,6 +301,7 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
     }
 }
 
+#[cfg(feature = "unstable")]
 fn compile_program<'a, 'inp, 'outer>(
     a: &'a Arena<'outer>,
     prog: Prog<'a>,
@@ -315,6 +322,7 @@ fn compile_program<'a, 'inp, 'outer>(
     ))
 }
 
+#[cfg(feature = "unstable")]
 fn run_prog_nodebug<'a, LR: runtime::LineReader>(
     interp: &mut Interp<'a, LR>,
     fake_fs: FakeFs,
