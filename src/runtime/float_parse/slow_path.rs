@@ -85,8 +85,7 @@ impl SmallCString {
 #[cfg(test)]
 mod tests {
     use super::*;
-    extern crate test;
-    use test::{black_box, Bencher};
+
     fn test_strtoi(mut f: impl FnMut(&[u8]) -> i64) {
         assert_eq!(f(b"0"), 0);
         assert_eq!(f(b"012345678910"), 12345678910);
@@ -153,6 +152,13 @@ mod tests {
     fn test_strtod_libc() {
         test_strtod(strtod_libc);
     }
+}
+
+#[cfg(all(feature = "unstable", test))]
+mod bench {
+    use super::*;
+    extern crate test;
+    use test::{black_box, Bencher};
     fn bench_strtoi_long(b: &mut Bencher, mut f: impl FnMut(&[u8]) -> i64) {
         const INPUT: &[u8] = b"9514590998633183616833425126589570467868 some more data after that";
         b.iter(|| {

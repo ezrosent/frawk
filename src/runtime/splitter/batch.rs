@@ -1000,6 +1000,7 @@ mod generic {
         const BUFFER_SIZE: usize = 4;
         macro_rules! iterate {
             ($buf:expr) => {{
+                #[cfg(feature = "unstable")]
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 // find commas not inside quotes
                 let inp = V::fill_input($buf);
@@ -1071,6 +1072,7 @@ mod generic {
         const BUFFER_SIZE: usize = 4;
         macro_rules! iterate {
             ($buf:expr) => {{
+                #[cfg(feature = "unstable")]
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 f($buf)
             }};
@@ -1139,6 +1141,7 @@ mod generic {
         const BUFFER_SIZE: usize = 4;
         macro_rules! iterate {
             ($buf:expr) => {{
+                #[cfg(feature = "unstable")]
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
                 let inp = V::fill_input($buf);
                 let (ws, nl, next_start) = inp.whitespace_masks(start_ws);

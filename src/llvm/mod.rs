@@ -326,7 +326,7 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     // For benchmarking.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "unstable"))]
     pub unsafe fn compile_main(&mut self) -> Result<()> {
         let mains = self.gen_main()?;
         self.verify()?;

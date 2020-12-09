@@ -197,8 +197,6 @@ impl<'outer> Arena<'outer> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    extern crate test;
-    use test::{black_box, Bencher};
 
     fn bytes(n: usize) -> String {
         let mut res = Vec::with_capacity(n);
@@ -297,6 +295,13 @@ mod tests {
             }
         }
     }
+}
+
+#[cfg(all(feature = "unstable", test))]
+mod bench {
+    use super::*;
+    extern crate test;
+    use test::{black_box, Bencher};
     enum Arith1 {
         N(i64),
         Add(Box<Arith1>, Box<Arith1>),

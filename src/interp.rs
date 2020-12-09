@@ -1490,6 +1490,7 @@ pub(crate) fn pop<'a, T: Clone>(s: &'a mut Storage<T>) -> T {
 
 #[cfg(test)]
 impl<T: Default> Storage<T> {
+    #[cfg(feature = "unstable")]
     fn reset(&mut self) {
         self.stack.clear();
         for i in self.regs.iter_mut() {
@@ -1500,6 +1501,7 @@ impl<T: Default> Storage<T> {
 
 #[cfg(test)]
 impl<'a, LR: LineReader> Interp<'a, LR> {
+    #[cfg(feature = "unstable")]
     pub(crate) fn reset(&mut self) {
         self.stack = Default::default();
         self.core.vars = Default::default();

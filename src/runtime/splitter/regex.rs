@@ -176,12 +176,11 @@ impl<R: Read> RegexSplitter<R> {
 #[cfg(test)]
 mod tests {
     // need to benchmark batched splitting vs. regular splitting to get a feel for things.
-    extern crate test;
     use super::*;
     use lazy_static::lazy_static;
     use regex::bytes::Regex;
     use std::io::Cursor;
-    use test::{black_box, Bencher};
+
     lazy_static! {
         static ref STR: String = String::from_utf8(bytes(1 << 20, 0.001, 0.05)).unwrap();
         static ref LINE: Regex = Regex::new("\n").unwrap();
@@ -328,6 +327,41 @@ mod tests {
                 assert!(false, "number of lines does not match");
             }
         }
+    }
+
+    fn bytes(n: usize, line_pct: f64, space_pct: f64) -> Vec<u8> {
+        let mut res = Vec::with_capacity(n);
+        use rand::distributions::{Distribution, Uniform};
+        let between = Uniform::new_inclusive(0.0, 1.0);
+        let ascii = Uniform::new_inclusive(33u8, 126u8);
+        let mut rng = rand::thread_rng();
+        for _ in 0..n {
+            let s = between.sample(&mut rng);
+            if s < line_pct {
+                res.push(b'\n')
+            } else if s < space_pct {
+                res.push(b' ')
+            } else {
+                res.push(ascii.sample(&mut rng))
+            }
+        }
+        res
+    }
+}
+
+#[cfg(all(feature = "unstable", test))]
+mod bench {
+    // need to benchmark batched splitting vs. regular splitting to get a feel for things.
+    extern crate test;
+    use lazy_static::lazy_static;
+    use regex::bytes::Regex;
+    use test::{black_box, Bencher};
+
+    lazy_static! {
+        static ref STR: String = String::from_utf8(bytes(1 << 20, 0.001, 0.05)).unwrap();
+        static ref LINE: Regex = Regex::new("\n").unwrap();
+        static ref SPACE: Regex = Regex::new(" ").unwrap();
+        static ref BS: Regex = Regex::new("b+").unwrap();
     }
 
     #[bench]

@@ -17,6 +17,14 @@ use std::cell::{Cell, UnsafeCell};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::marker::PhantomData;
+
+#[cfg(feature = "unstable")]
+use std::intrinsics::likely;
+#[cfg(not(feature = "unstable"))]
+fn likely(b: bool) -> bool {
+    b
+}
+
 use std::mem;
 use std::ptr;
 use std::rc::Rc;
@@ -1137,9 +1145,7 @@ impl Buf {
                         .into(),
                 )
             }
-        } else if std::intrinsics::likely(
-            from <= u32::max_value() as usize && to <= u32::max_value() as usize,
-        ) {
+        } else if likely(from <= u32::max_value() as usize && to <= u32::max_value() as usize) {
             Str::from_rep(
                 Shared {
                     buf: self.clone(),
@@ -1175,9 +1181,7 @@ impl Buf {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
     use super::*;
-    use test::{black_box, Bencher};
 
     #[test]
     fn inline_basics() {
@@ -1314,6 +1318,13 @@ And this is the second part"#
         s7.with_bytes(|bs| assert_eq!(bs, b"String number one substituted into another xxyz"));
         assert!(subbed);
     }
+}
+
+#[cfg(all(feature = "unstable", test))]
+mod bench {
+    extern crate test;
+    use super::*;
+    use test::{black_box, Bencher};
 
     #[bench]
     fn bench_get_bytes_drop_empty(b: &mut Bencher) {
