@@ -166,7 +166,7 @@ type ProgResult<'a> = Result<(
 
 #[cfg(feature = "llvm_backend")]
 const LLVM_CONFIG: llvm::Config = llvm::Config {
-    opt_level: 3,
+    opt_level: 0,
     num_workers: 1,
 };
 

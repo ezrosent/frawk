@@ -159,9 +159,9 @@ impl<'a> Line<'a> for DefaultLine {
                 let old_set = std::mem::replace(&mut self.used_fields, FieldSet::all());
                 let mut new_vec = LazyVec::new();
                 rc.split_regex(pat, &self.line, &self.used_fields, &mut new_vec)?;
-                for i in 0..new_vec.len() {
-                    if old_set.get(i + 1) {
-                        new_vec.insert(i, self.fields.get(i).unwrap_or_else(Str::default));
+                for k in self.fields.keys() {
+                    if old_set.get(k + 1) {
+                        new_vec.insert(k, self.fields.get(k).unwrap_or_else(Str::default));
                     }
                 }
                 self.fields = new_vec;

@@ -760,10 +760,11 @@ impl<'a, 'b> Generator<'a, 'b> {
                 let (_, t) = frame.cfg.edge_endpoints(e).unwrap();
                 let bb = bbs[t.index()];
                 if let Some(e) = frame.cfg.edge_weight(e).unwrap().clone() {
-                    assert!(tcase.is_none());
                     tcase = Some((e, bb));
                 } else {
-                    assert!(ecase.is_none());
+                    // NB, we used to disallow duplicate unconditional branches outbound from a
+                    // basic block, but it does seem to happen in some cases, but only benignly
+                    // (where taking either branch results in the same behavior).
                     ecase = Some(bb);
                 }
             }

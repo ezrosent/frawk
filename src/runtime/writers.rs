@@ -385,6 +385,7 @@ impl FileHandle {
                 RequestStatus::ERROR => return Err(self.read_error()),
             }
         }
+        // TODO: off-by-one, should morally be ..=, but that doesn't handle the empty case.
         for _ in 0..done_count {
             let old = self.guards.pop_front().unwrap();
             if self.old_guards.len() < IO_CHAN_SIZE {
@@ -680,6 +681,7 @@ impl WriteBatch {
     fn n_writes(&self) -> usize {
         self.n_writes
     }
+
     fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
         write_all(self, w)?;
         if self.flush || self.close {
@@ -689,6 +691,7 @@ impl WriteBatch {
         self.clear();
         Ok(close)
     }
+
     fn get_spec(&self) -> FileSpec {
         for req in self.requests.iter() {
             if let Request::Write { spec, .. } = req {
@@ -704,7 +707,7 @@ impl WriteBatch {
                 // documentation for IoSlice. Should be an easy fix if this comes up.
                 self.io_vec.push(io::IoSlice::new(unsafe { &**data }));
                 self.n_writes += 1;
-                self.flush = *flush;
+                self.flush |= *flush;
             }
             Request::Flush(_) => self.flush = true,
             Request::Close => self.close = true,

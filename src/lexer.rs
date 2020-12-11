@@ -500,9 +500,24 @@ impl<'a> Tokenizer<'a> {
 
     fn consume_ws(&mut self) {
         let mut res = 0;
-        for (ix, c) in self.text[self.cur..].char_indices() {
-            res = ix;
-            if c == '\n' || !c.is_whitespace() {
+        let mut iter = self.text[self.cur..].char_indices();
+        'outer: while let Some((ix, c)) = iter.next() {
+            loop {
+                res = ix;
+                if c == '\\' {
+                    // look ahead for a newline and hence a line continuation
+                    if let Some((_, next_c)) = iter.next() {
+                        if next_c == '\n' {
+                            // count this as whitespace
+                            continue 'outer;
+                        }
+                        break 'outer;
+                    }
+                }
+                if c == '\n' || !c.is_whitespace() {
+                    break 'outer;
+                }
+
                 break;
             }
         }

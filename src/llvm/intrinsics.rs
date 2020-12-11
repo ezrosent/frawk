@@ -567,7 +567,6 @@ pub unsafe extern "C" fn split_str(
     let into_arr = mem::transmute::<*mut c_void, StrMap<Str>>(into_arr);
     let to_split = &*(to_split as *mut Str);
     let pat = &*(pat as *mut Str);
-    let old_len = into_arr.len();
     if let Err(e) = runtime
         .core
         .regexes
@@ -575,7 +574,7 @@ pub unsafe extern "C" fn split_str(
     {
         fail!(runtime, "failed to split string: {}", e);
     }
-    let res = (into_arr.len() - old_len) as Int;
+    let res = into_arr.len() as Int;
     mem::forget((into_arr, to_split, pat));
     res
 }
@@ -591,7 +590,6 @@ pub unsafe extern "C" fn split_int(
     let into_arr = mem::transmute::<*mut c_void, IntMap<Str>>(into_arr);
     let to_split = &*(to_split as *mut Str);
     let pat = &*(pat as *mut Str);
-    let old_len = into_arr.len();
     if let Err(e) = runtime
         .core
         .regexes
@@ -599,7 +597,7 @@ pub unsafe extern "C" fn split_int(
     {
         fail!(runtime, "failed to split string: {}", e);
     }
-    let res = (into_arr.len() - old_len) as Int;
+    let res = into_arr.len() as Int;
     mem::forget((into_arr, to_split, pat));
     res
 }

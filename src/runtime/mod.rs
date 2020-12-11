@@ -66,6 +66,12 @@ impl<T> LazyVec<T> {
     pub(crate) fn len(&self) -> usize {
         for_either!(self, |x| x.len())
     }
+    pub fn keys(&self) -> impl Iterator<Item = usize> {
+        match self {
+            Either::Left(v) => Either::Left(0..v.len()),
+            Either::Right(m) => Either::Right(m.to_vec().into_iter().map(|x| x as usize)),
+        }
+    }
 }
 
 impl LazyVec<Str<'static>> {
@@ -286,9 +292,11 @@ impl RegexCache {
         m: &IntMap<Str<'a>>,
     ) -> Result<()> {
         let mut i = 0i64;
+        let mut m_b = m.0.borrow_mut();
+        m_b.clear();
         self.split_internal(pat, s, &FieldSet::all(), |s| {
             i += 1;
-            m.insert(i, s);
+            m_b.insert(i, s);
         })
     }
 
@@ -299,9 +307,11 @@ impl RegexCache {
         m: &StrMap<'a, Str<'a>>,
     ) -> Result<()> {
         let mut i = 0i64;
+        let mut m_b = m.0.borrow_mut();
+        m_b.clear();
         self.split_internal(pat, s, &FieldSet::all(), |s| {
             i += 1;
-            m.insert(convert::<i64, Str<'_>>(i), s);
+            m_b.insert(convert::<i64, Str<'_>>(i), s);
         })
     }
 

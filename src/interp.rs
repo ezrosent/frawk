@@ -1009,11 +1009,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let to_split = index(&self.strs, to_split);
                         let arr = index(&self.maps_int_str, arr);
                         let pat = index(&self.strs, pat);
-                        let old_len = arr.len();
                         self.core
                             .regexes
                             .split_regex_intmap(&pat, &to_split, &arr)?;
-                        let res = (arr.len() - old_len) as i64;
+                        let res = arr.len() as Int;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
                     }
@@ -1022,11 +1021,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let to_split = index(&self.strs, to_split);
                         let arr = index(&self.maps_str_str, arr);
                         let pat = index(&self.strs, pat);
-                        let old_len = arr.len();
                         self.core
                             .regexes
                             .split_regex_strmap(&pat, &to_split, &arr)?;
-                        let res = (arr.len() - old_len) as Int;
+                        let res = arr.len() as Int;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
                     }
