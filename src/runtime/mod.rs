@@ -390,6 +390,19 @@ impl FileWrite {
         let s = unsafe { text.into_str() };
         handle.write(&s, fspec)
     }
+    pub(crate) fn write_all(
+        &mut self,
+        ss: &[&Str],
+        out_spec: Option<(FileSpec, &Str)>,
+    ) -> Result<()> {
+        if let Some((spec, path)) = out_spec {
+            self.0.get_handle(Some(path), spec)?.write_all(ss, spec)
+        } else {
+            self.0
+                .get_handle(None, FileSpec::default())?
+                .write_all(ss, FileSpec::Append)
+        }
+    }
 
     pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
         self.0

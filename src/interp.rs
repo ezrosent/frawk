@@ -1056,6 +1056,24 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let dst = *dst;
                         *self.get_mut(dst) = res;
                     }
+                    PrintAll { output, args } => {
+                        // TODO: find a way to avoid building this vector locally.
+                        let mut scratch_strs: Vec<&Str> = Vec::with_capacity(args.len());
+                        for a in args {
+                            scratch_strs.push(index(&self.strs, a));
+                        }
+                        let res = if let Some((out_path_reg, fspec)) = output {
+                            let out_path = index(&self.strs, out_path_reg);
+                            self.core
+                                .write_files
+                                .write_all(&scratch_strs[..], Some((*fspec, out_path)))
+                        } else {
+                            self.core.write_files.write_all(&scratch_strs[..], None)
+                        };
+                        if res.is_err() {
+                            return Ok(());
+                        }
+                    }
                     Printf { output, fmt, args } => {
                         debug_assert_eq!(scratch.len(), 0);
                         for a in args.iter() {

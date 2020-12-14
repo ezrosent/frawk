@@ -1802,6 +1802,7 @@ impl<'a> View<'a> {
                 );
                 self.bind_reg(dst, resv);
             }
+            PrintAll { output, args } => unimplemented!(),
             Printf { output, fmt, args } => {
                 // First, extract the types and use that to get a handle on a wrapped printf
                 // function.
