@@ -303,6 +303,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         run_system(str_ref_ty) -> int_ty;
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
+        print_all_stdout(rt_ty, fmt_args_ty, int_ty);
+        print_all_file(rt_ty, fmt_args_ty, int_ty, str_ref_ty, int_ty);
         sprintf_impl(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
         printf_impl_file(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty, str_ref_ty, int_ty);
         printf_impl_stdout(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty);
@@ -1037,6 +1039,39 @@ unsafe fn wrap_args<'a>(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usize, num_args: Int) {
+    let args_wrapped: &[&Str] =
+        slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
+    let rt = rt as *mut Runtime;
+    try_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn print_all_file(
+    rt: *mut c_void,
+    args: *mut usize,
+    num_args: Int,
+    output: *const U128,
+    append: Int,
+) {
+    let args_wrapped: &[&Str] =
+        slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
+    let rt = rt as *mut Runtime;
+    let output_wrapped = Some((
+        &*(output as *mut Str),
+        try_abort!(rt, FileSpec::try_from(append)),
+    ));
+
+    try_abort!(
+        rt,
+        (*rt)
+            .core
+            .write_files
+            .write_all(args_wrapped, output_wrapped)
+    )
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn printf_impl_file(
     rt: *mut c_void,
     spec: *mut U128,
@@ -1048,7 +1083,7 @@ pub unsafe extern "C" fn printf_impl_file(
 ) {
     let output_wrapped = Some((
         &*(output as *mut Str),
-        FileSpec::try_from(append).expect("invalid filespec!"),
+        try_abort!(rt, FileSpec::try_from(append)),
     ));
     let format_args = wrap_args(&mut *(rt as *mut _), args, tys, num_args);
     let rt = rt as *mut Runtime;

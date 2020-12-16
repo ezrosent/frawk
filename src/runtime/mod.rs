@@ -393,9 +393,9 @@ impl FileWrite {
     pub(crate) fn write_all(
         &mut self,
         ss: &[&Str],
-        out_spec: Option<(FileSpec, &Str)>,
+        out_spec: Option<(&Str, FileSpec)>,
     ) -> Result<()> {
-        if let Some((spec, path)) = out_spec {
+        if let Some((path, spec)) = out_spec {
             self.0.get_handle(Some(path), spec)?.write_all(ss, spec)
         } else {
             self.0

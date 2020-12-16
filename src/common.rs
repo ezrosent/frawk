@@ -1,6 +1,7 @@
 //! This file contains common type definitions and utilities used in other parts of the project.
 use hashbrown::HashSet;
 use std::collections::VecDeque;
+use std::fmt;
 use std::hash::Hash;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -319,9 +320,17 @@ pub enum FileSpec {
     Cmd = 2,
 }
 
+#[derive(Debug)]
+pub struct InvalidFileSpec;
+impl fmt::Display for InvalidFileSpec {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt("invalid file spec", fmt)
+    }
+}
+
 impl std::convert::TryFrom<i64> for FileSpec {
-    type Error = ();
-    fn try_from(i: i64) -> std::result::Result<FileSpec, ()> {
+    type Error = InvalidFileSpec;
+    fn try_from(i: i64) -> std::result::Result<FileSpec, InvalidFileSpec> {
         // uglier than a match, but stays in sync with the enum more easily.
         if i == FileSpec::Trunc as i64 {
             Ok(FileSpec::Trunc)
@@ -330,7 +339,7 @@ impl std::convert::TryFrom<i64> for FileSpec {
         } else if i == FileSpec::Cmd as i64 {
             Ok(FileSpec::Cmd)
         } else {
-            Err(())
+            Err(InvalidFileSpec)
         }
     }
 }

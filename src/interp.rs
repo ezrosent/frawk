@@ -1066,7 +1066,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             let out_path = index(&self.strs, out_path_reg);
                             self.core
                                 .write_files
-                                .write_all(&scratch_strs[..], Some((*fspec, out_path)))
+                                .write_all(&scratch_strs[..], Some((out_path, *fspec)))
                         } else {
                             self.core.write_files.write_all(&scratch_strs[..], None)
                         };
