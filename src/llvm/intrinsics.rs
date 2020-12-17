@@ -236,6 +236,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     let fmt_tys_ty = LLVMPointerType(LLVMIntTypeInContext(ctx, 32), 0);
     let map_ty = rt_ty;
     let str_ref_ty = LLVMPointerType(str_ty, 0);
+    let pa_args_ty = LLVMPointerType(str_ref_ty, 0);
     let iter_int_ty = LLVMPointerType(int_ty, 0);
     let iter_str_ty = LLVMPointerType(str_ty, 0);
     let mut table = IntrinsicMap::new(module, ctx);
@@ -303,8 +304,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         run_system(str_ref_ty) -> int_ty;
         print_stdout(rt_ty, str_ref_ty);
         print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
-        print_all_stdout(rt_ty, fmt_args_ty, int_ty);
-        print_all_file(rt_ty, fmt_args_ty, int_ty, str_ref_ty, int_ty);
+        print_all_stdout(rt_ty, pa_args_ty, int_ty);
+        print_all_file(rt_ty, pa_args_ty, int_ty, str_ref_ty, int_ty);
         sprintf_impl(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
         printf_impl_file(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty, str_ref_ty, int_ty);
         printf_impl_stdout(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty);

@@ -1836,6 +1836,28 @@ impl<'a, 'b> View<'a, 'b> {
                 v_reg = self.ensure_ty(v_reg, v_ty, ret_ty)?;
                 self.pushr(HighLevel::Ret(v_reg, ret_ty));
             }
+            PrimStmt::PrintAll(args, out) => {
+                use bytecode::Instr::PrintAll;
+                let mut arg_regs = Vec::with_capacity(args.len());
+                for a in args {
+                    let (a_reg, a_ty) = self.get_reg(a)?;
+                    arg_regs.push(self.ensure_ty(a_reg, a_ty, Ty::Str)?.into());
+                }
+                let out_reg = if let Some((out, append)) = out {
+                    // Would use map, but I supposed we have no equivalent to sequenceA_ and/or
+                    // monad transformers.
+                    let (mut out_reg, out_ty) = self.get_reg(out)?;
+                    out_reg = self.ensure_ty(out_reg, out_ty, Ty::Str)?;
+                    // TODO check if we need the try_from? aren't they the same type?
+                    Some((out_reg.into(), *append))
+                } else {
+                    None
+                };
+                self.pushl(PrintAll {
+                    output: out_reg,
+                    args: arg_regs,
+                });
+            }
             PrimStmt::Printf(fmt, args, out) => {
                 // avoid spurious "variant never constructed" warning we get by using LL::Printf
                 use bytecode::Instr::Printf;
@@ -1848,7 +1870,7 @@ impl<'a, 'b> View<'a, 'b> {
                 let out_reg = if let Some((out, append)) = out {
                     let (mut out_reg, out_ty) = self.get_reg(out)?;
                     out_reg = self.ensure_ty(out_reg, out_ty, Ty::Str)?;
-                    Some((out_reg.into(), FileSpec::try_from(*append as i64).unwrap()))
+                    Some((out_reg.into(), *append))
                 } else {
                     None
                 };

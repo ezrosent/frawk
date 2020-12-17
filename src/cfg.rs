@@ -1,5 +1,5 @@
 use crate::arena;
-use crate::ast::{self, Binop, Expr, Stmt, Unop};
+use crate::ast::{self, Expr, Stmt, Unop};
 use crate::builtins::{self, IsSprintf};
 use crate::common::{Either, FileSpec, Graph, NodeIx, NumTy, Result, Stage};
 use crate::dom;
@@ -187,6 +187,10 @@ pub(crate) enum PrimStmt<'a> {
         /* args */ SmallVec<PrimVal<'a>>,
         /* output */ Option<(PrimVal<'a>, FileSpec)>,
     ),
+    PrintAll(
+        /* args */ SmallVec<PrimVal<'a>>,
+        /* output */ Option<(PrimVal<'a>, FileSpec)>,
+    ),
 }
 
 // only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
@@ -246,6 +250,14 @@ impl<'a> PrimStmt<'a> {
             // expressions, because assignments to m[k] are *uses* of m; it doesn't assign to it.
             AsgnVar(_, e) => e.replace(update),
             SetBuiltin(_, e) => e.replace(update),
+            PrintAll(specs, output) => {
+                for s in specs.iter_mut() {
+                    s.replace(&mut update);
+                }
+                if let Some((out, _)) = output {
+                    out.replace(update);
+                }
+            }
             Printf(fmt, specs, output) => {
                 fmt.replace(&mut update);
                 for s in specs.iter_mut() {
@@ -810,7 +822,7 @@ where
                 };
                 let (next, out) = if let Some((o, spec)) = out {
                     let (next, e) = self.convert_val(o, current_open)?;
-                    (next, Some((e, spec)))
+                    (next, Some((e, *spec)))
                 } else {
                     (current_open, None)
                 };
@@ -819,48 +831,7 @@ where
                 // Why a macro? breaking this out into methods too easily runs afoul of aliasing
                 // rules, a previous version here had to split out several local variables into
                 // parameters of outer functions; it was a lot more code.
-                macro_rules! print_stmt {
-                    ($v:expr) => {{
-                        let _v = $v;
-                        let v = if let Some((o, append)) = &out {
-                            PrimExpr::CallBuiltin(
-                                builtins::Function::Print,
-                                smallvec![_v, o.clone(), PrimVal::ILit(**append as i64)],
-                            )
-                        } else {
-                            PrimExpr::CallBuiltin(builtins::Function::PrintStdout, smallvec![_v])
-                        };
-                        self.add_stmt(current_open, PrimStmt::AsgnVar(Ident::unused(), v))
-                    }};
-                };
-                macro_rules! concat_vals {
-                    ($v1:expr, $v2:expr) => {{
-                        let v1: PrimVal = $v1;
-                        let v2: PrimVal = $v2;
-                        let tmp = self.fresh_local();
-                        self.add_stmt(
-                            current_open,
-                            PrimStmt::AsgnVar(
-                                tmp,
-                                PrimExpr::CallBuiltin(
-                                    builtins::Function::Binop(Binop::Concat),
-                                    smallvec![v1, v2],
-                                ),
-                            ),
-                        )?;
-                        PrimVal::Var(tmp)
-                    }};
-                }
-
-                // TODO: We used to just print strings one at a time; but this doesn't work in a
-                // multithreaded setting. Instead, we are concatenating the args and separators
-                // pairwise. This isn't going to be quadratic time beacause concat builds up a tree
-                // once the composite string exceeds a certain size, but it may lead to extra heap
-                // allocations in the hot path. If we notice that becoming an issue, we could build
-                // a batched writing function; implemented the same way we handle var-args for
-                // printf.
                 if vs.len() == 0 {
-                    // 0 args: print $0
                     let tmp = self.fresh_local();
                     self.add_stmt(
                         current_open,
@@ -872,49 +843,39 @@ where
                             ),
                         ),
                     )?;
-                    let escaped_tmp = self.escape(PrimVal::Var(tmp), current_open)?;
-                    let to_concat = concat_vals!(escaped_tmp, ors);
-                    print_stmt!(to_concat)?;
-                    current_open
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::PrintAll(smallvec![PrimVal::Var(tmp), ors], out.clone()),
+                    )?;
+                    return Ok(current_open);
+                }
+                let fs = if vs.len() > 1 {
+                    let fs = self.fresh_local();
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::AsgnVar(
+                            fs.clone(),
+                            PrimExpr::LoadBuiltin(builtins::Variable::OFS),
+                        ),
+                    )?;
+                    PrimVal::Var(fs)
                 } else {
-                    // Multiple args: print each argument, separated with OFS, followed by ORS.
-                    let fs = if vs.len() > 1 {
-                        let fs = self.fresh_local();
-                        self.add_stmt(
-                            current_open,
-                            PrimStmt::AsgnVar(
-                                fs.clone(),
-                                PrimExpr::LoadBuiltin(builtins::Variable::OFS),
-                            ),
-                        )?;
-                        PrimVal::Var(fs)
-                    } else {
-                        PrimVal::Var(Ident::unused())
-                    };
-                    // TODO: rewrite this without repeating the "unpack next, escape" steps?
-                    let mut iter = vs.iter().enumerate();
-                    let (mut i, arg) = iter.next().unwrap();
-                    let (next, mut to_print) = self.convert_val(*arg, current_open)?;
+                    PrimVal::Var(Ident::unused())
+                };
+                let mut print_args = SmallVec::with_capacity(vs.len() * 2);
+                for (i, v) in vs.iter().enumerate() {
+                    let (next, mut to_print) = self.convert_val(*v, current_open)?;
                     to_print = self.escape(to_print, current_open)?;
                     current_open = next;
-                    let len = vs.len();
-                    loop {
-                        if i == len - 1 {
-                            to_print = concat_vals!(to_print, ors.clone());
-                            break;
-                        } else {
-                            to_print = concat_vals!(to_print, fs.clone());
-                        }
-                        let (next_i, next_arg) = iter.next().unwrap();
-                        let (next_open, next_val) = self.convert_val(next_arg, current_open)?;
-                        current_open = next_open;
-                        let escaped_val = self.escape(next_val, current_open)?;
-                        to_print = concat_vals!(to_print, escaped_val);
-                        i = next_i;
+                    print_args.push(to_print);
+                    if i == vs.len() - 1 {
+                        print_args.push(ors.clone());
+                    } else {
+                        print_args.push(fs.clone());
                     }
-                    print_stmt!(to_print)?;
-                    current_open
                 }
+                self.add_stmt(current_open, PrimStmt::PrintAll(print_args, out.clone()))?;
+                current_open
             }
             If(cond, tcase, fcase) => {
                 let tcase = self.standalone_block(tcase)?;

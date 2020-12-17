@@ -1057,8 +1057,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         *self.get_mut(dst) = res;
                     }
                     PrintAll { output, args } => {
-                        // TODO: find a way to avoid building this vector locally.
-                        let mut scratch_strs: Vec<&Str> = Vec::with_capacity(args.len());
+                        let mut scratch_strs =
+                            smallvec::SmallVec::<[&Str; 4]>::with_capacity(args.len());
                         for a in args {
                             scratch_strs.push(index(&self.strs, a));
                         }
