@@ -1028,19 +1028,6 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let flds = *flds;
                         *self.get_mut(flds) = res;
                     }
-                    PrintStdout(txt) => {
-                        let txt = index(&self.strs, txt);
-                        // Why do this? We want to exit cleanly when output is closed. We use this
-                        // pattern for other IO functions as well.
-                        if let Err(_) = self.core.write_files.write_str_stdout(txt) {
-                            return Ok(());
-                        }
-                    }
-                    Print(txt, out, append) => {
-                        let txt = index(&self.strs, txt);
-                        let out = index(&self.strs, out);
-                        self.core.write_files.write_str(out, txt, *append)?
-                    }
                     Sprintf { dst, fmt, args } => {
                         debug_assert_eq!(scratch.len(), 0);
                         for a in args.iter() {

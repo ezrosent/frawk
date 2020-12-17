@@ -152,8 +152,6 @@ impl Display for Function {
             Binop(b) => write!(f, "{}", b),
             FloatFunc(ff) => write!(f, "{}", ff.func_name()),
             IntFunc(bw) => write!(f, "{}", bw.func_name()),
-            Print => write!(f, "print"),
-            PrintStdout => write!(f, "print(stdout)"),
             ReadErr => write!(f, "hasline"),
             ReadErrCmd => write!(f, "hasline(cmd)"),
             Nextline => write!(f, "nextline"),

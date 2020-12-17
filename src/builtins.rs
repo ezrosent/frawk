@@ -18,8 +18,6 @@ pub enum Function {
     Binop(ast::Binop),
     FloatFunc(FloatFunc),
     IntFunc(Bitwise),
-    Print,
-    PrintStdout,
     Close,
     ReadErr,
     ReadErrCmd,
@@ -252,7 +250,6 @@ impl FloatFunc {
 static_map!(
     FUNCTIONS<&'static str, Function>,
     ["close", Function::Close],
-    ["print", Function::Print],
     ["split", Function::Split],
     ["length", Function::Length],
     ["match", Function::Match],
@@ -423,8 +420,6 @@ impl Function {
                     }
                 }
             }
-            Print => (smallvec![Str, Str, Int], Int),
-            PrintStdout => (smallvec![Str], Int),
             NextlineCmd | Nextline => (smallvec![Str], Str),
             ReadErrCmd | ReadErr => (smallvec![Str], Int),
             NextFile | ReadLineStdinFused => (smallvec![], Int),
@@ -458,10 +453,10 @@ impl Function {
             IntFunc(bw) => bw.arity(),
             Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
             Srand | System | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length
-            | ReadErr | ReadErrCmd | Nextline | NextlineCmd | PrintStdout | Unop(_) => 1,
+            | ReadErr | ReadErrCmd | Nextline | NextlineCmd | Unop(_) => 1,
             SubstrIndex | Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
-            JoinCols | Substr | Sub | GSub | Print | Split => 3,
+            JoinCols | Substr | Sub | GSub | Split => 3,
         })
     }
 
@@ -492,7 +487,7 @@ impl Function {
                 }
             }
             Rand | Binop(Div) | Binop(Pow) => Ok(Scalar(BaseTy::Float).abs()),
-            Setcol | Print | PrintStdout => Ok(Scalar(BaseTy::Null).abs()),
+            Setcol => Ok(Scalar(BaseTy::Null).abs()),
             SubstrIndex | Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT)
             | Binop(GT) | Binop(LTE) | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr
             | ReadErrCmd | ReadErrStdin | Contains | Delete | Match | Sub | GSub | ToInt

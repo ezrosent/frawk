@@ -403,16 +403,6 @@ impl FileWrite {
                 .write_all(ss, FileSpec::Append)
         }
     }
-
-    pub(crate) fn write_str_stdout(&mut self, s: &Str) -> Result<()> {
-        self.0
-            .get_handle(None, FileSpec::default())?
-            .write(s, /*append=*/ FileSpec::Append)
-    }
-
-    pub(crate) fn write_str(&mut self, path: &Str, s: &Str, spec: FileSpec) -> Result<()> {
-        self.0.get_handle(Some(path), spec)?.write(s, spec)
-    }
 }
 
 pub const CHUNK_SIZE: usize = 8 << 10;

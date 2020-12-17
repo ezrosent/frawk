@@ -1,9 +1,7 @@
 use crate::builtins;
 use crate::bytecode::{self, Accum};
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
-use crate::common::{
-    CompileError, Either, FileSpec, Graph, NodeIx, NumTy, Result, Stage, WorkList,
-};
+use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
 #[cfg(feature = "llvm_backend")]
@@ -18,7 +16,6 @@ use hashbrown::{hash_map::Entry, HashMap, HashSet};
 use regex::bytes::Regex;
 
 use std::collections::VecDeque;
-use std::convert::TryFrom;
 use std::mem;
 use std::sync::Arc;
 
@@ -1528,25 +1525,6 @@ impl<'a, 'b> View<'a, 'b> {
                     })
                 }
             }
-            Print => {
-                // XXX this imports a specific assumption on how the PrimStmt is generated, we may
-                // want to make the bool parameter to Print dynamic.
-                if let cfg::PrimVal::ILit(i) = &args[2] {
-                    self.pushl(LL::Print(
-                        conv_regs[0].into(),
-                        conv_regs[1].into(),
-                        FileSpec::try_from(*i).unwrap(),
-                    ));
-                    return Ok(());
-                } else {
-                    return err!("must pass constant append parameter to print");
-                }
-            }
-            PrintStdout => {
-                self.pushl(LL::PrintStdout(conv_regs[0].into()));
-                return Ok(());
-            }
-
             Delete => match &conv_tys[0] {
                 Ty::MapIntInt
                 | Ty::MapIntStr

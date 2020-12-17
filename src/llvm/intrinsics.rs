@@ -302,8 +302,6 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         reseed_rng(rt_ty) -> int_ty;
 
         run_system(str_ref_ty) -> int_ty;
-        print_stdout(rt_ty, str_ref_ty);
-        print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
         print_all_stdout(rt_ty, pa_args_ty, int_ty);
         print_all_file(rt_ty, pa_args_ty, int_ty, str_ref_ty, int_ty);
         sprintf_impl(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
@@ -523,39 +521,6 @@ pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_f
     match res {
         Ok(res) => mem::transmute::<Str, U128>(res),
         Err(_) => mem::transmute::<Str, U128>("".into()),
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn print_stdout(runtime: *mut c_void, txt: *mut c_void) {
-    let runtime = &mut *(runtime as *mut Runtime);
-    let txt = &*(txt as *mut Str);
-    if let Err(_) = runtime.core.write_files.write_str_stdout(txt) {
-        exit!(runtime);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn print(
-    runtime: *mut c_void,
-    txt: *mut c_void,
-    out: *mut c_void,
-    append: Int,
-) {
-    let runtime = &mut *(runtime as *mut Runtime);
-    let txt = &*(txt as *mut Str);
-    let out = &*(out as *mut Str);
-    if runtime
-        .core
-        .write_files
-        .write_str(
-            out,
-            txt,
-            FileSpec::try_from(append).expect("invalid filespec"),
-        )
-        .is_err()
-    {
-        exit!(runtime);
     }
 }
 

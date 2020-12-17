@@ -461,7 +461,6 @@ impl FileHandle {
         Ok(())
     }
     pub fn write<'a>(&mut self, s: &Str<'a>, spec: FileSpec) -> Result<()> {
-        // TODO: get rid of this method
         self.write_all(&[s], spec)
     }
 

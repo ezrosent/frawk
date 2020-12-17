@@ -253,12 +253,11 @@ impl TaintedStringAnalysis {
             }
             PrintAll {
                 output: Some((cmd, FileSpec::Cmd)),
-                .. 
+                ..
             } | Printf {
                 output: Some((cmd, FileSpec::Cmd)),
                 ..
             } => self.queries.push(cmd.into()),
-            Print(_, out, FileSpec::Cmd) => self.queries.push(out.into()),
             RunCmd(dst, cmd) => {
                 self.queries.push(cmd.into());
                 self.add_src(dst, true);
@@ -305,8 +304,6 @@ impl TaintedStringAnalysis {
             | Call(_)
             | Ret
             | Printf { .. }
-            | PrintStdout(_)
-            | Print(..)
             | Close(_)
             | NextLineStdinFused()
             | NextFile()
