@@ -62,6 +62,26 @@ impl<'a> Display for PrimStmt<'a> {
                 }
                 Ok(())
             }
+            PrintAll(args, out) => {
+                write!(f, "print(")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i == args.len() - 1 {
+                        write!(f, "{}", a)?;
+                    } else {
+                        write!(f, "{}, ", a)?;
+                    }
+                }
+                write!(f, ")")?;
+                if let Some((out, ap)) = out {
+                    let redirect = match ap {
+                        FileSpec::Trunc => ">",
+                        FileSpec::Append => ">>",
+                        FileSpec::Cmd => "|",
+                    };
+                    write!(f, " {} {}", out, redirect)?;
+                }
+                Ok(())
+            }
             IterDrop(v) => write!(f, "drop_iter {}", v),
         }
     }
@@ -132,8 +152,6 @@ impl Display for Function {
             Binop(b) => write!(f, "{}", b),
             FloatFunc(ff) => write!(f, "{}", ff.func_name()),
             IntFunc(bw) => write!(f, "{}", bw.func_name()),
-            Print => write!(f, "print"),
-            PrintStdout => write!(f, "print(stdout)"),
             ReadErr => write!(f, "hasline"),
             ReadErrCmd => write!(f, "hasline(cmd)"),
             Nextline => write!(f, "nextline"),

@@ -385,6 +385,7 @@ impl FileHandle {
                 RequestStatus::ERROR => return Err(self.read_error()),
             }
         }
+        // TODO: off-by-one, should morally be ..=, but that doesn't handle the empty case.
         for _ in 0..done_count {
             let old = self.guards.pop_front().unwrap();
             if self.old_guards.len() < IO_CHAN_SIZE {
@@ -439,19 +440,28 @@ impl FileHandle {
         Ok(())
     }
 
-    pub fn write<'a>(&mut self, s: &Str<'a>, spec: FileSpec) -> Result<()> {
+    pub fn write_all<'a>(&mut self, ss: &[&Str<'a>], spec: FileSpec) -> Result<()> {
         let cur_len = self.cur_batch.data.len();
-        let bs = unsafe { &*s.get_bytes() };
-        self.cur_batch.extend(&*bs, spec);
-        if self.raw.line_buffer {
-            if let Some(ix) = memchr::memchr(b'\n', bs) {
-                // +1 to include the newline
-                self.clear_batch(Some(cur_len + ix + 1))?;
+        let mut added_bytes = 0;
+        let mut last_line = None;
+        for s in ss.iter() {
+            let bs = unsafe { &*s.get_bytes() };
+            self.cur_batch.extend(&*bs, spec);
+            if self.raw.line_buffer {
+                if let Some(ix) = memchr::memchr(b'\n', bs) {
+                    // +1 to include the newline
+                    last_line = Some(cur_len + added_bytes + ix + 1);
+                }
             }
-        } else if bs.len() + cur_len > BUFFER_SIZE {
-            self.clear_batch(None)?;
+            added_bytes += bs.len();
+        }
+        if (self.raw.line_buffer && last_line.is_some()) || (added_bytes + cur_len > BUFFER_SIZE) {
+            self.clear_batch(last_line)?;
         }
         Ok(())
+    }
+    pub fn write<'a>(&mut self, s: &Str<'a>, spec: FileSpec) -> Result<()> {
+        self.write_all(&[s], spec)
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -680,6 +690,7 @@ impl WriteBatch {
     fn n_writes(&self) -> usize {
         self.n_writes
     }
+
     fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
         write_all(self, w)?;
         if self.flush || self.close {
@@ -689,6 +700,7 @@ impl WriteBatch {
         self.clear();
         Ok(close)
     }
+
     fn get_spec(&self) -> FileSpec {
         for req in self.requests.iter() {
             if let Request::Write { spec, .. } = req {
@@ -704,7 +716,7 @@ impl WriteBatch {
                 // documentation for IoSlice. Should be an easy fix if this comes up.
                 self.io_vec.push(io::IoSlice::new(unsafe { &**data }));
                 self.n_writes += 1;
-                self.flush = *flush;
+                self.flush |= *flush;
             }
             Request::Flush(_) => self.flush = true,
             Request::Close => self.close = true,

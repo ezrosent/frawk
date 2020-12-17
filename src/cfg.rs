@@ -187,6 +187,10 @@ pub(crate) enum PrimStmt<'a> {
         /* args */ SmallVec<PrimVal<'a>>,
         /* output */ Option<(PrimVal<'a>, FileSpec)>,
     ),
+    PrintAll(
+        /* args */ SmallVec<PrimVal<'a>>,
+        /* output */ Option<(PrimVal<'a>, FileSpec)>,
+    ),
 }
 
 // only add constraints when doing an AsgnVar. Because these things are "shallow" it works.
@@ -246,6 +250,14 @@ impl<'a> PrimStmt<'a> {
             // expressions, because assignments to m[k] are *uses* of m; it doesn't assign to it.
             AsgnVar(_, e) => e.replace(update),
             SetBuiltin(_, e) => e.replace(update),
+            PrintAll(specs, output) => {
+                for s in specs.iter_mut() {
+                    s.replace(&mut update);
+                }
+                if let Some((out, _)) = output {
+                    out.replace(update);
+                }
+            }
             Printf(fmt, specs, output) => {
                 fmt.replace(&mut update);
                 for s in specs.iter_mut() {
@@ -720,9 +732,10 @@ where
     fn standalone_expr<'c>(
         &mut self,
         expr: &'c Expr<'c, 'b, I>,
+        in_cond: bool,
     ) -> Result<(NodeIx /*start*/, NodeIx /*end*/, PrimExpr<'b>)> {
         let start = self.f.cfg.add_node(Default::default());
-        let (end, res) = self.convert_expr(expr, start)?;
+        let (end, res) = self.convert_expr_inner(expr, start, in_cond)?;
         Ok((start, end, res))
     }
 
@@ -809,7 +822,7 @@ where
                 };
                 let (next, out) = if let Some((o, spec)) = out {
                     let (next, e) = self.convert_val(o, current_open)?;
-                    (next, Some((e, spec)))
+                    (next, Some((e, *spec)))
                 } else {
                     (current_open, None)
                 };
@@ -818,28 +831,7 @@ where
                 // Why a macro? breaking this out into methods too easily runs afoul of aliasing
                 // rules, a previous version here had to split out several local variables into
                 // parameters of outer functions; it was a lot more code.
-                macro_rules! print_stmt {
-                    ($v:expr) => {{
-                        let _v = $v;
-                        let v = if let Some((o, append)) = &out {
-                            PrimExpr::CallBuiltin(
-                                builtins::Function::Print,
-                                smallvec![_v, o.clone(), PrimVal::ILit(**append as i64)],
-                            )
-                        } else {
-                            PrimExpr::CallBuiltin(builtins::Function::PrintStdout, smallvec![_v])
-                        };
-                        self.add_stmt(current_open, PrimStmt::AsgnVar(Ident::unused(), v))
-                    }};
-                };
-                macro_rules! print_stmt_escaped {
-                    ($v:expr) => {{
-                        let escaped = self.escape($v, current_open)?;
-                        print_stmt!(escaped)
-                    }};
-                };
                 if vs.len() == 0 {
-                    // 0 args: print $0
                     let tmp = self.fresh_local();
                     self.add_stmt(
                         current_open,
@@ -851,34 +843,39 @@ where
                             ),
                         ),
                     )?;
-                    print_stmt_escaped!(PrimVal::Var(tmp))?;
-                    print_stmt!(ors)?;
-                    current_open
-                } else {
-                    // Multiple args: print each argument, separated with OFS, followed by ORS.
-                    let fs = {
-                        let fs = self.fresh_local();
-                        self.add_stmt(
-                            current_open,
-                            PrimStmt::AsgnVar(
-                                fs.clone(),
-                                PrimExpr::LoadBuiltin(builtins::Variable::OFS),
-                            ),
-                        )?;
-                        PrimVal::Var(fs)
-                    };
-                    for (i, v) in vs.iter().enumerate() {
-                        let (next, v) = self.convert_val(*v, current_open)?;
-                        current_open = next;
-                        print_stmt_escaped!(v)?;
-                        if i != vs.len() - 1 {
-                            print_stmt!(fs.clone())?;
-                        } else {
-                            print_stmt!(ors.clone())?;
-                        }
-                    }
-                    current_open
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::PrintAll(smallvec![PrimVal::Var(tmp), ors], out.clone()),
+                    )?;
+                    return Ok(current_open);
                 }
+                let fs = if vs.len() > 1 {
+                    let fs = self.fresh_local();
+                    self.add_stmt(
+                        current_open,
+                        PrimStmt::AsgnVar(
+                            fs.clone(),
+                            PrimExpr::LoadBuiltin(builtins::Variable::OFS),
+                        ),
+                    )?;
+                    PrimVal::Var(fs)
+                } else {
+                    PrimVal::Var(Ident::unused())
+                };
+                let mut print_args = SmallVec::with_capacity(vs.len() * 2);
+                for (i, v) in vs.iter().enumerate() {
+                    let (next, mut to_print) = self.convert_val(*v, current_open)?;
+                    to_print = self.escape(to_print, current_open)?;
+                    current_open = next;
+                    print_args.push(to_print);
+                    if i == vs.len() - 1 {
+                        print_args.push(ors.clone());
+                    } else {
+                        print_args.push(fs.clone());
+                    }
+                }
+                self.add_stmt(current_open, PrimStmt::PrintAll(print_args, out.clone()))?;
+                current_open
             }
             If(cond, tcase, fcase) => {
                 let tcase = self.standalone_block(tcase)?;
@@ -1016,6 +1013,14 @@ where
         expr: &'c Expr<'c, 'b, I>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
+        self.convert_expr_inner(expr, current_open, /*in_cond=*/ false)
+    }
+    fn convert_expr_inner<'c>(
+        &mut self,
+        expr: &'c Expr<'c, 'b, I>,
+        current_open: NodeIx,
+        in_cond: bool,
+    ) -> Result<(NodeIx, PrimExpr<'b>)> {
         use Expr::*;
 
         // This isn't a function because we want the &s to point to the current stack frame.
@@ -1027,13 +1032,19 @@ where
         let res_expr = match expr {
             ILit(n) => PrimExpr::Val(PrimVal::ILit(*n)),
             FLit(n) => PrimExpr::Val(PrimVal::FLit(*n)),
+            PatLit(_) if in_cond => {
+                use ast::{Binop::*, Expr::*, Unop::*};
+                return self
+                    .convert_expr(&Binop(IsMatch, &Unop(Column, &ILit(0)), expr), current_open);
+            }
             PatLit(s) | StrLit(s) => PrimExpr::Val(PrimVal::StrLit(s)),
             Cond(cond) => {
                 let id = self.get_cond(*cond);
                 PrimExpr::Val(PrimVal::Var(id))
             }
             Unop(op, e) => {
-                let (next, v) = self.convert_val(e, current_open)?;
+                let next_cond = in_cond && matches!(op, ast::Unop::Not);
+                let (next, v) = self.convert_val_inner(e, current_open, next_cond)?;
                 return Ok((
                     next,
                     PrimExpr::CallBuiltin(builtins::Function::Unop(*op), smallvec![v]),
@@ -1050,8 +1061,8 @@ where
             ITE(cond, tcase, fcase) => {
                 let res_id = self.fresh_local();
                 self.ctx.may_rename.push(res_id);
-                let (tstart, tend, te) = self.standalone_expr(tcase)?;
-                let (fstart, fend, fe) = self.standalone_expr(fcase)?;
+                let (tstart, tend, te) = self.standalone_expr(tcase, in_cond)?;
+                let (fstart, fend, fe) = self.standalone_expr(fcase, in_cond)?;
                 self.add_stmt(tend, PrimStmt::AsgnVar(res_id, te))?;
                 self.add_stmt(fend, PrimStmt::AsgnVar(res_id, fe))?;
                 let next =
@@ -1059,9 +1070,19 @@ where
                 return Ok((next, PrimExpr::Val(PrimVal::Var(res_id))));
             }
             And(e1, e2) => {
-                return self.convert_expr(&ITE(e1, to_bool!(e2), &ILit(0)), current_open)
+                return self.convert_expr_inner(
+                    &ITE(e1, to_bool!(e2), &ILit(0)),
+                    current_open,
+                    in_cond,
+                )
             }
-            Or(e1, e2) => return self.convert_expr(&ITE(e1, &ILit(1), to_bool!(e2)), current_open),
+            Or(e1, e2) => {
+                return self.convert_expr_inner(
+                    &ITE(e1, &ILit(1), to_bool!(e2)),
+                    current_open,
+                    in_cond,
+                );
+            }
             Var(id) => {
                 if let Ok(bi) = builtins::Variable::try_from(id.clone()) {
                     PrimExpr::LoadBuiltin(bi)
@@ -1071,8 +1092,8 @@ where
                 }
             }
             Index(arr, ix) => {
-                let (next, arr_v) = self.convert_val(arr, current_open)?;
-                let (next, ix_v) = self.convert_val(ix, next)?;
+                let (next, arr_v) = self.convert_val_inner(arr, current_open, in_cond)?;
+                let (next, ix_v) = self.convert_val_inner(ix, next, in_cond)?;
                 return Ok((next, PrimExpr::Index(arr_v, ix_v)));
             }
             Call(fname, args) => return self.call(current_open, fname, args),
@@ -1194,7 +1215,11 @@ where
                     // an unadorned `getline` is uses the "fused" stdin construct, which in turn
                     // enables some optimizations.
                     (None /* stdin */, None /* $0 */) => {
-                        return self.convert_expr(&ast::Expr::ReadStdin, current_open)
+                        return self.convert_expr_inner(
+                            &ast::Expr::ReadStdin,
+                            current_open,
+                            in_cond,
+                        )
                     }
                     (from, None /* $0 */) => {
                         return self.convert_expr(
@@ -1367,13 +1392,9 @@ where
         current_open: NodeIx,
     ) -> Result<NodeIx> {
         let (t_start, t_end) = tcase;
-        let (current_open, c_val) = if let ast::Expr::PatLit(_) = cond {
-            // For conditionals, pattern literals become matches against $0.
-            use ast::{Binop::*, Expr::*, Unop::*};
-            self.convert_val(&Binop(IsMatch, &Unop(Column, &ILit(0)), cond), current_open)?
-        } else {
-            self.convert_val(cond, current_open)?
-        };
+        let (current_open, c_val) =
+            self.convert_val_inner(cond, current_open, /*in_cond=*/ true)?;
+
         let next = self.f.cfg.add_node(Default::default());
 
         // current_open => t_start if the condition holds
@@ -1396,13 +1417,21 @@ where
         }
         Ok(next)
     }
-
     fn convert_val<'c>(
         &mut self,
         expr: &'c Expr<'c, 'b, I>,
         current_open: NodeIx,
     ) -> Result<(NodeIx, PrimVal<'b>)> {
-        let (next_open, e) = self.convert_expr(expr, current_open)?;
+        self.convert_val_inner(expr, current_open, /*in_cond=*/ false)
+    }
+
+    fn convert_val_inner<'c>(
+        &mut self,
+        expr: &'c Expr<'c, 'b, I>,
+        current_open: NodeIx,
+        in_cond: bool,
+    ) -> Result<(NodeIx, PrimVal<'b>)> {
+        let (next_open, e) = self.convert_expr_inner(expr, current_open, in_cond)?;
         Ok((next_open, self.to_val(e, next_open)?))
     }
 

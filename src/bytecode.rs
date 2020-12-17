@@ -206,12 +206,10 @@ pub(crate) enum Instr<'a> {
         fmt: Reg<Str<'a>>,
         args: Vec<(NumTy, Ty)>,
     },
-    PrintStdout(Reg<Str<'a>> /*text*/),
-    Print(
-        Reg<Str<'a>>, /*text*/
-        Reg<Str<'a>>, /*output*/
-        FileSpec,     /*append*/
-    ),
+    PrintAll {
+        output: Option<(Reg<Str<'a>>, FileSpec)>,
+        args: Vec<Reg<Str<'a>>>,
+    },
     Close(Reg<Str<'a>>),
     RunCmd(Reg<Int>, Reg<Str<'a>>),
 
@@ -661,10 +659,13 @@ impl<'a> Instr<'a> {
                     f(reg, ty);
                 }
             }
-            PrintStdout(txt) => txt.accum(&mut f),
-            Print(txt, out, _append) => {
-                txt.accum(&mut f);
-                out.accum(&mut f)
+            PrintAll { output, args } => {
+                if let Some((path_reg, _)) = output {
+                    path_reg.accum(&mut f);
+                }
+                for reg in args.iter().cloned() {
+                    reg.accum(&mut f)
+                }
             }
             Close(file) => file.accum(&mut f),
             RunCmd(dst, cmd) => {

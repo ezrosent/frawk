@@ -1009,11 +1009,10 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let to_split = index(&self.strs, to_split);
                         let arr = index(&self.maps_int_str, arr);
                         let pat = index(&self.strs, pat);
-                        let old_len = arr.len();
                         self.core
                             .regexes
                             .split_regex_intmap(&pat, &to_split, &arr)?;
-                        let res = (arr.len() - old_len) as i64;
+                        let res = arr.len() as Int;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
                     }
@@ -1022,26 +1021,12 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let to_split = index(&self.strs, to_split);
                         let arr = index(&self.maps_str_str, arr);
                         let pat = index(&self.strs, pat);
-                        let old_len = arr.len();
                         self.core
                             .regexes
                             .split_regex_strmap(&pat, &to_split, &arr)?;
-                        let res = (arr.len() - old_len) as Int;
+                        let res = arr.len() as Int;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
-                    }
-                    PrintStdout(txt) => {
-                        let txt = index(&self.strs, txt);
-                        // Why do this? We want to exit cleanly when output is closed. We use this
-                        // pattern for other IO functions as well.
-                        if let Err(_) = self.core.write_files.write_str_stdout(txt) {
-                            return Ok(());
-                        }
-                    }
-                    Print(txt, out, append) => {
-                        let txt = index(&self.strs, txt);
-                        let out = index(&self.strs, out);
-                        self.core.write_files.write_str(out, txt, *append)?
                     }
                     Sprintf { dst, fmt, args } => {
                         debug_assert_eq!(scratch.len(), 0);
@@ -1057,6 +1042,24 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let res = unsafe { buf.into_str() };
                         let dst = *dst;
                         *self.get_mut(dst) = res;
+                    }
+                    PrintAll { output, args } => {
+                        let mut scratch_strs =
+                            smallvec::SmallVec::<[&Str; 4]>::with_capacity(args.len());
+                        for a in args {
+                            scratch_strs.push(index(&self.strs, a));
+                        }
+                        let res = if let Some((out_path_reg, fspec)) = output {
+                            let out_path = index(&self.strs, out_path_reg);
+                            self.core
+                                .write_files
+                                .write_all(&scratch_strs[..], Some((out_path, *fspec)))
+                        } else {
+                            self.core.write_files.write_all(&scratch_strs[..], None)
+                        };
+                        if res.is_err() {
+                            return Ok(());
+                        }
                     }
                     Printf { output, fmt, args } => {
                         debug_assert_eq!(scratch.len(), 0);

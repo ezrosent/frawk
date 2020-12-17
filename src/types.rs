@@ -968,6 +968,9 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
             // For IterDrop, we do not add extra constraints because IterBegin and IterNext will be
             // sufficient to determine the type of a given iterator.
             IterDrop(_) | SetBuiltin(_, _) => {}
+            // Attempting something different for PrintAll vs Printf; the constraints are similar,
+            // but looking at deferring the type checks to the `compile` phase.
+            PrintAll(..) => {}
         }
     }
 

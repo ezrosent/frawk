@@ -73,6 +73,7 @@ struct View<'a> {
     ctx: LLVMContextRef,
     module: LLVMModuleRef,
     printfs: &'a mut HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
+    prints: &'a mut HashMap<(usize, /*stdout*/ bool), LLVMValueRef>,
     drop_str: LLVMValueRef,
     // We keep an extra builder always pointed at the start of the function. This is because
     // binding new string values requires an `alloca`; and we do not want to call `alloca` where a
@@ -158,6 +159,7 @@ pub(crate) struct Generator<'a, 'b> {
     type_map: TypeMap,
     intrinsics: IntrinsicMap,
     printfs: HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
+    prints: HashMap<(usize, /*stdout*/ bool), LLVMValueRef>,
     // We pass raw regex pointers in the generated code. These ensure we do not free them
     // before the code is run.
     regexes: Vec<Arc<Regex>>,
@@ -297,6 +299,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             type_map: TypeMap::new(ctx),
             intrinsics: intrinsics::register(module, ctx),
             printfs: Default::default(),
+            prints: Default::default(),
             cfg,
             drop_str: ptr::null_mut(),
         };
@@ -708,6 +711,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             intrinsics: &self.intrinsics,
             decls: &self.decls,
             printfs: &mut self.printfs,
+            prints: &mut self.prints,
             ctx: self.ctx,
             module: self.module,
             drop_str: self.drop_str,
@@ -760,10 +764,11 @@ impl<'a, 'b> Generator<'a, 'b> {
                 let (_, t) = frame.cfg.edge_endpoints(e).unwrap();
                 let bb = bbs[t.index()];
                 if let Some(e) = frame.cfg.edge_weight(e).unwrap().clone() {
-                    assert!(tcase.is_none());
                     tcase = Some((e, bb));
                 } else {
-                    assert!(ecase.is_none());
+                    // NB, we used to disallow duplicate unconditional branches outbound from a
+                    // basic block, but it does seem to happen in some cases, but only benignly
+                    // (where taking either branch results in the same behavior).
                     ecase = Some(bb);
                 }
             }
@@ -1801,6 +1806,28 @@ impl<'a> View<'a> {
                 );
                 self.bind_reg(dst, resv);
             }
+            PrintAll { output, args } => {
+                let print_fn =
+                    self.print_all_fn(args.len(), /*is_stdout=*/ output.is_none())?;
+                let mut args_v =
+                    SmallVec::with_capacity(args.len() + 1 + if output.is_some() { 2 } else { 0 });
+                args_v.push(self.runtime_val());
+                for a in args.iter() {
+                    args_v.push(self.get_local(a.reflect())?);
+                }
+                if let Some((out, fspec)) = output {
+                    args_v.push(self.get_local(out.reflect())?);
+                    let int_ty = self.tmap.get_ty(Ty::Int);
+                    args_v.push(LLVMConstInt(int_ty, *fspec as u64, /*sign_extend=*/ 0));
+                }
+                LLVMBuildCall(
+                    self.f.builder,
+                    print_fn,
+                    args_v.as_mut_ptr(),
+                    args_v.len() as libc::c_uint,
+                    c_str!(""),
+                );
+            }
             Printf { output, fmt, args } => {
                 // First, extract the types and use that to get a handle on a wrapped printf
                 // function.
@@ -1836,10 +1863,6 @@ impl<'a> View<'a> {
                     c_str!(""),
                 );
             }
-            PrintStdout(txt) => {
-                let txtv = self.get_local(txt.reflect())?;
-                self.call("print_stdout", &mut [self.runtime_val(), txtv]);
-            }
             Close(file) => {
                 let filev = self.get_local(file.reflect())?;
                 self.call("close_file", &mut [self.runtime_val(), filev]);
@@ -1849,14 +1872,6 @@ impl<'a> View<'a> {
                 let resv = self.call("run_system", &mut [cmd]);
                 self.bind_reg(dst, resv);
             }
-            Print(txt, out, append) => {
-                let int_ty = self.tmap.get_ty(Ty::Int);
-                let appv = LLVMConstInt(int_ty, *append as u64, /*sign_extend=*/ 1);
-                let txtv = self.get_local(txt.reflect())?;
-                let outv = self.get_local(out.reflect())?;
-                self.call("print", &mut [self.runtime_val(), txtv, outv, appv]);
-            }
-
             ReadErr(dst, file, is_file) => {
                 let filev = self.get_local(file.reflect())?;
                 let int_ty = self.tmap.get_ty(Ty::Int);
@@ -2106,7 +2121,6 @@ impl<'a> View<'a> {
     // We could implement this all inline, but making it a separate function allows us to cache the
     // codegen across compatible invocations, and also makes the generated code a lot cleaner.
     unsafe fn wrapped_printf(&mut self, key: (SmallVec<Ty>, PrintfKind)) -> LLVMValueRef {
-        use std::io::{Cursor, Write};
         use PrintfKind::*;
         let kind = key.1;
         if let Some(v) = self.printfs.get(&key) {
@@ -2114,16 +2128,7 @@ impl<'a> View<'a> {
         }
         let args = &key.0[..];
 
-        let ix = self.printfs.len();
-        let name = "_pf";
-        // 64 bit integers should only ever need 20 digits or so.
-        let mut name_c: smallvec::SmallVec<[u8; 32]> = smallvec![0; 32];
-        for (i, b) in name.as_bytes().iter().enumerate() {
-            name_c[i] = *b;
-        }
-        let mut w = Cursor::new(&mut name_c[name.as_bytes().len()..]);
-        write!(w, "{:x}", ix).unwrap();
-        assert_eq!(name_c[name_c.len() - 1], 0);
+        let name_c = gen_name("_pf", self.printfs.len());
 
         // The var-arg portion + runtime + format spec
         //  (+ output + append, if named_output)
@@ -2262,4 +2267,96 @@ impl<'a> View<'a> {
         self.printfs.insert(key, f);
         f
     }
+
+    // A scaled-down version of the strategy we have for printf. This is for the var-args "print"
+    // function that only prints strings. That means we don't have to pass an array of types, and
+    // we don't have to cast anything: we just pass a single array of strings. Otherwise, the setup
+    // is quite similar.
+    unsafe fn print_all_fn(&mut self, n_args: usize, is_stdout: bool) -> Result<LLVMValueRef> {
+        let key = (n_args, is_stdout);
+        if let Some(res) = self.prints.get(&key) {
+            return Ok(*res);
+        }
+
+        // Build the function type.
+        let mut arg_lltys = smallvec::SmallVec::<[_; 8]>::with_capacity(n_args + 3);
+        arg_lltys.push(self.tmap.runtime_ty);
+        // var-arg portion
+        let str_ty = self.tmap.get_ptr_ty(Ty::Str);
+        let int_ty = self.tmap.get_ty(Ty::Int);
+        let u32_ty = LLVMIntTypeInContext(self.ctx, 32);
+        arg_lltys.extend((0..n_args).map(|_| str_ty));
+        if !is_stdout {
+            // file params
+            arg_lltys.push(str_ty);
+            arg_lltys.push(int_ty);
+        }
+        let ret = LLVMVoidTypeInContext(self.ctx);
+        let func_ty = LLVMFunctionType(ret, arg_lltys.as_mut_ptr(), arg_lltys.len() as u32, 0);
+
+        // Set up the function
+        let name = gen_name("_pa", self.prints.len());
+        let builder = LLVMCreateBuilderInContext(self.ctx);
+        let f = LLVMAddFunction(self.module, name.as_ptr() as *const libc::c_char, func_ty);
+        let bb = LLVMAppendBasicBlockInContext(self.ctx, f, c_str!(""));
+        LLVMPositionBuilderAtEnd(builder, bb);
+        let len = n_args as libc::c_uint;
+        let args_ty = LLVMArrayType(str_ty, len);
+        let args_array = LLVMBuildAlloca(builder, args_ty, c_str!(""));
+        let zero = LLVMConstInt(u32_ty, 0, /*sign_extend=*/ 0);
+
+        for i in 0..n_args {
+            let mut index = [zero, LLVMConstInt(u32_ty, i as u64, /*sign_extend=*/ 0)];
+            let arg_ptr = LLVMBuildGEP(builder, args_array, index.as_mut_ptr(), 2, c_str!(""));
+            // We are storing index `i` in the array, which is going to be argument `i + 1`
+            let argval = LLVMGetParam(f, i as libc::c_uint + 1);
+            LLVMBuildStore(builder, argval, arg_ptr);
+        }
+        let mut start_index = [zero, zero];
+        let args_ptr = LLVMBuildGEP(builder, args_array, start_index.as_mut_ptr(), 2, c_str!(""));
+        let len_v = LLVMConstInt(int_ty, len as u64, /*sign_extend=*/ 0);
+        if is_stdout {
+            let intrinsic = self.intrinsics.get("print_all_stdout");
+            let mut args = [LLVMGetParam(f, 0), args_ptr, len_v];
+            LLVMBuildCall(
+                builder,
+                intrinsic,
+                args.as_mut_ptr(),
+                args.len() as libc::c_uint,
+                c_str!(""),
+            );
+            LLVMBuildRetVoid(builder);
+        } else {
+            let intrinsic = self.intrinsics.get("print_all_file");
+            let out_v = LLVMGetParam(f, 1 + len);
+            let spec_v = LLVMGetParam(f, 1 + len + 1);
+            let mut args = [LLVMGetParam(f, 0), args_ptr, len_v, out_v, spec_v];
+            LLVMBuildCall(
+                builder,
+                intrinsic,
+                args.as_mut_ptr(),
+                args.len() as libc::c_uint,
+                c_str!(""),
+            );
+            LLVMBuildRetVoid(builder);
+        }
+        LLVMSetLinkage(f, llvm_sys::LLVMLinkage::LLVMLinkerPrivateLinkage);
+        LLVMDisposeBuilder(builder);
+        self.prints.insert(key, f);
+        Ok(f)
+    }
+}
+
+fn gen_name(base_name: &str, index: usize) -> [u8; 32] {
+    use std::io::{Cursor, Write};
+    // 64 bit integers should only ever need 20 digits or so.
+    assert!(base_name.len() < 4);
+    let mut name_c = [0u8; 32];
+    for (i, b) in base_name.as_bytes().iter().enumerate() {
+        name_c[i] = *b;
+    }
+    let mut w = Cursor::new(&mut name_c[base_name.as_bytes().len()..]);
+    write!(w, "{:x}", index).unwrap();
+    assert_eq!(name_c[name_c.len() - 1], 0);
+    name_c
 }

@@ -1,9 +1,7 @@
 use crate::builtins;
 use crate::bytecode::{self, Accum};
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
-use crate::common::{
-    CompileError, Either, FileSpec, Graph, NodeIx, NumTy, Result, Stage, WorkList,
-};
+use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
 #[cfg(feature = "llvm_backend")]
@@ -18,7 +16,6 @@ use hashbrown::{hash_map::Entry, HashMap, HashSet};
 use regex::bytes::Regex;
 
 use std::collections::VecDeque;
-use std::convert::TryFrom;
 use std::mem;
 use std::sync::Arc;
 
@@ -1528,25 +1525,6 @@ impl<'a, 'b> View<'a, 'b> {
                     })
                 }
             }
-            Print => {
-                // XXX this imports a specific assumption on how the PrimStmt is generated, we may
-                // want to make the bool parameter to Print dynamic.
-                if let cfg::PrimVal::ILit(i) = &args[2] {
-                    self.pushl(LL::Print(
-                        conv_regs[0].into(),
-                        conv_regs[1].into(),
-                        FileSpec::try_from(*i).unwrap(),
-                    ));
-                    return Ok(());
-                } else {
-                    return err!("must pass constant append parameter to print");
-                }
-            }
-            PrintStdout => {
-                self.pushl(LL::PrintStdout(conv_regs[0].into()));
-                return Ok(());
-            }
-
             Delete => match &conv_tys[0] {
                 Ty::MapIntInt
                 | Ty::MapIntStr
@@ -1836,6 +1814,28 @@ impl<'a, 'b> View<'a, 'b> {
                 v_reg = self.ensure_ty(v_reg, v_ty, ret_ty)?;
                 self.pushr(HighLevel::Ret(v_reg, ret_ty));
             }
+            PrimStmt::PrintAll(args, out) => {
+                use bytecode::Instr::PrintAll;
+                let mut arg_regs = Vec::with_capacity(args.len());
+                for a in args {
+                    let (a_reg, a_ty) = self.get_reg(a)?;
+                    arg_regs.push(self.ensure_ty(a_reg, a_ty, Ty::Str)?.into());
+                }
+                let out_reg = if let Some((out, append)) = out {
+                    // Would use map, but I supposed we have no equivalent to sequenceA_ and/or
+                    // monad transformers.
+                    let (mut out_reg, out_ty) = self.get_reg(out)?;
+                    out_reg = self.ensure_ty(out_reg, out_ty, Ty::Str)?;
+                    // TODO check if we need the try_from? aren't they the same type?
+                    Some((out_reg.into(), *append))
+                } else {
+                    None
+                };
+                self.pushl(PrintAll {
+                    output: out_reg,
+                    args: arg_regs,
+                });
+            }
             PrimStmt::Printf(fmt, args, out) => {
                 // avoid spurious "variant never constructed" warning we get by using LL::Printf
                 use bytecode::Instr::Printf;
@@ -1848,7 +1848,7 @@ impl<'a, 'b> View<'a, 'b> {
                 let out_reg = if let Some((out, append)) = out {
                     let (mut out_reg, out_ty) = self.get_reg(out)?;
                     out_reg = self.ensure_ty(out_reg, out_ty, Ty::Str)?;
-                    Some((out_reg.into(), FileSpec::try_from(*append as i64).unwrap()))
+                    Some((out_reg.into(), *append))
                 } else {
                     None
                 };

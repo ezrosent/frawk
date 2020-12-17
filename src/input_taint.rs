@@ -251,11 +251,13 @@ impl TaintedStringAnalysis {
                     self.add_dep(dst, Key::Reg(*reg, *ty));
                 }
             }
-            Printf {
+            PrintAll {
+                output: Some((cmd, FileSpec::Cmd)),
+                ..
+            } | Printf {
                 output: Some((cmd, FileSpec::Cmd)),
                 ..
             } => self.queries.push(cmd.into()),
-            Print(_, out, FileSpec::Cmd) => self.queries.push(out.into()),
             RunCmd(dst, cmd) => {
                 self.queries.push(cmd.into());
                 self.add_src(dst, true);
@@ -289,6 +291,7 @@ impl TaintedStringAnalysis {
             LoadSlot{ty,slot,dst} => self.add_dep(Key::Reg(*dst, *ty), Key::Slot(*slot, *ty)),
             StoreSlot{ty,slot,src} => self.add_dep(Key::Slot(*slot, *ty), Key::Reg(*src, *ty)),
             Delete{..}
+            | PrintAll{..}
             | Contains{..} // 0 or 1
             | IterHasNext{..}
             |JmpIf(..)
@@ -301,8 +304,6 @@ impl TaintedStringAnalysis {
             | Call(_)
             | Ret
             | Printf { .. }
-            | PrintStdout(_)
-            | Print(..)
             | Close(_)
             | NextLineStdinFused()
             | NextFile()

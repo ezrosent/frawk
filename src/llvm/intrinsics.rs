@@ -236,6 +236,7 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     let fmt_tys_ty = LLVMPointerType(LLVMIntTypeInContext(ctx, 32), 0);
     let map_ty = rt_ty;
     let str_ref_ty = LLVMPointerType(str_ty, 0);
+    let pa_args_ty = LLVMPointerType(str_ref_ty, 0);
     let iter_int_ty = LLVMPointerType(int_ty, 0);
     let iter_str_ty = LLVMPointerType(str_ty, 0);
     let mut table = IntrinsicMap::new(module, ctx);
@@ -301,8 +302,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         reseed_rng(rt_ty) -> int_ty;
 
         run_system(str_ref_ty) -> int_ty;
-        print_stdout(rt_ty, str_ref_ty);
-        print(rt_ty, str_ref_ty, str_ref_ty, int_ty);
+        print_all_stdout(rt_ty, pa_args_ty, int_ty);
+        print_all_file(rt_ty, pa_args_ty, int_ty, str_ref_ty, int_ty);
         sprintf_impl(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty) -> str_ty;
         printf_impl_file(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty, str_ref_ty, int_ty);
         printf_impl_stdout(rt_ty, str_ref_ty, fmt_args_ty, fmt_tys_ty, int_ty);
@@ -524,39 +525,6 @@ pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_f
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn print_stdout(runtime: *mut c_void, txt: *mut c_void) {
-    let runtime = &mut *(runtime as *mut Runtime);
-    let txt = &*(txt as *mut Str);
-    if let Err(_) = runtime.core.write_files.write_str_stdout(txt) {
-        exit!(runtime);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn print(
-    runtime: *mut c_void,
-    txt: *mut c_void,
-    out: *mut c_void,
-    append: Int,
-) {
-    let runtime = &mut *(runtime as *mut Runtime);
-    let txt = &*(txt as *mut Str);
-    let out = &*(out as *mut Str);
-    if runtime
-        .core
-        .write_files
-        .write_str(
-            out,
-            txt,
-            FileSpec::try_from(append).expect("invalid filespec"),
-        )
-        .is_err()
-    {
-        exit!(runtime);
-    }
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn split_str(
     runtime: *mut c_void,
     to_split: *mut c_void,
@@ -567,7 +535,6 @@ pub unsafe extern "C" fn split_str(
     let into_arr = mem::transmute::<*mut c_void, StrMap<Str>>(into_arr);
     let to_split = &*(to_split as *mut Str);
     let pat = &*(pat as *mut Str);
-    let old_len = into_arr.len();
     if let Err(e) = runtime
         .core
         .regexes
@@ -575,7 +542,7 @@ pub unsafe extern "C" fn split_str(
     {
         fail!(runtime, "failed to split string: {}", e);
     }
-    let res = (into_arr.len() - old_len) as Int;
+    let res = into_arr.len() as Int;
     mem::forget((into_arr, to_split, pat));
     res
 }
@@ -591,7 +558,6 @@ pub unsafe extern "C" fn split_int(
     let into_arr = mem::transmute::<*mut c_void, IntMap<Str>>(into_arr);
     let to_split = &*(to_split as *mut Str);
     let pat = &*(pat as *mut Str);
-    let old_len = into_arr.len();
     if let Err(e) = runtime
         .core
         .regexes
@@ -599,7 +565,7 @@ pub unsafe extern "C" fn split_int(
     {
         fail!(runtime, "failed to split string: {}", e);
     }
-    let res = (into_arr.len() - old_len) as Int;
+    let res = into_arr.len() as Int;
     mem::forget((into_arr, to_split, pat));
     res
 }
@@ -1039,6 +1005,39 @@ unsafe fn wrap_args<'a>(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usize, num_args: Int) {
+    let args_wrapped: &[&Str] =
+        slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
+    let rt = rt as *mut Runtime;
+    try_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn print_all_file(
+    rt: *mut c_void,
+    args: *mut usize,
+    num_args: Int,
+    output: *const U128,
+    append: Int,
+) {
+    let args_wrapped: &[&Str] =
+        slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
+    let rt = rt as *mut Runtime;
+    let output_wrapped = Some((
+        &*(output as *mut Str),
+        try_abort!(rt, FileSpec::try_from(append)),
+    ));
+
+    try_abort!(
+        rt,
+        (*rt)
+            .core
+            .write_files
+            .write_all(args_wrapped, output_wrapped)
+    )
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn printf_impl_file(
     rt: *mut c_void,
     spec: *mut U128,
@@ -1050,7 +1049,7 @@ pub unsafe extern "C" fn printf_impl_file(
 ) {
     let output_wrapped = Some((
         &*(output as *mut Str),
-        FileSpec::try_from(append).expect("invalid filespec!"),
+        try_abort!(rt, FileSpec::try_from(append)),
     ));
     let format_args = wrap_args(&mut *(rt as *mut _), args, tys, num_args);
     let rt = rt as *mut Runtime;

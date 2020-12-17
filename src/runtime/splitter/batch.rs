@@ -1562,7 +1562,7 @@ where
     }
 }
 
-// Most of the implementation for splitting by whitespace and splitting by a single byte are
+// Most of the implementation for splitting by whitespace and splitting by a single byte is
 // shared. ByteReaderBase encapsulates the portions of the implementation that are different. This
 // isn't the cleanest abstraction, but given that it doesn't tend to "leak" into the rest of the
 // code-base, the win in code deduplication seems to justify its existence.
@@ -1709,8 +1709,10 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
         refresh_buf_impl(self)
     }
     fn maybe_done(&self) -> bool {
+        // TODO: This is a pretty gross check; we should see if we can streamline the ws.fields check.
         self.cur_chunk.off.nl.start == self.cur_chunk.off.nl.fields.len()
-            && self.cur_chunk.off.ws.start == self.cur_chunk.off.ws.fields.len()
+            && (self.cur_chunk.off.ws.start == self.cur_chunk.off.ws.fields.len()
+                || self.progress == self.buf_len)
     }
     fn read_line_inner<'a, 'b: 'a>(
         &'b mut self,
