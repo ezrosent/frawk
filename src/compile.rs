@@ -1826,7 +1826,6 @@ impl<'a, 'b> View<'a, 'b> {
                     // monad transformers.
                     let (mut out_reg, out_ty) = self.get_reg(out)?;
                     out_reg = self.ensure_ty(out_reg, out_ty, Ty::Str)?;
-                    // TODO check if we need the try_from? aren't they the same type?
                     Some((out_reg.into(), *append))
                 } else {
                     None
