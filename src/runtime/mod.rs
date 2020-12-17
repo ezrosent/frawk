@@ -656,11 +656,55 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
     }
 }
 
+// When sending SharedMaps across threads we have to clone them and clone their contents, as Rc is
+// not thread-safe (and we don't want to pay the cost of Arc clones during normal execution).
+pub(crate) struct Shuttle<T>(T);
+impl<'a> From<Shuttle<HashMap<Int, UniqueStr<'a>>>> for IntMap<Str<'a>> {
+    fn from(sh: Shuttle<HashMap<Int, UniqueStr<'a>>>) -> Self {
+        SharedMap(Rc::new(RefCell::new(
+            sh.0.into_iter().map(|(x, y)| (x, y.into_str())).collect(),
+        )))
+    }
+}
+
+impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
+    fn from(sh: Shuttle<HashMap<UniqueStr<'a>, Int>>) -> Self {
+        SharedMap(Rc::new(RefCell::new(
+            sh.0.into_iter().map(|(x, y)| (x.into_str(), y)).collect(),
+        )))
+    }
+}
+
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     pub(crate) fn get(&self, k: &K) -> Option<V> {
         self.0.borrow().get(k).cloned()
     }
 }
+
+impl<'a> IntMap<Str<'a>> {
+    pub(crate) fn shuttle(&self) -> Shuttle<HashMap<Int, UniqueStr<'a>>> {
+        Shuttle(
+            self.0
+                .borrow()
+                .iter()
+                .map(|(x, y)| (*x, UniqueStr::from(y.clone())))
+                .collect(),
+        )
+    }
+}
+
+impl<'a> StrMap<'a, Int> {
+    pub(crate) fn shuttle(&self) -> Shuttle<HashMap<UniqueStr<'a>, Int>> {
+        Shuttle(
+            self.0
+                .borrow()
+                .iter()
+                .map(|(x, y)| (UniqueStr::from(x.clone()), *y))
+                .collect(),
+        )
+    }
+}
+
 impl<K: Hash + Eq + Clone, V> SharedMap<K, V> {
     pub(crate) fn to_iter(&self) -> Iter<K> {
         self.0.borrow().keys().cloned().collect()

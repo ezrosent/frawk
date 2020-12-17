@@ -153,6 +153,8 @@ impl<'a> Core<'a> {
         let rs: UniqueStr<'a> = self.vars.rs.clone().into();
         let ors: UniqueStr<'a> = self.vars.ors.clone().into();
         let filename: UniqueStr<'a> = self.vars.filename.clone().into();
+        let argv = self.vars.argv.shuttle();
+        let fi = self.vars.fi.shuttle();
         let slots = self.slots.clone();
         move || {
             let vars = Variables {
@@ -168,7 +170,8 @@ impl<'a> Core<'a> {
                 rstart: 0,
                 rlength: 0,
                 argc: 0,
-                argv: Default::default(),
+                argv: argv.into(),
+                fi: fi.into(),
             };
             Core {
                 vars,

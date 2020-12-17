@@ -206,6 +206,7 @@ impl Display for Variable {
                 RSTART => "RSTART",
                 RLENGTH => "RLENGTH",
                 PID => "PID",
+                FI => "FI",
             }
         )
     }

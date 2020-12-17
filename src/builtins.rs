@@ -4,7 +4,7 @@ use crate::ast;
 use crate::common::Either;
 use crate::common::{NodeIx, Result};
 use crate::compile;
-use crate::runtime::{Int, IntMap, Str};
+use crate::runtime::{Int, IntMap, Str, StrMap};
 use crate::types::{self, SmallVec};
 #[cfg(feature = "llvm_backend")]
 use llvm_sys::{core::*, prelude::*};
@@ -516,6 +516,7 @@ pub(crate) enum Variable {
     ORS = 10,
     FNR = 11,
     PID = 12,
+    FI = 13,
 }
 
 impl From<Variable> for compile::Ty {
@@ -525,6 +526,7 @@ impl From<Variable> for compile::Ty {
             FS | OFS | ORS | RS | FILENAME => compile::Ty::Str,
             PID | ARGC | NF | NR | FNR | RSTART | RLENGTH => compile::Ty::Int,
             ARGV => compile::Ty::MapIntStr,
+            FI => compile::Ty::MapStrInt,
         }
     }
 }
@@ -543,6 +545,7 @@ pub(crate) struct Variables<'a> {
     pub rstart: Int,
     pub rlength: Int,
     pub pid: Int,
+    pub fi: StrMap<'a, Int>,
 }
 
 impl<'a> Default for Variables<'a> {
@@ -561,6 +564,7 @@ impl<'a> Default for Variables<'a> {
             rstart: 0,
             pid: 0,
             rlength: -1,
+            fi: Default::default(),
         }
     }
 }
@@ -575,7 +579,7 @@ impl<'a> Variables<'a> {
             RSTART => self.rstart,
             RLENGTH => self.rlength,
             PID => self.pid,
-            ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
+            FI | ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
         })
     }
 
@@ -589,7 +593,7 @@ impl<'a> Variables<'a> {
             RSTART => self.rstart = i,
             RLENGTH => self.rlength = i,
             PID => self.pid = i,
-            ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
+            FI | ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
         })
     }
 
@@ -601,7 +605,7 @@ impl<'a> Variables<'a> {
             ORS => self.ors.clone(),
             RS => self.rs.clone(),
             FILENAME => self.filename.clone(),
-            PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+            FI | PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
                 return err!("var {} not a string", var)
             }
         })
@@ -615,7 +619,7 @@ impl<'a> Variables<'a> {
             ORS => self.ors = s,
             RS => self.rs = s,
             FILENAME => self.filename = s,
-            PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+            FI | PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
                 return err!("var {} not a string", var)
             }
         })
@@ -625,7 +629,7 @@ impl<'a> Variables<'a> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv.clone()),
-            PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
+            FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
                 err!("var {} is not a map", var)
             }
         }
@@ -635,7 +639,7 @@ impl<'a> Variables<'a> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv = m),
-            PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
+            FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
                 err!("var {} is not a map", var)
             }
         }
@@ -648,7 +652,7 @@ impl Variable {
             PID | ARGC | NF | FNR | NR | RSTART | RLENGTH => {
                 types::TVar::Scalar(types::BaseTy::Int)
             }
-            // TODO(ezr): For full compliance, this may have to be Str -> Str
+            // NB: For full compliance, this may have to be Str -> Str
             //  If we had
             //  m["x"] = 1;
             //  if (true) {
@@ -673,6 +677,10 @@ impl Variable {
             ARGV => types::TVar::Map {
                 key: types::BaseTy::Int,
                 val: types::BaseTy::Str,
+            },
+            FI => types::TVar::Map {
+                key: types::BaseTy::Str,
+                val: types::BaseTy::Int,
             },
             ORS | OFS | FS | RS | FILENAME => types::TVar::Scalar(types::BaseTy::Str),
         }
@@ -707,6 +715,7 @@ impl<'a> TryFrom<usize> for Variable {
             10 => Ok(ORS),
             11 => Ok(FNR),
             12 => Ok(PID),
+            13 => Ok(FI),
             _ => Err(()),
         }
     }
@@ -726,5 +735,6 @@ static_map!(
     ["FILENAME", Variable::FILENAME],
     ["RSTART", Variable::RSTART],
     ["RLENGTH", Variable::RLENGTH],
-    ["PID", Variable::PID]
+    ["PID", Variable::PID],
+    ["FI", Variable::FI]
 );
