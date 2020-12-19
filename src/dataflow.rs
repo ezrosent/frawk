@@ -14,77 +14,69 @@ use std::convert::TryFrom;
 use std::hash::Hash;
 use std::mem;
 
-/// A bounded lattice, optimized for the kind of dataflow analyses we do on frawk programs. In
-/// particular you specify "transfer funcitons" as part of the lattice, rather than specifying
-/// join and meet separately. This means that, even though meet should "exist" (seems hard to
-/// define top() without reference to it); Func need not include it if it is not relevant to the
-/// analysis.
-pub trait BoundedLattice {
+/// A trait used for implementing Join Semilattices with a type for custom (monotone) binary
+/// functions. We assume that Func::default() is the "join" operation on the Semilattice.
+pub trait JoinSemiLattice {
     type Func: Default;
+    fn bottom() -> Self;
     // invoke(other, &Default::default()) ~ *self = join(self, other);
     fn invoke(&mut self, other: &Self, f: &Self::Func) -> bool /* changed */;
-    fn bottom() -> Self;
-    fn top() -> Self;
 }
 
-pub(crate) struct Analysis<B: BoundedLattice, K = Key> {
+pub(crate) struct Analysis<J: JoinSemiLattice, K = Key> {
     sentinel: NodeIx,
     nodes: HashMap<K, NodeIx>,
-    graph: Graph<B, B::Func>,
+    graph: Graph<J, J::Func>,
     queries: HashSet<NodeIx>,
-    blank: HashSet<NodeIx>,
 }
 
-impl<K, B: BoundedLattice> Default for Analysis<B, K> {
-    fn default() -> Analysis<B, K> {
+impl<K, J: JoinSemiLattice> Default for Analysis<J, K> {
+    fn default() -> Analysis<J, K> {
         let mut res = Analysis {
             sentinel: Default::default(),
             nodes: Default::default(),
             graph: Default::default(),
             queries: Default::default(),
-            blank: Default::default(),
         };
-        res.sentinel = res.graph.add_node(B::bottom());
+        res.sentinel = res.graph.add_node(J::bottom());
         res
     }
 }
 
-impl<K: Eq + Hash, B: BoundedLattice> Analysis<B, K> {
-    pub(crate) fn add_src(&mut self, k: impl Into<K>, mut v: B) {
+impl<K: Eq + Hash, J: JoinSemiLattice> Analysis<J, K> {
+    pub(crate) fn add_src(&mut self, k: impl Into<K>, mut v: J) {
         let ix = self.get_node(k);
         let weight = self.graph.node_weight_mut(ix).unwrap();
         v.invoke(weight, &Default::default());
         *weight = v;
-        self.blank.remove(&ix);
     }
-    pub(crate) fn add_dep(&mut self, src: impl Into<K>, dst: impl Into<K>, edge: B::Func) {
+    pub(crate) fn add_dep(&mut self, dst: impl Into<K>, src: impl Into<K>, edge: J::Func) {
         // We add dependencies in reverse order, so we can dfs for relevant nodes later on
         let dst_ix = self.get_node(dst);
         let src_ix = self.get_node(src);
-        self.blank.remove(&dst_ix);
         self.graph.add_edge(dst_ix, src_ix, edge);
     }
     fn get_node(&mut self, k: impl Into<K>) -> NodeIx {
-        let blank = &mut self.blank;
         let graph = &mut self.graph;
         self.nodes
             .entry(k.into())
-            .or_insert_with(|| {
-                let res = graph.add_node(B::bottom());
-                blank.insert(res);
-                res
-            })
+            .or_insert_with(|| graph.add_node(J::bottom()))
             .clone()
     }
     pub(crate) fn add_query(&mut self, k: impl Into<K>) {
         let ix = self.get_node(k);
         self.queries.insert(ix);
     }
-    pub(crate) fn query(&mut self, k: impl Into<K>) -> &B {
+    pub(crate) fn query(&mut self, k: impl Into<K>) -> &J {
         let ix = self.get_node(k);
         assert!(self.queries.contains(&ix));
         self.solve();
         self.graph.node_weight(ix).unwrap()
+    }
+    /// The join of all of the queries
+    pub(crate) fn root(&mut self) -> &J {
+        self.solve();
+        self.graph.node_weight(self.sentinel).unwrap()
     }
     fn populate(&mut self, wl: &mut WorkList<NodeIx>) {
         let sentinel = self.sentinel;
@@ -95,15 +87,12 @@ impl<K: Eq + Hash, B: BoundedLattice> Analysis<B, K> {
         while let Some(ix) = dfs.next(&self.graph) {
             wl.insert(ix);
         }
-        for ix in self.blank.iter().cloned() {
-            *self.graph.node_weight_mut(ix).unwrap() = B::top();
-        }
     }
     fn solve(&mut self) {
         let mut wl = WorkList::default();
         self.populate(&mut wl);
         while let Some(n) = wl.pop() {
-            let mut start = mem::replace(self.graph.node_weight_mut(n).unwrap(), B::bottom());
+            let mut start = mem::replace(self.graph.node_weight_mut(n).unwrap(), J::bottom());
             let mut changed = false;
             for edge in self.graph.edges_directed(n, Direction::Outgoing) {
                 let neigh = edge.target();
@@ -144,7 +133,6 @@ where
     }
 }
 
-// TODO: wire into input_taint, get those tests passing.
 // TODO: wire into used_fields
 // TODO: wire into string constants
 

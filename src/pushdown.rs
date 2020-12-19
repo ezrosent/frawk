@@ -41,21 +41,8 @@
 //!     GetCol(dst, 0)
 //!
 //! Which corresponds roughly to the AWK snippet `$$2`, or "the field corresponding to the value of
-//! the second column." We cannot predict this value ahead of time, but our rules do not generate
-//! any constraints for the StrToInt instruction, or for any number of other instructions that can
-//! assign to integer registers. If we apply the algorithm as written, register 0 will have no
-//! incoming edges, and so will contribute no fields to the dst register, thereby producing false
-//! negatives.
-//!
-//! The most direct solution here would be to contribute "full sets" (sets that contain all
-//! possible fields --- [FieldSet::all] below) to any register stored to by an instruction other
-//! than StoreConstInt, MovInt, or Phi. This would work, but it would require a lot more code, and
-//! we would have to continually update the analysis code as we added or removed instructions from
-//! the bytecode.
-//!
-//! Instead, we do this implicitly by detecting nodes with no incoming edges that have empty field
-//! sets. These nodes are replaced with full sets during iteration; the algorithm treats these
-//! jumps like standard updates for now, though they could probably be shortcircuited in some way.
+//! the second column." We cannot predict this value ahead of time, for cases like this, we
+//! contribute "full" sets to registers written by primitives that our analysis cannot introspect.
 
 use std::fmt;
 

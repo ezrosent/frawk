@@ -44,33 +44,54 @@
 //! (either because the analysis is too conservative, or because they trust user input) can opt out
 //! of taint analysis using the -A flag.
 use crate::bytecode::Instr;
-use crate::common::{FileSpec, Graph, NodeIx, NumTy, WorkList};
+use crate::common::{FileSpec, NumTy};
 use crate::compile::HighLevel;
-use crate::dataflow::{self, Key};
+use crate::dataflow::{self, JoinSemiLattice};
 
-use hashbrown::HashMap;
-use petgraph::Direction;
+/// aka bool, with join = ||; making our own enum for explicitness.
+#[derive(Copy, Clone)]
+enum Taint {
+    Tainted,
+    Okay,
+}
+
+impl JoinSemiLattice for Taint {
+    type Func = ();
+    fn bottom() -> Taint {
+        Taint::Okay
+    }
+    fn invoke(&mut self, other: &Self, (): &()) -> bool /* changed */ {
+        use Taint::*;
+        match (*self, *other) {
+            (Tainted, _) => false,
+            (Okay, Okay) => false,
+            (Okay, Tainted) => {
+                *self = Tainted;
+                true
+            }
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct TaintedStringAnalysis {
-    flows: Graph</*tainted=*/ bool, ()>,
-    regs: HashMap<Key, NodeIx>,
-    queries: Vec<Key>,
-    wl: WorkList<NodeIx>,
+    dfa: dataflow::Analysis<Taint>,
 }
 
 impl TaintedStringAnalysis {
     pub(crate) fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
-        // A little on how this handles functions. We do not implement a call-sensitive analysis.
-        // Instead, we ask "is the return value of a function always tainted by user input?" when
-        // analyzing the function body and "are any of the arguments tainted by user input" at the
-        // call site. This is a bit simplistic, i.e. it rules out scripts like:
+        // A little on how the dataflow module functions. We do not implement a call-sensitive
+        // analysis.  Instead, we ask "is the return value of a function always tainted by user
+        // input?" when analyzing the function body and "are any of the arguments tainted by user
+        // input" at the call site. This is a bit simplistic, i.e. it rules out scripts like:
         //
         // function cmd(x, y) { print $x; return y; }
         // { print "X" | cmd(2, "tee empty-line") }
         //
         // Which should be safe.
-        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |dst, src| self.add_dep(dst, src.unwrap()))
+        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |dst, src| {
+            self.dfa.add_dep(dst, src.unwrap(), ())
+        })
     }
     pub(crate) fn visit_ll<'a>(&mut self, inst: &Instr<'a>) {
         // NB: this analysis currently tracks taint even in string-to-integer operations. I cannot
@@ -81,23 +102,23 @@ impl TaintedStringAnalysis {
         use Instr::*;
         match inst {
             ReadErr(dst, cmd, is_file) => {
-                self.add_src(dst, true);
+                self.dfa.add_src(dst, Taint::Tainted);
                 if !*is_file {
-                    self.queries.push(cmd.into());
+                    self.dfa.add_query(cmd);
                 }
             }
             NextLine(dst, cmd, is_file) => {
-                self.add_src(dst, true);
+                self.dfa.add_src(dst, Taint::Tainted);
                 if !*is_file {
-                    self.queries.push(cmd.into())
+                    self.dfa.add_query(cmd);
                 }
             }
-            GetColumn(dst, _) => self.add_src(dst, true),
-            ReadErrStdin(dst) => self.add_src(dst, true),
-            NextLineStdin(dst) => self.add_src(dst, true),
-            StoreConstStr(dst, _) => self.add_src(dst, /*tainted=*/ false),
-            StoreConstInt(dst, _) => self.add_src(dst, /*tainted=*/ false),
-            StoreConstFloat(dst, _) => self.add_src(dst, /*tainted=*/ false),
+            GetColumn(dst, _) => self.dfa.add_src(dst, Taint::Tainted),
+            ReadErrStdin(dst) => self.dfa.add_src(dst, Taint::Tainted),
+            NextLineStdin(dst) => self.dfa.add_src(dst, Taint::Tainted),
+            StoreConstStr(dst, _) => self.dfa.add_src(dst, Taint::Okay),
+            StoreConstInt(dst, _) => self.dfa.add_src(dst, Taint::Okay),
+            StoreConstFloat(dst, _) => self.dfa.add_src(dst, Taint::Okay),
             PrintAll {
                 output: Some((cmd, FileSpec::Cmd)),
                 ..
@@ -105,76 +126,21 @@ impl TaintedStringAnalysis {
             | Printf {
                 output: Some((cmd, FileSpec::Cmd)),
                 ..
-            } => self.queries.push(cmd.into()),
+            } => self.dfa.add_query(cmd),
             RunCmd(dst, cmd) => {
-                self.queries.push(cmd.into());
-                self.add_src(dst, true);
+                self.dfa.add_query(cmd);
+                self.dfa.add_src(dst, Taint::Tainted);
             }
             _ => dataflow::boilerplate::visit_ll(inst, |dst, src| {
                 if let Some(src) = src {
-                    self.add_dep(dst, src)
+                    self.dfa.add_dep(dst, src, ())
                 }
             }),
         }
     }
-    fn get_node(&mut self, k: Key) -> NodeIx {
-        let flows = &mut self.flows;
-        let wl = &mut self.wl;
-        self.regs
-            .entry(k)
-            .or_insert_with(|| {
-                let ix = flows.add_node(false);
-                wl.insert(ix);
-                ix
-            })
-            .clone()
-    }
-    fn add_dep(&mut self, dst_reg: impl Into<Key>, src_reg: impl Into<Key>) {
-        let src_node = self.get_node(src_reg.into());
-        let dst_node = self.get_node(dst_reg.into());
-        self.flows.add_edge(src_node, dst_node, ());
-    }
-    fn add_src(&mut self, reg: impl Into<Key>, tainted: bool) {
-        let ix = self.get_node(reg.into());
-        let w = self.flows.node_weight_mut(ix).unwrap();
-        if *w != tainted {
-            *w = tainted;
-            self.wl.insert(ix);
-        }
-    }
 
     pub(crate) fn ok(&mut self) -> bool {
-        // TODO: add context to the "false" case here.
-        if self.queries.len() == 0 {
-            return true;
-        }
-        self.solve();
-        for q in self.queries.iter() {
-            if *self.flows.node_weight(self.regs[q]).unwrap() {
-                return false;
-            }
-        }
-        true
-    }
-
-    fn solve(&mut self) {
-        while let Some(n) = self.wl.pop() {
-            let start = *self.flows.node_weight(n).unwrap();
-            if start {
-                continue;
-            }
-            let mut new = start;
-            for n in self.flows.neighbors_directed(n, Direction::Incoming) {
-                new |= *self.flows.node_weight(n).unwrap();
-            }
-            if !new {
-                continue;
-            }
-            *self.flows.node_weight_mut(n).unwrap() = new;
-            for n in self.flows.neighbors_directed(n, Direction::Outgoing) {
-                self.wl.insert(n)
-            }
-        }
+        matches!(self.dfa.root(), Taint::Okay)
     }
 }
 
@@ -224,19 +190,29 @@ mod tests {
     }
 
     fn assert_analysis_reject(p: &str) {
-        compiles(p, /*allow_arbitrary=*/ true)
-            .expect(format!("program should compile without taint checks prog=[{}]", p).as_str());
+        assert!(
+            compiles(p, /*allow_arbitrary=*/ true).is_ok(),
+            "program should compile without taint checks: {}",
+            p
+        );
         assert!(
             compiles(p, /*allow_arbitrary=*/ false).is_err(),
-            "failed to rule out: {}",
+            "taint analysis should rule out: {}",
             p
         );
     }
 
     fn assert_analysis_accept(p: &str) {
-        compiles(p, /*allow_arbitrary=*/ true)
-            .expect(format!("program should compile without taint checks prog=[{}]", p).as_str());
-        compiles(p, /*allow_arbitrary=*/ false).expect("taint analysis should pass");
+        assert!(
+            compiles(p, /*allow_arbitrary=*/ true).is_ok(),
+            "program should compile without taint checks: {}",
+            p
+        );
+        assert!(
+            compiles(p, /*allow_arbitrary=*/ false).is_ok(),
+            "taint analysis should pass for program: {}",
+            p
+        );
     }
 
     #[test]
