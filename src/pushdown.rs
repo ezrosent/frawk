@@ -48,7 +48,7 @@ use std::fmt;
 
 use crate::bytecode::Instr;
 use crate::common::NumTy;
-use crate::compile::{HighLevel, Ty};
+use crate::compile::HighLevel;
 use crate::dataflow::{self, JoinSemiLattice, Key};
 
 /// Most AWK scripts do not use more than 63 fields, so we represent our sets of used fields
@@ -140,9 +140,9 @@ impl JoinSemiLattice for FieldSet {
         FieldSet::empty()
     }
     fn invoke(&mut self, other: &FieldSet, (): &()) -> bool /*changed*/ {
-        let res = self != other;
+        let old = self.clone();
         self.union(other);
-        res
+        self != &old
     }
 }
 
@@ -218,9 +218,14 @@ impl UsedFieldAnalysis {
             StoreConstInt(dst, i) if *i >= 0 => {
                 self.dfa.add_src(dst, FieldSet::singleton(*i as usize))
             }
-            Mov(Ty::Int, dst, src) => {
-                self.dfa
-                    .add_dep(Key::Reg(*dst, Ty::Int), Key::Reg(*src, Ty::Int), ())
+            Lookup { .. } | Store { .. } | IterBegin { .. } | IterGetNext { .. } | Mov(..) => {
+                dataflow::boilerplate::visit_ll(inst, |dst, src| {
+                    if let Some(src) = src {
+                        self.dfa.add_dep(dst, src, ())
+                    } else {
+                        self.dfa.add_src(dst, FieldSet::singleton(0))
+                    }
+                })
             }
             GetColumn(dst, col_reg) => {
                 self.dfa.add_query(col_reg);

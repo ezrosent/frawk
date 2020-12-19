@@ -194,6 +194,8 @@ pub(crate) mod boilerplate {
             } else {
                 f(Key::MapKey(*dst, *ty), Some(Key::MapKey(*src, *ty)));
                 f(Key::MapVal(*dst, *ty), Some(Key::MapVal(*src, *ty)));
+                f(Key::MapKey(*src, *ty), Some(Key::MapKey(*dst, *ty)));
+                f(Key::MapVal(*src, *ty), Some(Key::MapVal(*dst, *ty)));
             },
             AddInt(dst, x, y)
             | MulInt(dst, x, y)
@@ -313,8 +315,9 @@ pub(crate) mod boilerplate {
                 key,
             } => {
                 // lookups are also writes to the keys
-                f(Key::MapKey(*dst, *map_ty), Some(Key::Reg(*key, map_ty.val().unwrap())));
-                f(Key::MapVal(*dst, *map_ty), None);
+                f(Key::MapKey(*map, *map_ty), Some(Key::Reg(*key, map_ty.val().unwrap())));
+                // a null value will be inserted as a value into the map
+                f(Key::MapVal(*map, *map_ty), None);
                 f(Key::Reg(*dst, map_ty.val().unwrap()), Some(Key::MapVal(*map, *map_ty)))
             },
             Len { map_ty, dst, map } => f(Key::Reg(*dst, Ty::Int), Some(Key::Reg(*map, *map_ty))),
@@ -332,13 +335,18 @@ pub(crate) mod boilerplate {
             LoadVarInt(dst, v) => f(dst.into(), Some(Key::Var(*v))),
             LoadVarIntMap(dst, v) => {
                 let (dst_reg, dst_ty) = dst.reflect();
+
                 f(Key::MapKey(dst_reg, dst_ty), Some(Key::VarKey(*v)));
                 f(Key::MapVal(dst_reg, dst_ty), Some(Key::VarVal(*v)));
+                f(Key::VarKey(*v), Some(Key::MapKey(dst_reg, dst_ty)));
+                f(Key::VarVal(*v), Some(Key::MapVal(dst_reg, dst_ty)));
             },
             LoadVarStrMap(dst, v) => {
                 let (dst_reg, dst_ty) = dst.reflect();
                 f(Key::MapKey(dst_reg, dst_ty), Some(Key::VarKey(*v)));
                 f(Key::MapVal(dst_reg, dst_ty), Some(Key::VarVal(*v)));
+                f(Key::VarKey(*v), Some(Key::MapKey(dst_reg, dst_ty)));
+                f(Key::VarVal(*v), Some(Key::MapVal(dst_reg, dst_ty)));
             },
             StoreVarStr(v, src) => f(Key::Var(*v), Some(src.into())),
             StoreVarInt(v, src) => f(Key::Var(*v), Some(src.into())),
