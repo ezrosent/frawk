@@ -324,6 +324,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         store_var_int(rt_ty, int_ty, int_ty);
         [ReadOnly] load_var_intmap(rt_ty, int_ty) -> map_ty;
         store_var_intmap(rt_ty, int_ty, map_ty);
+        [ReadOnly] load_var_strmap(rt_ty, int_ty) -> map_ty;
+        store_var_strmap(rt_ty, int_ty, map_ty);
 
         [ReadOnly] str_lt(str_ref_ty, str_ref_ty) -> int_ty;
         [ReadOnly] str_gt(str_ref_ty, str_ref_ty) -> int_ty;
@@ -933,6 +935,29 @@ pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
         try_abort!(runtime, runtime.core.vars.store_intmap(var, map.clone()));
+        mem::forget(map);
+    } else {
+        fail!(runtime, "invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void {
+    let runtime = &*(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        let res = try_abort!(runtime, runtime.core.vars.load_strmap(var));
+        mem::transmute::<StrMap<_>, *mut c_void>(res)
+    } else {
+        fail!(runtime, "invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut c_void) {
+    let runtime = &mut *(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        let map = mem::transmute::<*mut c_void, StrMap<Int>>(map);
+        try_abort!(runtime, runtime.core.vars.store_strmap(var, map.clone()));
         mem::forget(map);
     } else {
         fail!(runtime, "invalid variable code={}", var)

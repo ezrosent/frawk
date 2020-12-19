@@ -12,6 +12,7 @@ pub mod bytecode;
 pub mod cfg;
 pub mod compile;
 pub mod cross_stage;
+pub mod dataflow;
 mod display;
 pub mod dom;
 #[cfg(test)]

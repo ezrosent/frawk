@@ -1975,6 +1975,21 @@ impl<'a> View<'a> {
                 let sv = self.get_local(src.reflect())?;
                 self.call("store_var_intmap", &mut [self.runtime_val(), v, sv]);
             }
+            LoadVarStrMap(dst, var) => {
+                let v = self.var_val(var);
+                let res = self.call("load_var_strmap", &mut [self.runtime_val(), v]);
+                // See the comment in the LoadVarStr case.
+                let dreg = dst.reflect();
+                self.bind_val(dreg, res);
+                if self.is_global(dreg) {
+                    self.drop_reg(dreg)?;
+                }
+            }
+            StoreVarStrMap(var, src) => {
+                let v = self.var_val(var);
+                let sv = self.get_local(src.reflect())?;
+                self.call("store_var_strmap", &mut [self.runtime_val(), v, sv]);
+            }
 
             LoadSlot { ty, dst, slot } => self.load_slot((*dst, *ty), *slot),
             StoreSlot { ty, src, slot } => self.store_slot((*src, *ty), *slot)?,

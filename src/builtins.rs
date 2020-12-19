@@ -630,7 +630,7 @@ impl<'a> Variables<'a> {
         match var {
             ARGV => Ok(self.argv.clone()),
             FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
-                err!("var {} is not a map", var)
+                err!("var {} is not an int-keyed map", var)
             }
         }
     }
@@ -640,11 +640,33 @@ impl<'a> Variables<'a> {
         match var {
             ARGV => Ok(self.argv = m),
             FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
-                err!("var {} is not a map", var)
+                err!("var {} is not an int-keyed map", var)
+            }
+        }
+    }
+    pub fn load_strmap(&self, var: Variable) -> Result<StrMap<'a, Int>> {
+        use Variable::*;
+        match var {
+            FI => Ok(self.fi.clone()),
+            ARGV | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART
+            | RLENGTH => {
+                err!("var {} is not a string-keyed map", var)
+            }
+        }
+    }
+
+    pub fn store_strmap(&mut self, var: Variable, m: StrMap<'a, Int>) -> Result<()> {
+        use Variable::*;
+        match var {
+            FI => Ok(self.fi = m),
+            ARGV | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART
+            | RLENGTH => {
+                err!("var {} is not a string-keyed map", var)
             }
         }
     }
 }
+
 impl Variable {
     pub(crate) fn ty(&self) -> types::TVar<types::BaseTy> {
         use Variable::*;

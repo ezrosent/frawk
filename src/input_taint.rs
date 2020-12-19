@@ -43,29 +43,13 @@
 //! Users who wish to execute a script they believe is safe, but is rejected by the analysis
 //! (either because the analysis is too conservative, or because they trust user input) can opt out
 //! of taint analysis using the -A flag.
-use crate::builtins::Variable;
-use crate::bytecode::{Accum, Instr};
+use crate::bytecode::Instr;
 use crate::common::{FileSpec, Graph, NodeIx, NumTy, WorkList};
-use crate::compile::{HighLevel, Ty};
+use crate::compile::HighLevel;
+use crate::dataflow::{self, Key};
 
 use hashbrown::HashMap;
 use petgraph::Direction;
-
-#[derive(Eq, PartialEq, Hash, Clone)]
-enum Key {
-    Reg(NumTy, Ty),
-    Rng,
-    Var(Variable, Ty),
-    Slot(i64, Ty),
-    Func(NumTy),
-}
-
-impl<'a, T: Accum> From<&'a T> for Key {
-    fn from(t: &T) -> Key {
-        let (reg, ty) = t.reflect();
-        Key::Reg(reg, ty)
-    }
-}
 
 #[derive(Default)]
 pub struct TaintedStringAnalysis {
@@ -86,30 +70,7 @@ impl TaintedStringAnalysis {
         // { print "X" | cmd(2, "tee empty-line") }
         //
         // Which should be safe.
-        use HighLevel::*;
-        match inst {
-            Call {
-                func_id,
-                dst_reg,
-                dst_ty,
-                args,
-            } => {
-                let dst_key = Key::Reg(*dst_reg, *dst_ty);
-                self.add_dep(dst_key.clone(), Key::Func(*func_id));
-                for (reg, ty) in args.iter().cloned() {
-                    self.add_dep(dst_key.clone(), Key::Reg(reg, ty));
-                }
-            }
-            Ret(reg, ty) => {
-                self.add_dep(Key::Func(cur_fn_id), Key::Reg(*reg, *ty));
-            }
-            Phi(reg, ty, preds) => {
-                for (_, pred_reg) in preds.iter() {
-                    self.add_dep(Key::Reg(*reg, *ty), Key::Reg(*pred_reg, *ty));
-                }
-            }
-            DropIter(..) => {}
-        }
+        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |dst, src| self.add_dep(dst, src.unwrap()))
     }
     pub(crate) fn visit_ll<'a>(&mut self, inst: &Instr<'a>) {
         // NB: this analysis currently tracks taint even in string-to-integer operations. I cannot
@@ -119,142 +80,29 @@ impl TaintedStringAnalysis {
         // should read up on the potential attack surface first.
         use Instr::*;
         match inst {
-            StoreConstStr(dst, _) => self.add_src(dst, /*tainted=*/ false),
-            StoreConstInt(dst, _) => self.add_src(dst, /*tainted=*/ false),
-            StoreConstFloat(dst, _) => self.add_src(dst, /*tainted=*/ false),
-
-            IntToStr(dst, src) => self.add_dep(dst, src),
-            IntToFloat(dst, src) => self.add_dep(dst, src),
-            FloatToStr(dst, src) => self.add_dep(dst, src),
-            FloatToInt(dst, src) => self.add_dep(dst, src),
-            StrToFloat(dst, src) => self.add_dep(dst, src),
-            LenStr(dst, src) | StrToInt(dst, src) | HexStrToInt(dst, src) => self.add_dep(dst, src),
-
-            Mov(ty, dst, src) => self.add_dep(Key::Reg(*dst, *ty), Key::Reg(*src, *ty)),
-            AddInt(dst, x, y)
-            | MulInt(dst, x, y)
-            | MinusInt(dst, x, y)
-            | ModInt(dst, x, y)
-            | Int2(_, dst, x, y) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-            }
-            AddFloat(dst, x, y)
-            | MulFloat(dst, x, y)
-            | MinusFloat(dst, x, y)
-            | ModFloat(dst, x, y)
-            | Div(dst, x, y)
-            | Pow(dst, x, y)
-            | Float2(_, dst, x, y) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-            }
-
-            Not(dst, src) | NegInt(dst, src) | Int1(_, dst, src) => self.add_dep(dst, src),
-            NegFloat(dst, src) | Float1(_, dst, src) => self.add_dep(dst, src),
-            NotStr(dst, src) => self.add_dep(dst, src),
-            Rand(dst) => self.add_dep(dst, Key::Rng),
-            Srand(old, new) => {
-                self.add_dep(old, Key::Rng);
-                self.add_dep(Key::Rng, new);
-            }
-            ReseedRng(new) => self.add_dep(Key::Rng, new),
-            Concat(dst, x, y) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-            }
-
-            // NB: this assumes that regexes that have been constant-folded are not tainted by
-            // user-input. That is certainly true today, but any kind of dynamic simplification or
-            // inlining could change that.
-            MatchConst(dst, x, _) | IsMatchConst(dst, x, _) => self.add_dep(dst, x),
-            IsMatch(dst, x, y) | Match(dst, x, y) | SubstrIndex(dst, x, y) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-            }
-            GSub(dst, x, y, dstin) | Sub(dst, x, y, dstin) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-                self.add_dep(dstin, x);
-                self.add_dep(dstin, y);
-            }
-            EscapeTSV(dst, src) | EscapeCSV(dst, src) => self.add_dep(dst, src),
-            Substr(dst, x, y, z) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-                self.add_dep(dst, z);
-            }
-            LTFloat(dst, x, y)
-            | GTFloat(dst, x, y)
-            | LTEFloat(dst, x, y)
-            | GTEFloat(dst, x, y)
-            | EQFloat(dst, x, y) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-            }
-            LTInt(dst, x, y)
-            | GTInt(dst, x, y)
-            | LTEInt(dst, x, y)
-            | GTEInt(dst, x, y)
-            | EQInt(dst, x, y) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-            }
-            LTStr(dst, x, y)
-            | GTStr(dst, x, y)
-            | LTEStr(dst, x, y)
-            | GTEStr(dst, x, y)
-            | EQStr(dst, x, y) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-            }
-            GetColumn(dst, _) => self.add_src(dst, true),
-            JoinTSV(dst, start, end) | JoinCSV(dst, start, end) => {
-                self.add_dep(dst, start);
-                self.add_dep(dst, end);
-            }
-            JoinColumns(dst, x, y, z) => {
-                self.add_dep(dst, x);
-                self.add_dep(dst, y);
-                self.add_dep(dst, z);
-            }
-            // maybe a bit paranoid, but may as well.
             ReadErr(dst, cmd, is_file) => {
                 self.add_src(dst, true);
                 if !*is_file {
                     self.queries.push(cmd.into());
                 }
-            },
+            }
             NextLine(dst, cmd, is_file) => {
                 self.add_src(dst, true);
                 if !*is_file {
                     self.queries.push(cmd.into())
                 }
-            },
+            }
+            GetColumn(dst, _) => self.add_src(dst, true),
             ReadErrStdin(dst) => self.add_src(dst, true),
             NextLineStdin(dst) => self.add_src(dst, true),
-            SplitInt(dst1, src1, dst2, src2) => {
-                self.add_dep(dst1, src1);
-                self.add_dep(dst1, src2);
-                self.add_dep(dst2, src1);
-                self.add_dep(dst2, src2);
-            }
-            SplitStr(dst1, src1, dst2, src2) => {
-                self.add_dep(dst1, src1);
-                self.add_dep(dst1, src2);
-                self.add_dep(dst2, src1);
-                self.add_dep(dst2, src2);
-            }
-            Sprintf { dst, fmt, args } => {
-                self.add_dep(dst, fmt);
-                for (reg, ty) in args.iter() {
-                    self.add_dep(dst, Key::Reg(*reg, *ty));
-                }
-            }
+            StoreConstStr(dst, _) => self.add_src(dst, /*tainted=*/ false),
+            StoreConstInt(dst, _) => self.add_src(dst, /*tainted=*/ false),
+            StoreConstFloat(dst, _) => self.add_src(dst, /*tainted=*/ false),
             PrintAll {
                 output: Some((cmd, FileSpec::Cmd)),
                 ..
-            } | Printf {
+            }
+            | Printf {
                 output: Some((cmd, FileSpec::Cmd)),
                 ..
             } => self.queries.push(cmd.into()),
@@ -262,53 +110,11 @@ impl TaintedStringAnalysis {
                 self.queries.push(cmd.into());
                 self.add_src(dst, true);
             }
-            Lookup {
-                map_ty,
-                dst,
-                map,
-                ..
-            } => self.add_dep(
-                Key::Reg(*dst, map_ty.val().unwrap()),
-                Key::Reg(*map, *map_ty),
-            ),
-            Len { map_ty, dst, map } => self.add_dep(Key::Reg(*dst, Ty::Int), Key::Reg(*map, *map_ty)),
-            Store { map_ty, map, key, val } => {
-                self.add_dep(Key::Reg(*map, *map_ty), Key::Reg(*key, map_ty.key().unwrap()));
-                self.add_dep(Key::Reg(*map, *map_ty), Key::Reg(*val, map_ty.val().unwrap()));
-            }
-            IterBegin { map_ty, dst, map } => {
-                self.add_dep(Key::Reg(*dst, map_ty.key_iter().unwrap()), Key::Reg(*map, *map_ty));
-            }
-            IterGetNext{iter_ty, dst, iter} => {
-                self.add_dep(Key::Reg(*dst, iter_ty.iter().unwrap()), Key::Reg(*iter, *iter_ty));
-            }
-            LoadVarStr(dst, v) => self.add_dep(dst, Key::Var(*v, Ty::Str)),
-            LoadVarInt(dst, v) => self.add_dep(dst, Key::Var(*v, Ty::Int)),
-            LoadVarIntMap(dst, v) => self.add_dep(dst, Key::Var(*v, Ty::MapIntStr)),
-            StoreVarStr(v, src) => self.add_dep(Key::Var(*v, Ty::Str), src),
-            StoreVarInt(v, src) => self.add_dep(Key::Var(*v, Ty::Int), src),
-            StoreVarIntMap(v, src) => self.add_dep(Key::Var(*v, Ty::MapIntStr), src),
-            LoadSlot{ty,slot,dst} => self.add_dep(Key::Reg(*dst, *ty), Key::Slot(*slot, *ty)),
-            StoreSlot{ty,slot,src} => self.add_dep(Key::Slot(*slot, *ty), Key::Reg(*src, *ty)),
-            Delete{..}
-            | PrintAll{..}
-            | Contains{..} // 0 or 1
-            | IterHasNext{..}
-            |JmpIf(..)
-            |Jmp(_)
-            | Halt
-            | Push(..)
-            | Pop(..)
-            // We consume high-level instructions, so calls and returns are handled by visit_hl
-            // above
-            | Call(_)
-            | Ret
-            | Printf { .. }
-            | Close(_)
-            | NextLineStdinFused()
-            | NextFile()
-            | SetColumn(_, _)
-            | AllocMap(_, _) => {}
+            _ => dataflow::boilerplate::visit_ll(inst, |dst, src| {
+                if let Some(src) = src {
+                    self.add_dep(dst, src)
+                }
+            }),
         }
     }
     fn get_node(&mut self, k: Key) -> NodeIx {
@@ -420,7 +226,11 @@ mod tests {
     fn assert_analysis_reject(p: &str) {
         compiles(p, /*allow_arbitrary=*/ true)
             .expect(format!("program should compile without taint checks prog=[{}]", p).as_str());
-        assert!(compiles(p, /*allow_arbitrary=*/ false).is_err());
+        assert!(
+            compiles(p, /*allow_arbitrary=*/ false).is_err(),
+            "failed to rule out: {}",
+            p
+        );
     }
 
     fn assert_analysis_accept(p: &str) {

@@ -3,7 +3,8 @@
 //! This analysis is currently used to perform constant folding on regular expressions, but it may
 //! be used for more things in the future. It largely follows the structure of the analysis in
 //! `pushdown.rs`.
-use crate::bytecode::{Accum, Instr};
+use crate::builtins::Variable;
+use crate::bytecode::{Accum, Instr, Reg};
 use crate::common::{Graph, NodeIx, NumTy, WorkList};
 use crate::compile::{HighLevel, Ty};
 use hashbrown::{HashMap, HashSet};
@@ -13,6 +14,26 @@ use std::mem;
 
 // TODO: nodes are going to go in "reverse order" here, because we want to use Dfs to figure out
 // which nodes need to be visited when doing the analysis.
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum Key {
+    Reg(NumTy, Ty),
+    MapKey(NumTy, Ty),
+    MapVal(NumTy, Ty),
+    VarKey(Variable),
+    VarVal(Variable),
+    Func(NumTy),
+}
+
+impl<T> From<Reg<T>> for Key
+where
+    Reg<T>: Accum,
+{
+    fn from(r: Reg<T>) -> Key {
+        let (reg, ty) = r.reflect();
+        Key::Reg(reg, ty)
+    }
+}
 
 struct ApproximateSet(Option<HashSet<usize>>);
 
@@ -58,13 +79,20 @@ impl Default for ApproximateSet {
     }
 }
 
-pub struct StringConstantAnalysis<'a> {
+pub(crate) struct StringConstantAnalysis<'a> {
     intern_l: HashMap<&'a [u8], usize>,
     intern_r: HashMap<usize, &'a [u8]>,
     sentinel: NodeIx,
     flows: Graph<ApproximateSet, ()>,
-    reg_map: HashMap<NumTy, NodeIx>,
+    reg_map: HashMap<Key, NodeIx>,
     wl: WorkList<NodeIx>,
+}
+
+pub struct Config {
+    // Collect possible regexes, with the purpose of constant-folding them
+    pub query_regex: bool,
+    // Collect the strings used to query FI, for the purpose of doing pushdown on named columns
+    pub fi_refs: bool,
 }
 
 impl<'a> Default for StringConstantAnalysis<'a> {
@@ -81,37 +109,99 @@ impl<'a> Default for StringConstantAnalysis<'a> {
         res
     }
 }
+// TODO: need to model all dataflow, see
+//   'function unused() { print x; } BEGIN { x = "hi"; x=ARGV[0]; print("h" ~ x); } '
+// unused forces x to be global.
+// This folds to "h" ~ "hi" currently
+//
+// Similar bug occurs with used fields:
+//  head ../frawk-scratch/scratch/Data8277.csv | target/debug/frawk -icsv 'function unused() { print x; } { x=2; x=NF; print $x; }'
+//
+// prints nothing; even though the last field is populated.
 
 impl<'a> StringConstantAnalysis<'a> {
-    pub(crate) fn visit_ll(&mut self, inst: &Instr<'a>, query_regex: bool) {
+    pub(crate) fn visit_ll(&mut self, inst: &Instr<'a>, Config { query_regex, .. }: &Config) {
         use Instr::*;
         match inst {
             StoreConstStr(dst, s) => {
                 let id = self.get_id(s.literal_bytes());
-                let node = self.get_node(dst.reflect().0);
+                let node = self.get_node(*dst);
                 self.flows.node_weight_mut(node).unwrap().insert(id)
             }
-            Mov(Ty::Str, dst, src) => {
+            Mov(ty, dst, src) => {
+                if ty.is_array() {
+                    let dst_node_k = self.get_node(Key::MapKey(*dst, *ty));
+                    let dst_node_v = self.get_node(Key::MapVal(*dst, *ty));
+                    let src_node_k = self.get_node(Key::MapKey(*src, *ty));
+                    let src_node_v = self.get_node(Key::MapVal(*src, *ty));
+                    self.flows.add_edge(dst_node_k, src_node_k, ());
+                    self.flows.add_edge(dst_node_v, src_node_v, ());
+                    self.flows.add_edge(src_node_k, dst_node_k, ());
+                    self.flows.add_edge(src_node_v, dst_node_v, ());
+                } else {
+                    let dst_node = self.get_node(Key::Reg(*dst, *ty));
+                    let src_node = self.get_node(Key::Reg(*src, *ty));
+                    // NB: we add dependencies "in reverse"
+                    self.flows.add_edge(dst_node, src_node, ());
+                }
+            }
+            LoadVarInt(dst, src) => {
                 let dst_node = self.get_node(*dst);
-                let src_node = self.get_node(*src);
-                // NB: we add dependencies "in reverse"
+                // By convention, scalar variables are keys
+                let src_node = self.get_node(Key::VarKey(*src));
                 self.flows.add_edge(dst_node, src_node, ());
             }
-            // TODO: Do the same for Sub, GSub, Split*
-            Match(_, _, pat) | IsMatch(_, _, pat) if query_regex => {
-                self.add_query(pat.reflect().0);
+            LoadVarStr(dst, src) => {
+                let dst_node = self.get_node(*dst);
+                let src_node = self.get_node(Key::VarKey(*src));
+                self.flows.add_edge(dst_node, src_node, ());
             }
+            LoadVarIntMap(dst, src) => {
+                let (reg, ty) = dst.reflect();
+                let dst_node_k = self.get_node(Key::MapKey(reg, ty));
+                let dst_node_v = self.get_node(Key::MapVal(reg, ty));
+                let src_node_k = self.get_node(Key::VarKey(*src));
+                let src_node_v = self.get_node(Key::VarVal(*src));
+                self.flows.add_edge(dst_node_k, src_node_k, ());
+                self.flows.add_edge(dst_node_v, src_node_v, ());
+                self.flows.add_edge(src_node_k, dst_node_k, ());
+                self.flows.add_edge(src_node_v, dst_node_v, ());
+            }
+            LoadVarStrMap(dst, src) => {
+                let (reg, ty) = dst.reflect();
+                let dst_node_k = self.get_node(Key::MapKey(reg, ty));
+                let dst_node_v = self.get_node(Key::MapVal(reg, ty));
+                let src_node_k = self.get_node(Key::VarKey(*src));
+                let src_node_v = self.get_node(Key::VarVal(*src));
+                self.flows.add_edge(dst_node_k, src_node_k, ());
+                self.flows.add_edge(dst_node_v, src_node_v, ());
+                self.flows.add_edge(src_node_k, dst_node_k, ());
+                self.flows.add_edge(src_node_v, dst_node_v, ());
+            }
+            // For now, we aren't going to be doing any rules for StoreVar...
+            // Why? Don't we want to poison them?
+
+            // TODO: anything else that stores into a string has to get added here as well?
+
+            // TODO: Do the same for Sub, GSub, Split*
+            Match(_, _, pat) | IsMatch(_, _, pat) if *query_regex => {
+                self.add_query(*pat);
+            }
+
             _ => {}
         }
     }
     pub(crate) fn visit_hl(&mut self, inst: &HighLevel) {
         use HighLevel::*;
-        if let Phi(dst, Ty::Str, preds) = inst {
-            let dst_node = self.get_node(*dst);
-            for (_, pred_reg) in preds.iter() {
-                let pred_node = self.get_node(*pred_reg);
-                self.flows.add_edge(dst_node, pred_node, ());
+        match inst {
+            Phi(dst, ty, preds) => {
+                let dst_node = self.get_node(Key::Reg(*dst, *ty));
+                for (_, pred_reg) in preds.iter() {
+                    let pred_node = self.get_node(Key::Reg(*pred_reg, *ty));
+                    self.flows.add_edge(dst_node, pred_node, ());
+                }
             }
+            _ => {}
         }
     }
     fn get_id(&mut self, s: &'a [u8]) -> usize {
@@ -123,27 +213,27 @@ impl<'a> StringConstantAnalysis<'a> {
             len
         })
     }
-    fn get_node(&mut self, reg: NumTy) -> NodeIx {
+    fn get_node(&mut self, k: impl Into<Key>) -> NodeIx {
         let flows = &mut self.flows;
         *self
             .reg_map
-            .entry(reg)
+            .entry(k.into())
             .or_insert_with(|| flows.add_node(Default::default()))
     }
 
-    pub fn possible_strings(&mut self, reg: NumTy, res: &mut Vec<&'a [u8]>) {
+    pub fn possible_strings(&mut self, k: impl Into<Key>, res: &mut Vec<&'a [u8]>) {
         self.solve();
         res.extend(
             self.flows
-                .node_weight(self.reg_map[&reg])
+                .node_weight(self.reg_map[&k.into()])
                 .unwrap()
                 .iter()
                 .map(|x| self.intern_r[x].clone()),
         )
     }
 
-    pub fn add_query(&mut self, reg: NumTy) {
-        let ix = self.get_node(reg);
+    pub fn add_query(&mut self, k: impl Into<Key>) {
+        let ix = self.get_node(k.into());
         self.wl.insert(ix);
     }
 

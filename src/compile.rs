@@ -1,5 +1,5 @@
 use crate::builtins;
-use crate::bytecode::{self, Accum};
+use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
@@ -9,7 +9,7 @@ use crate::llvm;
 use crate::pushdown::{FieldSet, UsedFieldAnalysis};
 use crate::runtime::{self, Str};
 use crate::smallvec::{self, smallvec};
-use crate::string_constants::StringConstantAnalysis;
+use crate::string_constants::{self, StringConstantAnalysis};
 use crate::types;
 
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
@@ -100,7 +100,6 @@ impl Ty {
         }
     }
 
-    #[cfg(feature = "llvm_backend")]
     pub(crate) fn is_array(self) -> bool {
         use Ty::*;
         match self {
@@ -168,9 +167,13 @@ fn visit_taint_analysis<'a>(stmt: &Instr<'a>, func_id: NumTy, tsa: &mut TaintedS
     }
 }
 
-fn visit_string_constant_analysis<'a>(stmt: &Instr<'a>, sca: &mut StringConstantAnalysis<'a>) {
+fn visit_string_constant_analysis<'a>(
+    stmt: &Instr<'a>,
+    config: &string_constants::Config,
+    sca: &mut StringConstantAnalysis<'a>,
+) {
     match stmt {
-        Either::Left(ll) => sca.visit_ll(ll, /*is_regex=*/ true),
+        Either::Left(ll) => sca.visit_ll(ll, config),
         Either::Right(hl) => sca.visit_hl(hl),
     }
 }
@@ -776,6 +779,10 @@ impl<'a> Typer<'a> {
     fn run_analyses(&mut self) -> Result<()> {
         let mut ufa = UsedFieldAnalysis::default();
         let mut refs = SmallVec::new();
+        let config = string_constants::Config {
+            query_regex: true,
+            fi_refs: false,
+        };
         for (fix, frame) in self.frames.iter().enumerate() {
             for (bbix, bb) in frame.cfg.raw_nodes().iter().enumerate() {
                 for (stmtix, stmt) in bb.weight.iter().enumerate() {
@@ -788,9 +795,9 @@ impl<'a> Typer<'a> {
                         if let Either::Left(LL::IsMatch(_, _, pat))
                         | Either::Left(LL::Match(_, _, pat)) = stmt
                         {
-                            refs.push((fix, bbix, stmtix, pat.reflect().0));
+                            refs.push((fix, bbix, stmtix, *pat));
                         }
-                        visit_string_constant_analysis(stmt, sca)
+                        visit_string_constant_analysis(stmt, &config, sca)
                     }
                 }
             }
@@ -1755,6 +1762,7 @@ impl<'a, 'b> View<'a, 'b> {
                     Ty::Str => LL::LoadVarStr(target_reg.into(), *bv),
                     Ty::Int => LL::LoadVarInt(target_reg.into(), *bv),
                     Ty::MapIntStr => LL::LoadVarIntMap(target_reg.into(), *bv),
+                    Ty::MapStrInt => LL::LoadVarStrMap(target_reg.into(), *bv),
                     _ => unreachable!(),
                 });
                 self.convert(dst_reg, dst_ty, target_reg, target_ty)?
@@ -1804,6 +1812,7 @@ impl<'a, 'b> View<'a, 'b> {
                 self.pushl(match ty {
                     Str => LL::StoreVarStr(*v, reg.into()),
                     MapIntStr => LL::StoreVarIntMap(*v, reg.into()),
+                    MapStrInt => LL::StoreVarStrMap(*v, reg.into()),
                     Int => LL::StoreVarInt(*v, reg.into()),
                     _ => return err!("unexpected type for variable {} : {:?}", v, ty),
                 });
