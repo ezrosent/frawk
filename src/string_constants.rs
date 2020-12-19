@@ -7,39 +7,24 @@ use crate::builtins::Variable;
 use crate::bytecode::{Accum, Instr, Reg};
 use crate::common::{Graph, NodeIx, NumTy, WorkList};
 use crate::compile::{HighLevel, Ty};
+use crate::dataflow::{self, JoinSemiLattice, Key};
 use hashbrown::{HashMap, HashSet};
 use petgraph::{visit::Dfs, Direction};
 
 use std::mem;
 
-// TODO: nodes are going to go in "reverse order" here, because we want to use Dfs to figure out
-// which nodes need to be visited when doing the analysis.
-
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
-pub(crate) enum Key {
-    Reg(NumTy, Ty),
-    MapKey(NumTy, Ty),
-    MapVal(NumTy, Ty),
-    VarKey(Variable),
-    VarVal(Variable),
-    Func(NumTy),
-}
-
-impl<T> From<Reg<T>> for Key
-where
-    Reg<T>: Accum,
-{
-    fn from(r: Reg<T>) -> Key {
-        let (reg, ty) = r.reflect();
-        Key::Reg(reg, ty)
-    }
-}
-
+// TODO: replace with a bitset? The keys will be very dense, though we won't know them ahead of
+// time.
 struct ApproximateSet(Option<HashSet<usize>>);
 
 impl ApproximateSet {
     fn iter(&self) -> impl Iterator<Item = &usize> + '_ {
         self.0.as_ref().into_iter().flat_map(|x| x.iter())
+    }
+    fn singleton(u: usize) -> ApproximateSet {
+        let mut res = HashSet::with_capacity(1);
+        res.insert(u);
+        ApproximateSet(Some(res))
     }
     fn unknown() -> Self {
         ApproximateSet(None)
@@ -73,6 +58,17 @@ impl ApproximateSet {
         }
     }
 }
+
+impl JoinSemiLattice for ApproximateSet {
+    type Func = ();
+    fn bottom() -> ApproximateSet {
+        ApproximateSet(Some(Default::default()))
+    }
+    fn invoke(&mut self, other: &ApproximateSet, (): &()) -> bool {
+        self.merge(other)
+    }
+}
+
 impl Default for ApproximateSet {
     fn default() -> Self {
         ApproximateSet(Some(Default::default()))
@@ -82,6 +78,7 @@ impl Default for ApproximateSet {
 pub(crate) struct StringConstantAnalysis<'a> {
     intern_l: HashMap<&'a [u8], usize>,
     intern_r: HashMap<usize, &'a [u8]>,
+    dfa: dataflow::Analysis<ApproximateSet>,
     sentinel: NodeIx,
     flows: Graph<ApproximateSet, ()>,
     reg_map: HashMap<Key, NodeIx>,
@@ -104,6 +101,7 @@ impl<'a> Default for StringConstantAnalysis<'a> {
             wl: Default::default(),
             intern_l: Default::default(),
             intern_r: Default::default(),
+            dfa: Default::default(),
         };
         res.sentinel = res.flows.add_node(Default::default());
         res
@@ -125,7 +123,8 @@ impl<'a> StringConstantAnalysis<'a> {
         match inst {
             StoreConstStr(dst, s) => {
                 let id = self.get_id(s.literal_bytes());
-                let node = self.get_node(*dst);
+                self.dfa.add_src(dst, ApproximateSet::singleton(id));
+                let node = self.get_node(dst);
                 self.flows.node_weight_mut(node).unwrap().insert(id)
             }
             Mov(ty, dst, src) => {
@@ -146,13 +145,13 @@ impl<'a> StringConstantAnalysis<'a> {
                 }
             }
             LoadVarInt(dst, src) => {
-                let dst_node = self.get_node(*dst);
+                let dst_node = self.get_node(dst);
                 // By convention, scalar variables are keys
                 let src_node = self.get_node(Key::VarKey(*src));
                 self.flows.add_edge(dst_node, src_node, ());
             }
             LoadVarStr(dst, src) => {
-                let dst_node = self.get_node(*dst);
+                let dst_node = self.get_node(dst);
                 let src_node = self.get_node(Key::VarKey(*src));
                 self.flows.add_edge(dst_node, src_node, ());
             }
@@ -185,7 +184,7 @@ impl<'a> StringConstantAnalysis<'a> {
 
             // TODO: Do the same for Sub, GSub, Split*
             Match(_, _, pat) | IsMatch(_, _, pat) if *query_regex => {
-                self.add_query(*pat);
+                self.add_query(pat);
             }
 
             _ => {}

@@ -43,7 +43,6 @@ impl<K, J: JoinSemiLattice> Default for Analysis<J, K> {
     }
 }
 
-// TODO: remove this bound
 impl<K: Eq + Hash, J: JoinSemiLattice> Analysis<J, K> {
     pub(crate) fn add_src(&mut self, k: impl Into<K>, mut v: J) {
         let ix = self.get_node(k);

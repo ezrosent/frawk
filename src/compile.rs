@@ -167,6 +167,12 @@ pub(crate) fn bytecode<'a, LR: runtime::LineReader>(
 }
 
 #[cfg(test)]
+pub(crate) fn context_compiles<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<()> {
+    Typer::init_from_ctx(ctx)?;
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) fn used_fields<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<FieldSet> {
     Ok(Typer::init_from_ctx(ctx)?.used_fields)
 }

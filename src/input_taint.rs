@@ -147,56 +147,16 @@ impl TaintedStringAnalysis {
 #[cfg(test)]
 mod tests {
     use crate::common::Result;
-
-    fn compiles(p: &str, allow_arbitrary: bool) -> Result<()> {
-        use crate::arena::Arena;
-        use crate::ast;
-        use crate::cfg;
-        use crate::common::{ExecutionStrategy, Stage};
-        use crate::compile;
-        use crate::lexer::Tokenizer;
-        use crate::parsing::syntax::ProgParser;
-        use crate::runtime::{
-            self,
-            splitter::batch::{CSVReader, InputFormat},
-        };
-
-        use std::io;
-        let a = Arena::default();
-        let prog = a.alloc_str(p);
-        let lexer = Tokenizer::new(prog);
-        let mut buf = Vec::new();
-        let parser = ProgParser::new();
-        let mut prog = ast::Prog::from_stage(Stage::Main(()));
-        if let Err(e) = parser.parse(&a, &mut buf, &mut prog, lexer) {
-            return err!("parse failure: {}", e);
-        }
-        let mut ctx = cfg::ProgramContext::from_prog(&a, a.alloc_v(prog), cfg::Escaper::default())?;
-        ctx.allow_arbitrary_commands = allow_arbitrary;
-        let fake_inp: Box<dyn io::Read + Send> = Box::new(io::Cursor::new(vec![]));
-        compile::bytecode(
-            &mut ctx,
-            CSVReader::new(
-                std::iter::once((fake_inp, String::from("unused"))),
-                InputFormat::CSV,
-                /*chunk_size=*/ 1024,
-                /*check_utf8=*/ false,
-                ExecutionStrategy::Serial,
-            ),
-            runtime::writers::default_factory(),
-            /*num_workers=*/ 1,
-        )?;
-        Ok(())
-    }
+    use crate::harness::program_compiles;
 
     fn assert_analysis_reject(p: &str) {
         assert!(
-            compiles(p, /*allow_arbitrary=*/ true).is_ok(),
+            program_compiles(p, /*allow_arbitrary=*/ true).is_ok(),
             "program should compile without taint checks: {}",
             p
         );
         assert!(
-            compiles(p, /*allow_arbitrary=*/ false).is_err(),
+            program_compiles(p, /*allow_arbitrary=*/ false).is_err(),
             "taint analysis should rule out: {}",
             p
         );
@@ -204,12 +164,12 @@ mod tests {
 
     fn assert_analysis_accept(p: &str) {
         assert!(
-            compiles(p, /*allow_arbitrary=*/ true).is_ok(),
+            program_compiles(p, /*allow_arbitrary=*/ true).is_ok(),
             "program should compile without taint checks: {}",
             p
         );
         assert!(
-            compiles(p, /*allow_arbitrary=*/ false).is_ok(),
+            program_compiles(p, /*allow_arbitrary=*/ false).is_ok(),
             "taint analysis should pass for program: {}",
             p
         );
