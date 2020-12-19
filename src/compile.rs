@@ -132,31 +132,10 @@ impl Ty {
     }
 }
 
-fn visit_used_fields<'a>(stmt: &Instr<'a>, ufa: &mut UsedFieldAnalysis) {
+fn visit_used_fields<'a>(stmt: &Instr<'a>, cur_func_id: NumTy, ufa: &mut UsedFieldAnalysis) {
     match stmt {
-        Either::Left(LL::StoreConstInt(dst, i)) if *i >= 0 => ufa.add_field(*dst, *i as usize),
-        Either::Left(LL::Mov(Ty::Int, dst, src)) => {
-            ufa.add_dep(
-                /*from_reg=*/ (*src).into(),
-                /*to_reg=*/ (*dst).into(),
-            );
-        }
-        Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
-        Either::Left(LL::JoinCSV(_, start, end))
-        | Either::Left(LL::JoinTSV(_, start, end))
-        | Either::Left(LL::JoinColumns(_, start, end, _)) => {
-            ufa.add_join(*start, *end);
-        }
-        Either::Right(HighLevel::Phi(dst, Ty::Int, preds)) => {
-            for (_, pred_reg) in preds.iter() {
-                use bytecode::Reg;
-                ufa.add_dep(
-                    /*from_reg=*/ Reg::from(*pred_reg),
-                    /*to_reg=*/ Reg::from(*dst),
-                );
-            }
-        }
-        _ => {}
+        Either::Left(l) => ufa.visit_ll(l),
+        Either::Right(r) => ufa.visit_hl(cur_func_id, r),
     }
 }
 
@@ -787,7 +766,7 @@ impl<'a> Typer<'a> {
             for (bbix, bb) in frame.cfg.raw_nodes().iter().enumerate() {
                 for (stmtix, stmt) in bb.weight.iter().enumerate() {
                     // not tracking function calls
-                    visit_used_fields(stmt, &mut ufa);
+                    visit_used_fields(stmt, frame.cur_ident, &mut ufa);
                     if let Some(tsa) = &mut self.taint_analysis {
                         visit_taint_analysis(stmt, frame.cur_ident, tsa)
                     }

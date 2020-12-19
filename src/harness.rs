@@ -570,6 +570,15 @@ mod tests {
         assert_eq!(s1, used_fields(p1).unwrap());
     }
 
+    #[test]
+    fn used_fields_global_variable_store_poisons() {
+        // frawk used to get this one wrong and build a used-field set of {2}.
+        let p1 = r#"function unused() { print x; } { x=2; x=NF; print $x; }"#;
+        let s1 = FieldSet::all();
+        assert_eq!(s1, used_fields(p1).unwrap());
+    }
+
+
     test_program_parallel!(
         parallel_aggs,
         ShardPerFile,

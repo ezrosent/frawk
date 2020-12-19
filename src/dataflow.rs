@@ -43,6 +43,7 @@ impl<K, J: JoinSemiLattice> Default for Analysis<J, K> {
     }
 }
 
+// TODO: remove this bound
 impl<K: Eq + Hash, J: JoinSemiLattice> Analysis<J, K> {
     pub(crate) fn add_src(&mut self, k: impl Into<K>, mut v: J) {
         let ix = self.get_node(k);
@@ -67,13 +68,15 @@ impl<K: Eq + Hash, J: JoinSemiLattice> Analysis<J, K> {
         let ix = self.get_node(k);
         self.queries.insert(ix);
     }
+
+    /// Call "solve" ahead of time to get a stable value here.
     pub(crate) fn query(&mut self, k: impl Into<K>) -> &J {
         let ix = self.get_node(k);
         assert!(self.queries.contains(&ix));
-        self.solve();
         self.graph.node_weight(ix).unwrap()
     }
-    /// The join of all of the queries
+
+    /// Solves the constraints, then returns the join of all the queries.
     pub(crate) fn root(&mut self) -> &J {
         self.solve();
         self.graph.node_weight(self.sentinel).unwrap()
@@ -133,7 +136,7 @@ where
     }
 }
 
-// TODO: wire into used_fields
+// TODO: loads/stores _of maps_ need to be bidirectional, because maps are referencey.
 // TODO: wire into string constants
 
 pub(crate) mod boilerplate {

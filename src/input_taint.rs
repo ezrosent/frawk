@@ -49,7 +49,7 @@ use crate::compile::HighLevel;
 use crate::dataflow::{self, JoinSemiLattice};
 
 /// aka bool, with join = ||; making our own enum for explicitness.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum Taint {
     Tainted,
     Okay,
