@@ -60,7 +60,7 @@ pub trait LineReader: Sized {
     }
     fn read_state(&self) -> i64;
     fn next_file(&mut self) -> Result<bool>;
-    fn set_used_fields(&mut self, _used_fields: &FieldSet);
+    fn set_used_fields(&mut self, used_fields: &FieldSet);
     // Whether or not this LineReader is configured to check for valid UTF-8. This is used to
     // propagate consistent options across multiple LineReader instances.
     fn check_utf8(&self) -> bool;

@@ -413,6 +413,11 @@ pub(crate) struct Inputs {
     commands: Registry<RegexSplitter<ChildStdout>>,
 }
 
+// TODO: save used_fields
+// TODO: save columns
+// TODO: supply an "update used fields" that takes FI
+//
+
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
     pub(crate) inputs: Inputs,
     stdin: LR,
@@ -444,6 +449,8 @@ impl<LR: LineReader> FileRead<LR> {
         res.stdin.set_used_fields(used_fields);
         res
     }
+
+    // pub(crate) fn update_named_columns(&mut self)
 
     pub(crate) fn stdin_filename(&self) -> Str<'static> {
         self.stdin.filename()

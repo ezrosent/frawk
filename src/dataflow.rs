@@ -28,6 +28,7 @@ pub(crate) struct Analysis<J: JoinSemiLattice, K = Key> {
     nodes: HashMap<K, NodeIx>,
     graph: Graph<J, J::Func>,
     queries: HashSet<NodeIx>,
+    solved: bool,
 }
 
 impl<K, J: JoinSemiLattice> Default for Analysis<J, K> {
@@ -37,6 +38,7 @@ impl<K, J: JoinSemiLattice> Default for Analysis<J, K> {
             nodes: Default::default(),
             graph: Default::default(),
             queries: Default::default(),
+            solved: false,
         };
         res.sentinel = res.graph.add_node(J::bottom());
         res
@@ -70,6 +72,7 @@ impl<K: Eq + Hash, J: JoinSemiLattice> Analysis<J, K> {
 
     /// Call "solve" ahead of time to get a stable value here.
     pub(crate) fn query(&mut self, k: impl Into<K>) -> &J {
+        self.solve();
         let ix = self.get_node(k);
         assert!(self.queries.contains(&ix));
         self.graph.node_weight(ix).unwrap()
@@ -91,6 +94,10 @@ impl<K: Eq + Hash, J: JoinSemiLattice> Analysis<J, K> {
         }
     }
     fn solve(&mut self) {
+        if self.solved {
+            return;
+        }
+        self.solved = true;
         let mut wl = WorkList::default();
         self.populate(&mut wl);
         while let Some(n) = wl.pop() {

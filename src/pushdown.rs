@@ -46,6 +46,7 @@
 
 use std::fmt;
 
+use crate::builtins::Variable;
 use crate::bytecode::Instr;
 use crate::common::NumTy;
 use crate::compile::HighLevel;
@@ -69,7 +70,9 @@ impl Default for FieldSet {
 // this library will be field-splitting routines, which will often be passing in counters or vector
 // lengths. We may as well handle the (however unlikely to be exercised) overflow logic here rather
 // than up the stack, in more complicated code, in multiple locations.
-const MAX_INDEX: usize = 63;
+const MAX_INDEX: usize = 62;
+const FI_INDEX: usize = 63;
+const FI_MASK: u64 = !(1 << FI_INDEX);
 
 impl FieldSet {
     pub fn singleton(index: usize) -> FieldSet {
@@ -78,6 +81,12 @@ impl FieldSet {
         } else {
             FieldSet(1 << index)
         }
+    }
+    pub fn fi() -> FieldSet {
+        FieldSet(1 << FI_INDEX)
+    }
+    pub fn has_fi(&self) -> bool {
+        (self.0 != FieldSet::all().0) && ((1 << FI_INDEX) & self.0) != 0
     }
     pub fn is_empty(&self) -> bool {
         self.0 == 0
@@ -92,10 +101,10 @@ impl FieldSet {
         self.0 = self.0 | other.0;
     }
     fn min_bit(&self) -> u32 {
-        self.0.trailing_zeros()
+        (FI_MASK & self.0).trailing_zeros()
     }
     fn max_bit(&self) -> u32 {
-        64 - self.0.leading_zeros()
+        64 - (FI_MASK & self.0).leading_zeros()
     }
     // Fill is used for `join` constructions, it fills all bits (inclusive) from the minimum bit in
     // self to the maximum bit in rhs.
@@ -123,7 +132,8 @@ impl FieldSet {
         self.0 |= rest ^ mask;
     }
     pub fn get(&self, index: usize) -> bool {
-        (index > MAX_INDEX) || (1u64 << (index as u32)) & self.0 != 0
+        ((index > MAX_INDEX) && (self.0 == Self::all().0))
+            || ((1u64 << (index as u32)) & self.0 != 0)
     }
     pub fn set(&mut self, index: usize) {
         if index <= MAX_INDEX {
@@ -151,7 +161,13 @@ impl fmt::Debug for FieldSet {
         if self == &FieldSet::all() {
             return write!(f, "<ALL>");
         }
-        let v: Vec<_> = (0..=MAX_INDEX).filter(|i| self.get(*i)).collect();
+        let mut v: Vec<_> = (0..=MAX_INDEX)
+            .filter(|i| self.get(*i))
+            .map(|x| format!("{}", x))
+            .collect();
+        if self.has_fi() {
+            v.push("FI[..]".into());
+        }
         write!(f, "{:?}", v)
     }
 }
@@ -182,9 +198,9 @@ mod tests {
         assert_eq!(fs3, fieldset_of_range(3usize..=23));
 
         let mut fs5 = FieldSet::singleton(1);
-        let fs6 = FieldSet::singleton(63);
+        let fs6 = FieldSet::singleton(62);
         fs5.fill(&fs6);
-        assert_eq!(fs5, fieldset_of_range(1usize..=63));
+        assert_eq!(fs5, fieldset_of_range(1usize..=62));
 
         let mut fs7 = FieldSet::all();
         fs7.fill(&fs2);
@@ -195,7 +211,6 @@ mod tests {
     }
 }
 
-#[derive(Default)]
 pub struct UsedFieldAnalysis {
     dfa: dataflow::Analysis<FieldSet>,
     // We could make the Join operation a member of FieldSet::Func but, while it is monotone, it
@@ -204,6 +219,18 @@ pub struct UsedFieldAnalysis {
     // the variables in question.  We can always add it in the future, but since join nodes are
     // always "leaves" we will just add the missing columns as a postprocessing step.
     joins: Vec<(Key /*lhs*/, Key /*rhs*/)>,
+}
+
+impl Default for UsedFieldAnalysis {
+    fn default() -> UsedFieldAnalysis {
+        let mut res = UsedFieldAnalysis {
+            dfa: Default::default(),
+            joins: Default::default(),
+        };
+        res.dfa.add_src(Key::VarVal(Variable::FI), FieldSet::fi());
+        res.dfa.add_src(Key::VarKey(Variable::FI), FieldSet::all());
+        res
+    }
 }
 
 impl UsedFieldAnalysis {
@@ -218,15 +245,20 @@ impl UsedFieldAnalysis {
             StoreConstInt(dst, i) if *i >= 0 => {
                 self.dfa.add_src(dst, FieldSet::singleton(*i as usize))
             }
-            Lookup { .. } | Store { .. } | IterBegin { .. } | IterGetNext { .. } | Mov(..) => {
-                dataflow::boilerplate::visit_ll(inst, |dst, src| {
-                    if let Some(src) = src {
-                        self.dfa.add_dep(dst, src, ())
-                    } else {
-                        self.dfa.add_src(dst, FieldSet::singleton(0))
-                    }
-                })
-            }
+
+            LoadVarStrMap(_, Variable::FI)
+            | StoreVarStrMap(Variable::FI, _)
+            | Lookup { .. }
+            | Store { .. }
+            | IterBegin { .. }
+            | IterGetNext { .. }
+            | Mov(..) => dataflow::boilerplate::visit_ll(inst, |dst, src| {
+                if let Some(src) = src {
+                    self.dfa.add_dep(dst, src, ())
+                } else {
+                    self.dfa.add_src(dst, FieldSet::singleton(0))
+                }
+            }),
             GetColumn(dst, col_reg) => {
                 self.dfa.add_query(col_reg);
                 self.dfa.add_src(dst, FieldSet::all());

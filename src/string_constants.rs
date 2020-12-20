@@ -4,14 +4,11 @@
 //! be used for more things in the future. It largely follows the structure of the analysis in
 //! `pushdown.rs`.
 use crate::builtins::Variable;
-use crate::bytecode::{Accum, Instr, Reg};
-use crate::common::{Graph, NodeIx, NumTy, WorkList};
-use crate::compile::{HighLevel, Ty};
+use crate::bytecode::Instr;
+use crate::common::NumTy;
+use crate::compile::HighLevel;
 use crate::dataflow::{self, JoinSemiLattice, Key};
 use hashbrown::{HashMap, HashSet};
-use petgraph::{visit::Dfs, Direction};
-
-use std::mem;
 
 // TODO: replace with a bitset? The keys will be very dense, though we won't know them ahead of
 // time.
@@ -28,18 +25,6 @@ impl ApproximateSet {
     }
     fn unknown() -> Self {
         ApproximateSet(None)
-    }
-    // This turns a set that we don't know anything about _at the moment_ into a set that we will
-    // _never_ know anything about. Sets that contain some information are not changed
-    fn sour(&mut self) {
-        if matches!(self.0.as_ref().map(|s| s.len() == 0), Some(true)) {
-            self.0 = None;
-        }
-    }
-    fn insert(&mut self, item: usize) {
-        if let Some(dst) = &mut self.0 {
-            dst.insert(item);
-        }
     }
     fn merge(&mut self, other: &Self) -> bool /*changed*/ {
         match (&mut self.0, &other.0) {
@@ -69,44 +54,22 @@ impl JoinSemiLattice for ApproximateSet {
     }
 }
 
-impl Default for ApproximateSet {
-    fn default() -> Self {
-        ApproximateSet(Some(Default::default()))
-    }
-}
-
 pub(crate) struct StringConstantAnalysis<'a> {
     intern_l: HashMap<&'a [u8], usize>,
     intern_r: HashMap<usize, &'a [u8]>,
     dfa: dataflow::Analysis<ApproximateSet>,
-    sentinel: NodeIx,
-    flows: Graph<ApproximateSet, ()>,
-    reg_map: HashMap<Key, NodeIx>,
-    wl: WorkList<NodeIx>,
+    cfg: Config,
+    //   TODO: query FI's keys
+    //   TODO: return "unknown" if there are any writes into FI
 }
 
-pub struct Config {
+pub(crate) struct Config {
     // Collect possible regexes, with the purpose of constant-folding them
     pub query_regex: bool,
     // Collect the strings used to query FI, for the purpose of doing pushdown on named columns
     pub fi_refs: bool,
 }
 
-impl<'a> Default for StringConstantAnalysis<'a> {
-    fn default() -> Self {
-        let mut res = StringConstantAnalysis {
-            sentinel: Default::default(),
-            flows: Default::default(),
-            reg_map: Default::default(),
-            wl: Default::default(),
-            intern_l: Default::default(),
-            intern_r: Default::default(),
-            dfa: Default::default(),
-        };
-        res.sentinel = res.flows.add_node(Default::default());
-        res
-    }
-}
 // TODO: need to model all dataflow, see
 //   'function unused() { print x; } BEGIN { x = "hi"; x=ARGV[0]; print("h" ~ x); } '
 // unused forces x to be global.
@@ -118,157 +81,109 @@ impl<'a> Default for StringConstantAnalysis<'a> {
 // prints nothing; even though the last field is populated.
 
 impl<'a> StringConstantAnalysis<'a> {
-    pub(crate) fn visit_ll(&mut self, inst: &Instr<'a>, Config { query_regex, .. }: &Config) {
+    pub(crate) fn cfg(&self) -> &Config {
+        &self.cfg
+    }
+    pub(crate) fn from_config(cfg: Config) -> Self {
+        let mut res = StringConstantAnalysis {
+            intern_l: Default::default(),
+            intern_r: Default::default(),
+            dfa: Default::default(),
+            cfg,
+        };
+        if res.cfg.fi_refs {
+            res.dfa.add_query(Key::VarKey(Variable::FI));
+            res.dfa.add_query(Key::VarVal(Variable::FI));
+        }
+        // if fi_refs is set:
+        //   TODO: add a UFA targetting FI's values (or at least poison writes into FI)
+        //   how to poison? query FI[vals], and look for unknown() (or anything non-zero?
+        //          unclear if that will work, need for lookups to write in a sentinel value, and
+        //          then you check for either nothing, or exactly that sentinel in the possible
+        //          values list.
+        //
+        //          Or maybe it doesn't matter? we just need to add all of the possible values
+        //          stored into the list of used fields.
+        //   )
+        res
+    }
+    pub(crate) fn visit_ll(&mut self, inst: &Instr<'a>) {
         use Instr::*;
+        if self.cfg.query_regex {
+            // TODO: Do the same for Sub, GSub, Split*
+            if let Match(_, _, pat) | IsMatch(_, _, pat) = inst {
+                self.dfa.add_query(pat)
+            }
+        }
         match inst {
             StoreConstStr(dst, s) => {
                 let id = self.get_id(s.literal_bytes());
                 self.dfa.add_src(dst, ApproximateSet::singleton(id));
-                let node = self.get_node(dst);
-                self.flows.node_weight_mut(node).unwrap().insert(id)
             }
-            Mov(ty, dst, src) => {
-                if ty.is_array() {
-                    let dst_node_k = self.get_node(Key::MapKey(*dst, *ty));
-                    let dst_node_v = self.get_node(Key::MapVal(*dst, *ty));
-                    let src_node_k = self.get_node(Key::MapKey(*src, *ty));
-                    let src_node_v = self.get_node(Key::MapVal(*src, *ty));
-                    self.flows.add_edge(dst_node_k, src_node_k, ());
-                    self.flows.add_edge(dst_node_v, src_node_v, ());
-                    self.flows.add_edge(src_node_k, dst_node_k, ());
-                    self.flows.add_edge(src_node_v, dst_node_v, ());
+            // Note that variables can be set "out of band", so by default we aren't treating them
+            // as standard registers.
+            StoreVarStrMap(Variable::FI, _)
+            | Lookup { .. }
+            | Store { .. }
+            | IterBegin { .. }
+            | IterGetNext { .. }
+            | Mov(..) => dataflow::boilerplate::visit_ll(inst, |dst, src| {
+                if let Some(src) = src {
+                    self.dfa.add_dep(dst, src, ())
                 } else {
-                    let dst_node = self.get_node(Key::Reg(*dst, *ty));
-                    let src_node = self.get_node(Key::Reg(*src, *ty));
-                    // NB: we add dependencies "in reverse"
-                    self.flows.add_edge(dst_node, src_node, ());
+                    // insert a sentinel for the inserts that occur due to a Lookup
+                    let id = 0;
+                    self.dfa.add_src(dst, ApproximateSet::singleton(id));
                 }
-            }
-            LoadVarInt(dst, src) => {
-                let dst_node = self.get_node(dst);
-                // By convention, scalar variables are keys
-                let src_node = self.get_node(Key::VarKey(*src));
-                self.flows.add_edge(dst_node, src_node, ());
-            }
-            LoadVarStr(dst, src) => {
-                let dst_node = self.get_node(dst);
-                let src_node = self.get_node(Key::VarKey(*src));
-                self.flows.add_edge(dst_node, src_node, ());
-            }
-            LoadVarIntMap(dst, src) => {
-                let (reg, ty) = dst.reflect();
-                let dst_node_k = self.get_node(Key::MapKey(reg, ty));
-                let dst_node_v = self.get_node(Key::MapVal(reg, ty));
-                let src_node_k = self.get_node(Key::VarKey(*src));
-                let src_node_v = self.get_node(Key::VarVal(*src));
-                self.flows.add_edge(dst_node_k, src_node_k, ());
-                self.flows.add_edge(dst_node_v, src_node_v, ());
-                self.flows.add_edge(src_node_k, dst_node_k, ());
-                self.flows.add_edge(src_node_v, dst_node_v, ());
-            }
-            LoadVarStrMap(dst, src) => {
-                let (reg, ty) = dst.reflect();
-                let dst_node_k = self.get_node(Key::MapKey(reg, ty));
-                let dst_node_v = self.get_node(Key::MapVal(reg, ty));
-                let src_node_k = self.get_node(Key::VarKey(*src));
-                let src_node_v = self.get_node(Key::VarVal(*src));
-                self.flows.add_edge(dst_node_k, src_node_k, ());
-                self.flows.add_edge(dst_node_v, src_node_v, ());
-                self.flows.add_edge(src_node_k, dst_node_k, ());
-                self.flows.add_edge(src_node_v, dst_node_v, ());
-            }
-            // For now, we aren't going to be doing any rules for StoreVar...
-            // Why? Don't we want to poison them?
-
-            // TODO: anything else that stores into a string has to get added here as well?
-
-            // TODO: Do the same for Sub, GSub, Split*
-            Match(_, _, pat) | IsMatch(_, _, pat) if *query_regex => {
-                self.add_query(pat);
-            }
-
-            _ => {}
+            }),
+            _ => dataflow::boilerplate::visit_ll(inst, |dst, _| {
+                self.dfa.add_src(dst, ApproximateSet::unknown());
+            }),
         }
     }
-    pub(crate) fn visit_hl(&mut self, inst: &HighLevel) {
-        use HighLevel::*;
-        match inst {
-            Phi(dst, ty, preds) => {
-                let dst_node = self.get_node(Key::Reg(*dst, *ty));
-                for (_, pred_reg) in preds.iter() {
-                    let pred_node = self.get_node(Key::Reg(*pred_reg, *ty));
-                    self.flows.add_edge(dst_node, pred_node, ());
-                }
-            }
-            _ => {}
-        }
+    pub(crate) fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
+        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |dst, src| {
+            self.dfa.add_dep(dst, src.unwrap(), ())
+        })
     }
     fn get_id(&mut self, s: &'a [u8]) -> usize {
-        let len = self.intern_l.len();
+        // 0 is a sentinel value
+        let next_id = self.intern_l.len() + 1;
         let l = &mut self.intern_l;
         let r = &mut self.intern_r;
         *l.entry(s).or_insert_with(|| {
-            r.insert(len, s);
-            len
+            r.insert(next_id, s);
+            next_id
         })
     }
-    fn get_node(&mut self, k: impl Into<Key>) -> NodeIx {
-        let flows = &mut self.flows;
-        *self
-            .reg_map
-            .entry(k.into())
-            .or_insert_with(|| flows.add_node(Default::default()))
+
+    fn possible_strings_inner(&mut self, k: impl Into<Key>, res: &mut Vec<&'a [u8]>) -> bool /* known */
+    {
+        let intern_r = &self.intern_r;
+        let q = self.dfa.query(k);
+        if q.0.is_none() {
+            return false;
+        }
+        res.extend(q.iter().map(|x| intern_r.get(x).cloned().unwrap_or(&[])));
+        true
     }
 
     pub fn possible_strings(&mut self, k: impl Into<Key>, res: &mut Vec<&'a [u8]>) {
-        self.solve();
-        res.extend(
-            self.flows
-                .node_weight(self.reg_map[&k.into()])
-                .unwrap()
-                .iter()
-                .map(|x| self.intern_r[x].clone()),
-        )
+        self.possible_strings_inner(k, res);
     }
 
-    pub fn add_query(&mut self, k: impl Into<Key>) {
-        let ix = self.get_node(k.into());
-        self.wl.insert(ix);
-    }
-
-    fn populate(&mut self) {
-        let sentinel = self.sentinel;
-        for node in self.wl.iter() {
-            self.flows.add_edge(sentinel, node, ());
-        }
-        let mut dfs = Dfs::new(&self.flows, sentinel);
-        while let Some(ix) = dfs.next(&self.flows) {
-            self.wl.insert(ix);
-            // check if there are any neighbors?
-            if self.flows.neighbors(ix).next().is_none() {
-                // If we're at a leaf, then "sour" it to ensure it poisons any downstream
-                // definitions. If this leaf node has some information in it, souring does nothing.
-                // I don't think it's the best metaphor to be honest, but it's an API that doesn't
-                // extend beyond this module.
-                self.flows.node_weight_mut(ix).unwrap().sour();
-            }
-        }
-    }
-
-    fn solve(&mut self) {
-        self.populate();
-        while let Some(n) = self.wl.pop() {
-            let mut cur = mem::replace(self.flows.node_weight_mut(n).unwrap(), Default::default());
-            let mut changed = false;
-            for n in self.flows.neighbors_directed(n, Direction::Outgoing) {
-                changed |= cur.merge(self.flows.node_weight(n).unwrap());
-            }
-            if changed {
-                for n in self.flows.neighbors_directed(n, Direction::Incoming) {
-                    self.wl.insert(n)
+    pub fn fi_info(&mut self, cols: &mut Vec<&'a [u8]>) -> bool /* known */ {
+        match &self.dfa.query(Key::VarVal(Variable::FI)).0 {
+            Some(ids) => {
+                if ids.len() == 0 || (ids.len() == 1 && ids.contains(&0 /*sentinel*/)) {
+                    self.possible_strings_inner(Key::VarKey(Variable::FI), cols)
+                } else {
+                    false
                 }
             }
-            mem::swap(&mut cur, self.flows.node_weight_mut(n).unwrap());
+            // The analysis isn't able to give a nontrivial upper bound on the strings passed to
+            // FI as values.
+            None => false,
         }
     }
 }
