@@ -213,9 +213,10 @@ pub(crate) fn run_llvm<'a>(
     use crate::llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     let used_fields = typer.used_fields.clone();
+    let named_cols = typer.named_columns.take();
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main(reader, ff, &used_fields, cfg.num_workers)
+        gen.run_main(reader, ff, &used_fields, named_cols, cfg.num_workers)
     }
 }
 
@@ -493,6 +494,7 @@ impl<'a> Typer<'a> {
         num_workers: usize,
     ) -> Result<bytecode::Interp<'a, LR>> {
         let instrs = self.to_bytecode()?;
+        let cols = self.named_columns.take();
         Ok(bytecode::Interp::new(
             instrs,
             self.stage(),
@@ -501,6 +503,7 @@ impl<'a> Typer<'a> {
             reader,
             ff,
             &self.used_fields,
+            cols,
         ))
     }
 
@@ -679,11 +682,11 @@ impl<'a> Typer<'a> {
         if !pc.allow_arbitrary_commands {
             gen.taint_analysis = Some(Default::default());
         }
-        if pc.fold_regex_constants {
+        if pc.fold_regex_constants || pc.parse_header {
             gen.string_constants = Some(StringConstantAnalysis::from_config(
                 string_constants::Config {
-                    query_regex: true,
-                    fi_refs: false,
+                    query_regex: pc.fold_regex_constants,
+                    fi_refs: pc.parse_header,
                 },
             ));
         }
@@ -1381,6 +1384,8 @@ impl<'a, 'b> View<'a, 'b> {
                     }
                 }
             }
+            UpdateUsedFields => self.pushl(LL::UpdateUsedFields()),
+            SetFI => self.pushl(LL::SetFI(conv_regs[0].into(), conv_regs[1].into())),
             System => {
                 if res_reg == UNUSED {
                     res_reg = self.regs.stats.reg_of_ty(res_ty);

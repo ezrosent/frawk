@@ -446,6 +446,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         stdin: LR,
         ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
+        named_columns: Option<Vec<&[u8]>>,
     ) -> Self {
         use compile::Ty::*;
         Interp {
@@ -459,7 +460,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             core: Core::new(ff),
 
             line: Default::default(),
-            read_files: runtime::FileRead::new(stdin, used_fields),
+            read_files: runtime::FileRead::new(stdin, used_fields.clone(), named_columns),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -1227,6 +1228,21 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     NextFile() => {
                         self.read_files.next_file()?;
                         self.reset_file_vars();
+                    }
+                    UpdateUsedFields() => {
+                        let fi = &self.core.vars.fi;
+                        self.read_files.update_named_columns(fi);
+                    }
+                    SetFI(key, val) => {
+                        let key = *index(&self.ints, key);
+                        let val = *index(&self.ints, val);
+                        let col = self.line.get_col(
+                            key,
+                            &self.core.vars.fs,
+                            &self.core.vars.ofs,
+                            &mut self.core.regexes,
+                        )?;
+                        self.core.vars.fi.insert(col, val);
                     }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;

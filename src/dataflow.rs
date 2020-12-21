@@ -321,7 +321,7 @@ pub(crate) mod boilerplate {
                 key,
             } => {
                 // lookups are also writes to the keys
-                f(Key::MapKey(*map, *map_ty), Some(Key::Reg(*key, map_ty.val().unwrap())));
+                f(Key::MapKey(*map, *map_ty), Some(Key::Reg(*key, map_ty.key().unwrap())));
                 // a null value will be inserted as a value into the map
                 f(Key::MapVal(*map, *map_ty), None);
                 f(Key::Reg(*dst, map_ty.val().unwrap()), Some(Key::MapVal(*map, *map_ty)))
@@ -363,6 +363,8 @@ pub(crate) mod boilerplate {
             StoreSlot{ty,slot,src} =>
                 f(Key::Slot(u32::try_from(*slot).expect("slot too large"), *ty), Some(Key::Reg(*src, *ty))),
             Delete{..}
+            | UpdateUsedFields()
+            | SetFI(..)
             | PrintAll{..}
             | Contains{..} // 0 or 1
             | IterHasNext{..}

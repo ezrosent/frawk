@@ -84,16 +84,22 @@ macro_rules! fail {
     }}
 }
 
+#[derive(Clone)]
+struct PreludeScalars {
+    arbitrary_shell: bool,
+    fold_regexes: bool,
+    parse_header: bool,
+    escaper: Escaper,
+    stage: Stage<()>,
+}
+
 struct RawPrelude {
     argv: Vec<String>,
     var_decs: Vec<String>,
     field_sep: Option<String>,
     output_sep: Option<&'static str>,
     output_record_sep: Option<&'static str>,
-    arbitrary_shell: bool,
-    fold_regexes: bool,
-    escaper: Escaper,
-    stage: Stage<()>,
+    scalars: PreludeScalars,
 }
 
 struct Prelude<'a> {
@@ -102,10 +108,7 @@ struct Prelude<'a> {
     output_sep: Option<&'a [u8]>,
     output_record_sep: Option<&'a [u8]>,
     argv: Vec<&'a str>,
-    arbitrary_shell: bool,
-    fold_regexes: bool,
-    escaper: Escaper,
-    stage: Stage<()>,
+    scalars: PreludeScalars,
 }
 
 // TODO: make file reading lazy
@@ -184,12 +187,9 @@ fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
     Prelude {
         field_sep,
         var_decs: get_vars(raw.var_decs.iter().map(|s| s.as_str()), a, &mut buf),
-        escaper: raw.escaper,
+        scalars: raw.scalars.clone(),
         output_sep,
         output_record_sep,
-        arbitrary_shell: raw.arbitrary_shell,
-        fold_regexes: raw.fold_regexes,
-        stage: raw.stage.clone(),
         argv: raw.argv.iter().map(|s| a.alloc_str(s.as_str())).collect(),
     }
 }
@@ -203,7 +203,7 @@ fn get_context<'a>(
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = parsing::syntax::ProgParser::new();
-    let mut prog = ast::Prog::from_stage(prelude.stage.clone());
+    let mut prog = ast::Prog::from_stage(prelude.scalars.stage.clone());
     prog.argv = std::mem::replace(&mut prelude.argv, Default::default());
     let stmt = match parser.parse(a, &mut buf, &mut prog, lexer) {
         Ok(()) => {
@@ -211,16 +211,17 @@ fn get_context<'a>(
             prog.prelude_vardecs = prelude.var_decs;
             prog.output_sep = prelude.output_sep;
             prog.output_record_sep = prelude.output_record_sep;
+            prog.parse_header = prelude.scalars.parse_header;
             a.alloc_v(prog)
         }
         Err(e) => {
             fail!("{}", e);
         }
     };
-    match cfg::ProgramContext::from_prog(a, stmt, prelude.escaper) {
+    match cfg::ProgramContext::from_prog(a, stmt, prelude.scalars.escaper) {
         Ok(mut ctx) => {
-            ctx.allow_arbitrary_commands = prelude.arbitrary_shell;
-            ctx.fold_regex_constants = prelude.fold_regexes;
+            ctx.allow_arbitrary_commands = prelude.scalars.arbitrary_shell;
+            ctx.fold_regex_constants = prelude.scalars.fold_regexes;
             ctx
         }
         Err(e) => fail!("failed to create program context: {}", e),
@@ -317,6 +318,11 @@ fn main() {
         .arg("--utf8 'validate all input as UTF-8, returning an error if it is invalid'")
         .arg("--dump-cfg 'print untyped SSA form for input program'")
         .arg("--dump-bytecode 'print bytecode for input program'")
+        .arg(Arg::new("parse-header")
+             .long("parse-header")
+             .short('H')
+             .takes_value(false)
+             .about("consume the first line of input and populate the `FI` variable with column names mapping to column indexes"))
         .arg(Arg::new("input-format")
              .long("input-format")
              .short('i')
@@ -430,6 +436,7 @@ fn main() {
         None => (Escaper::Identity, None, None),
     };
     let arbitrary_shell = matches.is_present("arbitrary-shell");
+    let parse_header = matches.is_present("parse-header");
 
     let mut opt_level: i32 = match matches.value_of("opt-level") {
         Some("3") => 3,
@@ -447,11 +454,14 @@ fn main() {
             .map(|x| x.map(String::from).collect())
             .unwrap_or_else(Vec::new),
         output_sep,
-        escaper,
-        arbitrary_shell,
-        fold_regexes: opt_level >= 3,
+        scalars: PreludeScalars {
+            escaper,
+            arbitrary_shell,
+            fold_regexes: opt_level >= 3,
+            stage: exec_strategy.stage(),
+            parse_header,
+        },
         output_record_sep,
-        stage: exec_strategy.stage(),
         argv,
     };
     let opt_dump_bytecode = matches.is_present("dump-bytecode");

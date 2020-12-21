@@ -146,7 +146,6 @@ impl TaintedStringAnalysis {
 
 #[cfg(test)]
 mod tests {
-    use crate::common::Result;
     use crate::harness::program_compiles;
 
     fn assert_analysis_reject(p: &str) {

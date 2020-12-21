@@ -182,6 +182,8 @@ impl Display for Function {
             Srand => write!(f, "srand"),
             ReseedRng => write!(f, "srand_reseed"),
             System => write!(f, "system"),
+            UpdateUsedFields => write!(f, "update_used_fields"),
+            SetFI => write!(f, "set-FI"),
         }
     }
 }

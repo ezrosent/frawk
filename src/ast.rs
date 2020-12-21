@@ -66,6 +66,57 @@ pub struct Prog<'a, 'b, I> {
     pub pats: Vec<(Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
     pub stage: Stage<()>,
     pub argv: Vec<&'b str>,
+    pub parse_header: bool,
+}
+
+fn parse_header<'a, 'b, I: From<&'b str> + Clone>(
+    arena: &'a Arena,
+    begin: &mut Vec<&'a Stmt<'a, 'b, I>>,
+) {
+    use {self::Expr::*, Stmt::*};
+    // Pick an illegal frawk identifier.
+    const LOOP_VAR: &'static str = "--";
+    // Append the following to begin:
+    // if (getline > 0) {
+    //  for (LOOP_VAR=1; LOOP_VAR <= NF; ++LOOP_VAR)
+    //      FI[$LOOP_VAR] = LOOP_VAR;
+    //  update_used_fields()
+    // }
+
+    let loop_var = arena.alloc_v(Var(LOOP_VAR.into()));
+    let init = arena.alloc_v(Expr(
+        arena.alloc_v(Assign(loop_var, arena.alloc_v(ILit(1)))),
+    ));
+    let cond = arena.alloc_v(Binop(
+        self::Binop::LTE,
+        loop_var,
+        arena.alloc_v(Var("NF".into())),
+    ));
+    let update = arena.alloc_v(Expr(arena.alloc_v(Inc {
+        is_inc: true,
+        is_post: false,
+        x: loop_var,
+    })));
+    let body = arena.alloc_v(Expr(arena.alloc_v(Call(
+        Either::Right(Function::SetFI),
+        vec![loop_var, loop_var],
+    ))));
+
+    let block = vec![
+        arena.alloc_v(For(Some(init), Some(cond), Some(update), body)),
+        arena.alloc_v(Expr(
+            arena.alloc_v(Call(Either::Right(Function::UpdateUsedFields), vec![])),
+        )),
+    ];
+    begin.push(arena.alloc_v(If(
+        arena.alloc_v(Binop(
+            self::Binop::GT,
+            arena.alloc_v(ReadStdin),
+            arena.alloc_v(ILit(0)),
+        )),
+        arena.alloc_v(Block(block)),
+        /*else*/ None,
+    )));
 }
 
 impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
@@ -81,6 +132,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             end: None,
             pats: Default::default(),
             argv: Default::default(),
+            parse_header: false,
             stage,
         }
     }
@@ -102,6 +154,12 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                 arena.alloc_v(StrLit(sep)),
             )))));
         }
+
+        // for -H
+        if self.parse_header {
+            parse_header(arena, &mut begin);
+        }
+
         // Support "output csv/tsv" mode
         if let Some(sep) = self.output_sep {
             begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(

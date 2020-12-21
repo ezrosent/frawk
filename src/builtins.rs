@@ -48,6 +48,9 @@ pub enum Function {
     Srand,
     ReseedRng,
     System,
+    // For header-parsing logic
+    UpdateUsedFields,
+    SetFI,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -422,7 +425,7 @@ impl Function {
             }
             NextlineCmd | Nextline => (smallvec![Str], Str),
             ReadErrCmd | ReadErr => (smallvec![Str], Int),
-            NextFile | ReadLineStdinFused => (smallvec![], Int),
+            UpdateUsedFields | NextFile | ReadLineStdinFused => (smallvec![], Int),
             NextlineStdin => (smallvec![], Str),
             ReadErrStdin => (smallvec![], Int),
             // irrelevant return type
@@ -443,6 +446,7 @@ impl Function {
             }
             JoinCols => (smallvec![Int, Int, Str], Str),
             JoinCSV | JoinTSV => (smallvec![Int, Int], Str),
+            SetFI => (smallvec![Int, Int], Int),
         })
     }
 
@@ -451,16 +455,16 @@ impl Function {
         Some(match self {
             FloatFunc(ff) => ff.arity(),
             IntFunc(bw) => bw.arity(),
-            Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
+            UpdateUsedFields | Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile
+            | ReadLineStdinFused => 0,
             Srand | System | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length
             | ReadErr | ReadErrCmd | Nextline | NextlineCmd | Unop(_) => 1,
-            SubstrIndex | Match | Setcol | Binop(_) => 2,
+            SetFI | SubstrIndex | Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
             JoinCols | Substr | Sub | GSub | Split => 3,
         })
     }
 
-    // TODO(ezr): rename this once old types module is gone
     pub(crate) fn step(&self, args: &[types::State]) -> Result<types::State> {
         use {
             ast::{Binop::*, Unop::*},
@@ -496,7 +500,7 @@ impl Function {
             | Binop(Concat) | Nextline | NextlineCmd | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())
             }
-            NextFile | ReadLineStdinFused | Close => Ok(None),
+            SetFI | UpdateUsedFields | NextFile | ReadLineStdinFused | Close => Ok(None),
         }
     }
 }

@@ -182,6 +182,10 @@ pub(crate) enum Instr<'a> {
     NextLineStdinFused(),
     // Advances early to the next file in our sequence
     NextFile(),
+    UpdateUsedFields(),
+    // Set the corresponding index in the FI variable. This is equivalent of loading FI, but we
+    // keep this as a separate instruction to make static analysis easier.
+    SetFI(Reg<Int>, Reg<Int>),
 
     // Split
     SplitInt(
@@ -757,7 +761,12 @@ impl<'a> Instr<'a> {
             JmpIf(cond, _lbl) => cond.accum(&mut f),
             Push(ty, reg) => f(*reg, *ty),
             Pop(ty, reg) => f(*reg, *ty),
-            NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret | Halt => {}
+            SetFI(key, val) => {
+                key.accum(&mut f);
+                val.accum(&mut f);
+            }
+            UpdateUsedFields() | NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret
+            | Halt => {}
         }
     }
 }

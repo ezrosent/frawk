@@ -6,6 +6,7 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io;
 use std::iter::FromIterator;
+use std::mem;
 use std::process::ChildStdout;
 use std::rc::Rc;
 use std::str;
@@ -421,6 +422,9 @@ pub(crate) struct Inputs {
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
     pub(crate) inputs: Inputs,
     stdin: LR,
+    named_columns: Option<Vec<Str<'static>>>,
+    used_fields: FieldSet,
+    backup_used_fields: FieldSet,
 }
 
 impl<LR: LineReader> FileRead<LR> {
@@ -429,9 +433,13 @@ impl<LR: LineReader> FileRead<LR> {
             .request_handles(size)
             .into_iter()
             .map(|x| {
+                let fields = self.used_fields.clone();
                 move || FileRead {
                     inputs: Default::default(),
                     stdin: x(),
+                    named_columns: None,
+                    used_fields: fields.clone(),
+                    backup_used_fields: fields.clone(),
                 }
             })
             .collect()
@@ -441,16 +449,45 @@ impl<LR: LineReader> FileRead<LR> {
         self.inputs.files.remove(path);
     }
 
-    pub(crate) fn new(stdin: LR, used_fields: &FieldSet) -> FileRead<LR> {
+    pub(crate) fn new(
+        stdin: LR,
+        used_fields: FieldSet,
+        named_columns: Option<Vec<&[u8]>>,
+    ) -> FileRead<LR> {
+        let backup_used_fields = used_fields;
+        let used_fields = if named_columns.is_some() {
+            FieldSet::all()
+        } else {
+            backup_used_fields.clone()
+        };
         let mut res = FileRead {
             inputs: Default::default(),
             stdin,
+            used_fields,
+            backup_used_fields,
+            named_columns: named_columns
+                .map(|cs| cs.into_iter().map(|s| Str::from(s).unmoor()).collect()),
         };
-        res.stdin.set_used_fields(used_fields);
+        res.stdin.set_used_fields(&res.used_fields);
         res
     }
 
-    // pub(crate) fn update_named_columns(&mut self)
+    pub(crate) fn update_named_columns<'a>(&mut self, fi: &StrMap<'a, Int>) {
+        mem::swap(&mut self.used_fields, &mut self.backup_used_fields);
+        if !self.used_fields.has_fi() {
+            return;
+        }
+        let cols = if let Some(cols) = &self.named_columns {
+            cols
+        } else {
+            return;
+        };
+        for c in cols.iter() {
+            let c_borrow: &Str<'a> = c.upcast_ref();
+            self.used_fields.set(fi.get(c_borrow).unwrap_or(0) as usize)
+        }
+        self.stdin.set_used_fields(&self.used_fields)
+    }
 
     pub(crate) fn stdin_filename(&self) -> Str<'static> {
         self.stdin.filename()

@@ -350,9 +350,10 @@ impl<'a, 'b> Generator<'a, 'b> {
         stdin: impl IntoRuntime,
         ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
+        named_columns: Option<Vec<&[u8]>>,
         num_workers: usize,
     ) -> Result<()> {
-        let mut rt = stdin.into_runtime(ff, used_fields);
+        let mut rt = stdin.into_runtime(ff, used_fields, named_columns);
         let main = self.gen_main()?;
         self.verify()?;
         self.optimize(main.iter().map(|(_, x)| x).cloned())?;
@@ -1899,6 +1900,17 @@ impl<'a> View<'a> {
             }
             NextFile() => {
                 self.call("next_file", &mut [self.runtime_val()]);
+            }
+            UpdateUsedFields() => {
+                self.call("update_used_fields", &mut [self.runtime_val()]);
+            }
+            SetFI(key, val) => {
+                // We could probably get away without an extra intrinsic here, but this way we can
+                // avoid repeated refs and drops of the FI variable outside of the existing
+                // framework for performing refs and drops.
+                let keyv = self.get_local(key.reflect())?;
+                let valv = self.get_local(val.reflect())?;
+                self.call("set_fi_entry", &mut [self.runtime_val(), keyv, valv]);
             }
             Lookup {
                 map_ty,

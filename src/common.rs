@@ -257,9 +257,6 @@ impl<T: Clone + Hash + Eq> WorkList<T> {
         debug_assert!(_was_there);
         Some(next)
     }
-    pub(crate) fn iter(&mut self) -> impl Iterator<Item = T> + '_ {
-        self.mem.iter().cloned()
-    }
 }
 
 /// Notification is a simple object used to synchronize multiple threads around a single event

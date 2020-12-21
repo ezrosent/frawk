@@ -95,16 +95,6 @@ impl<'a> StringConstantAnalysis<'a> {
             res.dfa.add_query(Key::VarKey(Variable::FI));
             res.dfa.add_query(Key::VarVal(Variable::FI));
         }
-        // if fi_refs is set:
-        //   TODO: add a UFA targetting FI's values (or at least poison writes into FI)
-        //   how to poison? query FI[vals], and look for unknown() (or anything non-zero?
-        //          unclear if that will work, need for lookups to write in a sentinel value, and
-        //          then you check for either nothing, or exactly that sentinel in the possible
-        //          values list.
-        //
-        //          Or maybe it doesn't matter? we just need to add all of the possible values
-        //          stored into the list of used fields.
-        //   )
         res
     }
     pub(crate) fn visit_ll(&mut self, inst: &Instr<'a>) {
@@ -123,6 +113,7 @@ impl<'a> StringConstantAnalysis<'a> {
             // Note that variables can be set "out of band", so by default we aren't treating them
             // as standard registers.
             StoreVarStrMap(Variable::FI, _)
+            | LoadVarStrMap(_, Variable::FI)
             | Lookup { .. }
             | Store { .. }
             | IterBegin { .. }
@@ -181,8 +172,8 @@ impl<'a> StringConstantAnalysis<'a> {
                     false
                 }
             }
-            // The analysis isn't able to give a nontrivial upper bound on the strings passed to
-            // FI as values.
+            // The analysis detected nontrivial writes into FI during execution. That's legal, but
+            // we don't try and model it for the purposes of this analysis.
             None => false,
         }
     }
