@@ -456,6 +456,9 @@ impl<LR: LineReader> FileRead<LR> {
     ) -> FileRead<LR> {
         let backup_used_fields = used_fields;
         let used_fields = if named_columns.is_some() {
+            // In header-parsing mode we parse all columns until `update_named_columns` is called
+            // to ensure that we parse the entire header. Otherwise we just use the same field set
+            // as before.
             FieldSet::all()
         } else {
             backup_used_fields.clone()
@@ -473,15 +476,30 @@ impl<LR: LineReader> FileRead<LR> {
     }
 
     pub(crate) fn update_named_columns<'a>(&mut self, fi: &StrMap<'a, Int>) {
-        mem::swap(&mut self.used_fields, &mut self.backup_used_fields);
-        if !self.used_fields.has_fi() {
+        let referenced_fi = self.backup_used_fields.has_fi();
+        let have_columns = self.named_columns.is_some();
+
+        // if we referenced FI, but we weren't able to analyze the columns accessed through FI,
+        // then keep the blanket used-fields set; we can't say anything more about them.
+        if referenced_fi && !have_columns {
             return;
         }
-        let cols = if let Some(cols) = &self.named_columns {
-            cols
-        } else {
+
+        // Switch back to the original used-field set.
+        mem::swap(&mut self.used_fields, &mut self.backup_used_fields);
+
+        // We didn't use FI to reference columns, perhaps just using -H to trim the header.
+        //
+        // NB: We could optimize for this case, but given that we only ever read a single line of
+        // input that's probably more trouble than it's worth.
+        if !referenced_fi {
             return;
-        };
+        }
+
+        // We failed the initial check, and referenced_fi is true, so we must have columns.
+        let cols = self.named_columns.as_ref().unwrap();
+
+        // Merge in the named column indexes into our used-field list.
         for c in cols.iter() {
             let c_borrow: &Str<'a> = c.upcast_ref();
             self.used_fields.set(fi.get(c_borrow).unwrap_or(0) as usize)
