@@ -339,25 +339,24 @@ pub(crate) mod boilerplate {
             }
             LoadVarStr(dst, v) => f(dst.into(), Some(Key::Var(*v))),
             LoadVarInt(dst, v) => f(dst.into(), Some(Key::Var(*v))),
-            LoadVarIntMap(dst, v) => {
-                let (dst_reg, dst_ty) = dst.reflect();
+            StoreVarIntMap(v, reg) | LoadVarIntMap(reg, v) => {
+                let (reg, ty) = reg.reflect();
 
-                f(Key::MapKey(dst_reg, dst_ty), Some(Key::VarKey(*v)));
-                f(Key::MapVal(dst_reg, dst_ty), Some(Key::VarVal(*v)));
-                f(Key::VarKey(*v), Some(Key::MapKey(dst_reg, dst_ty)));
-                f(Key::VarVal(*v), Some(Key::MapVal(dst_reg, dst_ty)));
+                f(Key::MapKey(reg, ty), Some(Key::VarKey(*v)));
+                f(Key::MapVal(reg, ty), Some(Key::VarVal(*v)));
+                f(Key::VarKey(*v), Some(Key::MapKey(reg, ty)));
+                f(Key::VarVal(*v), Some(Key::MapVal(reg, ty)));
             },
-            LoadVarStrMap(dst, v) => {
-                let (dst_reg, dst_ty) = dst.reflect();
-                f(Key::MapKey(dst_reg, dst_ty), Some(Key::VarKey(*v)));
-                f(Key::MapVal(dst_reg, dst_ty), Some(Key::VarVal(*v)));
-                f(Key::VarKey(*v), Some(Key::MapKey(dst_reg, dst_ty)));
-                f(Key::VarVal(*v), Some(Key::MapVal(dst_reg, dst_ty)));
+            StoreVarStrMap(v, reg) | LoadVarStrMap(reg, v) => {
+                let (reg, ty) = reg.reflect();
+
+                f(Key::MapKey(reg, ty), Some(Key::VarKey(*v)));
+                f(Key::MapVal(reg, ty), Some(Key::VarVal(*v)));
+                f(Key::VarKey(*v), Some(Key::MapKey(reg, ty)));
+                f(Key::VarVal(*v), Some(Key::MapVal(reg, ty)));
             },
             StoreVarStr(v, src) => f(Key::Var(*v), Some(src.into())),
             StoreVarInt(v, src) => f(Key::Var(*v), Some(src.into())),
-            StoreVarIntMap(v, src) => f(Key::Var(*v), Some(src.into())),
-            StoreVarStrMap(v, src) => f(Key::Var(*v), Some(src.into())),
             LoadSlot{ty,slot,dst} =>
                 f(Key::Reg(*dst, *ty), Some(Key::Slot(u32::try_from(*slot).expect("slot too large"), *ty))),
             StoreSlot{ty,slot,src} =>

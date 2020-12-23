@@ -227,6 +227,7 @@ impl Default for UsedFieldAnalysis {
             dfa: Default::default(),
             joins: Default::default(),
         };
+        res.dfa.add_src(Key::Rng, FieldSet::all());
         res.dfa.add_src(Key::VarVal(Variable::FI), FieldSet::fi());
         res.dfa.add_src(Key::VarKey(Variable::FI), FieldSet::all());
         res

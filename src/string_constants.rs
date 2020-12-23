@@ -1,8 +1,8 @@
 //! A simple data-flow analysis for finding string constants.
 //!
-//! This analysis is currently used to perform constant folding on regular expressions, but it may
-//! be used for more things in the future. It largely follows the structure of the analysis in
-//! `pushdown.rs`.
+//! This analysis is currently used to perform constant folding on regular expressions, and
+//! tracking accesses to the `FI` builtin variable for help in increasing the precision in the
+//! used-field analysis when passing the -H flag.
 use crate::builtins::Variable;
 use crate::bytecode::Instr;
 use crate::common::NumTy;
@@ -59,8 +59,6 @@ pub(crate) struct StringConstantAnalysis<'a> {
     intern_r: HashMap<usize, &'a [u8]>,
     dfa: dataflow::Analysis<ApproximateSet>,
     cfg: Config,
-    //   TODO: query FI's keys
-    //   TODO: return "unknown" if there are any writes into FI
 }
 
 pub(crate) struct Config {
@@ -69,16 +67,6 @@ pub(crate) struct Config {
     // Collect the strings used to query FI, for the purpose of doing pushdown on named columns
     pub fi_refs: bool,
 }
-
-// TODO: need to model all dataflow, see
-//   'function unused() { print x; } BEGIN { x = "hi"; x=ARGV[0]; print("h" ~ x); } '
-// unused forces x to be global.
-// This folds to "h" ~ "hi" currently
-//
-// Similar bug occurs with used fields:
-//  head ../frawk-scratch/scratch/Data8277.csv | target/debug/frawk -icsv 'function unused() { print x; } { x=2; x=NF; print $x; }'
-//
-// prints nothing; even though the last field is populated.
 
 impl<'a> StringConstantAnalysis<'a> {
     pub(crate) fn cfg(&self) -> &Config {
@@ -91,6 +79,7 @@ impl<'a> StringConstantAnalysis<'a> {
             dfa: Default::default(),
             cfg,
         };
+        res.dfa.add_src(Key::Rng, ApproximateSet::unknown());
         if res.cfg.fi_refs {
             res.dfa.add_query(Key::VarKey(Variable::FI));
             res.dfa.add_query(Key::VarVal(Variable::FI));
