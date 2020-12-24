@@ -107,6 +107,7 @@ pub(crate) trait IntoRuntime {
         self,
         ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
+        named_columns: Option<Vec<&[u8]>>,
     ) -> Runtime<'a>;
 }
 
@@ -117,12 +118,13 @@ macro_rules! impl_into_runtime {
                 self,
                 ff: impl runtime::writers::FileFactory,
                 used_fields: &FieldSet,
+                named_columns: Option<Vec<&[u8]>>,
             ) -> Runtime<'a> {
                 Runtime {
                     concurrent: false,
                     input_data: InputData::$var((
                         Default::default(),
-                        FileRead::new(self, used_fields),
+                        FileRead::new(self, used_fields.clone(), named_columns),
                     )),
                     core: crate::interp::Core::new(ff),
                 }
@@ -314,6 +316,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         next_line_stdin(rt_ty) -> str_ty;
         next_line_stdin_fused(rt_ty);
         next_file(rt_ty);
+        update_used_fields(rt_ty);
+        set_fi_entry(rt_ty, int_ty, int_ty);
 
         [ReadOnly, ArgmemOnly] _frawk_atan(float_ty) -> float_ty;
         [ReadOnly, ArgmemOnly] _frawk_atan2(float_ty, float_ty) -> float_ty;
@@ -324,6 +328,8 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         store_var_int(rt_ty, int_ty, int_ty);
         [ReadOnly] load_var_intmap(rt_ty, int_ty) -> map_ty;
         store_var_intmap(rt_ty, int_ty, map_ty);
+        [ReadOnly] load_var_strmap(rt_ty, int_ty) -> map_ty;
+        store_var_strmap(rt_ty, int_ty, map_ty);
 
         [ReadOnly] str_lt(str_ref_ty, str_ref_ty) -> int_ty;
         [ReadOnly] str_gt(str_ref_ty, str_ref_ty) -> int_ty;
@@ -522,6 +528,23 @@ pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_f
         Ok(res) => mem::transmute::<Str, U128>(res),
         Err(_) => mem::transmute::<Str, U128>("".into()),
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
+    let runtime = &mut *(runtime as *mut Runtime);
+    let fi = &runtime.core.vars.fi;
+    with_input!(&mut runtime.input_data, |(_, read_files)| {
+        read_files.update_named_columns(fi);
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn set_fi_entry(runtime: *mut c_void, key: Int, val: Int) {
+    let rt = &mut *(runtime as *mut Runtime);
+    let fi = &rt.core.vars.fi;
+    let k = mem::transmute::<U128, Str>(get_col(runtime, key));
+    fi.insert(k, val);
 }
 
 #[no_mangle]
@@ -933,6 +956,29 @@ pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
         try_abort!(runtime, runtime.core.vars.store_intmap(var, map.clone()));
+        mem::forget(map);
+    } else {
+        fail!(runtime, "invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void {
+    let runtime = &*(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        let res = try_abort!(runtime, runtime.core.vars.load_strmap(var));
+        mem::transmute::<StrMap<_>, *mut c_void>(res)
+    } else {
+        fail!(runtime, "invalid variable code={}", var)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut c_void) {
+    let runtime = &mut *(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        let map = mem::transmute::<*mut c_void, StrMap<Int>>(map);
+        try_abort!(runtime, runtime.core.vars.store_strmap(var, map.clone()));
         mem::forget(map);
     } else {
         fail!(runtime, "invalid variable code={}", var)

@@ -6,6 +6,7 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io;
 use std::iter::FromIterator;
+use std::mem;
 use std::process::ChildStdout;
 use std::rc::Rc;
 use std::str;
@@ -413,9 +414,17 @@ pub(crate) struct Inputs {
     commands: Registry<RegexSplitter<ChildStdout>>,
 }
 
+// TODO: save used_fields
+// TODO: save columns
+// TODO: supply an "update used fields" that takes FI
+//
+
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
     pub(crate) inputs: Inputs,
     stdin: LR,
+    named_columns: Option<Vec<Str<'static>>>,
+    used_fields: FieldSet,
+    backup_used_fields: FieldSet,
 }
 
 impl<LR: LineReader> FileRead<LR> {
@@ -424,9 +433,13 @@ impl<LR: LineReader> FileRead<LR> {
             .request_handles(size)
             .into_iter()
             .map(|x| {
+                let fields = self.used_fields.clone();
                 move || FileRead {
                     inputs: Default::default(),
                     stdin: x(),
+                    named_columns: None,
+                    used_fields: fields.clone(),
+                    backup_used_fields: fields.clone(),
                 }
             })
             .collect()
@@ -436,13 +449,62 @@ impl<LR: LineReader> FileRead<LR> {
         self.inputs.files.remove(path);
     }
 
-    pub(crate) fn new(stdin: LR, used_fields: &FieldSet) -> FileRead<LR> {
+    pub(crate) fn new(
+        stdin: LR,
+        used_fields: FieldSet,
+        named_columns: Option<Vec<&[u8]>>,
+    ) -> FileRead<LR> {
+        let backup_used_fields = used_fields;
+        let used_fields = if named_columns.is_some() {
+            // In header-parsing mode we parse all columns until `update_named_columns` is called
+            // to ensure that we parse the entire header. Otherwise we just use the same field set
+            // as before.
+            FieldSet::all()
+        } else {
+            backup_used_fields.clone()
+        };
         let mut res = FileRead {
             inputs: Default::default(),
             stdin,
+            used_fields,
+            backup_used_fields,
+            named_columns: named_columns
+                .map(|cs| cs.into_iter().map(|s| Str::from(s).unmoor()).collect()),
         };
-        res.stdin.set_used_fields(used_fields);
+        res.stdin.set_used_fields(&res.used_fields);
         res
+    }
+
+    pub(crate) fn update_named_columns<'a>(&mut self, fi: &StrMap<'a, Int>) {
+        let referenced_fi = self.backup_used_fields.has_fi();
+        let have_columns = self.named_columns.is_some();
+
+        // if we referenced FI, but we weren't able to analyze the columns accessed through FI,
+        // then keep the blanket used-fields set; we can't say anything more about them.
+        if referenced_fi && !have_columns {
+            return;
+        }
+
+        // Switch back to the original used-field set.
+        mem::swap(&mut self.used_fields, &mut self.backup_used_fields);
+
+        // We didn't use FI to reference columns, perhaps just using -H to trim the header.
+        //
+        // NB: We could optimize for this case, but given that we only ever read a single line of
+        // input that's probably more trouble than it's worth.
+        if !referenced_fi {
+            return;
+        }
+
+        // We failed the initial check, and referenced_fi is true, so we must have columns.
+        let cols = self.named_columns.as_ref().unwrap();
+
+        // Merge in the named column indexes into our used-field list.
+        for c in cols.iter() {
+            let c_borrow: &Str<'a> = c.upcast_ref();
+            self.used_fields.set(fi.get(c_borrow).unwrap_or(0) as usize)
+        }
+        self.stdin.set_used_fields(&self.used_fields)
     }
 
     pub(crate) fn stdin_filename(&self) -> Str<'static> {
@@ -656,16 +718,59 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
     }
 }
 
+// When sending SharedMaps across threads we have to clone them and clone their contents, as Rc is
+// not thread-safe (and we don't want to pay the cost of Arc clones during normal execution).
+pub(crate) struct Shuttle<T>(T);
+impl<'a> From<Shuttle<HashMap<Int, UniqueStr<'a>>>> for IntMap<Str<'a>> {
+    fn from(sh: Shuttle<HashMap<Int, UniqueStr<'a>>>) -> Self {
+        SharedMap(Rc::new(RefCell::new(
+            sh.0.into_iter().map(|(x, y)| (x, y.into_str())).collect(),
+        )))
+    }
+}
+
+impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
+    fn from(sh: Shuttle<HashMap<UniqueStr<'a>, Int>>) -> Self {
+        SharedMap(Rc::new(RefCell::new(
+            sh.0.into_iter().map(|(x, y)| (x.into_str(), y)).collect(),
+        )))
+    }
+}
+
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     pub(crate) fn get(&self, k: &K) -> Option<V> {
         self.0.borrow().get(k).cloned()
     }
 }
+
+impl<'a> IntMap<Str<'a>> {
+    pub(crate) fn shuttle(&self) -> Shuttle<HashMap<Int, UniqueStr<'a>>> {
+        Shuttle(
+            self.0
+                .borrow()
+                .iter()
+                .map(|(x, y)| (*x, UniqueStr::from(y.clone())))
+                .collect(),
+        )
+    }
+}
+
+impl<'a> StrMap<'a, Int> {
+    pub(crate) fn shuttle(&self) -> Shuttle<HashMap<UniqueStr<'a>, Int>> {
+        Shuttle(
+            self.0
+                .borrow()
+                .iter()
+                .map(|(x, y)| (UniqueStr::from(x.clone()), *y))
+                .collect(),
+        )
+    }
+}
+
 impl<K: Hash + Eq + Clone, V> SharedMap<K, V> {
     pub(crate) fn to_iter(&self) -> Iter<K> {
         self.0.borrow().keys().cloned().collect()
     }
-    #[cfg(feature = "llvm_backend")]
     pub(crate) fn to_vec(&self) -> Vec<K> {
         self.0.borrow().keys().cloned().collect()
     }

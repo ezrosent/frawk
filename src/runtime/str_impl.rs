@@ -318,6 +318,10 @@ impl<'a> UniqueStr<'a> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    // TODO: is this safe for INLINE values?
+    // Seems like we aren't guaranteed that inlines are valid for all of <'a>
+    // We probably just want to use Strs
     pub fn literal_bytes(&self) -> &'a [u8] {
         assert!(self.0.drop_is_trivial());
         unsafe { &*self.0.get_bytes() }

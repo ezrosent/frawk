@@ -182,6 +182,10 @@ pub(crate) enum Instr<'a> {
     NextLineStdinFused(),
     // Advances early to the next file in our sequence
     NextFile(),
+    UpdateUsedFields(),
+    // Set the corresponding index in the FI variable. This is equivalent of loading FI, but we
+    // keep this as a separate instruction to make static analysis easier.
+    SetFI(Reg<Int>, Reg<Int>),
 
     // Split
     SplitInt(
@@ -264,6 +268,8 @@ pub(crate) enum Instr<'a> {
     StoreVarInt(Variable, Reg<Int>),
     LoadVarIntMap(Reg<runtime::IntMap<Str<'a>>>, Variable),
     StoreVarIntMap(Variable, Reg<runtime::IntMap<Str<'a>>>),
+    LoadVarStrMap(Reg<runtime::StrMap<'a, Int>>, Variable),
+    StoreVarStrMap(Variable, Reg<runtime::StrMap<'a, Int>>),
 
     LoadSlot {
         ty: Ty,
@@ -723,6 +729,8 @@ impl<'a> Instr<'a> {
             StoreVarInt(_var, src) => src.accum(&mut f),
             LoadVarIntMap(dst, _var) => dst.accum(&mut f),
             StoreVarIntMap(_var, src) => src.accum(&mut f),
+            LoadVarStrMap(dst, _var) => dst.accum(&mut f),
+            StoreVarStrMap(_var, src) => src.accum(&mut f),
 
             LoadSlot { ty, dst, .. } => f(*dst, *ty),
             StoreSlot { ty, src, .. } => f(*src, *ty),
@@ -753,7 +761,12 @@ impl<'a> Instr<'a> {
             JmpIf(cond, _lbl) => cond.accum(&mut f),
             Push(ty, reg) => f(*reg, *ty),
             Pop(ty, reg) => f(*reg, *ty),
-            NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret | Halt => {}
+            SetFI(key, val) => {
+                key.accum(&mut f);
+                val.accum(&mut f);
+            }
+            UpdateUsedFields() | NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret
+            | Halt => {}
         }
     }
 }

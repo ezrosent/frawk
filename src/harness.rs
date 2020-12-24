@@ -261,6 +261,15 @@ pub(crate) fn bench_program(
     run_prog_nodebug(&mut interp, stdout)
 }
 
+pub(crate) fn program_compiles(prog: &str, allow_arbitrary: bool) -> Result<()> {
+    let a = Arena::default();
+    let esc = Escaper::Identity;
+    let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+    ctx.allow_arbitrary_commands = allow_arbitrary;
+    compile::context_compiles(&mut ctx)
+}
+
 pub(crate) fn used_fields(prog: &str) -> Result<FieldSet> {
     let a = Arena::default();
     let esc = Escaper::Identity;
@@ -567,6 +576,42 @@ mod tests {
         s1.set(6);
         s1.set(7);
         s1.set(8);
+        assert_eq!(s1, used_fields(p1).unwrap());
+    }
+
+    #[test]
+    fn used_fields_maps() {
+        let p1 = r#"{ m[1]=1; m[2]=3; y=m[8]; for (i in m) print $i; }"#;
+        let mut s1 = FieldSet::singleton(1);
+        s1.set(2);
+        s1.set(8);
+        assert_eq!(s1, used_fields(p1).unwrap());
+
+        let p2 = r#"{ m[1]=1; m[2]=3; y=m[8]; for (i in m) print $m[i]; }"#;
+        let mut s2 = FieldSet::singleton(1);
+        s2.set(3);
+        s2.set(0);
+        assert_eq!(s2, used_fields(p2).unwrap());
+
+        let p3 = r#"{ m[1]=1; m[2]=3; print $m[$2]; }"#;
+        s2.set(2);
+        assert_eq!(s2, used_fields(p3).unwrap());
+    }
+
+    #[test]
+    fn used_fields_functions() {
+        // We handle functions pretty imprecisely at the moment, but basic stuff does work.
+
+        let p1 = r#"function one() { return 1; } { print $one(); }"#;
+        let s1 = FieldSet::singleton(1);
+        assert_eq!(s1, used_fields(p1).unwrap());
+    }
+
+    #[test]
+    fn used_fields_global_variable_store_poisons() {
+        // frawk used to get this one wrong and build a used-field set of {2}.
+        let p1 = r#"function unused() { print x; } { x=2; x=NF; print $x; }"#;
+        let s1 = FieldSet::all();
         assert_eq!(s1, used_fields(p1).unwrap());
     }
 

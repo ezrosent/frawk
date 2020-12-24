@@ -232,8 +232,9 @@ surprised to discover there were bugs in frawk's parser.
   these commands from within a function, and it's a major simplification to just
   disallow this case. Again, let me know if this is an important use-case for
   you.
-* Some basic Awk commands are missing (e.g. `exit` is not present, though
-  `nextfile` is and suffices in many cases), because I have not gotten to them
+* Some basic Awk commands are missing (e.g. `exit` is not present as its
+  semantics are unclear in a multithreaded setting, though `nextfile` is and
+  suffices in many cases), because I have not gotten to them
   yet. Many of the extensions in gawk (e.g. co-processes, multidimensional
   arrays) are also not implemented.
 * While it has never been tried, I sincerely doubt that frawk will run at all
@@ -262,6 +263,12 @@ surprised to discover there were bugs in frawk's parser.
   not variadic.
 * frawk functions can return arrays, function calls can appear in the array
   position for a for-each loop.
+* With the `-H` flag, frawk parses the first line of input (without updating
+  `NR` or `FNR`) and populates the `FI` builtin variable with the contents the
+  fields in the first line mapping to their index. So in a script parsing a
+  file with a field called "count" in column 6, the expression `$FI["count"]`
+  behaves like `$6`. frawk's implementation of this feature plays nicely with
+  its projection pushdown analysis.
 
 ### What is different
 

@@ -292,6 +292,8 @@ pub(crate) struct ProgramContext<'a, I> {
     // Lower certain regular expression instructions to direct invocations of a given pattern,
     // rather than dynamic lookups
     pub fold_regex_constants: bool,
+    // Thread through information regarding header columns used.
+    pub parse_header: bool,
 }
 
 impl<'a, I> ProgramContext<'a, I> {
@@ -500,6 +502,7 @@ where
                         ctx: &mut shared,
                         f: &mut func,
                         func_table: &func_table,
+                        parse_header: p.parse_header,
                     }
                     .fill(s)?;
                     func_table.insert($name, offset as NumTy);
@@ -519,6 +522,7 @@ where
                 ctx: &mut shared,
                 f: funcs.get_mut(f as usize).unwrap(),
                 func_table: &func_table,
+                parse_header: p.parse_header,
             }
             .fill(fundec.body)?;
         }
@@ -557,6 +561,7 @@ where
             main_offset,
             allow_arbitrary_commands: false,
             fold_regex_constants: false,
+            parse_header: p.parse_header,
         })
     }
 }
@@ -565,6 +570,7 @@ struct View<'a, 'b, I> {
     ctx: &'a mut GlobalContext<I>,
     f: &'a mut Function<'b, I>,
     func_table: &'a HashMap<FunctionName<I>, NumTy>,
+    parse_header: bool,
 }
 
 #[derive(Debug)]
@@ -1085,7 +1091,14 @@ where
             }
             Var(id) => {
                 if let Ok(bi) = builtins::Variable::try_from(id.clone()) {
-                    PrimExpr::LoadBuiltin(bi)
+                    // To maximize compatibility with other scripts, we don't have FI in scope as a
+                    // builtin if we are not parsing the header line.
+                    if matches!(bi, builtins::Variable::FI) && !self.parse_header {
+                        let ident = self.get_identifier(id);
+                        PrimExpr::Val(PrimVal::Var(ident))
+                    } else {
+                        PrimExpr::LoadBuiltin(bi)
+                    }
                 } else {
                     let ident = self.get_identifier(id);
                     PrimExpr::Val(PrimVal::Var(ident))

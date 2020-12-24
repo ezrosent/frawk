@@ -153,6 +153,8 @@ impl<'a> Core<'a> {
         let rs: UniqueStr<'a> = self.vars.rs.clone().into();
         let ors: UniqueStr<'a> = self.vars.ors.clone().into();
         let filename: UniqueStr<'a> = self.vars.filename.clone().into();
+        let argv = self.vars.argv.shuttle();
+        let fi = self.vars.fi.shuttle();
         let slots = self.slots.clone();
         move || {
             let vars = Variables {
@@ -168,7 +170,8 @@ impl<'a> Core<'a> {
                 rstart: 0,
                 rlength: 0,
                 argc: 0,
-                argv: Default::default(),
+                argv: argv.into(),
+                fi: fi.into(),
             };
             Core {
                 vars,
@@ -443,6 +446,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         stdin: LR,
         ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
+        named_columns: Option<Vec<&[u8]>>,
     ) -> Self {
         use compile::Ty::*;
         Interp {
@@ -456,7 +460,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             core: Core::new(ff),
 
             line: Default::default(),
-            read_files: runtime::FileRead::new(stdin, used_fields),
+            read_files: runtime::FileRead::new(stdin, used_fields.clone(), named_columns),
 
             maps_int_float: default_of(regs(MapIntFloat)),
             maps_int_int: default_of(regs(MapIntInt)),
@@ -1151,6 +1155,16 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let s = self.get(src).clone();
                         self.core.vars.store_intmap(*var, s)?;
                     }
+                    LoadVarStrMap(dst, var) => {
+                        let arr = self.core.vars.load_strmap(*var)?;
+                        let dst = *dst;
+                        *self.get_mut(dst) = arr;
+                    }
+                    StoreVarStrMap(var, src) => {
+                        let src = *src;
+                        let s = self.get(src).clone();
+                        self.core.vars.store_strmap(*var, s)?;
+                    }
 
                     IterBegin { map_ty, map, dst } => self.iter_begin(*map_ty, *map, *dst),
                     IterHasNext { iter_ty, dst, iter } => self.iter_has_next(*iter_ty, *dst, *iter),
@@ -1214,6 +1228,21 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     NextFile() => {
                         self.read_files.next_file()?;
                         self.reset_file_vars();
+                    }
+                    UpdateUsedFields() => {
+                        let fi = &self.core.vars.fi;
+                        self.read_files.update_named_columns(fi);
+                    }
+                    SetFI(key, val) => {
+                        let key = *index(&self.ints, key);
+                        let val = *index(&self.ints, val);
+                        let col = self.line.get_col(
+                            key,
+                            &self.core.vars.fs,
+                            &self.core.vars.ofs,
+                            &mut self.core.regexes,
+                        )?;
+                        self.core.vars.fi.insert(col, val);
                     }
                     JmpIf(cond, lbl) => {
                         let cond = *cond;

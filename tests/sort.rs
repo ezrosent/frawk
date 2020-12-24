@@ -18,7 +18,11 @@ fn numbers_str(n: usize) -> (String, String) {
 }
 
 const N: usize = 10_000;
+
+#[cfg(feature = "llvm_backend")]
 const BACKEND_ARGS: &'static [&'static str] = &["-b", "-O3"];
+#[cfg(not(feature = "llvm_backend"))]
+const BACKEND_ARGS: &'static [&'static str] = &["-b"];
 
 #[cfg(not(target_os = "windows"))]
 #[test]

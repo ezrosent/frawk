@@ -1,5 +1,5 @@
 use crate::builtins;
-use crate::bytecode::{self, Accum};
+use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
@@ -9,7 +9,7 @@ use crate::llvm;
 use crate::pushdown::{FieldSet, UsedFieldAnalysis};
 use crate::runtime::{self, Str};
 use crate::smallvec::{self, smallvec};
-use crate::string_constants::StringConstantAnalysis;
+use crate::string_constants::{self, StringConstantAnalysis};
 use crate::types;
 
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
@@ -100,7 +100,6 @@ impl Ty {
         }
     }
 
-    #[cfg(feature = "llvm_backend")]
     pub(crate) fn is_array(self) -> bool {
         use Ty::*;
         match self {
@@ -133,31 +132,10 @@ impl Ty {
     }
 }
 
-fn visit_used_fields<'a>(stmt: &Instr<'a>, ufa: &mut UsedFieldAnalysis) {
+fn visit_used_fields<'a>(stmt: &Instr<'a>, cur_func_id: NumTy, ufa: &mut UsedFieldAnalysis) {
     match stmt {
-        Either::Left(LL::StoreConstInt(dst, i)) if *i >= 0 => ufa.add_field(*dst, *i as usize),
-        Either::Left(LL::Mov(Ty::Int, dst, src)) => {
-            ufa.add_dep(
-                /*from_reg=*/ (*src).into(),
-                /*to_reg=*/ (*dst).into(),
-            );
-        }
-        Either::Left(LL::GetColumn(_dst, col_reg)) => ufa.add_col(*col_reg),
-        Either::Left(LL::JoinCSV(_, start, end))
-        | Either::Left(LL::JoinTSV(_, start, end))
-        | Either::Left(LL::JoinColumns(_, start, end, _)) => {
-            ufa.add_join(*start, *end);
-        }
-        Either::Right(HighLevel::Phi(dst, Ty::Int, preds)) => {
-            for (_, pred_reg) in preds.iter() {
-                use bytecode::Reg;
-                ufa.add_dep(
-                    /*from_reg=*/ Reg::from(*pred_reg),
-                    /*to_reg=*/ Reg::from(*dst),
-                );
-            }
-        }
-        _ => {}
+        Either::Left(l) => ufa.visit_ll(l),
+        Either::Right(r) => ufa.visit_hl(cur_func_id, r),
     }
 }
 
@@ -168,10 +146,14 @@ fn visit_taint_analysis<'a>(stmt: &Instr<'a>, func_id: NumTy, tsa: &mut TaintedS
     }
 }
 
-fn visit_string_constant_analysis<'a>(stmt: &Instr<'a>, sca: &mut StringConstantAnalysis<'a>) {
+fn visit_string_constant_analysis<'a>(
+    stmt: &Instr<'a>,
+    func_id: NumTy,
+    sca: &mut StringConstantAnalysis<'a>,
+) {
     match stmt {
-        Either::Left(ll) => sca.visit_ll(ll, /*is_regex=*/ true),
-        Either::Right(hl) => sca.visit_hl(hl),
+        Either::Left(ll) => sca.visit_ll(ll),
+        Either::Right(hl) => sca.visit_hl(func_id, hl),
     }
 }
 
@@ -182,6 +164,12 @@ pub(crate) fn bytecode<'a, LR: runtime::LineReader>(
     num_workers: usize,
 ) -> Result<bytecode::Interp<'a, LR>> {
     Typer::init_from_ctx(ctx)?.to_interp(reader, ff, num_workers)
+}
+
+#[cfg(test)]
+pub(crate) fn context_compiles<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<()> {
+    Typer::init_from_ctx(ctx)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -225,9 +213,10 @@ pub(crate) fn run_llvm<'a>(
     use crate::llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     let used_fields = typer.used_fields.clone();
+    let named_cols = typer.named_columns.take();
     unsafe {
         let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main(reader, ff, &used_fields, cfg.num_workers)
+        gen.run_main(reader, ff, &used_fields, named_cols, cfg.num_workers)
     }
 }
 
@@ -326,6 +315,8 @@ pub(crate) struct Typer<'a> {
 
     // For projection pushdown
     used_fields: FieldSet,
+    // The fields referenced by name via the FI builtin variable
+    named_columns: Option<Vec<&'a [u8]>>,
     // For rejecting suspcicious programs with commands.
     taint_analysis: Option<TaintedStringAnalysis>,
     // For analysis passes that introspect into the set of constant string values that will
@@ -503,6 +494,7 @@ impl<'a> Typer<'a> {
         num_workers: usize,
     ) -> Result<bytecode::Interp<'a, LR>> {
         let instrs = self.to_bytecode()?;
+        let cols = self.named_columns.take();
         Ok(bytecode::Interp::new(
             instrs,
             self.stage(),
@@ -511,6 +503,7 @@ impl<'a> Typer<'a> {
             reader,
             ff,
             &self.used_fields,
+            cols,
         ))
     }
 
@@ -689,8 +682,13 @@ impl<'a> Typer<'a> {
         if !pc.allow_arbitrary_commands {
             gen.taint_analysis = Some(Default::default());
         }
-        if pc.fold_regex_constants {
-            gen.string_constants = Some(Default::default());
+        if pc.fold_regex_constants || pc.parse_header {
+            gen.string_constants = Some(StringConstantAnalysis::from_config(
+                string_constants::Config {
+                    query_regex: pc.fold_regex_constants,
+                    fi_refs: pc.parse_header,
+                },
+            ));
         }
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
         let local_globals = pc.local_globals();
@@ -767,6 +765,7 @@ impl<'a> Typer<'a> {
             }
             .process_function(&pc.funcs[src_func])?;
         }
+        // TODO: mark used frames first and then exclude them from the analyses?
         gen.run_analyses()?;
         gen.mark_used_frames();
         gen.add_slots()?;
@@ -780,17 +779,19 @@ impl<'a> Typer<'a> {
             for (bbix, bb) in frame.cfg.raw_nodes().iter().enumerate() {
                 for (stmtix, stmt) in bb.weight.iter().enumerate() {
                     // not tracking function calls
-                    visit_used_fields(stmt, &mut ufa);
+                    visit_used_fields(stmt, frame.cur_ident, &mut ufa);
                     if let Some(tsa) = &mut self.taint_analysis {
                         visit_taint_analysis(stmt, frame.cur_ident, tsa)
                     }
                     if let Some(sca) = &mut self.string_constants {
-                        if let Either::Left(LL::IsMatch(_, _, pat))
-                        | Either::Left(LL::Match(_, _, pat)) = stmt
-                        {
-                            refs.push((fix, bbix, stmtix, pat.reflect().0));
+                        if sca.cfg().query_regex {
+                            if let Either::Left(LL::IsMatch(_, _, pat))
+                            | Either::Left(LL::Match(_, _, pat)) = stmt
+                            {
+                                refs.push((fix, bbix, stmtix, *pat));
+                            }
                         }
-                        visit_string_constant_analysis(stmt, sca)
+                        visit_string_constant_analysis(stmt, frame.cur_ident, sca)
                     }
                 }
             }
@@ -802,41 +803,49 @@ impl<'a> Typer<'a> {
             }
         }
         if let Some(sca) = &mut self.string_constants {
-            // Fold any regex pattern constants that we see
             let mut strs = Vec::new();
-            for (frame, bb, stmt, reg) in refs.into_iter() {
-                strs.clear();
-                sca.possible_strings(reg, &mut strs);
-                if strs.len() != 1 {
-                    continue;
+            if sca.cfg().query_regex {
+                // Fold any regex pattern constants that we see
+                for (frame, bb, stmt, reg) in refs.into_iter() {
+                    strs.clear();
+                    sca.possible_strings(&reg, &mut strs);
+                    if strs.len() != 1 {
+                        continue;
+                    }
+                    let text = std::str::from_utf8(&strs[0]).map_err(|e| {
+                        CompileError(format!("regex patterns must be valid UTF-8: {}", e))
+                    })?;
+                    let re = Arc::new(Regex::new(text).map_err(|err| {
+                        CompileError(format!("regex parse error during compilation: {}", err))
+                    })?);
+                    let inst = self.frames[frame]
+                        .cfg
+                        .node_weight_mut(NodeIx::new(bb))
+                        .unwrap()
+                        .get_mut(stmt)
+                        .unwrap();
+                    let new_inst: Instr = match inst {
+                        Either::Left(LL::IsMatch(dst, s, _)) => {
+                            Either::Left(LL::IsMatchConst(*dst, *s, re))
+                        }
+                        Either::Left(LL::Match(dst, s, _)) => {
+                            Either::Left(LL::MatchConst(*dst, *s, re))
+                        }
+                        _ => {
+                            return err!(
+                                "unexpected instruction during regex constant folding: {:?}",
+                                inst
+                            )
+                        }
+                    };
+                    *inst = new_inst;
                 }
-                let text = std::str::from_utf8(&strs[0]).map_err(|e| {
-                    CompileError(format!("regex patterns must be valid UTF-8: {}", e))
-                })?;
-                let re = Arc::new(Regex::new(text).map_err(|err| {
-                    CompileError(format!("regex parse error during compilation: {}", err))
-                })?);
-                let inst = self.frames[frame]
-                    .cfg
-                    .node_weight_mut(NodeIx::new(bb))
-                    .unwrap()
-                    .get_mut(stmt)
-                    .unwrap();
-                let new_inst: Instr = match inst {
-                    Either::Left(LL::IsMatch(dst, s, _)) => {
-                        Either::Left(LL::IsMatchConst(*dst, *s, re))
-                    }
-                    Either::Left(LL::Match(dst, s, _)) => {
-                        Either::Left(LL::MatchConst(*dst, *s, re))
-                    }
-                    _ => {
-                        return err!(
-                            "unexpected instruction during regex constant folding: {:?}",
-                            inst
-                        )
-                    }
-                };
-                *inst = new_inst;
+            }
+            if sca.cfg().fi_refs {
+                strs.clear();
+                if sca.fi_info(&mut strs) {
+                    self.named_columns = Some(strs);
+                }
             }
         }
         Ok(())
@@ -1375,6 +1384,8 @@ impl<'a, 'b> View<'a, 'b> {
                     }
                 }
             }
+            UpdateUsedFields => self.pushl(LL::UpdateUsedFields()),
+            SetFI => self.pushl(LL::SetFI(conv_regs[0].into(), conv_regs[1].into())),
             System => {
                 if res_reg == UNUSED {
                     res_reg = self.regs.stats.reg_of_ty(res_ty);
@@ -1755,6 +1766,7 @@ impl<'a, 'b> View<'a, 'b> {
                     Ty::Str => LL::LoadVarStr(target_reg.into(), *bv),
                     Ty::Int => LL::LoadVarInt(target_reg.into(), *bv),
                     Ty::MapIntStr => LL::LoadVarIntMap(target_reg.into(), *bv),
+                    Ty::MapStrInt => LL::LoadVarStrMap(target_reg.into(), *bv),
                     _ => unreachable!(),
                 });
                 self.convert(dst_reg, dst_ty, target_reg, target_ty)?
@@ -1804,6 +1816,7 @@ impl<'a, 'b> View<'a, 'b> {
                 self.pushl(match ty {
                     Str => LL::StoreVarStr(*v, reg.into()),
                     MapIntStr => LL::StoreVarIntMap(*v, reg.into()),
+                    MapStrInt => LL::StoreVarStrMap(*v, reg.into()),
                     Int => LL::StoreVarInt(*v, reg.into()),
                     _ => return err!("unexpected type for variable {} : {:?}", v, ty),
                 });

@@ -41,31 +41,16 @@
 //!     GetCol(dst, 0)
 //!
 //! Which corresponds roughly to the AWK snippet `$$2`, or "the field corresponding to the value of
-//! the second column." We cannot predict this value ahead of time, but our rules do not generate
-//! any constraints for the StrToInt instruction, or for any number of other instructions that can
-//! assign to integer registers. If we apply the algorithm as written, register 0 will have no
-//! incoming edges, and so will contribute no fields to the dst register, thereby producing false
-//! negatives.
-//!
-//! The most direct solution here would be to contribute "full sets" (sets that contain all
-//! possible fields --- [FieldSet::all] below) to any register stored to by an instruction other
-//! than StoreConstInt, MovInt, or Phi. This would work, but it would require a lot more code, and
-//! we would have to continually update the analysis code as we added or removed instructions from
-//! the bytecode.
-//!
-//! Instead, we do this implicitly by detecting nodes with no incoming edges that have empty field
-//! sets. These nodes are replaced with full sets during iteration; the algorithm treats these
-//! jumps like standard updates for now, though they could probably be shortcircuited in some way.
+//! the second column." We cannot predict this value ahead of time, for cases like this, we
+//! contribute "full" sets to registers written by primitives that our analysis cannot introspect.
 
 use std::fmt;
 
-use crate::bytecode::Reg;
-use crate::common::{Graph, NodeIx, WorkList};
-use crate::runtime::Int;
-
-use hashbrown::HashMap;
-use petgraph::Direction;
-use smallvec::SmallVec;
+use crate::builtins::Variable;
+use crate::bytecode::Instr;
+use crate::common::NumTy;
+use crate::compile::HighLevel;
+use crate::dataflow::{self, JoinSemiLattice, Key};
 
 /// Most AWK scripts do not use more than 63 fields, so we represent our sets of used fields
 /// "lossy bitsets" that can precisely represent subsets of [0, 63] but otherwise just say "yes" to
@@ -85,7 +70,9 @@ impl Default for FieldSet {
 // this library will be field-splitting routines, which will often be passing in counters or vector
 // lengths. We may as well handle the (however unlikely to be exercised) overflow logic here rather
 // than up the stack, in more complicated code, in multiple locations.
-const MAX_INDEX: usize = 63;
+const MAX_INDEX: usize = 62;
+const FI_INDEX: usize = 63;
+const FI_MASK: u64 = !(1 << FI_INDEX);
 
 impl FieldSet {
     pub fn singleton(index: usize) -> FieldSet {
@@ -94,6 +81,12 @@ impl FieldSet {
         } else {
             FieldSet(1 << index)
         }
+    }
+    pub fn fi() -> FieldSet {
+        FieldSet(1 << FI_INDEX)
+    }
+    pub fn has_fi(&self) -> bool {
+        (self.0 != FieldSet::all().0) && ((1 << FI_INDEX) & self.0) != 0
     }
     pub fn is_empty(&self) -> bool {
         self.0 == 0
@@ -108,10 +101,10 @@ impl FieldSet {
         self.0 = self.0 | other.0;
     }
     fn min_bit(&self) -> u32 {
-        self.0.trailing_zeros()
+        (FI_MASK & self.0).trailing_zeros()
     }
     fn max_bit(&self) -> u32 {
-        64 - self.0.leading_zeros()
+        64 - (FI_MASK & self.0).leading_zeros()
     }
     // Fill is used for `join` constructions, it fills all bits (inclusive) from the minimum bit in
     // self to the maximum bit in rhs.
@@ -139,7 +132,8 @@ impl FieldSet {
         self.0 |= rest ^ mask;
     }
     pub fn get(&self, index: usize) -> bool {
-        (index > MAX_INDEX) || (1u64 << (index as u32)) & self.0 != 0
+        ((index > MAX_INDEX) && (self.0 == Self::all().0))
+            || ((1u64 << (index as u32)) & self.0 != 0)
     }
     pub fn set(&mut self, index: usize) {
         if index <= MAX_INDEX {
@@ -150,12 +144,30 @@ impl FieldSet {
     }
 }
 
+impl JoinSemiLattice for FieldSet {
+    type Func = ();
+    fn bottom() -> Self {
+        FieldSet::empty()
+    }
+    fn invoke(&mut self, other: &FieldSet, (): &()) -> bool /*changed*/ {
+        let old = self.clone();
+        self.union(other);
+        self != &old
+    }
+}
+
 impl fmt::Debug for FieldSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self == &FieldSet::all() {
             return write!(f, "<ALL>");
         }
-        let v: Vec<_> = (0..=MAX_INDEX).filter(|i| self.get(*i)).collect();
+        let mut v: Vec<_> = (0..=MAX_INDEX)
+            .filter(|i| self.get(*i))
+            .map(|x| format!("{}", x))
+            .collect();
+        if self.has_fi() {
+            v.push("FI[..]".into());
+        }
         write!(f, "{:?}", v)
     }
 }
@@ -186,9 +198,9 @@ mod tests {
         assert_eq!(fs3, fieldset_of_range(3usize..=23));
 
         let mut fs5 = FieldSet::singleton(1);
-        let fs6 = FieldSet::singleton(63);
+        let fs6 = FieldSet::singleton(62);
         fs5.fill(&fs6);
-        assert_eq!(fs5, fieldset_of_range(1usize..=63));
+        assert_eq!(fs5, fieldset_of_range(1usize..=62));
 
         let mut fs7 = FieldSet::all();
         fs7.fill(&fs2);
@@ -199,103 +211,82 @@ mod tests {
     }
 }
 
-#[derive(Default)]
 pub struct UsedFieldAnalysis {
-    assign_graph: Graph<FieldSet, ()>,
-    regs: HashMap<Reg<Int>, NodeIx>,
-    relevant: SmallVec<[NodeIx; 2]>,
-    joins: Vec<(NodeIx /*lhs*/, NodeIx /*rhs*/)>,
+    dfa: dataflow::Analysis<FieldSet>,
+    // We could make the Join operation a member of FieldSet::Func but, while it is monotone, it
+    // does not commute with union. The most general option here is probably to make Funcs
+    // Semilattices themselves, and when solving to take the join of the functions before reading
+    // the variables in question.  We can always add it in the future, but since join nodes are
+    // always "leaves" we will just add the missing columns as a postprocessing step.
+    joins: Vec<(Key /*lhs*/, Key /*rhs*/)>,
+}
+
+impl Default for UsedFieldAnalysis {
+    fn default() -> UsedFieldAnalysis {
+        let mut res = UsedFieldAnalysis {
+            dfa: Default::default(),
+            joins: Default::default(),
+        };
+        res.dfa.add_src(Key::Rng, FieldSet::all());
+        res.dfa.add_src(Key::VarVal(Variable::FI), FieldSet::fi());
+        res.dfa.add_src(Key::VarKey(Variable::FI), FieldSet::all());
+        res
+    }
 }
 
 impl UsedFieldAnalysis {
-    /// Get the node corresponding to a given regiter, or allocate a fresh one with an empty set.
-    fn get_node(&mut self, reg: Reg<Int>) -> NodeIx {
-        use hashbrown::hash_map::Entry;
-        match self.regs.entry(reg) {
-            Entry::Occupied(o) => *o.get(),
-            Entry::Vacant(v) => {
-                let n = self.assign_graph.add_node(FieldSet::empty());
-                v.insert(n);
-                n
+    pub(crate) fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
+        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |dst, src| {
+            self.dfa.add_dep(dst, src.unwrap(), ())
+        })
+    }
+    pub(crate) fn visit_ll(&mut self, inst: &Instr) {
+        use Instr::*;
+        match inst {
+            StoreConstInt(dst, i) if *i >= 0 => {
+                self.dfa.add_src(dst, FieldSet::singleton(*i as usize))
             }
-        }
-    }
 
-    /// Add a node with a constant: these correspond to the StoreConstInt nodes mentioned above.
-    pub fn add_field(&mut self, reg: Reg<Int>, index: usize) {
-        use hashbrown::hash_map::Entry;
-        match self.regs.entry(reg) {
-            Entry::Occupied(o) => self
-                .assign_graph
-                .node_weight_mut(*o.get())
-                .unwrap()
-                .set(index),
-            Entry::Vacant(v) => {
-                let n = self.assign_graph.add_node(FieldSet::singleton(index));
-                v.insert(n);
+            LoadVarStrMap(_, Variable::FI)
+            | StoreVarStrMap(Variable::FI, _)
+            | Lookup { .. }
+            | Store { .. }
+            | IterBegin { .. }
+            | IterGetNext { .. }
+            | Mov(..) => dataflow::boilerplate::visit_ll(inst, |dst, src| {
+                if let Some(src) = src {
+                    self.dfa.add_dep(dst, src, ())
+                } else {
+                    self.dfa.add_src(dst, FieldSet::singleton(0))
+                }
+            }),
+            GetColumn(dst, col_reg) => {
+                self.dfa.add_query(col_reg);
+                self.dfa.add_src(dst, FieldSet::all());
             }
+            JoinCSV(dst, start, end)
+            | JoinTSV(dst, start, end)
+            | JoinColumns(dst, start, end, _) => {
+                self.dfa.add_query(start);
+                self.dfa.add_query(end);
+                self.dfa.add_src(dst, FieldSet::all());
+                self.joins.push((start.into(), end.into()));
+            }
+            _ => dataflow::boilerplate::visit_ll(inst, |dst, _| {
+                self.dfa.add_src(dst, FieldSet::all())
+            }),
         }
-    }
-    pub fn add_dep(&mut self, from_reg: Reg<Int>, to_reg: Reg<Int>) {
-        let from_node = self.get_node(from_reg);
-        let to_node = self.get_node(to_reg);
-        self.assign_graph.add_edge(from_node, to_node, ());
-    }
-
-    pub fn add_join(&mut self, start_reg: Reg<Int>, end_reg: Reg<Int>) {
-        let start_node = self.get_node(start_reg);
-        let end_node = self.get_node(end_reg);
-        self.joins.push((start_node, end_node));
-    }
-
-    /// Mark a given register as a "column" node: one that will be part of the used field set
-    /// returned from [UsedFieldAnalysis::solve].
-    pub fn add_col(&mut self, col_reg: Reg<Int>) {
-        let col_node = self.get_node(col_reg);
-        self.relevant.push(col_node);
     }
 
     /// Return the set of all fields mentioned by column nodes.
     pub fn solve(mut self) -> FieldSet {
-        self.solve_internal();
-        let mut res = FieldSet::empty();
-        for i in self.relevant.iter().cloned() {
-            res.union(self.assign_graph.node_weight(i).unwrap());
-        }
-        for (start, end) in self.joins.iter().cloned() {
-            let mut start_set = self.assign_graph.node_weight(start).unwrap().clone();
-            let end_set = self.assign_graph.node_weight(end).unwrap();
-            start_set.fill(end_set);
-            res.union(&start_set)
+        let mut res = self.dfa.root().clone();
+        for (l, r) in self.joins.iter().cloned() {
+            let mut l_flds = self.dfa.query(l).clone();
+            let r_flds = self.dfa.query(r);
+            l_flds.fill(r_flds);
+            res.union(&l_flds);
         }
         res
-    }
-
-    fn solve_internal(&mut self) {
-        // The core solving portion of the analysis. Start with a full worklist.
-        let mut wl = WorkList::default();
-        wl.extend((0..self.assign_graph.node_count()).map(|x| NodeIx::new(x)));
-
-        // Iterate to convergence, being careful to detect "abstract" nodes that we have to replace
-        // with full sets.
-        while let Some(n) = wl.pop() {
-            let start = self.assign_graph.node_weight(n).unwrap().clone();
-            let mut new = start.clone();
-            let mut incoming_count = 0;
-            for n in self.assign_graph.neighbors_directed(n, Direction::Incoming) {
-                new.union(self.assign_graph.node_weight(n).unwrap());
-                incoming_count += 1;
-            }
-            if incoming_count == 0 && start == FieldSet::empty() {
-                new = FieldSet::all();
-            }
-            if start == new {
-                continue;
-            }
-            *self.assign_graph.node_weight_mut(n).unwrap() = new;
-            for n in self.assign_graph.neighbors_directed(n, Direction::Outgoing) {
-                wl.insert(n);
-            }
-        }
     }
 }

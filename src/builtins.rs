@@ -4,7 +4,7 @@ use crate::ast;
 use crate::common::Either;
 use crate::common::{NodeIx, Result};
 use crate::compile;
-use crate::runtime::{Int, IntMap, Str};
+use crate::runtime::{Int, IntMap, Str, StrMap};
 use crate::types::{self, SmallVec};
 #[cfg(feature = "llvm_backend")]
 use llvm_sys::{core::*, prelude::*};
@@ -48,6 +48,9 @@ pub enum Function {
     Srand,
     ReseedRng,
     System,
+    // For header-parsing logic
+    UpdateUsedFields,
+    SetFI,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -422,7 +425,7 @@ impl Function {
             }
             NextlineCmd | Nextline => (smallvec![Str], Str),
             ReadErrCmd | ReadErr => (smallvec![Str], Int),
-            NextFile | ReadLineStdinFused => (smallvec![], Int),
+            UpdateUsedFields | NextFile | ReadLineStdinFused => (smallvec![], Int),
             NextlineStdin => (smallvec![], Str),
             ReadErrStdin => (smallvec![], Int),
             // irrelevant return type
@@ -443,6 +446,7 @@ impl Function {
             }
             JoinCols => (smallvec![Int, Int, Str], Str),
             JoinCSV | JoinTSV => (smallvec![Int, Int], Str),
+            SetFI => (smallvec![Int, Int], Int),
         })
     }
 
@@ -451,16 +455,16 @@ impl Function {
         Some(match self {
             FloatFunc(ff) => ff.arity(),
             IntFunc(bw) => bw.arity(),
-            Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile | ReadLineStdinFused => 0,
+            UpdateUsedFields | Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile
+            | ReadLineStdinFused => 0,
             Srand | System | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length
             | ReadErr | ReadErrCmd | Nextline | NextlineCmd | Unop(_) => 1,
-            SubstrIndex | Match | Setcol | Binop(_) => 2,
+            SetFI | SubstrIndex | Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
             JoinCols | Substr | Sub | GSub | Split => 3,
         })
     }
 
-    // TODO(ezr): rename this once old types module is gone
     pub(crate) fn step(&self, args: &[types::State]) -> Result<types::State> {
         use {
             ast::{Binop::*, Unop::*},
@@ -496,7 +500,7 @@ impl Function {
             | Binop(Concat) | Nextline | NextlineCmd | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())
             }
-            NextFile | ReadLineStdinFused | Close => Ok(None),
+            SetFI | UpdateUsedFields | NextFile | ReadLineStdinFused | Close => Ok(None),
         }
     }
 }
@@ -516,6 +520,7 @@ pub(crate) enum Variable {
     ORS = 10,
     FNR = 11,
     PID = 12,
+    FI = 13,
 }
 
 impl From<Variable> for compile::Ty {
@@ -525,6 +530,7 @@ impl From<Variable> for compile::Ty {
             FS | OFS | ORS | RS | FILENAME => compile::Ty::Str,
             PID | ARGC | NF | NR | FNR | RSTART | RLENGTH => compile::Ty::Int,
             ARGV => compile::Ty::MapIntStr,
+            FI => compile::Ty::MapStrInt,
         }
     }
 }
@@ -543,6 +549,7 @@ pub(crate) struct Variables<'a> {
     pub rstart: Int,
     pub rlength: Int,
     pub pid: Int,
+    pub fi: StrMap<'a, Int>,
 }
 
 impl<'a> Default for Variables<'a> {
@@ -561,6 +568,7 @@ impl<'a> Default for Variables<'a> {
             rstart: 0,
             pid: 0,
             rlength: -1,
+            fi: Default::default(),
         }
     }
 }
@@ -575,7 +583,7 @@ impl<'a> Variables<'a> {
             RSTART => self.rstart,
             RLENGTH => self.rlength,
             PID => self.pid,
-            ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
+            FI | ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
         })
     }
 
@@ -589,7 +597,7 @@ impl<'a> Variables<'a> {
             RSTART => self.rstart = i,
             RLENGTH => self.rlength = i,
             PID => self.pid = i,
-            ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
+            FI | ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
         })
     }
 
@@ -601,7 +609,7 @@ impl<'a> Variables<'a> {
             ORS => self.ors.clone(),
             RS => self.rs.clone(),
             FILENAME => self.filename.clone(),
-            PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+            FI | PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
                 return err!("var {} not a string", var)
             }
         })
@@ -615,7 +623,7 @@ impl<'a> Variables<'a> {
             ORS => self.ors = s,
             RS => self.rs = s,
             FILENAME => self.filename = s,
-            PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+            FI | PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
                 return err!("var {} not a string", var)
             }
         })
@@ -625,8 +633,8 @@ impl<'a> Variables<'a> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv.clone()),
-            PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
-                err!("var {} is not a map", var)
+            FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
+                err!("var {} is not an int-keyed map", var)
             }
         }
     }
@@ -635,12 +643,34 @@ impl<'a> Variables<'a> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv = m),
-            PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
-                err!("var {} is not a map", var)
+            FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
+                err!("var {} is not an int-keyed map", var)
+            }
+        }
+    }
+    pub fn load_strmap(&self, var: Variable) -> Result<StrMap<'a, Int>> {
+        use Variable::*;
+        match var {
+            FI => Ok(self.fi.clone()),
+            ARGV | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART
+            | RLENGTH => {
+                err!("var {} is not a string-keyed map", var)
+            }
+        }
+    }
+
+    pub fn store_strmap(&mut self, var: Variable, m: StrMap<'a, Int>) -> Result<()> {
+        use Variable::*;
+        match var {
+            FI => Ok(self.fi = m),
+            ARGV | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART
+            | RLENGTH => {
+                err!("var {} is not a string-keyed map", var)
             }
         }
     }
 }
+
 impl Variable {
     pub(crate) fn ty(&self) -> types::TVar<types::BaseTy> {
         use Variable::*;
@@ -648,7 +678,7 @@ impl Variable {
             PID | ARGC | NF | FNR | NR | RSTART | RLENGTH => {
                 types::TVar::Scalar(types::BaseTy::Int)
             }
-            // TODO(ezr): For full compliance, this may have to be Str -> Str
+            // NB: For full compliance, this may have to be Str -> Str
             //  If we had
             //  m["x"] = 1;
             //  if (true) {
@@ -673,6 +703,10 @@ impl Variable {
             ARGV => types::TVar::Map {
                 key: types::BaseTy::Int,
                 val: types::BaseTy::Str,
+            },
+            FI => types::TVar::Map {
+                key: types::BaseTy::Str,
+                val: types::BaseTy::Int,
             },
             ORS | OFS | FS | RS | FILENAME => types::TVar::Scalar(types::BaseTy::Str),
         }
@@ -707,6 +741,7 @@ impl<'a> TryFrom<usize> for Variable {
             10 => Ok(ORS),
             11 => Ok(FNR),
             12 => Ok(PID),
+            13 => Ok(FI),
             _ => Err(()),
         }
     }
@@ -726,5 +761,6 @@ static_map!(
     ["FILENAME", Variable::FILENAME],
     ["RSTART", Variable::RSTART],
     ["RLENGTH", Variable::RLENGTH],
-    ["PID", Variable::PID]
+    ["PID", Variable::PID],
+    ["FI", Variable::FI]
 );
