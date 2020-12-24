@@ -41,7 +41,7 @@ without the `llvm_backend` feature.
 
 frawk currently requires a nightly compiler by default. To compile frawk using stable,
 compile without the `unstable` feature. Using `rustup default nightly`, or some other
-method to run a nightly compiler release is currently required to build frawk.
+method to run a nightly compiler release is otherwise required to build frawk.
 
 With those prerequisites, cloning this repository and a `cargo build --release`
 or `cargo [+nightly] install --path <frawk repo path>` will produce a binary that you can
