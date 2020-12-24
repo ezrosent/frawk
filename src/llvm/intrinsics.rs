@@ -21,9 +21,11 @@ use llvm_sys::{
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     support::LLVMAddSymbol,
 };
+use paste::paste;
 use rand::{self, Rng};
 use regex::bytes::Regex;
 use smallvec;
+
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
 // We don't use u128 as there's a warning that the ABI is not stable. We're in big trouble if our
@@ -417,27 +419,27 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
     table
 }
 
-pub unsafe extern "C" fn run_system(cmd: *mut U128) -> Int {
+unsafe extern "C" fn run_system(cmd: *mut U128) -> Int {
     let s: &Str = &*(cmd as *mut Str);
     s.with_bytes(runtime::run_command)
 }
 
-pub unsafe extern "C" fn rand_float(runtime: *mut c_void) -> f64 {
+unsafe extern "C" fn rand_float(runtime: *mut c_void) -> f64 {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.rng.gen_range(0.0, 1.0)
 }
 
-pub unsafe extern "C" fn seed_rng(runtime: *mut c_void, seed: Int) -> Int {
+unsafe extern "C" fn seed_rng(runtime: *mut c_void, seed: Int) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.reseed(seed as u64) as Int
 }
 
-pub unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
+unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.reseed_random() as Int
 }
 
-pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void, is_file: Int) -> Int {
+unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void, is_file: Int) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         runtime,
@@ -454,13 +456,13 @@ pub unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void, is_fi
     res
 }
 
-pub unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
+unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     with_input!(&mut runtime.input_data, |(_, read_files)| read_files
         .read_err_stdin())
 }
 
-pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
+unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let changed = try_abort!(
         runtime,
@@ -477,7 +479,7 @@ pub unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     }
 }
 
-pub unsafe extern "C" fn next_file(runtime: *mut c_void) {
+unsafe extern "C" fn next_file(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     try_abort!(
         runtime,
@@ -487,7 +489,7 @@ pub unsafe extern "C" fn next_file(runtime: *mut c_void) {
     );
 }
 
-pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
+unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let (changed, res) = try_abort!(
         runtime,
@@ -505,7 +507,7 @@ pub unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     mem::transmute::<Str, U128>(res)
 }
 
-pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_file: Int) -> U128 {
+unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_file: Int) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let file = &*(file as *mut Str);
     let res = with_input!(&mut runtime.input_data, |(_, read_files)| {
@@ -520,7 +522,7 @@ pub unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_f
     }
 }
 
-pub unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
+unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let fi = &runtime.core.vars.fi;
     with_input!(&mut runtime.input_data, |(_, read_files)| {
@@ -528,14 +530,14 @@ pub unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
     });
 }
 
-pub unsafe extern "C" fn set_fi_entry(runtime: *mut c_void, key: Int, val: Int) {
+unsafe extern "C" fn set_fi_entry(runtime: *mut c_void, key: Int, val: Int) {
     let rt = &mut *(runtime as *mut Runtime);
     let fi = &rt.core.vars.fi;
     let k = mem::transmute::<U128, Str>(get_col(runtime, key));
     fi.insert(k, val);
 }
 
-pub unsafe extern "C" fn split_str(
+unsafe extern "C" fn split_str(
     runtime: *mut c_void,
     to_split: *mut c_void,
     into_arr: *mut c_void,
@@ -557,7 +559,7 @@ pub unsafe extern "C" fn split_str(
     res
 }
 
-pub unsafe extern "C" fn split_int(
+unsafe extern "C" fn split_int(
     runtime: *mut c_void,
     to_split: *mut c_void,
     into_arr: *mut c_void,
@@ -579,7 +581,7 @@ pub unsafe extern "C" fn split_int(
     res
 }
 
-pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
+unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let col_str = with_input!(&mut runtime.input_data, |(line, _)| {
         line.get_col(
@@ -596,7 +598,7 @@ pub unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
     mem::transmute::<Str, U128>(res)
 }
 
-pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
+unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
     let sep: Str<'static> = ",".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
@@ -614,7 +616,7 @@ pub unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) ->
     mem::transmute::<Str, U128>(res)
 }
 
-pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
+unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
     let sep: Str<'static> = "\t".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
@@ -632,12 +634,7 @@ pub unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) ->
     mem::transmute::<Str, U128>(res)
 }
 
-pub unsafe extern "C" fn join_cols(
-    runtime: *mut c_void,
-    start: Int,
-    end: Int,
-    sep: *mut U128,
-) -> U128 {
+unsafe extern "C" fn join_cols(runtime: *mut c_void, start: Int, end: Int, sep: *mut U128) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         runtime,
@@ -654,7 +651,7 @@ pub unsafe extern "C" fn join_cols(
     mem::transmute::<Str, U128>(res)
 }
 
-pub unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
+unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let s = &*(s as *mut Str);
     if let Err(e) = with_input!(&mut runtime.input_data, |(line, _)| line.set_col(
@@ -667,21 +664,21 @@ pub unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void)
     }
 }
 
-pub unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
+unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
     let s = &*(s as *mut Str);
     let res = s.len();
     mem::forget(s);
     res
 }
 
-pub unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128 {
+unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128 {
     let s1 = &*(s1 as *mut Str);
     let s2 = &*(s2 as *mut Str);
     let res = Str::concat(s1.clone(), s2.clone());
     mem::transmute::<Str, U128>(res)
 }
 
-pub unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *mut c_void) -> Int {
+unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *mut c_void) -> Int {
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
@@ -694,17 +691,13 @@ pub unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *m
     res as Int
 }
 
-pub unsafe extern "C" fn match_const_pat(s: *mut c_void, pat: *mut c_void) -> Int {
+unsafe extern "C" fn match_const_pat(s: *mut c_void, pat: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let pat = &*(pat as *const Regex);
     RegexCache::regex_const_match(pat, s) as Int
 }
 
-pub unsafe extern "C" fn match_pat_loc(
-    runtime: *mut c_void,
-    s: *mut c_void,
-    pat: *mut c_void,
-) -> Int {
+unsafe extern "C" fn match_pat_loc(runtime: *mut c_void, s: *mut c_void, pat: *mut c_void) -> Int {
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
@@ -717,7 +710,7 @@ pub unsafe extern "C" fn match_pat_loc(
     res as Int
 }
 
-pub unsafe extern "C" fn match_const_pat_loc(
+unsafe extern "C" fn match_const_pat_loc(
     runtime: *mut c_void,
     s: *mut c_void,
     pat: *mut c_void,
@@ -732,13 +725,13 @@ pub unsafe extern "C" fn match_const_pat_loc(
     )
 }
 
-pub unsafe extern "C" fn substr_index(s: *mut U128, t: *mut U128) -> Int {
+unsafe extern "C" fn substr_index(s: *mut U128, t: *mut U128) -> Int {
     let s = &*(s as *mut Str);
     let t = &*(t as *mut Str);
     runtime::string_search::index_substr(/*needle*/ t, /*haystack*/ s)
 }
 
-pub unsafe extern "C" fn subst_first(
+unsafe extern "C" fn subst_first(
     runtime: *mut c_void,
     pat: *mut U128,
     s: *mut U128,
@@ -759,7 +752,7 @@ pub unsafe extern "C" fn subst_first(
     new as Int
 }
 
-pub unsafe extern "C" fn subst_all(
+unsafe extern "C" fn subst_all(
     runtime: *mut c_void,
     pat: *mut U128,
     s: *mut U128,
@@ -780,15 +773,15 @@ pub unsafe extern "C" fn subst_all(
     nsubs
 }
 
-pub unsafe extern "C" fn escape_csv(s: *mut U128) -> U128 {
+unsafe extern "C" fn escape_csv(s: *mut U128) -> U128 {
     mem::transmute::<Str, U128>(runtime::escape_csv(&*(s as *mut Str)))
 }
 
-pub unsafe extern "C" fn escape_tsv(s: *mut U128) -> U128 {
+unsafe extern "C" fn escape_tsv(s: *mut U128) -> U128 {
     mem::transmute::<Str, U128>(runtime::escape_tsv(&*(s as *mut Str)))
 }
 
-pub unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 {
+unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 {
     use std::cmp::{max, min};
     let base = &*(base as *mut Str);
     let len = base.len();
@@ -797,11 +790,11 @@ pub unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 {
     mem::transmute::<Str, U128>(base.slice(l as usize, r))
 }
 
-pub unsafe extern "C" fn ref_str(s: *mut c_void) {
+unsafe extern "C" fn ref_str(s: *mut c_void) {
     mem::forget((&*(s as *mut Str)).clone())
 }
 
-pub unsafe extern "C" fn drop_str_slow(s: *mut U128, tag: u64) {
+unsafe extern "C" fn drop_str_slow(s: *mut U128, tag: u64) {
     (&*(s as *mut Str)).drop_with_tag(tag)
 }
 
@@ -816,42 +809,42 @@ unsafe fn drop_map_generic<K, V>(m: *mut c_void) {
 // XXX: relying on this doing the same thing regardless of type. We probably want a custom Rc to
 // guarantee this.
 
-pub unsafe extern "C" fn ref_map(m: *mut c_void) {
+unsafe extern "C" fn ref_map(m: *mut c_void) {
     ref_map_generic::<Int, Str>(m)
 }
 
-pub unsafe extern "C" fn int_to_str(i: Int) -> U128 {
+unsafe extern "C" fn int_to_str(i: Int) -> U128 {
     mem::transmute::<Str, U128>(runtime::convert::<Int, Str>(i))
 }
 
-pub unsafe extern "C" fn float_to_str(f: Float) -> U128 {
+unsafe extern "C" fn float_to_str(f: Float) -> U128 {
     mem::transmute::<Str, U128>(runtime::convert::<Float, Str>(f))
 }
 
 // TODO: these next few mem::forgets don't seem necessary.
 
-pub unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
+unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let res = runtime::convert::<&Str, Int>(&s);
     mem::forget(s);
     res
 }
 
-pub unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
+unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let res = s.with_bytes(runtime::hextoi);
     mem::forget(s);
     res
 }
 
-pub unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
+unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
     let s = &*(s as *mut Str);
     let res = runtime::convert::<&Str, Float>(&s);
     mem::forget(s);
     res
 }
 
-pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
+unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_str(var));
@@ -861,7 +854,7 @@ pub unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
     }
 }
 
-pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) {
+unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let s = (&*(s as *mut Str)).clone();
@@ -871,7 +864,7 @@ pub unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_vo
     }
 }
 
-pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
+unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         if let Variable::NF = var {
@@ -888,7 +881,7 @@ pub unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     }
 }
 
-pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
+unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         try_abort!(runtime, runtime.core.vars.store_int(var, i));
@@ -897,7 +890,7 @@ pub unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
     }
 }
 
-pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
+unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_intmap(var));
@@ -907,7 +900,7 @@ pub unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_
     }
 }
 
-pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_void) {
+unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
@@ -918,7 +911,7 @@ pub unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut
     }
 }
 
-pub unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void {
+unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_strmap(var));
@@ -928,7 +921,7 @@ pub unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_
     }
 }
 
-pub unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut c_void) {
+unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, StrMap<Int>>(map);
@@ -942,7 +935,7 @@ pub unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut
 macro_rules! str_compare_inner {
     ($name:ident, $op:tt) => {
 
-        pub unsafe extern "C" fn $name(s1: *mut c_void, s2: *mut c_void) -> Int {
+        unsafe extern "C" fn $name(s1: *mut c_void, s2: *mut c_void) -> Int {
             let s1 = &*(s1 as *mut Str);
             let s2 = &*(s2 as *mut Str);
             let res = s1.with_bytes(|bs1| s2.with_bytes(|bs2| bs1 $op bs2)) as Int;
@@ -959,11 +952,11 @@ str_compare! {
     str_lt(<); str_gt(>); str_lte(<=); str_gte(>=); str_eq(==);
 }
 
-pub unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
+unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(iter, len)))
 }
 
-pub unsafe extern "C" fn drop_iter_str(iter: *mut U128, len: usize) {
+unsafe extern "C" fn drop_iter_str(iter: *mut U128, len: usize) {
     let p = iter as *mut Str;
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
 }
@@ -1002,14 +995,14 @@ unsafe fn wrap_args<'a>(
     format_args
 }
 
-pub unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usize, num_args: Int) {
+unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usize, num_args: Int) {
     let args_wrapped: &[&Str] =
         slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
     let rt = rt as *mut Runtime;
     try_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
 }
 
-pub unsafe extern "C" fn print_all_file(
+unsafe extern "C" fn print_all_file(
     rt: *mut c_void,
     args: *mut usize,
     num_args: Int,
@@ -1033,7 +1026,7 @@ pub unsafe extern "C" fn print_all_file(
     )
 }
 
-pub unsafe extern "C" fn printf_impl_file(
+unsafe extern "C" fn printf_impl_file(
     rt: *mut c_void,
     spec: *mut U128,
     args: *mut usize,
@@ -1057,7 +1050,7 @@ pub unsafe extern "C" fn printf_impl_file(
     )
 }
 
-pub unsafe extern "C" fn sprintf_impl(
+unsafe extern "C" fn sprintf_impl(
     rt: *mut c_void,
     spec: *mut U128,
     args: *mut usize,
@@ -1075,7 +1068,7 @@ pub unsafe extern "C" fn sprintf_impl(
     mem::transmute::<Str, U128>(buf.into_str())
 }
 
-pub unsafe extern "C" fn printf_impl_stdout(
+unsafe extern "C" fn printf_impl_stdout(
     rt: *mut c_void,
     spec: *mut U128,
     args: *mut usize,
@@ -1093,19 +1086,19 @@ pub unsafe extern "C" fn printf_impl_stdout(
     }
 }
 
-pub unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
+unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
     with_input!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
     try_abort!(rt, rt.core.write_files.close(file));
 }
 
-pub unsafe extern "C" fn _frawk_atan(f: Float) -> Float {
+unsafe extern "C" fn _frawk_atan(f: Float) -> Float {
     std::ptr::read_volatile(&false);
     f.atan()
 }
 
-pub unsafe extern "C" fn _frawk_atan2(x: Float, y: Float) -> Float {
+unsafe extern "C" fn _frawk_atan2(x: Float, y: Float) -> Float {
     std::ptr::read_volatile(&false);
     x.atan2(y)
 }
@@ -1119,11 +1112,10 @@ pub unsafe extern "C" fn _frawk_atan2(x: Float, y: Float) -> Float {
 //       fn convert_in(x: &Self::In) -> &Self;
 //       fn convert_out(x: Self) -> Self::Out;
 //   }
-// But that didn't end up working out. We had intrinsic functions with parameter types like
-// <Int as InTy>::In, which had strange consequences like not being able to take the address of a
-// function. We need to take the address of these functions though,  otherwise the linker on some
-// platform will spuriously strip out the symbol.  Instead, we replicate this trait in the form of
-// macros that match on the input type.
+// But that didn't end up working out. We had intrinsic functions with parameter types like <Int as
+// InTy>::In, which had strange consequences like not being able to take the address of a function.
+// We need to take the address of these functions though, because we pass them to generated code.
+// Instead, we replicate this trait in the form of macros that match on the input type.
 
 macro_rules! in_ty {
     (Str) => { *mut c_void };
@@ -1193,154 +1185,98 @@ macro_rules! convert_out {
     }};
 }
 
-macro_rules! map_impl_inner {
-    ($alloc:ident, $iter:ident, $lookup:ident, $len:ident,
-     $insert:ident, $delete:ident, $contains:ident, $drop:ident, $k:tt, $v:tt) => {
-        // XXX
-        // What's going on with the read_volatile(&false) stuff?
-        //
-        // Put simply, on MacOS the symbols for these functions are stripped out of the function
-        // without these lines.
-        //
-        // Linux seems much more fogiving in this regard. Without these, some tests will fail, only
-        // on MacOS, and only in a release build.
-
-        pub unsafe extern "C" fn $alloc() -> *mut c_void {
-            if std::ptr::read_volatile(&false) {
-                eprintln!("allocating from {}", stringify!($alloc));
-            }
-            let res: runtime::SharedMap<$k, $v> = Default::default();
-            mem::transmute::<runtime::SharedMap<$k, $v>, *mut c_void>(res)
-        }
-
-        pub unsafe extern "C" fn $iter(map: *mut c_void) -> iter_ty!($k) {
-            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
-            let iter: Vec<_> = map.to_vec();
-            mem::forget(map);
-            let b = iter.into_boxed_slice();
-            Box::into_raw(b) as _
-        }
-
-        pub unsafe extern "C" fn $len(map: *mut c_void) -> Int {
-            if std::ptr::read_volatile(&false) {
-                eprintln!("allocating from {}", stringify!($alloc));
-            }
-            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
-            let res = map.len();
-            mem::forget(map);
-            res as Int
-        }
-
-        pub unsafe extern "C" fn $lookup(map: *mut c_void, k: in_ty!($k)) -> out_ty!($v) {
-            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
-            let key = convert_in!($k, &k);
-            let res = map.get(key).unwrap_or_else(Default::default);
-            mem::forget(map);
-            convert_out!($v, res)
-        }
-
-        pub unsafe extern "C" fn $contains(map: *mut c_void, k: in_ty!($k)) -> Int {
-            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
-            let key = convert_in!($k, &k);
-            let res = map.get(key).is_some() as Int;
-            mem::forget(map);
-            res
-        }
-
-        pub unsafe extern "C" fn $insert(map: *mut c_void, k: in_ty!($k), v: in_ty!($v)) {
-            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
-            let key = convert_in!($k, &k);
-            let val = convert_in!($v, &v);
-            map.insert(key.clone(), val.clone());
-            mem::forget(map);
-        }
-
-        pub unsafe extern "C" fn $delete(map: *mut c_void, k: in_ty!($k)) {
-            let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
-            let key = convert_in!($k, &k);
-            map.delete(key);
-            mem::forget(map);
-        }
-
-        pub unsafe extern "C" fn $drop(map: *mut c_void) {
-            if std::ptr::read_volatile(&false) {
-                eprintln!("dropping from {}", stringify!($drop));
-            }
-            drop_map_generic::<$k, $v>(map)
-        }
-    };
-}
-
 macro_rules! map_impl {
-    ($($iter:ident, $alloc:ident, $len:ident, $lookup:ident,
-       $insert:ident, $delete:ident, $contains:ident, $drop:ident, < $k:tt, $v:tt >;)*) => {
-        $(
-            map_impl_inner!(
-                $alloc,
-                $iter,
-                $lookup,
-                $len,
-                $insert,
-                $delete,
-                $contains,
-                $drop,
-                $k,
-                $v
-            );
-        )*
-    }
-}
+    ($ty:ident, $k:tt, $v:tt) => {
+        paste! {
+            unsafe extern "C" fn [< alloc_ $ty >]() -> *mut c_void {
+                let res: runtime::SharedMap<$k, $v> = Default::default();
+                mem::transmute::<runtime::SharedMap<$k, $v>, *mut c_void>(res)
+            }
 
-map_impl! {
-    iter_intint, alloc_intint, len_intint, lookup_intint,
-    insert_intint, delete_intint, contains_intint, drop_intint, <Int, Int>;
+            unsafe extern "C" fn [< iter_ $ty >](map: *mut c_void) -> iter_ty!($k) {
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                let iter: Vec<_> = map.to_vec();
+                mem::forget(map);
+                let b = iter.into_boxed_slice();
+                Box::into_raw(b) as _
+            }
 
-    iter_intfloat, alloc_intfloat, len_intfloat, lookup_intfloat,
-    insert_intfloat, delete_intfloat, contains_intfloat, drop_intfloat, <Int, Float>;
+            unsafe extern "C" fn [<len_ $ty>](map: *mut c_void) -> Int {
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                let res = map.len();
+                mem::forget(map);
+                res as Int
+            }
 
-    iter_intstr, alloc_intstr, len_intstr, lookup_intstr,
-    insert_intstr, delete_intstr, contains_intstr, drop_intstr, <Int, Str>;
+            unsafe extern "C" fn [<lookup_ $ty>](map: *mut c_void, k: in_ty!($k)) -> out_ty!($v) {
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                let key = convert_in!($k, &k);
+                let res = map.get(key).unwrap_or_else(Default::default);
+                mem::forget(map);
+                convert_out!($v, res)
+            }
 
-    iter_strint, alloc_strint, len_strint, lookup_strint,
-    insert_strint, delete_strint, contains_strint, drop_strint, <Str, Int>;
+            unsafe extern "C" fn [<contains_ $ty>](map: *mut c_void, k: in_ty!($k)) -> Int {
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                let key = convert_in!($k, &k);
+                let res = map.get(key).is_some() as Int;
+                mem::forget(map);
+                res
+            }
 
-    iter_strfloat, alloc_strfloat, len_strfloat, lookup_strfloat,
-    insert_strfloat, delete_strfloat, contains_strfloat, drop_strfloat, <Str, Float>;
+            unsafe extern "C" fn [<insert_ $ty>](map: *mut c_void, k: in_ty!($k), v: in_ty!($v)) {
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                let key = convert_in!($k, &k);
+                let val = convert_in!($v, &v);
+                map.insert(key.clone(), val.clone());
+                mem::forget(map);
+            }
 
-    iter_strstr, alloc_strstr, len_strstr, lookup_strstr,
-    insert_strstr, delete_strstr, contains_strstr, drop_strstr, <Str, Str>;
-}
+            unsafe extern "C" fn [<delete_ $ty>](map: *mut c_void, k: in_ty!($k)) {
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                let key = convert_in!($k, &k);
+                map.delete(key);
+                mem::forget(map);
+            }
 
-macro_rules! slot_impl_inner {
-    ($load:ident, $store:ident, $load_fn:ident, $store_fn:ident, $ty:tt) => {
-        pub unsafe extern "C" fn $load(runtime: *mut c_void, slot: Int) -> out_ty!($ty) {
-            let runtime = &mut *(runtime as *mut Runtime);
-            convert_out!($ty, runtime.core.$load_fn(slot as usize))
-        }
-
-        pub unsafe extern "C" fn $store(runtime: *mut c_void, slot: Int, v: in_ty!($ty)) {
-            let runtime = &mut *(runtime as *mut Runtime);
-            runtime
-                .core
-                .$store_fn(slot as usize, convert_in_val!($ty, v));
+            unsafe extern "C" fn [<drop_ $ty>](map: *mut c_void) {
+                drop_map_generic::<$k, $v>(map)
+            }
         }
     };
 }
+
+map_impl!(intint, Int, Int);
+map_impl!(intfloat, Int, Float);
+map_impl!(intstr, Int, Str);
+map_impl!(strint, Str, Int);
+map_impl!(strfloat, Str, Float);
+map_impl!(strstr, Str, Str);
 
 macro_rules! slot_impl {
-    ($($load:ident, $store:ident, $load_fn:ident, $store_fn:ident, $ty:tt;)*) => {
-        $( slot_impl_inner!($load, $store, $load_fn, $store_fn, $ty); )*
-    }
+    ($name:ident, $ty:tt) => {
+        paste! {
+            unsafe extern "C" fn [<load_slot_ $name>](runtime: *mut c_void, slot: Int) -> out_ty!($ty) {
+                let runtime = &mut *(runtime as *mut Runtime);
+                convert_out!($ty, runtime.core.[<load_ $name>](slot as usize))
+            }
+
+            unsafe extern "C" fn [<store_slot_ $name>](runtime: *mut c_void, slot: Int, v: in_ty!($ty)) {
+                let runtime = &mut *(runtime as *mut Runtime);
+                runtime
+                    .core
+                    .[<store_ $name>](slot as usize, convert_in_val!($ty, v));
+            }
+        }
+    };
 }
 
-slot_impl! {
-    load_slot_int, store_slot_int, load_int, store_int, Int;
-    load_slot_float, store_slot_float, load_float, store_float, Float;
-    load_slot_str, store_slot_str, load_str, store_str, Str;
-    load_slot_intint, store_slot_intint, load_intint, store_intint, Map;
-    load_slot_intfloat, store_slot_intfloat, load_intfloat, store_intfloat, Map;
-    load_slot_intstr, store_slot_intstr, load_intstr, store_intstr, Map;
-    load_slot_strint, store_slot_strint, load_strint, store_strint, Map;
-    load_slot_strfloat, store_slot_strfloat, load_strfloat, store_strfloat, Map;
-    load_slot_strstr, store_slot_strstr, load_strstr, store_strstr, Map;
-}
+slot_impl!(int, Int);
+slot_impl!(float, Float);
+slot_impl!(str, Str);
+slot_impl!(intint, Map);
+slot_impl!(intfloat, Map);
+slot_impl!(intstr, Map);
+slot_impl!(strint, Map);
+slot_impl!(strfloat, Map);
+slot_impl!(strstr, Map);
