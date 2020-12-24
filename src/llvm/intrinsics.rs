@@ -1,3 +1,8 @@
+//! This module exposes core runtime functionality to generated code.
+//!
+//! There is quite a lot of code here at this point, but most of it is "glue". Where possible we
+//! try and hew closely to the steps in the `interp` module, with most functionality in the
+//! underlying runtime library.
 use super::attr::{self, FunctionAttr};
 use crate::builtins::Variable;
 use crate::common::{Either, FileSpec};
@@ -229,6 +234,7 @@ impl IntrinsicMap {
     }
 }
 
+/// Lazily registers all runtime functions with the given LLVM module and context.
 pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
     use llvm_sys::core::*;
     let int_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Int>() * 8) as libc::c_uint);
@@ -821,26 +827,21 @@ unsafe extern "C" fn float_to_str(f: Float) -> U128 {
     mem::transmute::<Str, U128>(runtime::convert::<Float, Str>(f))
 }
 
-// TODO: these next few mem::forgets don't seem necessary.
-
 unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let res = runtime::convert::<&Str, Int>(&s);
-    mem::forget(s);
     res
 }
 
 unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let res = s.with_bytes(runtime::hextoi);
-    mem::forget(s);
     res
 }
 
 unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
     let s = &*(s as *mut Str);
     let res = runtime::convert::<&Str, Float>(&s);
-    mem::forget(s);
     res
 }
 

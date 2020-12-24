@@ -41,6 +41,11 @@ impl<'a> Drop for Core<'a> {
     }
 }
 
+/// Slots are used for transmitting data across different "stages" of a parallel computation. In
+/// order to send data to and from worker threads, we load and store them into dynamically-sized
+/// "slots". These aren't normal registers, because slots store `Send` variants of the frawk
+/// runtime types; making the value safe for sending between threads may involve performing a
+/// deep copy.
 #[derive(Default, Clone)]
 pub(crate) struct Slots {
     pub int: Vec<Int>,
@@ -93,7 +98,8 @@ impl<K: std::hash::Hash + Eq, V: Agg + Default> Agg for HashMap<K, V> {
 /// parallel script.
 pub(crate) struct StageResult {
     slots: Slots,
-    // TODO: put more variables in here?
+    // TODO: put more variables in here? Most builtin variables are just going to be propagated
+    // from the initial thread.
     nr: Int,
 }
 
