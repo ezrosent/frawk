@@ -16,7 +16,10 @@ use std::fs::{read_to_string, File};
 use std::io::Write;
 use tempfile::tempdir;
 
+#[cfg(feature = "llvm_backend")]
 const BACKEND_ARGS: &'static [&'static str] = &["-b", "-O3"];
+#[cfg(not(feature = "llvm_backend"))]
+const BACKEND_ARGS: &'static [&'static str] = &["-b"];
 
 const COUNTRIES: &'static str = r#"Russia	8650	262	Asia
 Canada	3852	24	North America

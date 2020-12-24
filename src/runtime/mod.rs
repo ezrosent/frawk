@@ -771,7 +771,6 @@ impl<K: Hash + Eq + Clone, V> SharedMap<K, V> {
     pub(crate) fn to_iter(&self) -> Iter<K> {
         self.0.borrow().keys().cloned().collect()
     }
-    #[cfg(feature = "llvm_backend")]
     pub(crate) fn to_vec(&self) -> Vec<K> {
         self.0.borrow().keys().cloned().collect()
     }
