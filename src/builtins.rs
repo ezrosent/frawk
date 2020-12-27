@@ -213,7 +213,7 @@ impl FloatFunc {
     #[cfg(feature = "llvm_backend")]
     pub fn intrinsic_name(
         &self,
-    ) -> crate::common::Either<&'static str, crate::llvm::builtin_functions::Function> {
+    ) -> crate::common::Either<*const u8, crate::llvm::builtin_functions::Function> {
         use FloatFunc::*;
         type LLVMFunc = crate::llvm::builtin_functions::Function;
         // NB these must match the corresponding function name in llvm/intrinsics. New functions
@@ -226,8 +226,8 @@ impl FloatFunc {
             Log10 => Either::Right(LLVMFunc::Log10),
             Sqrt => Either::Right(LLVMFunc::Sqrt),
             Exp => Either::Right(LLVMFunc::Exp),
-            Atan => Either::Left("_frawk_atan"),
-            Atan2 => Either::Left("_frawk_atan2"),
+            Atan => Either::Left(crate::llvm::intrinsics::_frawk_atan as _),
+            Atan2 => Either::Left(crate::llvm::intrinsics::_frawk_atan2 as _),
         }
     }
 

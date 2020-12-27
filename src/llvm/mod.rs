@@ -1,7 +1,7 @@
 mod attr;
 pub(crate) mod builtin_functions;
 #[macro_use]
-mod intrinsics;
+pub(crate) mod intrinsics;
 
 pub(crate) use intrinsics::{IntoRuntime, Runtime};
 
@@ -177,6 +177,12 @@ impl<'a, 'b> Drop for Generator<'a, 'b> {
     }
 }
 
+macro_rules! intrinsic {
+    ($name:ident) => {
+        crate::llvm::intrinsics::$name as *const u8
+    };
+}
+
 unsafe fn alloc_local(
     builder: LLVMBuilderRef,
     ty: Ty,
@@ -196,19 +202,19 @@ unsafe fn alloc_local(
             v_loc
         }
         MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
-            let fname = match ty {
-                MapIntInt => "alloc_intint",
-                MapIntFloat => "alloc_intfloat",
-                MapIntStr => "alloc_intstr",
-                MapStrInt => "alloc_strint",
-                MapStrFloat => "alloc_strfloat",
-                MapStrStr => "alloc_strstr",
+            let func = match ty {
+                MapIntInt => intrinsic!(alloc_intint),
+                MapIntFloat => intrinsic!(alloc_intfloat),
+                MapIntStr => intrinsic!(alloc_intstr),
+                MapStrInt => intrinsic!(alloc_strint),
+                MapStrFloat => intrinsic!(alloc_strfloat),
+                MapStrStr => intrinsic!(alloc_strstr),
                 _ => unreachable!(),
             };
             let map_ty = tmap.get_ty(ty);
             let v = LLVMBuildCall(
                 builder,
-                intrinsics.get(fname),
+                intrinsics.get(func),
                 ptr::null_mut(),
                 0,
                 c_str!(""),
@@ -304,7 +310,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             drop_str: ptr::null_mut(),
         };
         res.build_map();
-        let drop_slow = res.intrinsics.get("drop_str_slow");
+        let drop_slow = res.intrinsics.get(intrinsic!(drop_str_slow));
         res.drop_str =
             builtin_functions::gen_drop_str(res.ctx, res.module, &res.type_map, drop_slow);
         res.build_decls();
@@ -939,12 +945,12 @@ impl<'a> View<'a> {
     unsafe fn drop_val(&mut self, mut val: LLVMValueRef, ty: Ty) {
         use Ty::*;
         let func = match ty {
-            MapIntInt => self.intrinsics.get("drop_intint"),
-            MapIntFloat => self.intrinsics.get("drop_intfloat"),
-            MapIntStr => self.intrinsics.get("drop_intstr"),
-            MapStrInt => self.intrinsics.get("drop_strint"),
-            MapStrFloat => self.intrinsics.get("drop_strfloat"),
-            MapStrStr => self.intrinsics.get("drop_strstr"),
+            MapIntInt => self.intrinsics.get(intrinsic!(drop_intint)),
+            MapIntFloat => self.intrinsics.get(intrinsic!(drop_intfloat)),
+            MapIntStr => self.intrinsics.get(intrinsic!(drop_intstr)),
+            MapStrInt => self.intrinsics.get(intrinsic!(drop_strint)),
+            MapStrFloat => self.intrinsics.get(intrinsic!(drop_strfloat)),
+            MapStrStr => self.intrinsics.get(intrinsic!(drop_strstr)),
             Str => self.drop_str,
             _ => return,
         };
@@ -965,7 +971,7 @@ impl<'a> View<'a> {
     unsafe fn call_at(
         &mut self,
         builder: LLVMBuilderRef,
-        func: &'static str,
+        func: *const u8,
         args: &mut [LLVMValueRef],
     ) -> LLVMValueRef {
         let f = self.intrinsics.get(func);
@@ -978,7 +984,7 @@ impl<'a> View<'a> {
         )
     }
 
-    unsafe fn call(&mut self, func: &'static str, args: &mut [LLVMValueRef]) -> LLVMValueRef {
+    unsafe fn call(&mut self, func: *const u8, args: &mut [LLVMValueRef]) -> LLVMValueRef {
         self.call_at(self.f.builder, func, args)
     }
 
@@ -1002,12 +1008,12 @@ impl<'a> View<'a> {
                 return err!("unexpected type passed to alloca: {:?}", ty);
             }
             // map
-            Ty::MapIntInt => "alloc_intint",
-            Ty::MapIntFloat => "alloc_intfloat",
-            Ty::MapIntStr => "alloc_intstr",
-            Ty::MapStrInt => "alloc_strint",
-            Ty::MapStrFloat => "alloc_strfloat",
-            Ty::MapStrStr => "alloc_strstr",
+            Ty::MapIntInt => intrinsic!(alloc_intint),
+            Ty::MapIntFloat => intrinsic!(alloc_intfloat),
+            Ty::MapIntStr => intrinsic!(alloc_intstr),
+            Ty::MapStrInt => intrinsic!(alloc_strint),
+            Ty::MapStrFloat => intrinsic!(alloc_strfloat),
+            Ty::MapStrStr => intrinsic!(alloc_strstr),
         };
         let llty = self.tmap.get_ty(ty);
         let res = LLVMBuildAlloca(self.entry_builder, llty, c_str!(""));
@@ -1020,12 +1026,12 @@ impl<'a> View<'a> {
         use Ty::*;
         let arrv = self.get_local(arr)?;
         let (len_fn, begin_fn) = match arr.1 {
-            MapIntInt => ("len_intint", "iter_intint"),
-            MapIntStr => ("len_intstr", "iter_intstr"),
-            MapIntFloat => ("len_intfloat", "iter_intfloat"),
-            MapStrInt => ("len_strint", "iter_strint"),
-            MapStrStr => ("len_strstr", "iter_strstr"),
-            MapStrFloat => ("len_strfloat", "iter_strfloat"),
+            MapIntInt => (intrinsic!(len_intint), intrinsic!(iter_intint)),
+            MapIntStr => (intrinsic!(len_intstr), intrinsic!(iter_intstr)),
+            MapIntFloat => (intrinsic!(len_intfloat), intrinsic!(iter_intfloat)),
+            MapStrInt => (intrinsic!(len_strint), intrinsic!(iter_strint)),
+            MapStrStr => (intrinsic!(len_strstr), intrinsic!(iter_strstr)),
+            MapStrFloat => (intrinsic!(len_strfloat), intrinsic!(iter_strfloat)),
             _ => return err!("iterating over non-map type: {:?}", arr.1),
         };
 
@@ -1089,7 +1095,7 @@ impl<'a> View<'a> {
             (res, res_loc)
         };
         if let Ty::Str = dst.1 {
-            self.call("ref_str", &mut [res_loc]);
+            self.call(intrinsic!(ref_str), &mut [res_loc]);
         }
         self.bind_val(dst, res);
 
@@ -1133,7 +1139,7 @@ impl<'a> View<'a> {
                 Str => {
                     self.drop_val(param, Ty::Str);
                     LLVMBuildStore(self.f.builder, new_global, param);
-                    self.call("ref_str", &mut [param]);
+                    self.call(intrinsic!(ref_str), &mut [param]);
                 }
                 _ => {
                     LLVMBuildStore(self.f.builder, new_global, param);
@@ -1182,15 +1188,15 @@ impl<'a> View<'a> {
             /*sign_extend=*/ 0,
         );
         let func = match dst.1 {
-            Ty::Int => "load_slot_int",
-            Ty::Float => "load_slot_float",
-            Ty::Str => "load_slot_str",
-            Ty::MapIntInt => "load_slot_intint",
-            Ty::MapIntFloat => "load_slot_intfloat",
-            Ty::MapIntStr => "load_slot_intstr",
-            Ty::MapStrInt => "load_slot_strint",
-            Ty::MapStrFloat => "load_slot_strfloat",
-            Ty::MapStrStr => "load_slot_strstr",
+            Ty::Int => intrinsic!(load_slot_int),
+            Ty::Float => intrinsic!(load_slot_float),
+            Ty::Str => intrinsic!(load_slot_str),
+            Ty::MapIntInt => intrinsic!(load_slot_intint),
+            Ty::MapIntFloat => intrinsic!(load_slot_intfloat),
+            Ty::MapIntStr => intrinsic!(load_slot_intstr),
+            Ty::MapStrInt => intrinsic!(load_slot_strint),
+            Ty::MapStrFloat => intrinsic!(load_slot_strfloat),
+            Ty::MapStrStr => intrinsic!(load_slot_strstr),
             _ => unreachable!(),
         };
         let resv = self.call(func, &mut [self.runtime_val(), slot_v]);
@@ -1204,15 +1210,15 @@ impl<'a> View<'a> {
             /*sign_extend=*/ 0,
         );
         let func = match src.1 {
-            Ty::Int => "store_slot_int",
-            Ty::Float => "store_slot_float",
-            Ty::Str => "store_slot_str",
-            Ty::MapIntInt => "store_slot_intint",
-            Ty::MapIntFloat => "store_slot_intfloat",
-            Ty::MapIntStr => "store_slot_intstr",
-            Ty::MapStrInt => "store_slot_strint",
-            Ty::MapStrFloat => "store_slot_strfloat",
-            Ty::MapStrStr => "store_slot_strstr",
+            Ty::Int => intrinsic!(store_slot_int),
+            Ty::Float => intrinsic!(store_slot_float),
+            Ty::Str => intrinsic!(store_slot_str),
+            Ty::MapIntInt => intrinsic!(store_slot_intint),
+            Ty::MapIntFloat => intrinsic!(store_slot_intfloat),
+            Ty::MapIntStr => intrinsic!(store_slot_intstr),
+            Ty::MapStrInt => intrinsic!(store_slot_strint),
+            Ty::MapStrFloat => intrinsic!(store_slot_strfloat),
+            Ty::MapStrStr => intrinsic!(store_slot_strstr),
             _ => unreachable!(),
         };
         let arg = self.get_local(src)?;
@@ -1230,12 +1236,12 @@ impl<'a> View<'a> {
         assert_eq!(map.1.val()?, dst.1);
         use Ty::*;
         let func = match map.1 {
-            MapIntInt => "lookup_intint",
-            MapIntFloat => "lookup_intfloat",
-            MapIntStr => "lookup_intstr",
-            MapStrInt => "lookup_strint",
-            MapStrFloat => "lookup_strfloat",
-            MapStrStr => "lookup_strstr",
+            MapIntInt => intrinsic!(lookup_intint),
+            MapIntFloat => intrinsic!(lookup_intfloat),
+            MapIntStr => intrinsic!(lookup_intstr),
+            MapStrInt => intrinsic!(lookup_strint),
+            MapStrFloat => intrinsic!(lookup_strfloat),
+            MapStrStr => intrinsic!(lookup_strstr),
             _ => unreachable!(),
         };
         let mapv = self.get_local(map)?;
@@ -1249,12 +1255,12 @@ impl<'a> View<'a> {
         assert_eq!(map.1.key()?, key.1);
         use Ty::*;
         let func = match map.1 {
-            MapIntInt => "delete_intint",
-            MapIntFloat => "delete_intfloat",
-            MapIntStr => "delete_intstr",
-            MapStrInt => "delete_strint",
-            MapStrFloat => "delete_strfloat",
-            MapStrStr => "delete_strstr",
+            MapIntInt => intrinsic!(delete_intint),
+            MapIntFloat => intrinsic!(delete_intfloat),
+            MapIntStr => intrinsic!(delete_intstr),
+            MapStrInt => intrinsic!(delete_strint),
+            MapStrFloat => intrinsic!(delete_strfloat),
+            MapStrStr => intrinsic!(delete_strstr),
             _ => unreachable!(),
         };
         let mapv = self.get_local(map)?;
@@ -1272,12 +1278,12 @@ impl<'a> View<'a> {
         assert_eq!(map.1.key()?, key.1);
         use Ty::*;
         let func = match map.1 {
-            MapIntInt => "contains_intint",
-            MapIntFloat => "contains_intfloat",
-            MapIntStr => "contains_intstr",
-            MapStrInt => "contains_strint",
-            MapStrFloat => "contains_strfloat",
-            MapStrStr => "contains_strstr",
+            MapIntInt => intrinsic!(contains_intint),
+            MapIntFloat => intrinsic!(contains_intfloat),
+            MapIntStr => intrinsic!(contains_intstr),
+            MapStrInt => intrinsic!(contains_strint),
+            MapStrFloat => intrinsic!(contains_strfloat),
+            MapStrStr => intrinsic!(contains_strstr),
             _ => unreachable!(),
         };
         let mapv = self.get_local(map)?;
@@ -1290,12 +1296,12 @@ impl<'a> View<'a> {
     unsafe fn len_map(&mut self, map: (NumTy, Ty), dst: (NumTy, Ty)) -> Result<()> {
         use Ty::*;
         let func = match map.1 {
-            MapIntInt => "len_intint",
-            MapIntFloat => "len_intfloat",
-            MapIntStr => "len_intstr",
-            MapStrInt => "len_strint",
-            MapStrFloat => "len_strfloat",
-            MapStrStr => "len_strstr",
+            MapIntInt => intrinsic!(len_intint),
+            MapIntFloat => intrinsic!(len_intfloat),
+            MapIntStr => intrinsic!(len_intstr),
+            MapStrInt => intrinsic!(len_strint),
+            MapStrFloat => intrinsic!(len_strfloat),
+            MapStrStr => intrinsic!(len_strstr),
             _ => unreachable!(),
         };
         let mapv = self.get_local(map)?;
@@ -1314,12 +1320,12 @@ impl<'a> View<'a> {
         assert_eq!(map.1.val()?, val.1);
         use Ty::*;
         let func = match map.1 {
-            MapIntInt => "insert_intint",
-            MapIntFloat => "insert_intfloat",
-            MapIntStr => "insert_intstr",
-            MapStrInt => "insert_strint",
-            MapStrFloat => "insert_strfloat",
-            MapStrStr => "insert_strstr",
+            MapIntInt => intrinsic!(insert_intint),
+            MapIntFloat => intrinsic!(insert_intfloat),
+            MapIntStr => intrinsic!(insert_intstr),
+            MapStrInt => intrinsic!(insert_strint),
+            MapStrFloat => intrinsic!(insert_strfloat),
+            MapStrStr => intrinsic!(insert_strstr),
             _ => unreachable!(),
         };
         let mapv = self.get_local(map)?;
@@ -1408,27 +1414,27 @@ impl<'a> View<'a> {
             }
             IntToStr(sr, ir) => {
                 let arg = self.get_local(ir.reflect())?;
-                let res = self.call("int_to_str", &mut [arg]);
+                let res = self.call(intrinsic!(int_to_str), &mut [arg]);
                 self.bind_reg(sr, res);
             }
             FloatToStr(sr, fr) => {
                 let arg = self.get_local(fr.reflect())?;
-                let res = self.call("float_to_str", &mut [arg]);
+                let res = self.call(intrinsic!(float_to_str), &mut [arg]);
                 self.bind_reg(sr, res);
             }
             StrToInt(ir, sr) => {
                 let str_ref = self.get_local(sr.reflect())?;
-                let res = self.call("str_to_int", &mut [str_ref]);
+                let res = self.call(intrinsic!(str_to_int), &mut [str_ref]);
                 self.bind_reg(ir, res);
             }
             HexStrToInt(ir, sr) => {
                 let str_ref = self.get_local(sr.reflect())?;
-                let res = self.call("hex_str_to_int", &mut [str_ref]);
+                let res = self.call(intrinsic!(hex_str_to_int), &mut [str_ref]);
                 self.bind_reg(ir, res);
             }
             StrToFloat(fr, sr) => {
                 let str_ref = self.get_local(sr.reflect())?;
-                let res = self.call("str_to_float", &mut [str_ref]);
+                let res = self.call(intrinsic!(str_to_float), &mut [str_ref]);
                 self.bind_reg(fr, res);
             }
             FloatToInt(ir, fr) => {
@@ -1512,7 +1518,7 @@ impl<'a> View<'a> {
             }
             NotStr(res, sr) => {
                 let mut sv = self.get_local(sr.reflect())?;
-                let strlen = self.intrinsics.get("str_len");
+                let strlen = self.intrinsics.get(intrinsic!(str_len));
                 let lenv = LLVMBuildCall(self.f.builder, strlen, &mut sv, 1, c_str!(""));
                 let ty = self.tmap.get_ty(Ty::Int);
                 let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
@@ -1560,62 +1566,62 @@ impl<'a> View<'a> {
                 self.bind_reg(dst, resv);
             }
             Rand(res) => {
-                let resv = self.call("rand_float", &mut [self.runtime_val()]);
+                let resv = self.call(intrinsic!(rand_float), &mut [self.runtime_val()]);
                 self.bind_reg(res, resv);
             }
             Srand(res, seed) => {
                 let seedv = self.get_local(seed.reflect())?;
-                let resv = self.call("seed_rng", &mut [self.runtime_val(), seedv]);
+                let resv = self.call(intrinsic!(seed_rng), &mut [self.runtime_val(), seedv]);
                 self.bind_reg(res, resv);
             }
             ReseedRng(res) => {
-                let resv = self.call("reseed_rng", &mut [self.runtime_val()]);
+                let resv = self.call(intrinsic!(reseed_rng), &mut [self.runtime_val()]);
                 self.bind_reg(res, resv);
             }
             Concat(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let resv = self.call("concat", &mut [lv, rv]);
+                let resv = self.call(intrinsic!(concat), &mut [lv, rv]);
                 self.bind_reg(res, resv);
             }
             Match(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let rt = self.runtime_val();
-                let resv = self.call("match_pat_loc", &mut [rt, lv, rv]);
+                let resv = self.call(intrinsic!(match_pat_loc), &mut [rt, lv, rv]);
                 self.bind_reg(res, resv);
             }
             IsMatch(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
                 let rt = self.runtime_val();
-                let resv = self.call("match_pat", &mut [rt, lv, rv]);
+                let resv = self.call(intrinsic!(match_pat), &mut [rt, lv, rv]);
                 self.bind_reg(res, resv);
             }
             MatchConst(res, src, pat) => {
                 let rt = self.runtime_val();
                 let srcv = self.get_local(src.reflect())?;
                 let patv = self.get_ptr(&**pat);
-                let resv = self.call("match_const_pat_loc", &mut [rt, srcv, patv]);
+                let resv = self.call(intrinsic!(match_const_pat_loc), &mut [rt, srcv, patv]);
                 self.bind_reg(res, resv);
                 self.regexes.push(pat.clone());
             }
             IsMatchConst(res, src, pat) => {
                 let srcv = self.get_local(src.reflect())?;
                 let patv = self.get_ptr(&**pat);
-                let resv = self.call("match_const_pat", &mut [srcv, patv]);
+                let resv = self.call(intrinsic!(match_const_pat), &mut [srcv, patv]);
                 self.bind_reg(res, resv);
                 self.regexes.push(pat.clone());
             }
             SubstrIndex(res, s, t) => {
                 let sv = self.get_local(s.reflect())?;
                 let tv = self.get_local(t.reflect())?;
-                let resv = self.call("substr_index", &mut [sv, tv]);
+                let resv = self.call(intrinsic!(substr_index), &mut [sv, tv]);
                 self.bind_reg(res, resv);
             }
             LenStr(res, s) => {
                 let sv = self.get_local(s.reflect())?;
-                let lenv = self.call("str_len", &mut [sv]);
+                let lenv = self.call(intrinsic!(str_len), &mut [sv]);
                 self.bind_reg(res, lenv);
             }
             Sub(res, pat, s, in_s) => {
@@ -1623,7 +1629,7 @@ impl<'a> View<'a> {
                 let sv = self.get_local(s.reflect())?;
                 let in_sv = self.get_local(in_s.reflect())?;
                 let rt = self.runtime_val();
-                let resv = self.call("subst_first", &mut [rt, patv, sv, in_sv]);
+                let resv = self.call(intrinsic!(subst_first), &mut [rt, patv, sv, in_sv]);
                 self.bind_reg(res, resv);
             }
             GSub(res, pat, s, in_s) => {
@@ -1631,24 +1637,24 @@ impl<'a> View<'a> {
                 let sv = self.get_local(s.reflect())?;
                 let in_sv = self.get_local(in_s.reflect())?;
                 let rt = self.runtime_val();
-                let resv = self.call("subst_all", &mut [rt, patv, sv, in_sv]);
+                let resv = self.call(intrinsic!(subst_all), &mut [rt, patv, sv, in_sv]);
                 self.bind_reg(res, resv);
             }
             EscapeCSV(res, s) => {
                 let sv = self.get_local(s.reflect())?;
-                let resv = self.call("escape_csv", &mut [sv]);
+                let resv = self.call(intrinsic!(escape_csv), &mut [sv]);
                 self.bind_reg(res, resv);
             }
             EscapeTSV(res, s) => {
                 let sv = self.get_local(s.reflect())?;
-                let resv = self.call("escape_tsv", &mut [sv]);
+                let resv = self.call(intrinsic!(escape_tsv), &mut [sv]);
                 self.bind_reg(res, resv);
             }
             Substr(res, base, l, r) => {
                 let basev = self.get_local(base.reflect())?;
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let resv = self.call("substr", &mut [basev, lv, rv]);
+                let resv = self.call(intrinsic!(substr), &mut [basev, lv, rv]);
                 self.bind_reg(res, resv);
             }
             LTFloat(res, l, r) => {
@@ -1666,7 +1672,7 @@ impl<'a> View<'a> {
             LTStr(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let resv = self.call("str_lt", &mut [lv, rv]);
+                let resv = self.call(intrinsic!(str_lt), &mut [lv, rv]);
                 self.bind_reg(res, resv);
             }
             GTFloat(res, l, r) => {
@@ -1684,7 +1690,7 @@ impl<'a> View<'a> {
             GTStr(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let resv = self.call("str_gt", &mut [lv, rv]);
+                let resv = self.call(intrinsic!(str_gt), &mut [lv, rv]);
                 self.bind_reg(res, resv);
             }
             LTEFloat(res, l, r) => {
@@ -1702,7 +1708,7 @@ impl<'a> View<'a> {
             LTEStr(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let resv = self.call("str_lte", &mut [lv, rv]);
+                let resv = self.call(intrinsic!(str_lte), &mut [lv, rv]);
                 self.bind_reg(res, resv);
             }
             GTEFloat(res, l, r) => {
@@ -1720,7 +1726,7 @@ impl<'a> View<'a> {
             GTEStr(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let resv = self.call("str_gte", &mut [lv, rv]);
+                let resv = self.call(intrinsic!(str_gte), &mut [lv, rv]);
                 self.bind_reg(res, resv);
             }
             EQFloat(res, l, r) => {
@@ -1738,31 +1744,31 @@ impl<'a> View<'a> {
             EQStr(res, l, r) => {
                 let lv = self.get_local(l.reflect())?;
                 let rv = self.get_local(r.reflect())?;
-                let resv = self.call("str_eq", &mut [lv, rv]);
+                let resv = self.call(intrinsic!(str_eq), &mut [lv, rv]);
                 self.bind_reg(res, resv);
             }
             SetColumn(dst, src) => {
                 let dv = self.get_local(dst.reflect())?;
                 let sv = self.get_local(src.reflect())?;
-                self.call("set_col", &mut [self.runtime_val(), dv, sv]);
+                self.call(intrinsic!(set_col), &mut [self.runtime_val(), dv, sv]);
             }
             GetColumn(dst, src) => {
                 let sv = self.get_local(src.reflect())?;
-                let resv = self.call("get_col", &mut [self.runtime_val(), sv]);
+                let resv = self.call(intrinsic!(get_col), &mut [self.runtime_val(), sv]);
                 self.bind_reg(dst, resv);
             }
             JoinCSV(dst, start, end) => {
                 let rt = self.runtime_val();
                 let start = self.get_local(start.reflect())?;
                 let end = self.get_local(end.reflect())?;
-                let resv = self.call("join_csv", &mut [rt, start, end]);
+                let resv = self.call(intrinsic!(join_csv), &mut [rt, start, end]);
                 self.bind_reg(dst, resv);
             }
             JoinTSV(dst, start, end) => {
                 let rt = self.runtime_val();
                 let start = self.get_local(start.reflect())?;
                 let end = self.get_local(end.reflect())?;
-                let resv = self.call("join_tsv", &mut [rt, start, end]);
+                let resv = self.call(intrinsic!(join_tsv), &mut [rt, start, end]);
                 self.bind_reg(dst, resv);
             }
             JoinColumns(dst, start, end, sep) => {
@@ -1770,7 +1776,7 @@ impl<'a> View<'a> {
                 let start = self.get_local(start.reflect())?;
                 let end = self.get_local(end.reflect())?;
                 let sep = self.get_local(sep.reflect())?;
-                let resv = self.call("join_cols", &mut [rt, start, end, sep]);
+                let resv = self.call(intrinsic!(join_cols), &mut [rt, start, end, sep]);
                 self.bind_reg(dst, resv);
             }
             SplitInt(flds, to_split, arr, pat) => {
@@ -1778,7 +1784,7 @@ impl<'a> View<'a> {
                 let tsv = self.get_local(to_split.reflect())?;
                 let arrv = self.get_local(arr.reflect())?;
                 let patv = self.get_local(pat.reflect())?;
-                let resv = self.call("split_int", &mut [rt, tsv, arrv, patv]);
+                let resv = self.call(intrinsic!(split_int), &mut [rt, tsv, arrv, patv]);
                 self.bind_reg(flds, resv);
             }
             SplitStr(flds, to_split, arr, pat) => {
@@ -1786,7 +1792,7 @@ impl<'a> View<'a> {
                 let tsv = self.get_local(to_split.reflect())?;
                 let arrv = self.get_local(arr.reflect())?;
                 let patv = self.get_local(pat.reflect())?;
-                let resv = self.call("split_str", &mut [rt, tsv, arrv, patv]);
+                let resv = self.call(intrinsic!(split_str), &mut [rt, tsv, arrv, patv]);
                 self.bind_reg(flds, resv);
             }
             Sprintf { dst, fmt, args } => {
@@ -1866,43 +1872,49 @@ impl<'a> View<'a> {
             }
             Close(file) => {
                 let filev = self.get_local(file.reflect())?;
-                self.call("close_file", &mut [self.runtime_val(), filev]);
+                self.call(intrinsic!(close_file), &mut [self.runtime_val(), filev]);
             }
             RunCmd(dst, cmd) => {
                 let cmd = self.get_local(cmd.reflect())?;
-                let resv = self.call("run_system", &mut [cmd]);
+                let resv = self.call(intrinsic!(run_system), &mut [cmd]);
                 self.bind_reg(dst, resv);
             }
             ReadErr(dst, file, is_file) => {
                 let filev = self.get_local(file.reflect())?;
                 let int_ty = self.tmap.get_ty(Ty::Int);
                 let is_filev = LLVMConstInt(int_ty, *is_file as u64, /*sign_extend=*/ 1);
-                let resv = self.call("read_err", &mut [self.runtime_val(), filev, is_filev]);
+                let resv = self.call(
+                    intrinsic!(read_err),
+                    &mut [self.runtime_val(), filev, is_filev],
+                );
                 self.bind_reg(dst, resv);
             }
             NextLine(dst, file, is_file) => {
                 let filev = self.get_local(file.reflect())?;
                 let int_ty = self.tmap.get_ty(Ty::Int);
                 let is_filev = LLVMConstInt(int_ty, *is_file as u64, /*sign_extend=*/ 1);
-                let resv = self.call("next_line", &mut [self.runtime_val(), filev, is_filev]);
+                let resv = self.call(
+                    intrinsic!(next_line),
+                    &mut [self.runtime_val(), filev, is_filev],
+                );
                 self.bind_reg(dst, resv);
             }
             ReadErrStdin(dst) => {
-                let resv = self.call("read_err_stdin", &mut [self.runtime_val()]);
+                let resv = self.call(intrinsic!(read_err_stdin), &mut [self.runtime_val()]);
                 self.bind_reg(dst, resv);
             }
             NextLineStdin(dst) => {
-                let resv = self.call("next_line_stdin", &mut [self.runtime_val()]);
+                let resv = self.call(intrinsic!(next_line_stdin), &mut [self.runtime_val()]);
                 self.bind_reg(dst, resv);
             }
             NextLineStdinFused() => {
-                self.call("next_line_stdin_fused", &mut [self.runtime_val()]);
+                self.call(intrinsic!(next_line_stdin_fused), &mut [self.runtime_val()]);
             }
             NextFile() => {
-                self.call("next_file", &mut [self.runtime_val()]);
+                self.call(intrinsic!(next_file), &mut [self.runtime_val()]);
             }
             UpdateUsedFields() => {
-                self.call("update_used_fields", &mut [self.runtime_val()]);
+                self.call(intrinsic!(update_used_fields), &mut [self.runtime_val()]);
             }
             SetFI(key, val) => {
                 // We could probably get away without an extra intrinsic here, but this way we can
@@ -1910,7 +1922,10 @@ impl<'a> View<'a> {
                 // framework for performing refs and drops.
                 let keyv = self.get_local(key.reflect())?;
                 let valv = self.get_local(val.reflect())?;
-                self.call("set_fi_entry", &mut [self.runtime_val(), keyv, valv]);
+                self.call(
+                    intrinsic!(set_fi_entry),
+                    &mut [self.runtime_val(), keyv, valv],
+                );
             }
             Lookup {
                 map_ty,
@@ -1944,10 +1959,10 @@ impl<'a> View<'a> {
             )?,
             LoadVarStr(dst, var) => {
                 let v = self.var_val(var);
-                let res = self.call("load_var_str", &mut [self.runtime_val(), v]);
+                let res = self.call(intrinsic!(load_var_str), &mut [self.runtime_val(), v]);
                 let dreg = dst.reflect();
                 self.bind_val(dreg, res);
-                // The "load_var_" function refs the result for the common case that we are binding
+                // The intrinsic!(load_var_) function refs the result for the common case that we are binding
                 // the result to a local variable. If we are storing it directly into a global,
                 // then bind_val would have already reffed it, so we decrement the count again.
                 //
@@ -1960,21 +1975,21 @@ impl<'a> View<'a> {
             StoreVarStr(var, src) => {
                 let v = self.var_val(var);
                 let sv = self.get_local(src.reflect())?;
-                self.call("store_var_str", &mut [self.runtime_val(), v, sv]);
+                self.call(intrinsic!(store_var_str), &mut [self.runtime_val(), v, sv]);
             }
             LoadVarInt(dst, var) => {
                 let v = self.var_val(var);
-                let res = self.call("load_var_int", &mut [self.runtime_val(), v]);
+                let res = self.call(intrinsic!(load_var_int), &mut [self.runtime_val(), v]);
                 self.bind_reg(dst, res);
             }
             StoreVarInt(var, src) => {
                 let v = self.var_val(var);
                 let sv = self.get_local(src.reflect())?;
-                self.call("store_var_int", &mut [self.runtime_val(), v, sv]);
+                self.call(intrinsic!(store_var_int), &mut [self.runtime_val(), v, sv]);
             }
             LoadVarIntMap(dst, var) => {
                 let v = self.var_val(var);
-                let res = self.call("load_var_intmap", &mut [self.runtime_val(), v]);
+                let res = self.call(intrinsic!(load_var_intmap), &mut [self.runtime_val(), v]);
                 // See the comment in the LoadVarStr case.
                 let dreg = dst.reflect();
                 self.bind_val(dreg, res);
@@ -1985,11 +2000,14 @@ impl<'a> View<'a> {
             StoreVarIntMap(var, src) => {
                 let v = self.var_val(var);
                 let sv = self.get_local(src.reflect())?;
-                self.call("store_var_intmap", &mut [self.runtime_val(), v, sv]);
+                self.call(
+                    intrinsic!(store_var_intmap),
+                    &mut [self.runtime_val(), v, sv],
+                );
             }
             LoadVarStrMap(dst, var) => {
                 let v = self.var_val(var);
-                let res = self.call("load_var_strmap", &mut [self.runtime_val(), v]);
+                let res = self.call(intrinsic!(load_var_strmap), &mut [self.runtime_val(), v]);
                 // See the comment in the LoadVarStr case.
                 let dreg = dst.reflect();
                 self.bind_val(dreg, res);
@@ -2000,7 +2018,10 @@ impl<'a> View<'a> {
             StoreVarStrMap(var, src) => {
                 let v = self.var_val(var);
                 let sv = self.get_local(src.reflect())?;
-                self.call("store_var_strmap", &mut [self.runtime_val(), v, sv]);
+                self.call(
+                    intrinsic!(store_var_strmap),
+                    &mut [self.runtime_val(), v, sv],
+                );
             }
 
             LoadSlot { ty, dst, slot } => self.load_slot((*dst, *ty), *slot),
@@ -2008,13 +2029,13 @@ impl<'a> View<'a> {
             Mov(ty, dst, src) => {
                 if let Ty::Str = ty {
                     let sv = self.get_local((*src, Ty::Str))?;
-                    self.call("ref_str", &mut [sv]);
+                    self.call(intrinsic!(ref_str), &mut [sv]);
                     let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
                     self.bind_val((*dst, Ty::Str), loaded)
                 } else {
                     let sv = self.get_local((*src, *ty))?;
                     if ty.is_array() {
-                        self.call("ref_map", &mut [sv]);
+                        self.call(intrinsic!(ref_map), &mut [sv]);
                     }
                     self.bind_val((*dst, *ty), sv)
                 }
@@ -2129,8 +2150,8 @@ impl<'a> View<'a> {
             Ret(_reg, _ty) => {}
             DropIter(reg, ty) => {
                 let drop_fn = match ty {
-                    Ty::IterInt => "drop_iter_int",
-                    Ty::IterStr => "drop_iter_str",
+                    Ty::IterInt => intrinsic!(drop_iter_int),
+                    Ty::IterStr => intrinsic!(drop_iter_str),
                     _ => return err!("can only drop iterators, got {:?}", ty),
                 };
                 let IterState { iter_ptr, len, .. } = self.get_iter((*reg, *ty))?.clone();
@@ -2231,7 +2252,7 @@ impl<'a> View<'a> {
         );
         match kind {
             File => {
-                let intrinsic = self.intrinsics.get("printf_impl_file");
+                let intrinsic = self.intrinsics.get(intrinsic!(printf_impl_file));
                 // runtime, spec, args, tys, num_args, output, append
                 let mut args = [
                     LLVMGetParam(f, 0),
@@ -2252,7 +2273,7 @@ impl<'a> View<'a> {
                 LLVMBuildRetVoid(builder);
             }
             Stdout => {
-                let intrinsic = self.intrinsics.get("printf_impl_stdout");
+                let intrinsic = self.intrinsics.get(intrinsic!(printf_impl_stdout));
                 // runtime, spec, args, tys, num_args
                 let mut args = [
                     LLVMGetParam(f, 0),
@@ -2271,7 +2292,7 @@ impl<'a> View<'a> {
                 LLVMBuildRetVoid(builder);
             }
             Sprintf => {
-                let intrinsic = self.intrinsics.get("sprintf_impl");
+                let intrinsic = self.intrinsics.get(intrinsic!(sprintf_impl));
                 let mut args = [
                     LLVMGetParam(f, 0),
                     LLVMGetParam(f, 1),
@@ -2343,7 +2364,7 @@ impl<'a> View<'a> {
         let args_ptr = LLVMBuildGEP(builder, args_array, start_index.as_mut_ptr(), 2, c_str!(""));
         let len_v = LLVMConstInt(int_ty, len as u64, /*sign_extend=*/ 0);
         if is_stdout {
-            let intrinsic = self.intrinsics.get("print_all_stdout");
+            let intrinsic = self.intrinsics.get(intrinsic!(print_all_stdout));
             let mut args = [LLVMGetParam(f, 0), args_ptr, len_v];
             LLVMBuildCall(
                 builder,
@@ -2354,7 +2375,7 @@ impl<'a> View<'a> {
             );
             LLVMBuildRetVoid(builder);
         } else {
-            let intrinsic = self.intrinsics.get("print_all_file");
+            let intrinsic = self.intrinsics.get(intrinsic!(print_all_file));
             let out_v = LLVMGetParam(f, 1 + len);
             let spec_v = LLVMGetParam(f, 1 + len + 1);
             let mut args = [LLVMGetParam(f, 0), args_ptr, len_v, out_v, spec_v];

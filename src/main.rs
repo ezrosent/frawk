@@ -10,6 +10,7 @@ pub mod ast;
 pub mod builtins;
 pub mod bytecode;
 pub mod cfg;
+pub mod codegen;
 pub mod compile;
 pub mod cross_stage;
 pub mod dataflow;
