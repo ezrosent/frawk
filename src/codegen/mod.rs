@@ -1,7 +1,9 @@
 use crate::{
-    bytecode::Instr,
+    builtins,
+    bytecode::Accum,
     common::{NumTy, Result},
     compile,
+    runtime::UniqueStr,
 };
 
 // TODO: move intrinsics module over to codegen, make it CodeGenerator-generic.
@@ -27,25 +29,68 @@ struct Sig<C: CodeGenerator> {
 
 macro_rules! intrinsic {
     ($name:ident) => {
-        crate::llvm::intrinsics::$name as *const u8
+        Op::Intrinsic(crate::llvm::intrinsics::$name as *const u8)
     };
+}
+
+pub(crate) enum Cmp {
+    EQ,
+    NEQ,
+    LTE,
+    LT,
+    GTE,
+    GT,
+}
+
+pub(crate) enum Arith {
+    Mul,
+    Minus,
+    Add,
+    Mod,
+}
+
+pub(crate) enum Op {
+    Cmp { is_float: bool, op: Cmp },
+    Arith { is_float: bool, op: Arith },
+    Bitwise(builtins::Bitwise),
+    Math(builtins::FloatFunc),
+    Div,
+    Pow,
+    FloatToInt,
+    IntToFloat,
+    Intrinsic(*const u8),
+}
+
+fn op(op: Arith, is_float: bool) -> Op {
+    Op::Arith { is_float, op }
 }
 
 /// CodeGenerator encapsulates common functionality needed to generate instructions across multiple
 /// backends. This trait is not currently sufficient to abstract over any backend "end to end" from
 /// bytecode instructions all the way to machine code, but it allows us to keep much of the more
-/// mundane plumbing work common across all backends.
+/// mundane plumbing work common across all backends (as well as separate safe "glue code" from
+/// unsafe calls to the LLVM C API).
 pub(crate) trait CodeGenerator {
     type Ty;
     type Val;
+
+    // mappings from compile::Ty to Self::Ty
     fn void_ptr_ty(&self) -> Self::Ty;
     fn usize_ty(&self) -> Self::Ty;
     fn get_ty(&self, ty: compile::Ty) -> Self::Ty;
+
+    // mappings to and from bytecode-level registers to IR-level values
     fn bind_val(&mut self, r: Ref, v: Self::Val) -> Result<()>;
     fn get_val(&mut self, r: Ref) -> Result<Self::Val>;
+
+    // backend-specific handling of constants and low-level operations.
     fn runtime_val(&self) -> Self::Val;
-    fn call_intrinsic(&mut self, func: *const u8, args: &mut [Self::Val]) -> Result<Self::Val>;
     fn const_int(&self, i: i64) -> Self::Val;
+    fn const_float(&self, f: f64) -> Self::Val;
+    fn const_str<'a>(&self, s: &UniqueStr<'a>) -> Self::Val;
+
+    /// Call an intrinsic, given a pointer to the [`intrinsics`] module and a list of arguments.
+    fn call_intrinsic(&mut self, func: Op, args: &mut [Self::Val]) -> Result<Self::Val>;
 
     // derived functions
 
@@ -201,6 +246,71 @@ pub(crate) trait CodeGenerator {
         self.call_intrinsic(func, &mut [mapv, keyv, valv])?;
         Ok(())
     }
+
+    /// Wraps `call_intrinsic` for [`Op`]s that have two arguments and return a value.
+    fn binop(&mut self, op: Op, dst: &impl Accum, l: &impl Accum, r: &impl Accum) -> Result<()> {
+        let lv = self.get_val(l.reflect())?;
+        let rv = self.get_val(r.reflect())?;
+        let res = self.call_intrinsic(op, &mut [lv, rv])?;
+        self.bind_val(dst.reflect(), res)
+    }
+
+    fn gen_ll_inst(&mut self, inst: &compile::LL) -> Result<()> {
+        use crate::bytecode::Instr::*;
+        match inst {
+            StoreConstStr(sr, s) => {
+                let sv = self.const_str(s);
+                self.bind_val(sr.reflect(), sv)
+            }
+            StoreConstInt(ir, i) => {
+                let iv = self.const_int(*i);
+                self.bind_val(ir.reflect(), iv)
+            }
+            StoreConstFloat(fr, f) => {
+                let fv = self.const_float(*f);
+                self.bind_val(fr.reflect(), fv)
+            }
+            IntToStr(sr, ir) => {
+                let arg = self.get_val(ir.reflect())?;
+                let res = self.call_intrinsic(intrinsic!(int_to_str), &mut [arg])?;
+                self.bind_val(sr.reflect(), res)
+            }
+            StrToInt(ir, sr) => {
+                let arg = self.get_val(sr.reflect())?;
+                let res = self.call_intrinsic(intrinsic!(str_to_int), &mut [arg])?;
+                self.bind_val(ir.reflect(), res)
+            }
+            HexStrToInt(ir, sr) => {
+                let arg = self.get_val(sr.reflect())?;
+                let res = self.call_intrinsic(intrinsic!(hex_str_to_int), &mut [arg])?;
+                self.bind_val(ir.reflect(), res)
+            }
+            StrToFloat(fr, sr) => {
+                let arg = self.get_val(sr.reflect())?;
+                let res = self.call_intrinsic(intrinsic!(str_to_float), &mut [arg])?;
+                self.bind_val(fr.reflect(), res)
+            }
+            FloatToInt(ir, fr) => {
+                let arg = self.get_val(fr.reflect())?;
+                let res = self.call_intrinsic(Op::FloatToInt, &mut [arg])?;
+                self.bind_val(ir.reflect(), res)
+            }
+            IntToFloat(fr, ir) => {
+                let arg = self.get_val(ir.reflect())?;
+                let res = self.call_intrinsic(Op::IntToFloat, &mut [arg])?;
+                self.bind_val(fr.reflect(), res)
+            }
+            AddInt(res, l, r) => self.binop(op(Arith::Add, false), res, l, r),
+            AddFloat(res, l, r) => self.binop(op(Arith::Add, true), res, l, r),
+            MinusInt(res, l, r) => self.binop(op(Arith::Minus, false), res, l, r),
+            MinusFloat(res, l, r) => self.binop(op(Arith::Minus, true), res, l, r),
+            ModInt(res, l, r) => self.binop(op(Arith::Mod, false), res, l, r),
+            ModFloat(res, l, r) => self.binop(op(Arith::Mod, true), res, l, r),
+            Div(res, l, r) => self.binop(Op::Div, res, l, r),
+            Pow(res, l, r) => self.binop(Op::Pow, res, l, r),
+            _ => unimplemented!(),
+        }
+    }
 }
 
 fn map_key_valid(map: compile::Ty, key: compile::Ty) -> Result<()> {
@@ -216,10 +326,4 @@ fn map_valid(map: compile::Ty, key: compile::Ty, val: compile::Ty) -> Result<()>
         return err!("map value type does not match: {:?} vs {:?}", map, val);
     }
     Ok(())
-}
-
-fn gen_inst(cg: &mut impl CodeGenerator, instr: &Instr) -> Result<()> {
-    match instr {
-        _ => unimplemented!(),
-    }
 }
