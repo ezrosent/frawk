@@ -47,9 +47,12 @@ pub(crate) enum Arith {
     Minus,
     Add,
     Mod,
+    Neg,
 }
 
 pub(crate) enum Op {
+    // TODO: we probably don't need the is_float here? we could infer based on the operands?
+    // otoh it's more explicit...
     Cmp { is_float: bool, op: Cmp },
     Arith { is_float: bool, op: Arith },
     Bitwise(builtins::Bitwise),
@@ -255,6 +258,13 @@ pub(crate) trait CodeGenerator {
         self.bind_val(dst.reflect(), res)
     }
 
+    /// Wraps `call_intrinsic` for [`Op`]s that have one argument and return a value.
+    fn unop(&mut self, op: Op, dst: &impl Accum, x: &impl Accum) -> Result<()> {
+        let xv = self.get_val(x.reflect())?;
+        let res = self.call_intrinsic(op, &mut [xv])?;
+        self.bind_val(dst.reflect(), res)
+    }
+
     fn gen_ll_inst(&mut self, inst: &compile::LL) -> Result<()> {
         use crate::bytecode::Instr::*;
         match inst {
@@ -308,6 +318,66 @@ pub(crate) trait CodeGenerator {
             ModFloat(res, l, r) => self.binop(op(Arith::Mod, true), res, l, r),
             Div(res, l, r) => self.binop(Op::Div, res, l, r),
             Pow(res, l, r) => self.binop(Op::Pow, res, l, r),
+            Not(res, ir) => {
+                let iv = self.get_val(ir.reflect())?;
+                let zero = self.const_int(0);
+                let cmp = self.call_intrinsic(
+                    Op::Cmp {
+                        is_float: false,
+                        op: Cmp::EQ,
+                    },
+                    &mut [iv, zero],
+                )?;
+                self.bind_val(res.reflect(), cmp)
+            }
+            NotStr(res, sr) => {
+                let sv = self.get_val(sr.reflect())?;
+                let lenv = self.call_intrinsic(intrinsic!(str_len), &mut [sv])?;
+                let zero = self.const_int(0);
+                let cmp = self.call_intrinsic(
+                    Op::Cmp {
+                        is_float: false,
+                        op: Cmp::EQ,
+                    },
+                    &mut [lenv, zero],
+                )?;
+                self.bind_val(res.reflect(), cmp)
+            }
+            NegInt(res, ir) => self.unop(op(Arith::Neg, false), res, ir),
+            NegFloat(res, fr) => self.unop(op(Arith::Neg, true), res, fr),
+            Float1(ff, dst, src) => self.unop(Op::Math(*ff), dst, src),
+            Float2(ff, dst, l, r) => self.binop(Op::Math(*ff), dst, l, r),
+            Int1(bw, dst, src) => self.unop(Op::Bitwise(*bw), dst, src),
+            Int2(bw, dst, l, r) => self.binop(Op::Bitwise(*bw), dst, l, r),
+            Rand(dst) => {
+                let res = self.call_intrinsic(intrinsic!(rand_float), &mut [self.runtime_val()])?;
+                self.bind_val(dst.reflect(), res)
+            }
+            Srand(dst, seed) => {
+                let seedv = self.get_val(seed.reflect())?;
+                let res =
+                    self.call_intrinsic(intrinsic!(seed_rng), &mut [self.runtime_val(), seedv])?;
+                self.bind_val(dst.reflect(), res)
+            }
+            ReseedRng(dst) => {
+                let res = self.call_intrinsic(intrinsic!(reseed_rng), &mut [self.runtime_val()])?;
+                self.bind_val(dst.reflect(), res)
+            }
+            Concat(dst, l, r) => self.binop(intrinsic!(concat), dst, l, r),
+            Match(dst, l, r) => {
+                let lv = self.get_val(l.reflect())?;
+                let rv = self.get_val(r.reflect())?;
+                let rt = self.runtime_val();
+                let res = self.call_intrinsic(intrinsic!(match_pat_loc), &mut [rt, lv, rv])?;
+                self.bind_val(dst.reflect(), res)
+            }
+            IsMatch(dst, l, r) => {
+                let lv = self.get_val(l.reflect())?;
+                let rv = self.get_val(r.reflect())?;
+                let rt = self.runtime_val();
+                let res = self.call_intrinsic(intrinsic!(match_pat), &mut [rt, lv, rv])?;
+                self.bind_val(dst.reflect(), res)
+            }
             _ => unimplemented!(),
         }
     }
