@@ -100,6 +100,34 @@ pub(crate) trait CodeGenerator {
     /// Call an intrinsic, given a pointer to the [`intrinsics`] module and a list of arguments.
     fn call_intrinsic(&mut self, func: Op, args: &mut [Self::Val]) -> Result<Self::Val>;
 
+    // var-arg printing functions. The arguments here directly parallel the instruction
+    // definitions.
+
+    fn printf(
+        &mut self,
+        output: &Option<(StrReg, FileSpec)>,
+        fmt: &StrReg,
+        args: &Vec<Ref>,
+    ) -> Result<()>;
+
+    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &Vec<Ref>) -> Result<()>;
+
+    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()>;
+
+    // TODO:comment
+    fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()>;
+    fn iter_begin(&mut self, dst: Ref, map: Ref) -> Result<()>;
+    fn iter_hasnext(&mut self, dst: Ref, iter: Ref) -> Result<()>;
+    fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()>;
+
+    // The plumbing for builtin variable manipulation is mostly pretty wrote ... anything we can do
+    // here?
+
+    /// Method called after loading a builtin variable into `dst`.
+    ///
+    /// This is included to help clean up ref-counts on string or map builtins, if necessary.
+    fn var_loaded(&mut self, dst: Ref) -> Result<()>;
+
     // derived functions
 
     /// Loads contents of given slot into dst.
@@ -255,20 +283,6 @@ pub(crate) trait CodeGenerator {
         Ok(())
     }
 
-    // var-arg printing functions. The arguments here directly parallel the instruction
-    // definitions.
-
-    fn printf(
-        &mut self,
-        output: &Option<(StrReg, FileSpec)>,
-        fmt: &StrReg,
-        args: &Vec<Ref>,
-    ) -> Result<()>;
-
-    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &Vec<Ref>) -> Result<()>;
-
-    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()>;
-
     /// Wraps `call_intrinsic` for [`Op`]s that have two arguments and return a value.
     fn binop(&mut self, op: Op, dst: &impl Accum, l: &impl Accum, r: &impl Accum) -> Result<()> {
         let lv = self.get_val(l.reflect())?;
@@ -299,40 +313,19 @@ pub(crate) trait CodeGenerator {
                 let fv = self.const_float(*f);
                 self.bind_val(fr.reflect(), fv)
             }
-            IntToStr(sr, ir) => {
-                let arg = self.get_val(ir.reflect())?;
-                let res = self.call_intrinsic(intrinsic!(int_to_str), &mut [arg])?;
-                self.bind_val(sr.reflect(), res)
-            }
-            StrToInt(ir, sr) => {
-                let arg = self.get_val(sr.reflect())?;
-                let res = self.call_intrinsic(intrinsic!(str_to_int), &mut [arg])?;
-                self.bind_val(ir.reflect(), res)
-            }
-            HexStrToInt(ir, sr) => {
-                let arg = self.get_val(sr.reflect())?;
-                let res = self.call_intrinsic(intrinsic!(hex_str_to_int), &mut [arg])?;
-                self.bind_val(ir.reflect(), res)
-            }
-            StrToFloat(fr, sr) => {
-                let arg = self.get_val(sr.reflect())?;
-                let res = self.call_intrinsic(intrinsic!(str_to_float), &mut [arg])?;
-                self.bind_val(fr.reflect(), res)
-            }
-            FloatToInt(ir, fr) => {
-                let arg = self.get_val(fr.reflect())?;
-                let res = self.call_intrinsic(Op::FloatToInt, &mut [arg])?;
-                self.bind_val(ir.reflect(), res)
-            }
-            IntToFloat(fr, ir) => {
-                let arg = self.get_val(ir.reflect())?;
-                let res = self.call_intrinsic(Op::IntToFloat, &mut [arg])?;
-                self.bind_val(fr.reflect(), res)
-            }
+            IntToStr(sr, ir) => self.unop(intrinsic!(int_to_str), sr, ir),
+            FloatToStr(sr, fr) => self.unop(intrinsic!(float_to_str), sr, fr),
+            StrToInt(ir, sr) => self.unop(intrinsic!(str_to_int), ir, sr),
+            HexStrToInt(ir, sr) => self.unop(intrinsic!(hex_str_to_int), ir, sr),
+            StrToFloat(fr, sr) => self.unop(intrinsic!(str_to_float), fr, sr),
+            FloatToInt(ir, fr) => self.unop(Op::FloatToInt, ir, fr),
+            IntToFloat(fr, ir) => self.unop(Op::IntToFloat, fr, ir),
             AddInt(res, l, r) => self.binop(op(Arith::Add, false), res, l, r),
             AddFloat(res, l, r) => self.binop(op(Arith::Add, true), res, l, r),
             MinusInt(res, l, r) => self.binop(op(Arith::Minus, false), res, l, r),
             MinusFloat(res, l, r) => self.binop(op(Arith::Minus, true), res, l, r),
+            MulInt(res, l, r) => self.binop(op(Arith::Mul, false), res, l, r),
+            MulFloat(res, l, r) => self.binop(op(Arith::Mul, true), res, l, r),
             ModInt(res, l, r) => self.binop(op(Arith::Mod, false), res, l, r),
             ModFloat(res, l, r) => self.binop(op(Arith::Mod, true), res, l, r),
             Div(res, l, r) => self.binop(Op::Div, res, l, r),
@@ -610,7 +603,93 @@ pub(crate) trait CodeGenerator {
                 (*key, map_ty.key()?),
                 (*val, map_ty.val()?),
             ),
-            _ => unimplemented!(),
+            LoadVarStr(dst, var) => {
+                let varv = self.const_int(*var as i64);
+                let res =
+                    self.call_intrinsic(intrinsic!(load_var_str), &mut [self.runtime_val(), varv])?;
+                let dref = dst.reflect();
+                self.bind_val(dref, res)?;
+                self.var_loaded(dref)
+            }
+            StoreVarStr(var, src) => {
+                let varv = self.const_int(*var as i64);
+                let srcv = self.get_val(src.reflect())?;
+                self.call_intrinsic(
+                    intrinsic!(store_var_str),
+                    &mut [self.runtime_val(), varv, srcv],
+                )?;
+                Ok(())
+            }
+            LoadVarInt(dst, var) => {
+                let varv = self.const_int(*var as i64);
+                let res =
+                    self.call_intrinsic(intrinsic!(load_var_int), &mut [self.runtime_val(), varv])?;
+                let dref = dst.reflect();
+                self.bind_val(dref, res)?;
+                self.var_loaded(dref)
+            }
+            StoreVarInt(var, src) => {
+                let varv = self.const_int(*var as i64);
+                let srcv = self.get_val(src.reflect())?;
+                self.call_intrinsic(
+                    intrinsic!(store_var_int),
+                    &mut [self.runtime_val(), varv, srcv],
+                )?;
+                Ok(())
+            }
+            LoadVarIntMap(dst, var) => {
+                let varv = self.const_int(*var as i64);
+                let res = self
+                    .call_intrinsic(intrinsic!(load_var_intmap), &mut [self.runtime_val(), varv])?;
+                let dref = dst.reflect();
+                self.bind_val(dref, res)?;
+                self.var_loaded(dref)
+            }
+            StoreVarIntMap(var, src) => {
+                let varv = self.const_int(*var as i64);
+                let srcv = self.get_val(src.reflect())?;
+                self.call_intrinsic(
+                    intrinsic!(store_var_intmap),
+                    &mut [self.runtime_val(), varv, srcv],
+                )?;
+                Ok(())
+            }
+            LoadVarStrMap(dst, var) => {
+                let varv = self.const_int(*var as i64);
+                let res = self
+                    .call_intrinsic(intrinsic!(load_var_strmap), &mut [self.runtime_val(), varv])?;
+                let dref = dst.reflect();
+                self.bind_val(dref, res)?;
+                self.var_loaded(dref)
+            }
+            StoreVarStrMap(var, src) => {
+                let varv = self.const_int(*var as i64);
+                let srcv = self.get_val(src.reflect())?;
+                self.call_intrinsic(
+                    intrinsic!(store_var_strmap),
+                    &mut [self.runtime_val(), varv, srcv],
+                )?;
+                Ok(())
+            }
+            LoadSlot { ty, dst, slot } => self.load_slot((*dst, *ty), *slot),
+            StoreSlot { ty, src, slot } => self.store_slot((*src, *ty), *slot),
+            Mov(ty, dst, src) => self.mov(*ty, *dst, *src),
+            IterBegin { map_ty, map, dst } => {
+                self.iter_begin((*dst, map_ty.key_iter()?), (*map, *map_ty))
+            }
+            IterHasNext { iter_ty, dst, iter } => {
+                self.iter_hasnext((*dst, compile::Ty::Int), (*iter, *iter_ty))
+            }
+            IterGetNext { iter_ty, dst, iter } => {
+                self.iter_getnext((*dst, iter_ty.iter()?), (*iter, *iter_ty))
+            }
+            Push(_, _) | Pop(_, _) => err!("unexpected explicit push/pop in llvm"),
+            AllocMap(_, _) => {
+                err!("unexpected AllocMap (allocs are handled differently in LLVM)")
+            }
+            Ret | Halt | Jmp(_) | JmpIf(_, _) | Call(_) => {
+                err!("unexpected bytecode-level control flow")
+            }
         }
     }
 }
