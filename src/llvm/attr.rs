@@ -1,6 +1,6 @@
-/// Adds more ergonomic support for setting function attributes on functions. This is adapted from
-/// the same functionality in the Weld project. For now we are not adding attributes to parameters,
-/// just to the functions themselves.
+//! Adds more ergonomic support for setting function attributes on functions. This is adapted from
+//! the same functionality in the Weld project. For now we are not adding attributes to parameters,
+//! just to the functions themselves.
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 

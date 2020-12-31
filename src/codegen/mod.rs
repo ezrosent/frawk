@@ -6,6 +6,8 @@ use crate::{
     runtime::{self, UniqueStr},
 };
 
+pub(crate) mod intrinsics;
+
 // TODO: move intrinsics module over to codegen, make it CodeGenerator-generic.
 //  (fine that some runtime libraries are left behind for the time being in llvm)
 // TODO: continue stubbing out gen_inst; filling in missing items. I think the idea is that for
@@ -19,11 +21,10 @@ type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 type Ref = (NumTy, compile::Ty);
 type StrReg<'a> = bytecode::Reg<runtime::Str<'a>>;
 
-struct Sig<C: CodeGenerator> {
-    // cstr? that we assert is utf8? bytes that we assert are both utf8 and nul-terminated?
-    name: &'static str,
-    args: SmallVec<C::Ty>,
-    ret: C::Ty,
+pub(crate) struct Sig<'a, C: CodeGenerator + ?Sized> {
+    pub attrs: &'a [FunctionAttr],
+    pub args: &'a [C::Ty],
+    pub ret: Option<C::Ty>,
 }
 
 // TODO: fill in the intrinsics stuf...
@@ -72,17 +73,34 @@ fn cmp(op: Cmp, is_float: bool) -> Op {
     Op::Cmp { is_float, op }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum FunctionAttr {
+    ReadOnly,
+    ArgmemOnly,
+}
+
 /// CodeGenerator encapsulates common functionality needed to generate instructions across multiple
 /// backends. This trait is not currently sufficient to abstract over any backend "end to end" from
 /// bytecode instructions all the way to machine code, but it allows us to keep much of the more
 /// mundane plumbing work common across all backends (as well as separate safe "glue code" from
 /// unsafe calls to the LLVM C API).
 pub(crate) trait CodeGenerator {
-    type Ty;
+    type Ty: Clone;
     type Val;
+
+    /// Register a function with address `addr` and name `name` (/ `name_c`, the null-terminated
+    /// variant) with signature `Sig` to be called.
+    fn register_external_fn(
+        &mut self,
+        name: &'static str,
+        name_c: *const u8,
+        addr: *const u8,
+        sig: Sig<Self>,
+    ) -> Result<()>;
 
     // mappings from compile::Ty to Self::Ty
     fn void_ptr_ty(&self) -> Self::Ty;
+    fn ptr_to(&self, ty: Self::Ty) -> Self::Ty;
     fn usize_ty(&self) -> Self::Ty;
     fn get_ty(&self, ty: compile::Ty) -> Self::Ty;
 
@@ -114,10 +132,17 @@ pub(crate) trait CodeGenerator {
 
     fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()>;
 
-    // TODO:comment
+    /// Moves the contents of `src` into `dst`, taking refcounts into consideration if necessary.
     fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()>;
+
+    /// Constructs an iterator over the keys of `map` and stores it in `dst`.
     fn iter_begin(&mut self, dst: Ref, map: Ref) -> Result<()>;
+
+    /// Queries the iterator in `iter` as to whether any elements remain, stores the result in the
+    /// `dst` register.
     fn iter_hasnext(&mut self, dst: Ref, iter: Ref) -> Result<()>;
+
+    /// Advances the iterator in `iter` to the next element and stores the current element in `dst`
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()>;
 
     // The plumbing for builtin variable manipulation is mostly pretty wrote ... anything we can do
