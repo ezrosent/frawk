@@ -10,6 +10,7 @@ pub mod ast;
 pub mod builtins;
 pub mod bytecode;
 pub mod cfg;
+#[macro_use]
 pub mod codegen;
 pub mod compile;
 pub mod cross_stage;
@@ -60,9 +61,9 @@ use clap::{App, Arg};
 
 use arena::Arena;
 use cfg::Escaper;
-use common::{ExecutionStrategy, Stage};
 #[cfg(feature = "llvm_backend")]
-use llvm::IntoRuntime;
+use codegen::intrinsics::IntoRuntime;
+use common::{ExecutionStrategy, Stage};
 use runtime::{
     splitter::{
         batch::{ByteReader, CSVReader, InputFormat},

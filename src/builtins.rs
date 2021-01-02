@@ -226,8 +226,8 @@ impl FloatFunc {
             Log10 => Either::Right(LLVMFunc::Log10),
             Sqrt => Either::Right(LLVMFunc::Sqrt),
             Exp => Either::Right(LLVMFunc::Exp),
-            Atan => Either::Left(crate::llvm::intrinsics::_frawk_atan as _),
-            Atan2 => Either::Left(crate::llvm::intrinsics::_frawk_atan2 as _),
+            Atan => Either::Left(crate::codegen::intrinsics::_frawk_atan as _),
+            Atan2 => Either::Left(crate::codegen::intrinsics::_frawk_atan2 as _),
         }
     }
 

@@ -1,3 +1,8 @@
+//! This module exposes core runtime functionality to generated code.
+//!
+//! There is quite a lot of code here at this point, but most of it is "glue". Where possible we
+//! try and hew closely to the steps in the `interp` module, with most functionality in the
+//! underlying runtime library.
 use super::{CodeGenerator, FunctionAttr, Sig};
 use crate::runtime::{
     self,

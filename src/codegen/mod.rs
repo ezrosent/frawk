@@ -6,18 +6,12 @@ use crate::{
     runtime::{self, UniqueStr},
 };
 
+#[macro_use]
 pub(crate) mod intrinsics;
 
-// TODO: move intrinsics module over to codegen, make it CodeGenerator-generic.
-//  (fine that some runtime libraries are left behind for the time being in llvm)
-// TODO: continue stubbing out gen_inst; filling in missing items. I think the idea is that for
-// difficult stuff, we'll add a method that implementors will override, and that this will
-// encapsulate code generation "without the branches"
-// TODO: migrate LLVM over to gen_inst, get everything passing
-// TODO: move LLVM into codegen module
+// TODO: get llvm tests passing
 // TODO: start on clir
 
-type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 pub(crate) type Ref = (NumTy, compile::Ty);
 pub(crate) type StrReg<'a> = bytecode::Reg<runtime::Str<'a>>;
 
@@ -27,17 +21,15 @@ pub(crate) struct Sig<'a, C: CodeGenerator + ?Sized> {
     pub ret: Option<C::Ty>,
 }
 
-// TODO: fill in the intrinsics stuf...
-
 macro_rules! intrinsic {
     ($name:ident) => {
-        Op::Intrinsic(crate::llvm::intrinsics::$name as *const u8)
+        Op::Intrinsic(crate::codegen::intrinsics::$name as *const u8)
     };
 }
 
+#[derive(Copy, Clone)]
 pub(crate) enum Cmp {
     EQ,
-    NEQ,
     LTE,
     LT,
     GTE,

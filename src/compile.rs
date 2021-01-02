@@ -1,6 +1,7 @@
 use crate::builtins;
 use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
+use crate::codegen;
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
@@ -206,7 +207,7 @@ pub(crate) fn compile_llvm<'a>(
 #[cfg(feature = "llvm_backend")]
 pub(crate) fn run_llvm<'a>(
     ctx: &mut cfg::ProgramContext<'a, &'a str>,
-    reader: impl llvm::IntoRuntime,
+    reader: impl codegen::intrinsics::IntoRuntime,
     ff: impl runtime::writers::FileFactory,
     cfg: llvm::Config,
 ) -> Result<()> {
