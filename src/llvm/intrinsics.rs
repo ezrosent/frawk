@@ -3,8 +3,9 @@
 //! There is quite a lot of code here at this point, but most of it is "glue". Where possible we
 //! try and hew closely to the steps in the `interp` module, with most functionality in the
 //! underlying runtime library.
-use super::attr::{self, FunctionAttr};
+use super::attr;
 use crate::builtins::Variable;
+use crate::codegen::FunctionAttr;
 use crate::common::{Either, FileSpec};
 use crate::compile::Ty;
 use crate::libc::c_void;
@@ -185,14 +186,14 @@ pub(crate) struct IntrinsicMap {
 }
 
 impl IntrinsicMap {
-    fn new(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
+    pub(crate) fn new(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
         IntrinsicMap {
             ctx,
             module,
             map: Default::default(),
         }
     }
-    fn register(
+    pub(crate) fn register(
         &mut self,
         cname: *const libc::c_char,
         ty: LLVMTypeRef,

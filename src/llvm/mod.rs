@@ -7,7 +7,8 @@ pub(crate) use intrinsics::{IntoRuntime, Runtime};
 
 use crate::builtins::Variable;
 use crate::bytecode::{self, Accum};
-use crate::common::{Either, NodeIx, NumTy, Result, Stage};
+use crate::codegen::{self, CodeGenerator, Ref, Sig, StrReg};
+use crate::common::{Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
 use crate::pushdown::FieldSet;
@@ -64,12 +65,18 @@ struct FuncInfo {
     num_args: usize,
 }
 
+macro_rules! intrinsic {
+    ($name:ident) => {
+        crate::llvm::intrinsics::$name as *const u8
+    };
+}
+
 struct View<'a> {
     f: &'a mut Function,
     decls: &'a Vec<FuncInfo>,
     regexes: &'a mut Vec<Arc<Regex>>,
     tmap: &'a TypeMap,
-    intrinsics: &'a IntrinsicMap,
+    intrinsics: &'a mut IntrinsicMap,
     ctx: LLVMContextRef,
     module: LLVMModuleRef,
     printfs: &'a mut HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
@@ -79,6 +86,444 @@ struct View<'a> {
     // binding new string values requires an `alloca`; and we do not want to call `alloca` where a
     // string variable is referenced: for example, we do not want to call alloca in a loop.
     entry_builder: LLVMBuilderRef,
+}
+
+impl<'a> CodeGenerator for View<'a> {
+    type Ty = LLVMTypeRef;
+    type Val = LLVMValueRef;
+
+    fn register_external_fn(
+        &mut self,
+        _name: &'static str,
+        name_c: *const u8,
+        addr: *const u8,
+        sig: Sig<Self>,
+    ) -> Result<()> {
+        let f_ty = unsafe {
+            LLVMFunctionType(
+                sig.ret.unwrap_or(LLVMVoidTypeInContext(self.ctx)),
+                sig.args.as_mut_ptr(),
+                sig.args.len() as u32,
+                0,
+            )
+        };
+        self.intrinsics
+            .register(name_c as *const _, f_ty, sig.attrs, addr as *mut _);
+        Ok(())
+    }
+
+    fn void_ptr_ty(&self) -> Self::Ty {
+        self.tmap.runtime_ty
+    }
+    fn ptr_to(&self, ty: Self::Ty) -> Self::Ty {
+        unsafe { LLVMPointerType(ty, 0) }
+    }
+    fn usize_ty(&self) -> Self::Ty {
+        unsafe { LLVMIntTypeInContext(self.ctx, (mem::size_of::<*const u8>() * 8) as libc::c_uint) }
+    }
+    fn get_ty(&self, ty: compile::Ty) -> Self::Ty {
+        self.tmap.get_ty(ty)
+    }
+
+    fn bind_val(&mut self, val: Ref, to: Self::Val) -> Result<()> {
+        unsafe {
+            // if val is global, then find the relevant parameter and store it directly.
+            // if val is an existing local, fail
+            // if val.ty is a string, alloca a new string, store it, then bind the result.
+            // otherwise, just bind the result directly.
+            #[cfg(debug_assertions)]
+            {
+                if let Ty::Str = val.1 {
+                    use llvm_sys::LLVMTypeKind::*;
+                    // make sure we are passing string values, not pointers here.
+                    assert_eq!(LLVMGetTypeKind(LLVMTypeOf(to)), LLVMIntegerTypeKind);
+                }
+            }
+            if val.1 == Ty::Null {
+                // We do not store null values explicitly
+                return Ok(());
+            }
+            // Note: we ref strings ahead of time, either before call8ing bind_val in a MovStr, or as
+            // the result of a function call.
+            use Ty::*;
+            if let Some(ix) = self.decls[self.f.id].globals.get(&val) {
+                // We're storing into a global variable. If it's a string or map, that means we have to
+                // alter the reference counts appropriately.
+                //  - if Str, call drop, store, call ref.
+                //  - if Map, load the value, drop it, ref `to` then store it
+                //  - otherwise, just store it directly
+                let param = LLVMGetParam(self.f.val, *ix as libc::c_uint);
+                let new_global = to;
+                match val.1 {
+                    MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+                        let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
+                        self.drop_val(prev_global, val.1);
+                        LLVMBuildStore(self.f.builder, new_global, param);
+                    }
+                    Str => {
+                        self.drop_val(param, Ty::Str);
+                        LLVMBuildStore(self.f.builder, new_global, param);
+                        // TODO: migrate this to call_intrinsic
+                        self.call(intrinsic!(ref_str), &mut [param]);
+                    }
+                    _ => {
+                        LLVMBuildStore(self.f.builder, new_global, param);
+                    }
+                };
+                return Ok(());
+            }
+            debug_assert!(
+                self.f.locals.get(&val).is_none(),
+                "we are inserting {:?}, but there is already something in there: {:?}",
+                val,
+                self.f.locals[&val]
+            );
+            match val.1 {
+                MapIntInt | MapIntStr | MapIntFloat | MapStrInt | MapStrStr | MapStrFloat => {
+                    // alloca only fails with an iterator or null type; but we have checked the type
+                    // already.
+                    let loc = self.alloca(val.1).unwrap();
+                    let prev = LLVMBuildLoad(self.f.builder, loc, c_str!(""));
+                    self.drop_val(prev, val.1);
+                    LLVMBuildStore(self.f.builder, to, loc);
+                    // NB: we used to have this here, but it leaked. See a segfault? It's possible we
+                    // are missing some refs elsewhere.
+                    //   self.call("ref_map", &mut [to]);
+                    // We had this for globals as well.
+                    self.f.locals.insert(val, loc);
+                    return Ok(());
+                }
+                Str => {
+                    // unwrap justified like the above case for maps.
+                    let loc = self.alloca(Ty::Str).unwrap();
+                    self.drop_val(loc, Ty::Str);
+                    LLVMBuildStore(self.f.builder, to, loc);
+                    self.f.locals.insert(val, loc);
+                    return Ok(());
+                }
+                _ => {}
+            }
+            self.f.locals.insert(val, to);
+        }
+        Ok(())
+    }
+    fn get_val(&mut self, r: Ref) -> Result<Self::Val> {
+        match unsafe {
+            self.get_local_inner(r, /*array_ptr=*/ false)
+        } {
+            Some(v) => Ok(v),
+            None => err!("unbound variable {:?} (must call bind_val on it before)", r),
+        }
+    }
+
+    fn runtime_val(&self) -> Self::Val {
+        unsafe {
+            LLVMGetParam(
+                self.f.val,
+                self.decls[self.f.id].num_args as libc::c_uint - 1,
+            )
+        }
+    }
+    fn const_int(&self, i: i64) -> Self::Val {
+        unsafe {
+            LLVMConstInt(self.get_ty(Ty::Int), i as u64, /*sign_extend=*/ 0)
+        }
+    }
+    fn const_float(&self, f: f64) -> Self::Val {
+        unsafe { LLVMConstReal(self.get_ty(Ty::Float), f) }
+    }
+    fn const_str<'b>(&self, s: &runtime::UniqueStr<'b>) -> Self::Val {
+        // We don't know where we're storing this string literal. If it's in the middle of
+        // a loop, we could be calling drop on it repeatedly. If the string is boxed, that
+        // will lead to double-frees. In our current setup, these literals will all be
+        // either empty, or references to word-aligned arena-allocated strings, so that's
+        // actually fine.
+        let as_str = s.clone_str();
+        assert!(as_str.drop_is_trivial());
+        let sc = as_str.into_bits();
+        // There is no way to pass a 128-bit integer to LLVM directly. We have to convert
+        // it to a string first.
+        let as_hex = CString::new(format!("{:x}", sc)).unwrap();
+        let ty = self.tmap.get_ty(Ty::Str);
+        unsafe {
+            LLVMConstIntOfString(ty, as_hex.as_ptr(), /*radix=*/ 16)
+        }
+    }
+    fn const_ptr<'b, T>(&'b self, c: &'b T) -> Self::Val {
+        let voidp = self.tmap.runtime_ty;
+        let int_ty = self.tmap.get_ty(Ty::Int);
+        unsafe {
+            let bits = LLVMConstInt(int_ty, c as *const T as u64, /*sign_extend=*/ 0);
+            LLVMBuildIntToPtr(self.f.builder, bits, voidp, c_str!(""))
+        }
+    }
+    // TODO: initialize intrinsic map in new way
+    // TODO: remove intrinsics code from llvm/intrinsics.rs, eventually moving IntrinsicMap in here
+    // TODO: remove gen_ll_inst, bind_val, get_local from main body
+    // TODO: get tests  passing
+    fn call_intrinsic(&mut self, func: codegen::Op, args: &mut [Self::Val]) -> Result<Self::Val> {
+        use codegen::Op::*;
+        fn to_pred(cmp: codegen::Cmp, is_float: bool) -> Either<Pred, FPred> {
+            use codegen::Cmp::*;
+            if is_float {
+                Either::Right(match cmp {
+                    EQ => FPred::LLVMRealUEQ,
+                    NEQ => FPred::LLVMRealUNE,
+                    LT => FPred::LLVMRealULT,
+                    LTE => FPred::LLVMRealULE,
+                    GT => FPred::LLVMRealUGT,
+                    GTE => FPred::LLVMRealUGE,
+                })
+            } else {
+                Either::Left(match cmp {
+                    EQ => Pred::LLVMIntEQ,
+                    NEQ => Pred::LLVMIntNE,
+                    LT => Pred::LLVMIntSLT,
+                    LTE => Pred::LLVMIntSLE,
+                    GT => Pred::LLVMIntSGT,
+                    GTE => Pred::LLVMIntSGE,
+                })
+            }
+        }
+        unsafe {
+            match func {
+                Cmp { is_float, op } => Ok(self.cmp(to_pred(op, is_float), args[0], args[1])),
+                Arith { is_float, op } => {
+                    use codegen::Arith::*;
+                    let res = if is_float {
+                        match op {
+                            Mul => LLVMBuildFMul(self.f.builder, args[0], args[1], c_str!("")),
+                            Minus => LLVMBuildFSub(self.f.builder, args[0], args[1], c_str!("")),
+                            Add => LLVMBuildFAdd(self.f.builder, args[0], args[1], c_str!("")),
+                            Mod => LLVMBuildFRem(self.f.builder, args[0], args[1], c_str!("")),
+                            Neg => LLVMBuildFNeg(self.f.builder, args[0], c_str!("")),
+                        }
+                    } else {
+                        match op {
+                            Mul => LLVMBuildMul(self.f.builder, args[0], args[1], c_str!("")),
+                            Minus => LLVMBuildSub(self.f.builder, args[0], args[1], c_str!("")),
+                            Add => LLVMBuildAdd(self.f.builder, args[0], args[1], c_str!("")),
+                            Mod => LLVMBuildSRem(self.f.builder, args[0], args[1], c_str!("")),
+                            Neg => {
+                                let zero = self.const_int(0);
+                                LLVMBuildSub(self.f.builder, zero, args[0], c_str!(""))
+                            }
+                        }
+                    };
+                    Ok(res)
+                }
+                Bitwise(bw) => Ok(match args.len() {
+                    1 => bw.llvm1(self.f.builder, args[0], self.get_ty(Ty::Int)),
+                    2 => bw.llvm2(self.f.builder, args[0], args[1]),
+                    x => panic!("too many ({}) operands for int builtin: {:?}", x, bw),
+                }),
+                Math(ff) => Ok(match ff.intrinsic_name() {
+                    Either::Left(fname) => self.call(fname, args),
+                    Either::Right(builtin) => self.call_builtin(builtin, args),
+                }),
+                Div => Ok(LLVMBuildFDiv(self.f.builder, args[0], args[1], c_str!(""))),
+                Pow => Ok(self.call_builtin(BuiltinFunc::Pow, args)),
+                FloatToInt => Ok(LLVMBuildFPToSI(
+                    self.f.builder,
+                    args[0],
+                    self.get_ty(Ty::Int),
+                    c_str!(""),
+                )),
+                IntToFloat => Ok(LLVMBuildSIToFP(
+                    self.f.builder,
+                    args[0],
+                    self.get_ty(Ty::Float),
+                    c_str!(""),
+                )),
+                Intrinsic(f) => Ok(self.call(f, args)),
+            }
+        }
+    }
+    fn printf(
+        &mut self,
+        output: &Option<(StrReg, FileSpec)>,
+        fmt: &StrReg,
+        args: &Vec<Ref>,
+    ) -> Result<()> {
+        unsafe {
+            // First, extract the types and use that to get a handle on a wrapped printf
+            // function.
+            let arg_tys: SmallVec<_> = args.iter().map(|x| x.1).collect();
+            let printf_fn = self.wrapped_printf((
+                arg_tys,
+                if output.is_some() {
+                    PrintfKind::File
+                } else {
+                    PrintfKind::Stdout
+                },
+            ));
+            let mut arg_vs = SmallVec::with_capacity(if output.is_some() {
+                args.len() + 4
+            } else {
+                args.len() + 2
+            });
+            arg_vs.push(self.runtime_val());
+            arg_vs.push(self.get_val(fmt.reflect())?);
+            for a in args.iter().cloned() {
+                arg_vs.push(self.get_val(a)?);
+            }
+            if let Some((path, append)) = output {
+                arg_vs.push(self.get_val(path.reflect())?);
+                let int_ty = self.tmap.get_ty(Ty::Int);
+                arg_vs.push(LLVMConstInt(int_ty, *append as u64, 0));
+            }
+            LLVMBuildCall(
+                self.f.builder,
+                printf_fn,
+                arg_vs.as_mut_ptr(),
+                arg_vs.len() as libc::c_uint,
+                c_str!(""),
+            );
+        }
+        Ok(())
+    }
+    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &Vec<Ref>) -> Result<()> {
+        unsafe {
+            let arg_tys: SmallVec<_> = args.iter().map(|x| x.1).collect();
+            let sprintf_fn = self.wrapped_printf((arg_tys, PrintfKind::Sprintf));
+            let mut arg_vs = SmallVec::with_capacity(args.len() + 1);
+            arg_vs.push(self.runtime_val());
+            arg_vs.push(self.get_val(fmt.reflect())?);
+            for a in args.iter().cloned() {
+                arg_vs.push(self.get_val(a)?);
+            }
+            let resv = LLVMBuildCall(
+                self.f.builder,
+                sprintf_fn,
+                arg_vs.as_mut_ptr(),
+                arg_vs.len() as libc::c_uint,
+                c_str!(""),
+            );
+            // TODO: move back to method call syntax
+            CodeGenerator::bind_val(self, dst.reflect(), resv)
+        }
+    }
+    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()> {
+        unsafe {
+            let print_fn = self.print_all_fn(args.len(), /*is_stdout=*/ output.is_none())?;
+            let mut args_v =
+                SmallVec::with_capacity(args.len() + 1 + if output.is_some() { 2 } else { 0 });
+            args_v.push(self.runtime_val());
+            for a in args.iter() {
+                args_v.push(self.get_val(a.reflect())?);
+            }
+            if let Some((out, fspec)) = output {
+                args_v.push(self.get_val(out.reflect())?);
+                let int_ty = self.tmap.get_ty(Ty::Int);
+                args_v.push(LLVMConstInt(int_ty, *fspec as u64, /*sign_extend=*/ 0));
+            }
+            LLVMBuildCall(
+                self.f.builder,
+                print_fn,
+                args_v.as_mut_ptr(),
+                args_v.len() as libc::c_uint,
+                c_str!(""),
+            );
+        }
+        Ok(())
+    }
+    fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()> {
+        unsafe {
+            if let Ty::Str = ty {
+                let sv = self.get_local((src, Ty::Str))?;
+                self.call(intrinsic!(ref_str), &mut [sv]);
+                let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
+                self.bind_val((dst, Ty::Str), loaded)
+            } else {
+                let sv = self.get_local((src, ty))?;
+                if ty.is_array() {
+                    self.call(intrinsic!(ref_map), &mut [sv]);
+                }
+                self.bind_val((dst, ty), sv)
+            }
+        }
+        Ok(())
+    }
+    fn iter_begin(&mut self, dst: Ref, map: Ref) -> Result<()> {
+        unsafe {
+            use Ty::*;
+            let arrv = self.get_val(map)?;
+            let (len_fn, begin_fn) = match map.1 {
+                MapIntInt => (intrinsic!(len_intint), intrinsic!(iter_intint)),
+                MapIntStr => (intrinsic!(len_intstr), intrinsic!(iter_intstr)),
+                MapIntFloat => (intrinsic!(len_intfloat), intrinsic!(iter_intfloat)),
+                MapStrInt => (intrinsic!(len_strint), intrinsic!(iter_strint)),
+                MapStrStr => (intrinsic!(len_strstr), intrinsic!(iter_strstr)),
+                MapStrFloat => (intrinsic!(len_strfloat), intrinsic!(iter_strfloat)),
+                _ => return err!("iterating over non-map type: {:?}", map.1),
+            };
+
+            let iter_ptr = self.call(begin_fn, &mut [arrv]);
+            let cur_index = self.alloca(Ty::Int)?;
+
+            let ty = self.tmap.get_ty(Ty::Int);
+            let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
+            LLVMBuildStore(self.f.builder, zero, cur_index);
+            let len = self.call(len_fn, &mut [arrv]);
+            let _old = self.f.iters.insert(
+                dst,
+                IterState {
+                    iter_ptr,
+                    cur_index,
+                    len,
+                },
+            );
+            debug_assert!(_old.is_none());
+            Ok(())
+        }
+    }
+    fn iter_hasnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
+        unsafe {
+            let istate = self.get_iter(iter)?;
+            let cur = LLVMBuildLoad(self.f.builder, istate.cur_index, c_str!(""));
+            let len = istate.len;
+            let hasnext = self.cmp(Either::Left(Pred::LLVMIntULT), cur, len);
+            self.bind_val(dst, hasnext);
+            Ok(())
+        }
+    }
+    fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
+        unsafe {
+            let (res, res_loc) = {
+                let istate = self.get_iter(iter)?;
+                let cur = LLVMBuildLoad(self.f.builder, istate.cur_index, c_str!(""));
+                let indices = &mut [cur];
+                let res_loc = LLVMBuildGEP(
+                    self.f.builder,
+                    istate.iter_ptr,
+                    indices.as_mut_ptr(),
+                    indices.len() as libc::c_uint,
+                    c_str!(""),
+                );
+                let res = LLVMBuildLoad(self.f.builder, res_loc, c_str!(""));
+
+                let next_ix = LLVMBuildAdd(
+                    self.f.builder,
+                    cur,
+                    LLVMConstInt(self.tmap.get_ty(Ty::Int), 1, /*sign_extend=*/ 1),
+                    c_str!(""),
+                );
+                LLVMBuildStore(self.f.builder, next_ix, istate.cur_index);
+                (res, res_loc)
+            };
+            if let Ty::Str = dst.1 {
+                self.call(intrinsic!(ref_str), &mut [res_loc]);
+            }
+            self.bind_val(dst, res);
+        }
+        Ok(())
+    }
+    fn var_loaded(&mut self, dst: Ref) -> Result<()> {
+        if (dst.1.is_array() || dst.1 == Ty::Str) && self.is_global(dst) {
+            unsafe { self.drop_reg(dst)? };
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Function {
@@ -175,12 +620,6 @@ impl<'a, 'b> Drop for Generator<'a, 'b> {
             LLVMDisposeModule(self.module);
         }
     }
-}
-
-macro_rules! intrinsic {
-    ($name:ident) => {
-        crate::llvm::intrinsics::$name as *const u8
-    };
 }
 
 unsafe fn alloc_local(
@@ -715,7 +1154,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             f,
             regexes: &mut self.regexes,
             tmap: &self.type_map,
-            intrinsics: &self.intrinsics,
+            intrinsics: &mut self.intrinsics,
             decls: &self.decls,
             printfs: &mut self.printfs,
             prints: &mut self.prints,
@@ -789,6 +1228,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         // for dropping all local variables, and we aren't guaranteed that our traversal will visit
         // the exit block last.
         let node_weight = |bb, inst| &frame.cfg.node_weight(NodeIx::new(bb)).unwrap()[inst];
+        let mut placeholder_intrinsics = IntrinsicMap::new(view.module, view.ctx);
         for (exit_bb, return_inst) in exits.into_iter() {
             LLVMPositionBuilderAtEnd(view.f.builder, bbs[exit_bb]);
             let var = if let Either::Right(Ret(reg, ty)) = node_weight(exit_bb, return_inst) {
@@ -804,7 +1244,14 @@ impl<'a, 'b> Generator<'a, 'b> {
                 // function. It probably means this function is "void"; but because you can assign
                 // to the result of a void function we need to allocate something here.
                 let ty = var.1;
-                let val = alloc_local(view.entry_builder, ty, &self.type_map, &self.intrinsics)?;
+                mem::swap(view.intrinsics, &mut placeholder_intrinsics);
+                let val = alloc_local(
+                    view.entry_builder,
+                    ty,
+                    &self.type_map,
+                    &placeholder_intrinsics,
+                )?;
+                mem::swap(view.intrinsics, &mut placeholder_intrinsics);
                 view.ret_val(val, ty)?
             }
         }
@@ -1022,84 +1469,12 @@ impl<'a> View<'a> {
         Ok(res)
     }
 
-    unsafe fn iter_begin(&mut self, dst: (NumTy, Ty), arr: (NumTy, Ty)) -> Result<()> {
-        use Ty::*;
-        let arrv = self.get_local(arr)?;
-        let (len_fn, begin_fn) = match arr.1 {
-            MapIntInt => (intrinsic!(len_intint), intrinsic!(iter_intint)),
-            MapIntStr => (intrinsic!(len_intstr), intrinsic!(iter_intstr)),
-            MapIntFloat => (intrinsic!(len_intfloat), intrinsic!(iter_intfloat)),
-            MapStrInt => (intrinsic!(len_strint), intrinsic!(iter_strint)),
-            MapStrStr => (intrinsic!(len_strstr), intrinsic!(iter_strstr)),
-            MapStrFloat => (intrinsic!(len_strfloat), intrinsic!(iter_strfloat)),
-            _ => return err!("iterating over non-map type: {:?}", arr.1),
-        };
-
-        let iter_ptr = self.call(begin_fn, &mut [arrv]);
-        let cur_index = self.alloca(Ty::Int)?;
-
-        let ty = self.tmap.get_ty(Ty::Int);
-        let zero = LLVMConstInt(ty, 0, /*sign_extend=*/ 1);
-        LLVMBuildStore(self.f.builder, zero, cur_index);
-        let len = self.call(len_fn, &mut [arrv]);
-        let _old = self.f.iters.insert(
-            dst,
-            IterState {
-                iter_ptr,
-                cur_index,
-                len,
-            },
-        );
-        debug_assert!(_old.is_none());
-        Ok(())
-    }
-
     fn get_iter(&self, iter: (NumTy, Ty)) -> Result<&IterState> {
         if let Some(istate) = self.f.iters.get(&iter) {
             Ok(istate)
         } else {
             err!("unbound iterator: {:?}", iter)
         }
-    }
-
-    unsafe fn iter_hasnext(&mut self, iter: (NumTy, Ty), dst: (NumTy, Ty)) -> Result<()> {
-        let istate = self.get_iter(iter)?;
-        let cur = LLVMBuildLoad(self.f.builder, istate.cur_index, c_str!(""));
-        let len = istate.len;
-        let hasnext = self.cmp(Either::Left(Pred::LLVMIntULT), cur, len);
-        self.bind_val(dst, hasnext);
-        Ok(())
-    }
-
-    unsafe fn iter_getnext(&mut self, iter: (NumTy, Ty), dst: (NumTy, Ty)) -> Result<()> {
-        let (res, res_loc) = {
-            let istate = self.get_iter(iter)?;
-            let cur = LLVMBuildLoad(self.f.builder, istate.cur_index, c_str!(""));
-            let indices = &mut [cur];
-            let res_loc = LLVMBuildGEP(
-                self.f.builder,
-                istate.iter_ptr,
-                indices.as_mut_ptr(),
-                indices.len() as libc::c_uint,
-                c_str!(""),
-            );
-            let res = LLVMBuildLoad(self.f.builder, res_loc, c_str!(""));
-
-            let next_ix = LLVMBuildAdd(
-                self.f.builder,
-                cur,
-                LLVMConstInt(self.tmap.get_ty(Ty::Int), 1, /*sign_extend=*/ 1),
-                c_str!(""),
-            );
-            LLVMBuildStore(self.f.builder, next_ix, istate.cur_index);
-            (res, res_loc)
-        };
-        if let Ty::Str = dst.1 {
-            self.call(intrinsic!(ref_str), &mut [res_loc]);
-        }
-        self.bind_val(dst, res);
-
-        Ok(())
     }
 
     unsafe fn bind_val(&mut self, val: (NumTy, Ty), to: LLVMValueRef) {
@@ -2044,10 +2419,10 @@ impl<'a> View<'a> {
                 self.iter_begin((*dst, map_ty.key_iter()?), (*map, *map_ty))?
             }
             IterHasNext { iter_ty, dst, iter } => {
-                self.iter_hasnext((*iter, *iter_ty), (*dst, Ty::Int))?
+                self.iter_hasnext((*dst, Ty::Int), (*iter, *iter_ty))?
             }
             IterGetNext { iter_ty, dst, iter } => {
-                self.iter_getnext((*iter, *iter_ty), (*dst, iter_ty.iter()?))?
+                self.iter_getnext((*dst, iter_ty.iter()?), (*iter, *iter_ty))?
             }
             Push(_, _) | Pop(_, _) => return err!("unexpected explicit push/pop in llvm"),
             AllocMap(_, _) => {

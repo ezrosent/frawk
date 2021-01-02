@@ -18,12 +18,12 @@ pub(crate) mod intrinsics;
 // TODO: start on clir
 
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
-type Ref = (NumTy, compile::Ty);
-type StrReg<'a> = bytecode::Reg<runtime::Str<'a>>;
+pub(crate) type Ref = (NumTy, compile::Ty);
+pub(crate) type StrReg<'a> = bytecode::Reg<runtime::Str<'a>>;
 
 pub(crate) struct Sig<'a, C: CodeGenerator + ?Sized> {
     pub attrs: &'a [FunctionAttr],
-    pub args: &'a [C::Ty],
+    pub args: &'a mut [C::Ty],
     pub ret: Option<C::Ty>,
 }
 
