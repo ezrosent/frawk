@@ -1,3 +1,5 @@
+//! The `codegen` module provides general tools for implementing different backends for frawk
+//! programs based on the output of the `compile` module.
 use crate::{
     builtins,
     bytecode::{self, Accum},
@@ -94,6 +96,7 @@ pub(crate) trait CodeGenerator {
     fn void_ptr_ty(&self) -> Self::Ty;
     fn ptr_to(&self, ty: Self::Ty) -> Self::Ty;
     fn usize_ty(&self) -> Self::Ty;
+    fn u32_ty(&self) -> Self::Ty;
     fn get_ty(&self, ty: compile::Ty) -> Self::Ty;
 
     // mappings to and from bytecode-level registers to IR-level values
@@ -416,11 +419,9 @@ pub(crate) trait CodeGenerator {
                 self.bind_val(res.reflect(), resv)
             }
             IsMatchConst(res, src, pat) => {
-                let rt = self.runtime_val();
                 let srcv = self.get_val(src.reflect())?;
                 let patv = self.const_ptr(&**pat);
-                let resv =
-                    self.call_intrinsic(intrinsic!(match_const_pat), &mut [rt, srcv, patv])?;
+                let resv = self.call_intrinsic(intrinsic!(match_const_pat), &mut [srcv, patv])?;
                 self.bind_val(res.reflect(), resv)
             }
             SubstrIndex(dst, s, t) => self.binop(intrinsic!(substr_index), dst, s, t),

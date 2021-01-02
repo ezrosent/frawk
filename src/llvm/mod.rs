@@ -91,7 +91,7 @@ impl<'a> CodeGenerator for View<'a> {
 
     fn register_external_fn(
         &mut self,
-        _name: &'static str,
+        name: &'static str,
         name_c: *const u8,
         addr: *const u8,
         sig: Sig<Self>,
@@ -105,12 +105,15 @@ impl<'a> CodeGenerator for View<'a> {
             )
         };
         self.intrinsics
-            .register(name_c as *const _, f_ty, sig.attrs, addr as *mut _);
+            .register(name, name_c as *const _, f_ty, sig.attrs, addr as *mut _);
         Ok(())
     }
 
     fn void_ptr_ty(&self) -> Self::Ty {
         self.tmap.runtime_ty
+    }
+    fn u32_ty(&self) -> Self::Ty {
+        unsafe { LLVMIntTypeInContext(self.ctx, 32) }
     }
     fn ptr_to(&self, ty: Self::Ty) -> Self::Ty {
         unsafe { LLVMPointerType(ty, 0) }
@@ -260,11 +263,14 @@ impl<'a> CodeGenerator for View<'a> {
             use codegen::Cmp::*;
             if is_float {
                 Either::Right(match cmp {
-                    EQ => FPred::LLVMRealUEQ,
-                    LT => FPred::LLVMRealULT,
-                    LTE => FPred::LLVMRealULE,
-                    GT => FPred::LLVMRealUGT,
-                    GTE => FPred::LLVMRealUGE,
+                    // LLVM gives you `O` and `U` variants for float comparisons that "fail true"
+                    // or "fail false" if either operand is NaN. `O` is  what matches the bytecode
+                    // interpreter, but we may want to switch this around at some point.
+                    EQ => FPred::LLVMRealOEQ,
+                    LT => FPred::LLVMRealOLT,
+                    LTE => FPred::LLVMRealOLE,
+                    GT => FPred::LLVMRealOGT,
+                    GTE => FPred::LLVMRealOGE,
                 })
             } else {
                 Either::Left(match cmp {
@@ -748,13 +754,13 @@ impl<'a, 'b> Generator<'a, 'b> {
             cfg,
             drop_str: ptr::null_mut(),
         };
+        res.build_map();
+        res.build_decls();
         // Construct a placeholder `View` and use it to register intrinsics.
         register_all(&mut view_at!(res, 0, ptr::null_mut()))?;
-        res.build_map();
         let drop_slow = res.intrinsics.get(intrinsic!(drop_str_slow));
         res.drop_str =
             builtin_functions::gen_drop_str(res.ctx, res.module, &res.type_map, drop_slow);
-        res.build_decls();
         for i in 0..nframes {
             res.gen_function(i)?;
         }

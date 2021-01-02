@@ -46,11 +46,10 @@ pub struct U128(u64, u64);
 pub(crate) fn register_all(cg: &mut impl CodeGenerator) -> Result<()> {
     let int_ty = cg.get_ty(Ty::Int);
     let float_ty = cg.get_ty(Ty::Float);
-    let str_ty = cg.get_ty(Ty::Float);
+    let str_ty = cg.get_ty(Ty::Str);
     let rt_ty = cg.void_ptr_ty();
-    // do we want to make these more advanced (they are actually *usize and *u32s)
-    let fmt_args_ty = cg.void_ptr_ty();
-    let fmt_tys_ty = cg.void_ptr_ty();
+    let fmt_args_ty = cg.ptr_to(int_ty.clone());
+    let fmt_tys_ty = cg.ptr_to(cg.u32_ty());
     // we assume that maps are all represented the same
     let map_ty = cg.get_ty(Ty::MapIntInt);
     let str_ref_ty = cg.ptr_to(str_ty.clone());

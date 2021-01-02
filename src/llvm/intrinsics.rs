@@ -40,23 +40,33 @@ impl IntrinsicMap {
     }
     pub(crate) fn register(
         &mut self,
+        name: &str,
         cname: *const libc::c_char,
         ty: LLVMTypeRef,
         attrs: &[FunctionAttr],
         func: *mut c_void,
     ) {
-        assert!(self
-            .map
-            .insert(
-                func as usize,
-                Intrinsic {
-                    name: cname,
-                    data: RefCell::new(Either::Left(ty)),
-                    attrs: attrs.iter().cloned().collect(),
-                    func,
-                }
-            )
-            .is_none())
+        if let Some(old) = self.map.insert(
+            func as usize,
+            Intrinsic {
+                name: cname,
+                data: RefCell::new(Either::Left(ty)),
+                attrs: attrs.iter().cloned().collect(),
+                func,
+            },
+        ) {
+            // Some functions that have distinct implementations may get merged in release builds
+            // (e.g. alloc_intint vs. alloc_intfloat). In that case it's fine to just overwrite
+            // the data. We still want this assert to run on debug builds, though, to guard against
+            // typos/duplicate registrations.
+            debug_assert!(
+                false,
+                "duplicate entry in intrinsics table for {} {:p}. Other entry: {}",
+                name,
+                func,
+                unsafe { String::from_utf8_lossy(std::ffi::CStr::from_ptr(old.name).to_bytes()) }
+            );
+        }
     }
 
     pub(crate) unsafe fn get(&self, func: *const u8) -> LLVMValueRef {

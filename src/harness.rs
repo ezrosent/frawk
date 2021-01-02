@@ -24,6 +24,8 @@ use crate::{
 #[cfg(feature = "llvm_backend")]
 use crate::{llvm, runtime::splitter::batch::ByteReader};
 
+use crate::codegen::intrinsics::IntoRuntime;
+
 use cfg_if::cfg_if;
 use hashbrown::HashMap;
 use std::io;
@@ -53,7 +55,7 @@ cfg_if! {
             mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
         ) -> ChainedReader<LR>
         where
-            ChainedReader<LR>: llvm::IntoRuntime,
+            ChainedReader<LR>: IntoRuntime,
         {
             ChainedReader::new(split_stdin(inp.into()).map(|(r, name)| f(r, name)))
         }
@@ -62,13 +64,13 @@ cfg_if! {
             ifmt: InputFormat,
             inp: impl Into<String>,
             strat: ExecutionStrategy,
-        ) -> impl llvm::IntoRuntime + runtime::LineReader {
+        ) -> impl IntoRuntime + runtime::LineReader {
             CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, /*check_utf8=*/ true,strat)
         }
 
         fn simulate_stdin_regex(
             inp: impl Into<String>
-        ) -> impl llvm::IntoRuntime + runtime::LineReader {
+        ) -> impl IntoRuntime + runtime::LineReader {
             simulate_stdin(inp, |reader, name| {
                 RegexSplitter::new(reader, runtime::CHUNK_SIZE, name, /*check_utf8=*/false )
             })
@@ -76,7 +78,7 @@ cfg_if! {
 
         fn simulate_stdin_whitespace(
             inp: impl Into<String>,
-        ) -> impl llvm::IntoRuntime + runtime::LineReader {
+        ) -> impl IntoRuntime + runtime::LineReader {
             ByteReader::new_whitespace(split_stdin(inp.into()), runtime::CHUNK_SIZE, /*check_utf8=*/true, ExecutionStrategy::Serial)
         }
 
@@ -84,7 +86,7 @@ cfg_if! {
             field_sep: u8,
             record_sep: u8,
             inp: impl Into<String>,
-        ) -> impl llvm::IntoRuntime + runtime::LineReader {
+        ) -> impl IntoRuntime + runtime::LineReader {
             ByteReader::new(
                 split_stdin(inp.into()),
                 field_sep,
