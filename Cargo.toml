@@ -39,6 +39,11 @@ termcolor = "1.1"
 itertools = "0.9.0"
 assert_cmd = "1.0.2"
 paste = "1.0"
+cranelift = "0.68.0"
+cranelift-codegen = "0.68.0"
+cranelift-frontend = "0.68.0"
+cranelift-module = "0.68.0"
+cranelift-simplejit = "0.68.0"
 
 [dev-dependencies]
 assert_cmd = "1.0.2"

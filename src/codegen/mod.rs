@@ -10,8 +10,8 @@ use crate::{
 
 #[macro_use]
 pub(crate) mod intrinsics;
+pub(crate) mod clir;
 
-// TODO: get llvm tests passing
 // TODO: start on clir
 
 pub(crate) type Ref = (NumTy, compile::Ty);
