@@ -1,11 +1,11 @@
 //! Cranelift code generation for frawk programs.
 use cranelift::prelude::*;
-use cranelift_module::{FuncId, Module};
-use cranelift_simplejit::SimpleJITModule;
+use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_simplejit::{SimpleJITBuilder, SimpleJITModule};
 use hashbrown::HashMap;
 
-use crate::codegen::{CodeGenerator, Op, Ref, Sig, StrReg};
-use crate::common::{FileSpec, NumTy, Result};
+use crate::codegen::{Backend, CodeGenerator, Op, Ref, Sig, StrReg};
+use crate::common::{CompileError, FileSpec, NumTy, Result};
 use crate::compile;
 use crate::runtime::UniqueStr;
 
@@ -39,6 +39,9 @@ struct Shared {
     module: SimpleJITModule,
     func_ids: Vec<FuncId>,
     external_funcs: HashMap<*const u8, FuncId>,
+    // We need cranelift Signatures for declaring external functions. We put them here to reuse
+    // them across calls to `register_external_fn`.
+    sig: Signature,
 }
 
 /// A cranelift [`Variable`] with frawk-specific metadata
@@ -144,20 +147,45 @@ impl<'a> View<'a> {
     }
 }
 
-impl<'a> CodeGenerator for View<'a> {
-    type Ty = Type;
-    type Val = Value;
+// For Cranelift, we need to register function names in a lookup table before constructing a
+// module, so we actually implement `Backend` twice for each registration step.
+
+struct RegistrationState {
+    builder: SimpleJITBuilder,
+}
+
+impl Backend for RegistrationState {
+    type Ty = ();
+    fn void_ptr_ty(&self) -> () {
+        ()
+    }
+    fn ptr_to(&self, (): ()) -> () {
+        ()
+    }
+    fn usize_ty(&self) -> () {
+        ()
+    }
+    fn u32_ty(&self) -> () {
+        ()
+    }
+    fn get_ty(&self, _ty: compile::Ty) -> () {
+        ()
+    }
 
     fn register_external_fn(
         &mut self,
         name: &'static str,
-        name_c: *const u8,
+        _name_c: *const u8,
         addr: *const u8,
-        sig: Sig<Self>,
+        _sig: Sig<Self>,
     ) -> Result<()> {
-        unimplemented!()
+        self.builder.symbol(name, addr);
+        Ok(())
     }
+}
 
+impl<'a> Backend for View<'a> {
+    type Ty = Type;
     // mappings from compile::Ty to Self::Ty
     fn void_ptr_ty(&self) -> Self::Ty {
         self.shared.module.target_config().pointer_type()
@@ -186,6 +214,41 @@ impl<'a> CodeGenerator for View<'a> {
         }
     }
 
+    fn register_external_fn(
+        &mut self,
+        name: &'static str,
+        _name_c: *const u8,
+        addr: *const u8,
+        sig: Sig<Self>,
+    ) -> Result<()> {
+        let cl_sig = &mut self.shared.sig;
+        cl_sig.params.clear();
+        cl_sig.returns.clear();
+        cl_sig
+            .params
+            .extend(sig.args.iter().cloned().map(AbiParam::new));
+        cl_sig
+            .returns
+            .extend(sig.ret.as_ref().into_iter().cloned().map(AbiParam::new));
+        let id = self
+            .shared
+            .module
+            .declare_function(name, Linkage::Import, cl_sig)
+            .map_err(|e| {
+                CompileError(format!(
+                    "error declaring {} in module: {}",
+                    name,
+                    e.to_string()
+                ))
+            })?;
+        self.shared.external_funcs.insert(addr, id);
+        Ok(())
+    }
+}
+
+impl<'a> CodeGenerator for View<'a> {
+    type Val = Value;
+
     // mappings to and from bytecode-level registers to IR-level values
     fn bind_val(&mut self, r: Ref, v: Self::Val) -> Result<()> {
         use compile::Ty::*;
@@ -213,11 +276,10 @@ impl<'a> CodeGenerator for View<'a> {
                 let p = self.builder.use_var(var);
                 self.drop_val(Str, p);
                 self.builder.ins().store(MemFlags::trusted(), v, p, 0);
-                // and ref the new value
-                self.ref_val(Str, p);
             }
             MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
                 // first, ref the new value
+                // TODO: can we skip the ref here?
                 self.ref_val(r.1, v);
                 if is_global {
                     // then, drop the value currently in the pointer
@@ -243,11 +305,31 @@ impl<'a> CodeGenerator for View<'a> {
         Ok(())
     }
     fn get_val(&mut self, r: Ref) -> Result<Self::Val> {
-        // * check locals, if it's there, return the val directly,
-        //   (for strings, do we return the pointer or value itself? I think we return the pointer)
-        // * if it is not, then check globals and issue the load (unless it's a string, in that
-        // case return the pointer)
-        unimplemented!()
+        use compile::Ty::*;
+        if let Null = r.1 {
+            return Ok(self.const_int(0));
+        }
+        let (var, is_global) = if let Some(VarRef { var, is_global, .. }) = self.f.vars.get(&r) {
+            (*var, *is_global)
+        } else {
+            return err!("loading an unbound variable: {:?}", r);
+        };
+        let val = self.builder.use_var(var);
+
+        match r.1 {
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr | Int
+            | Float => {
+                if is_global {
+                    let ty = self.get_ty(r.1);
+                    Ok(self.builder.ins().load(ty, MemFlags::trusted(), val, 0))
+                } else {
+                    Ok(val)
+                }
+            }
+            Str => Ok(val),
+            IterInt | IterStr => err!("attempting to load an iterator pointer"),
+            Null => unreachable!(),
+        }
     }
 
     // backend-specific handling of constants and low-level operations.
@@ -297,23 +379,18 @@ impl<'a> CodeGenerator for View<'a> {
         unimplemented!()
     }
 
-    /// Moves the contents of `src` into `dst`, taking refcounts into consideration if necessary.
     fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()> {
         unimplemented!()
     }
 
-    /// Constructs an iterator over the keys of `map` and stores it in `dst`.
     fn iter_begin(&mut self, dst: Ref, map: Ref) -> Result<()> {
         unimplemented!()
     }
 
-    /// Queries the iterator in `iter` as to whether any elements remain, stores the result in the
-    /// `dst` register.
     fn iter_hasnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
         unimplemented!()
     }
 
-    /// Advances the iterator in `iter` to the next element and stores the current element in `dst`
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
         unimplemented!()
     }
@@ -321,9 +398,6 @@ impl<'a> CodeGenerator for View<'a> {
     // The plumbing for builtin variable manipulation is mostly pretty wrote ... anything we can do
     // here?
 
-    /// Method called after loading a builtin variable into `dst`.
-    ///
-    /// This is included to help clean up ref-counts on string or map builtins, if necessary.
     fn var_loaded(&mut self, dst: Ref) -> Result<()> {
         unimplemented!()
     }

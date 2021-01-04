@@ -3,7 +3,7 @@
 //! There is quite a lot of code here at this point, but most of it is "glue". Where possible we
 //! try and hew closely to the steps in the `interp` module, with most functionality in the
 //! underlying runtime library.
-use super::{CodeGenerator, FunctionAttr, Sig};
+use super::{Backend, FunctionAttr, Sig};
 use crate::runtime::{
     self,
     printf::{printf, FormatArg},
@@ -43,7 +43,7 @@ type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 pub struct U128(u64, u64);
 
 /// Lazily registers all runtime functions with the given LLVM module and context.
-pub(crate) fn register_all(cg: &mut impl CodeGenerator) -> Result<()> {
+pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
     let int_ty = cg.get_ty(Ty::Int);
     let float_ty = cg.get_ty(Ty::Float);
     let str_ty = cg.get_ty(Ty::Str);
@@ -89,7 +89,6 @@ pub(crate) fn register_all(cg: &mut impl CodeGenerator) -> Result<()> {
             register_inner!($name, [ $($param),* ], [$($attr),*], wrap_ret!($ret));
             register!($($rest)*);
         };
-
         () => {};
     }
 

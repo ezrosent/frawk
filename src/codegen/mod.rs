@@ -17,7 +17,7 @@ pub(crate) mod clir;
 pub(crate) type Ref = (NumTy, compile::Ty);
 pub(crate) type StrReg<'a> = bytecode::Reg<runtime::Str<'a>>;
 
-pub(crate) struct Sig<'a, C: CodeGenerator + ?Sized> {
+pub(crate) struct Sig<'a, C: Backend + ?Sized> {
     pub attrs: &'a [FunctionAttr],
     pub args: &'a mut [C::Ty],
     pub ret: Option<C::Ty>,
@@ -73,17 +73,17 @@ pub enum FunctionAttr {
     ArgmemOnly,
 }
 
-/// CodeGenerator encapsulates common functionality needed to generate instructions across multiple
-/// backends. This trait is not currently sufficient to abstract over any backend "end to end" from
-/// bytecode instructions all the way to machine code, but it allows us to keep much of the more
-/// mundane plumbing work common across all backends (as well as separate safe "glue code" from
-/// unsafe calls to the LLVM C API).
-pub(crate) trait CodeGenerator {
+pub(crate) trait Backend {
     type Ty: Clone;
-    type Val;
+    // mappings from compile::Ty to Self::Ty
+    fn void_ptr_ty(&self) -> Self::Ty;
+    fn ptr_to(&self, ty: Self::Ty) -> Self::Ty;
+    fn usize_ty(&self) -> Self::Ty;
+    fn u32_ty(&self) -> Self::Ty;
+    fn get_ty(&self, ty: compile::Ty) -> Self::Ty;
 
-    /// Register a function with address `addr` and name `name` (/ `name_c`, the null-terminated
-    /// variant) with signature `Sig` to be called.
+    /// Register a function with address `addr` and name `name` (/ `name_c`, the nul-terminated
+    /// variant if needed) with signature `Sig` to be called.
     fn register_external_fn(
         &mut self,
         name: &'static str,
@@ -91,13 +91,15 @@ pub(crate) trait CodeGenerator {
         addr: *const u8,
         sig: Sig<Self>,
     ) -> Result<()>;
+}
 
-    // mappings from compile::Ty to Self::Ty
-    fn void_ptr_ty(&self) -> Self::Ty;
-    fn ptr_to(&self, ty: Self::Ty) -> Self::Ty;
-    fn usize_ty(&self) -> Self::Ty;
-    fn u32_ty(&self) -> Self::Ty;
-    fn get_ty(&self, ty: compile::Ty) -> Self::Ty;
+/// CodeGenerator encapsulates common functionality needed to generate instructions across multiple
+/// backends. This trait is not currently sufficient to abstract over any backend "end to end" from
+/// bytecode instructions all the way to machine code, but it allows us to keep much of the more
+/// mundane plumbing work common across all backends (as well as separate safe "glue code" from
+/// unsafe calls to the LLVM C API).
+pub(crate) trait CodeGenerator: Backend {
+    type Val;
 
     // mappings to and from bytecode-level registers to IR-level values
     fn bind_val(&mut self, r: Ref, v: Self::Val) -> Result<()>;

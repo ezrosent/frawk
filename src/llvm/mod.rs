@@ -6,7 +6,7 @@ use crate::bytecode::Accum;
 use crate::codegen::{
     self,
     intrinsics::{register_all, IntoRuntime, Runtime},
-    CodeGenerator, Ref, Sig, StrReg,
+    Backend, CodeGenerator, Ref, Sig, StrReg,
 };
 use crate::common::{Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Ty, Typer};
@@ -85,10 +85,23 @@ struct View<'a> {
     entry_builder: LLVMBuilderRef,
 }
 
-impl<'a> CodeGenerator for View<'a> {
+impl<'a> Backend for View<'a> {
     type Ty = LLVMTypeRef;
-    type Val = LLVMValueRef;
-
+    fn void_ptr_ty(&self) -> Self::Ty {
+        self.tmap.runtime_ty
+    }
+    fn u32_ty(&self) -> Self::Ty {
+        unsafe { LLVMIntTypeInContext(self.ctx, 32) }
+    }
+    fn ptr_to(&self, ty: Self::Ty) -> Self::Ty {
+        unsafe { LLVMPointerType(ty, 0) }
+    }
+    fn usize_ty(&self) -> Self::Ty {
+        unsafe { LLVMIntTypeInContext(self.ctx, (mem::size_of::<*const u8>() * 8) as libc::c_uint) }
+    }
+    fn get_ty(&self, ty: compile::Ty) -> Self::Ty {
+        self.tmap.get_ty(ty)
+    }
     fn register_external_fn(
         &mut self,
         name: &'static str,
@@ -108,22 +121,10 @@ impl<'a> CodeGenerator for View<'a> {
             .register(name, name_c as *const _, f_ty, sig.attrs, addr as *mut _);
         Ok(())
     }
+}
 
-    fn void_ptr_ty(&self) -> Self::Ty {
-        self.tmap.runtime_ty
-    }
-    fn u32_ty(&self) -> Self::Ty {
-        unsafe { LLVMIntTypeInContext(self.ctx, 32) }
-    }
-    fn ptr_to(&self, ty: Self::Ty) -> Self::Ty {
-        unsafe { LLVMPointerType(ty, 0) }
-    }
-    fn usize_ty(&self) -> Self::Ty {
-        unsafe { LLVMIntTypeInContext(self.ctx, (mem::size_of::<*const u8>() * 8) as libc::c_uint) }
-    }
-    fn get_ty(&self, ty: compile::Ty) -> Self::Ty {
-        self.tmap.get_ty(ty)
-    }
+impl<'a> CodeGenerator for View<'a> {
+    type Val = LLVMValueRef;
 
     fn bind_val(&mut self, val: Ref, to: Self::Val) -> Result<()> {
         unsafe {
@@ -143,8 +144,6 @@ impl<'a> CodeGenerator for View<'a> {
                 // We do not store null values explicitly
                 return Ok(());
             }
-            // Note: we ref strings ahead of time, either before call8ing bind_val in a MovStr, or as
-            // the result of a function call.
             use Ty::*;
             if let Some(ix) = self.decls[self.f.id].globals.get(&val) {
                 // We're storing into a global variable. If it's a string or map, that means we have to
@@ -193,6 +192,9 @@ impl<'a> CodeGenerator for View<'a> {
                     return Ok(());
                 }
                 Str => {
+                    // Note: we ref strings ahead of time, either before calling bind_val in a
+                    // MovStr, or as the result of a function call.
+
                     // unwrap justified like the above case for maps.
                     let loc = self.alloca(Ty::Str).unwrap();
                     self.drop_val(loc, Ty::Str);
