@@ -104,11 +104,11 @@ pub(crate) trait CodeGenerator {
     fn get_val(&mut self, r: Ref) -> Result<Self::Val>;
 
     // backend-specific handling of constants and low-level operations.
-    fn runtime_val(&self) -> Self::Val;
-    fn const_int(&self, i: i64) -> Self::Val;
-    fn const_float(&self, f: f64) -> Self::Val;
-    fn const_str<'a>(&self, s: &UniqueStr<'a>) -> Self::Val;
-    fn const_ptr<'a, T>(&'a self, c: &'a T) -> Self::Val;
+    fn runtime_val(&mut self) -> Self::Val;
+    fn const_int(&mut self, i: i64) -> Self::Val;
+    fn const_float(&mut self, f: f64) -> Self::Val;
+    fn const_str<'a>(&mut self, s: &UniqueStr<'a>) -> Self::Val;
+    fn const_ptr<'a, T>(&'a mut self, c: &'a T) -> Self::Val;
 
     /// Call an intrinsic, given a pointer to the [`intrinsics`] module and a list of arguments.
     fn call_intrinsic(&mut self, func: Op, args: &mut [Self::Val]) -> Result<Self::Val>;
@@ -168,7 +168,8 @@ pub(crate) trait CodeGenerator {
             MapStrStr => intrinsic!(load_slot_strstr),
             _ => unreachable!(),
         };
-        let resv = self.call_intrinsic(func, &mut [self.runtime_val(), slot_v])?;
+        let rt = self.runtime_val();
+        let resv = self.call_intrinsic(func, &mut [rt, slot_v])?;
         self.bind_val(dst, resv)
     }
 
@@ -190,8 +191,9 @@ pub(crate) trait CodeGenerator {
             MapStrStr => intrinsic!(store_slot_strstr),
             _ => unreachable!(),
         };
+        let rt = self.runtime_val();
         let arg = self.get_val(src)?;
-        self.call_intrinsic(func, &mut [self.runtime_val(), slot_v, arg])?;
+        self.call_intrinsic(func, &mut [rt, slot_v, arg])?;
         Ok(())
     }
 
@@ -382,17 +384,19 @@ pub(crate) trait CodeGenerator {
             Int1(bw, dst, src) => self.unop(Op::Bitwise(*bw), dst, src),
             Int2(bw, dst, l, r) => self.binop(Op::Bitwise(*bw), dst, l, r),
             Rand(dst) => {
-                let res = self.call_intrinsic(intrinsic!(rand_float), &mut [self.runtime_val()])?;
+                let rt = self.runtime_val();
+                let res = self.call_intrinsic(intrinsic!(rand_float), &mut [rt])?;
                 self.bind_val(dst.reflect(), res)
             }
             Srand(dst, seed) => {
+                let rt = self.runtime_val();
                 let seedv = self.get_val(seed.reflect())?;
-                let res =
-                    self.call_intrinsic(intrinsic!(seed_rng), &mut [self.runtime_val(), seedv])?;
+                let res = self.call_intrinsic(intrinsic!(seed_rng), &mut [rt, seedv])?;
                 self.bind_val(dst.reflect(), res)
             }
             ReseedRng(dst) => {
-                let res = self.call_intrinsic(intrinsic!(reseed_rng), &mut [self.runtime_val()])?;
+                let rt = self.runtime_val();
+                let res = self.call_intrinsic(intrinsic!(reseed_rng), &mut [rt])?;
                 self.bind_val(dst.reflect(), res)
             }
             Concat(dst, l, r) => self.binop(intrinsic!(concat), dst, l, r),
@@ -469,124 +473,117 @@ pub(crate) trait CodeGenerator {
             GTEStr(res, l, r) => self.binop(intrinsic!(str_gte), res, l, r),
             EQStr(res, l, r) => self.binop(intrinsic!(str_eq), res, l, r),
             SetColumn(dst, src) => {
+                let rt = self.runtime_val();
                 let srcv = self.get_val(src.reflect())?;
                 let dstv = self.get_val(dst.reflect())?;
-                self.call_intrinsic(intrinsic!(set_col), &mut [self.runtime_val(), dstv, srcv])?;
+                self.call_intrinsic(intrinsic!(set_col), &mut [rt, dstv, srcv])?;
                 Ok(())
             }
             GetColumn(dst, src) => {
+                let rt = self.runtime_val();
                 let srcv = self.get_val(src.reflect())?;
-                let dstv =
-                    self.call_intrinsic(intrinsic!(get_col), &mut [self.runtime_val(), srcv])?;
+                let dstv = self.call_intrinsic(intrinsic!(get_col), &mut [rt, srcv])?;
                 self.bind_val(dst.reflect(), dstv)
             }
             JoinCSV(dst, start, end) => {
+                let rt = self.runtime_val();
                 let startv = self.get_val(start.reflect())?;
                 let endv = self.get_val(end.reflect())?;
-                let resv = self.call_intrinsic(
-                    intrinsic!(join_csv),
-                    &mut [self.runtime_val(), startv, endv],
-                )?;
+                let resv = self.call_intrinsic(intrinsic!(join_csv), &mut [rt, startv, endv])?;
                 self.bind_val(dst.reflect(), resv)
             }
             JoinTSV(dst, start, end) => {
+                let rt = self.runtime_val();
                 let startv = self.get_val(start.reflect())?;
                 let endv = self.get_val(end.reflect())?;
-                let resv = self.call_intrinsic(
-                    intrinsic!(join_tsv),
-                    &mut [self.runtime_val(), startv, endv],
-                )?;
+                let resv = self.call_intrinsic(intrinsic!(join_tsv), &mut [rt, startv, endv])?;
                 self.bind_val(dst.reflect(), resv)
             }
             JoinColumns(dst, start, end, sep) => {
+                let rt = self.runtime_val();
                 let startv = self.get_val(start.reflect())?;
                 let endv = self.get_val(end.reflect())?;
                 let sepv = self.get_val(sep.reflect())?;
-                let resv = self.call_intrinsic(
-                    intrinsic!(join_cols),
-                    &mut [self.runtime_val(), startv, endv, sepv],
-                )?;
+                let resv =
+                    self.call_intrinsic(intrinsic!(join_cols), &mut [rt, startv, endv, sepv])?;
                 self.bind_val(dst.reflect(), resv)
             }
             SplitInt(flds, to_split, arr, pat) => {
+                let rt = self.runtime_val();
                 let tsv = self.get_val(to_split.reflect())?;
                 let arrv = self.get_val(arr.reflect())?;
                 let patv = self.get_val(pat.reflect())?;
-                let fldsv = self.call_intrinsic(
-                    intrinsic!(split_int),
-                    &mut [self.runtime_val(), tsv, arrv, patv],
-                )?;
+                let fldsv =
+                    self.call_intrinsic(intrinsic!(split_int), &mut [rt, tsv, arrv, patv])?;
                 self.bind_val(flds.reflect(), fldsv)
             }
             SplitStr(flds, to_split, arr, pat) => {
+                let rt = self.runtime_val();
                 let tsv = self.get_val(to_split.reflect())?;
                 let arrv = self.get_val(arr.reflect())?;
                 let patv = self.get_val(pat.reflect())?;
-                let fldsv = self.call_intrinsic(
-                    intrinsic!(split_str),
-                    &mut [self.runtime_val(), tsv, arrv, patv],
-                )?;
+                let fldsv =
+                    self.call_intrinsic(intrinsic!(split_str), &mut [rt, tsv, arrv, patv])?;
                 self.bind_val(flds.reflect(), fldsv)
             }
             Printf { output, fmt, args } => self.printf(output, fmt, args),
             Sprintf { dst, fmt, args } => self.sprintf(dst, fmt, args),
             PrintAll { output, args } => self.print_all(output, args),
             Close(file) => {
+                let rt = self.runtime_val();
                 let filev = self.get_val(file.reflect())?;
-                self.call_intrinsic(intrinsic!(close_file), &mut [self.runtime_val(), filev])?;
+                self.call_intrinsic(intrinsic!(close_file), &mut [rt, filev])?;
                 Ok(())
             }
             RunCmd(dst, cmd) => self.unop(intrinsic!(run_system), dst, cmd),
             ReadErr(dst, file, is_file) => {
+                let rt = self.runtime_val();
                 let filev = self.get_val(file.reflect())?;
                 let is_filev = self.const_int(*is_file as i64);
-                let resv = self.call_intrinsic(
-                    intrinsic!(read_err),
-                    &mut [self.runtime_val(), filev, is_filev],
-                )?;
+                let resv = self.call_intrinsic(intrinsic!(read_err), &mut [rt, filev, is_filev])?;
                 self.bind_val(dst.reflect(), resv)
             }
             NextLine(dst, file, is_file) => {
+                let rt = self.runtime_val();
                 let filev = self.get_val(file.reflect())?;
                 let is_filev = self.const_int(*is_file as i64);
-                let resv = self.call_intrinsic(
-                    intrinsic!(next_line),
-                    &mut [self.runtime_val(), filev, is_filev],
-                )?;
+                let resv =
+                    self.call_intrinsic(intrinsic!(next_line), &mut [rt, filev, is_filev])?;
                 self.bind_val(dst.reflect(), resv)
             }
             ReadErrStdin(dst) => {
-                let resv =
-                    self.call_intrinsic(intrinsic!(read_err_stdin), &mut [self.runtime_val()])?;
+                let rt = self.runtime_val();
+                let resv = self.call_intrinsic(intrinsic!(read_err_stdin), &mut [rt])?;
                 self.bind_val(dst.reflect(), resv)
             }
             NextLineStdin(dst) => {
-                let resv =
-                    self.call_intrinsic(intrinsic!(next_line_stdin), &mut [self.runtime_val()])?;
+                let rt = self.runtime_val();
+                let resv = self.call_intrinsic(intrinsic!(next_line_stdin), &mut [rt])?;
                 self.bind_val(dst.reflect(), resv)
             }
             NextLineStdinFused() => {
-                self.call_intrinsic(intrinsic!(next_line_stdin_fused), &mut [self.runtime_val()])?;
+                let rt = self.runtime_val();
+                self.call_intrinsic(intrinsic!(next_line_stdin_fused), &mut [rt])?;
                 Ok(())
             }
             NextFile() => {
-                self.call_intrinsic(intrinsic!(next_file), &mut [self.runtime_val()])?;
+                let rt = self.runtime_val();
+                self.call_intrinsic(intrinsic!(next_file), &mut [rt])?;
                 Ok(())
             }
             UpdateUsedFields() => {
-                self.call_intrinsic(intrinsic!(update_used_fields), &mut [self.runtime_val()])?;
+                let rt = self.runtime_val();
+                self.call_intrinsic(intrinsic!(update_used_fields), &mut [rt])?;
                 Ok(())
             }
             SetFI(key, val) => {
                 // We could probably get away without an extra intrinsic here, but this way we can
                 // avoid repeated refs and drops of the FI variable outside of the existing
                 // framework for performing refs and drops.
+                let rt = self.runtime_val();
                 let keyv = self.get_val(key.reflect())?;
                 let valv = self.get_val(val.reflect())?;
-                self.call_intrinsic(
-                    intrinsic!(set_fi_entry),
-                    &mut [self.runtime_val(), keyv, valv],
-                )?;
+                self.call_intrinsic(intrinsic!(set_fi_entry), &mut [rt, keyv, valv])?;
                 Ok(())
             }
             Lookup {
@@ -622,71 +619,63 @@ pub(crate) trait CodeGenerator {
                 (*val, map_ty.val()?),
             ),
             LoadVarStr(dst, var) => {
+                let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
-                let res =
-                    self.call_intrinsic(intrinsic!(load_var_str), &mut [self.runtime_val(), varv])?;
+                let res = self.call_intrinsic(intrinsic!(load_var_str), &mut [rt, varv])?;
                 let dref = dst.reflect();
                 self.bind_val(dref, res)?;
                 self.var_loaded(dref)
             }
             StoreVarStr(var, src) => {
+                let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_intrinsic(
-                    intrinsic!(store_var_str),
-                    &mut [self.runtime_val(), varv, srcv],
-                )?;
+                self.call_intrinsic(intrinsic!(store_var_str), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadVarInt(dst, var) => {
+                let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
-                let res =
-                    self.call_intrinsic(intrinsic!(load_var_int), &mut [self.runtime_val(), varv])?;
+                let res = self.call_intrinsic(intrinsic!(load_var_int), &mut [rt, varv])?;
                 let dref = dst.reflect();
                 self.bind_val(dref, res)?;
                 self.var_loaded(dref)
             }
             StoreVarInt(var, src) => {
+                let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_intrinsic(
-                    intrinsic!(store_var_int),
-                    &mut [self.runtime_val(), varv, srcv],
-                )?;
+                self.call_intrinsic(intrinsic!(store_var_int), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadVarIntMap(dst, var) => {
+                let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
-                let res = self
-                    .call_intrinsic(intrinsic!(load_var_intmap), &mut [self.runtime_val(), varv])?;
+                let res = self.call_intrinsic(intrinsic!(load_var_intmap), &mut [rt, varv])?;
                 let dref = dst.reflect();
                 self.bind_val(dref, res)?;
                 self.var_loaded(dref)
             }
             StoreVarIntMap(var, src) => {
+                let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_intrinsic(
-                    intrinsic!(store_var_intmap),
-                    &mut [self.runtime_val(), varv, srcv],
-                )?;
+                self.call_intrinsic(intrinsic!(store_var_intmap), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadVarStrMap(dst, var) => {
+                let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
-                let res = self
-                    .call_intrinsic(intrinsic!(load_var_strmap), &mut [self.runtime_val(), varv])?;
+                let res = self.call_intrinsic(intrinsic!(load_var_strmap), &mut [rt, varv])?;
                 let dref = dst.reflect();
                 self.bind_val(dref, res)?;
                 self.var_loaded(dref)
             }
             StoreVarStrMap(var, src) => {
+                let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_intrinsic(
-                    intrinsic!(store_var_strmap),
-                    &mut [self.runtime_val(), varv, srcv],
-                )?;
+                self.call_intrinsic(intrinsic!(store_var_strmap), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadSlot { ty, dst, slot } => self.load_slot((*dst, *ty), *slot),

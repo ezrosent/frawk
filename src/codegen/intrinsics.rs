@@ -95,6 +95,7 @@ pub(crate) fn register_all(cg: &mut impl CodeGenerator) -> Result<()> {
 
     register! {
         ref_str(str_ref_ty);
+        drop_str(str_ref_ty);
         drop_str_slow(str_ref_ty, int_ty);
         ref_map(map_ty);
         [ReadOnly] int_to_str(int_ty) -> str_ty;
@@ -756,6 +757,11 @@ pub(crate) unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 
 
 pub(crate) unsafe extern "C" fn ref_str(s: *mut c_void) {
     mem::forget((&*(s as *mut Str)).clone())
+}
+
+// This is a "slow path" drop, used by cranelift only for the time being.
+pub(crate) unsafe extern "C" fn drop_str(s: *mut U128) {
+    std::ptr::drop_in_place(s as *mut Str)
 }
 
 pub(crate) unsafe extern "C" fn drop_str_slow(s: *mut U128, tag: u64) {

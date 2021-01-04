@@ -215,7 +215,7 @@ impl<'a> CodeGenerator for View<'a> {
         }
     }
 
-    fn runtime_val(&self) -> Self::Val {
+    fn runtime_val(&mut self) -> Self::Val {
         unsafe {
             LLVMGetParam(
                 self.f.val,
@@ -223,15 +223,15 @@ impl<'a> CodeGenerator for View<'a> {
             )
         }
     }
-    fn const_int(&self, i: i64) -> Self::Val {
+    fn const_int(&mut self, i: i64) -> Self::Val {
         unsafe {
             LLVMConstInt(self.get_ty(Ty::Int), i as u64, /*sign_extend=*/ 0)
         }
     }
-    fn const_float(&self, f: f64) -> Self::Val {
+    fn const_float(&mut self, f: f64) -> Self::Val {
         unsafe { LLVMConstReal(self.get_ty(Ty::Float), f) }
     }
-    fn const_str<'b>(&self, s: &runtime::UniqueStr<'b>) -> Self::Val {
+    fn const_str<'b>(&mut self, s: &runtime::UniqueStr<'b>) -> Self::Val {
         // We don't know where we're storing this string literal. If it's in the middle of
         // a loop, we could be calling drop on it repeatedly. If the string is boxed, that
         // will lead to double-frees. In our current setup, these literals will all be
@@ -248,7 +248,7 @@ impl<'a> CodeGenerator for View<'a> {
             LLVMConstIntOfString(ty, as_hex.as_ptr(), /*radix=*/ 16)
         }
     }
-    fn const_ptr<'b, T>(&'b self, c: &'b T) -> Self::Val {
+    fn const_ptr<'b, T>(&'b mut self, c: &'b T) -> Self::Val {
         let voidp = self.tmap.runtime_ty;
         let int_ty = self.tmap.get_ty(Ty::Int);
         unsafe {
