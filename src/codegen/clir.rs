@@ -2,42 +2,39 @@
 use cranelift::prelude::*;
 use cranelift_module::{FuncId, Linkage, Module};
 use cranelift_simplejit::{SimpleJITBuilder, SimpleJITModule};
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
+use crate::builtins;
 use crate::codegen::{Backend, CodeGenerator, Op, Ref, Sig, StrReg};
 use crate::common::{CompileError, FileSpec, NumTy, Result};
 use crate::compile;
 use crate::runtime::UniqueStr;
 
-// TODO: IntrinsicMap equivalent (convert signatures)
-// TODO: locals => Variable map
-//       globals referenced as loads to a global variable.
-//       stores of ref-counted type are refs
-//          (except for eliminated phi nodes)
-//      things should, on the whole, be simpler (knock on wood)
+// TODO:
+// * do `mov`
+// * set up iterators
+// * do print_all
+// * do printf, sprintf
+// * figure out declarations, stack slots for strings, and frame setup.
+// * control flow, drops, etc.
 //
-//
-// so, concretely. Let's keep the same Generator/View structure, but this time encapsulate all the
-// shit into a Shared struct
-//
-// * implement type maps. (or perhapss we don't need them?)
-// * declare all functions.
-// * fill in CodeGenerator trait impl for View
-//
-// Notes:
-// * do iterators, printf last. See if we can get something compiling without all those.
-// * inline drop_str manually, or not at all (?)
-// * strings need to be "allocad" i.e. pointers on the stack, and then stores into pointers, loads
-// when doing get_val. Do we need to do the same w/maps (hoping "no"; we do this with maps in llvm
-// because ... why, excactly? Something about doing refs)
-//
-// We'll probably want to do stack slots directly for prints
+// TODO (cleanup; after tests are passing):
+// * move floatfunc/bitwise stuff into llvm module
+// * move llvm module under codegen
+// * make sure cargo doc builds
+// * doc fixups
+
+/// Information about a user-defined function needed by callers.
+struct FuncInfo {
+    globals: HashSet<Ref>,
+    func_id: FuncId,
+}
 
 /// Function-independent data used in compilation
 struct Shared {
     codegen_ctx: codegen::Context,
     module: SimpleJITModule,
-    func_ids: Vec<FuncId>,
+    func_ids: Vec<FuncInfo>,
     external_funcs: HashMap<*const u8, FuncId>,
     // We need cranelift Signatures for declaring external functions. We put them here to reuse
     // them across calls to `register_external_fn`.
@@ -53,9 +50,7 @@ struct VarRef {
 
 /// Function-level state
 struct Frame {
-    // TODO: initialize these two at construction time. Unlike LLVM, we don't really have to worry
-    // about constructing these things "just in time", we can take "bind_val" to behave just like
-    // assignment.
+    // Used for most lookups of variable information.
     vars: HashMap<Ref, VarRef>,
     runtime: Variable,
     n_params: usize,
@@ -144,6 +139,105 @@ impl<'a> View<'a> {
             .module
             .declare_func_in_func(id, self.builder.func);
         self.builder.ins().call(fref, args)
+    }
+
+    /// frawk does not have booleans, so for now we always convert the results of comparison
+    /// operations back to integers.
+    ///
+    /// NB: It would be interesting and likely useful to add a "bool" type (with consequent
+    /// coercions).
+    fn bool_to_int(&mut self, b: Value) -> Value {
+        let int_ty = self.get_ty(compile::Ty::Int);
+        self.builder.ins().bint(int_ty, b)
+    }
+
+    /// Generate a new value according to the comparison instruction, applied to `l` and `r`, which
+    /// are assumed to be floating point values if `is_float` and (signed, as is the case in frawk)
+    /// integer values otherwise.
+    ///
+    /// As with the LLVM, we use the "ordered" variants on comparsion: the ones that return false
+    /// if either operand is NaN.
+    fn cmp(&mut self, op: crate::codegen::Cmp, is_float: bool, l: Value, r: Value) -> Value {
+        use crate::codegen::Cmp::*;
+        let res = if is_float {
+            match op {
+                EQ => self.builder.ins().fcmp(FloatCC::Equal, l, r),
+                LTE => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
+                LT => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
+                GTE => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
+                GT => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
+            }
+        } else {
+            match op {
+                EQ => self.builder.ins().icmp(IntCC::Equal, l, r),
+                LTE => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
+                LT => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
+                GTE => self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::SignedGreaterThanOrEqual, l, r),
+                GT => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
+            }
+        };
+        self.bool_to_int(res)
+    }
+
+    /// Generate a new value according to the operation specified in `op`.
+    ///
+    /// We assume that `args` contains floating point or signed integer values depending on the
+    /// value of `is_float`. Panics if args has the wrong arity.
+    fn arith(&mut self, op: crate::codegen::Arith, is_float: bool, args: &[Value]) -> Value {
+        use crate::codegen::Arith::*;
+        if is_float {
+            match op {
+                Mul => self.builder.ins().fmul(args[0], args[1]),
+                Minus => self.builder.ins().fsub(args[0], args[1]),
+                Add => self.builder.ins().fadd(args[0], args[1]),
+                // No floating-point modulo in cranelift?
+                Mod => self.call_external(external!(_frawk_fprem), args),
+                Neg => self.builder.ins().fneg(args[0]),
+            }
+        } else {
+            match op {
+                Mul => self.builder.ins().imul(args[0], args[1]),
+                Minus => self.builder.ins().isub(args[0], args[1]),
+                Add => self.builder.ins().iadd(args[0], args[1]),
+                Mod => self.builder.ins().srem(args[0], args[1]),
+                Neg => self.builder.ins().ineg(args[0]),
+            }
+        }
+    }
+
+    /// Apply the bitwise operation specified in `op` to args.
+    ///
+    /// Panics if args has the wrong arity (2 for all bitwise operations except for `Complement`).
+    /// All of the entries in `args` should be integer values.
+    fn bitwise(&mut self, op: builtins::Bitwise, args: &[Value]) -> Value {
+        use builtins::Bitwise::*;
+        match op {
+            Complement => self.builder.ins().bnot(args[0]),
+            And => self.builder.ins().band(args[0], args[1]),
+            Or => self.builder.ins().bor(args[0], args[1]),
+            LogicalRightShift => self.builder.ins().ushr(args[0], args[1]),
+            ArithmeticRightShift => self.builder.ins().ushr(args[0], args[1]),
+            LeftShift => self.builder.ins().ishl(args[0], args[1]),
+            Xor => self.builder.ins().bxor(args[0], args[1]),
+        }
+    }
+
+    fn floatfunc(&mut self, op: builtins::FloatFunc, args: &[Value]) -> Value {
+        use builtins::FloatFunc::*;
+        match op {
+            Cos => self.call_external(external!(_frawk_cos), args),
+            Sin => self.call_external(external!(_frawk_sin), args),
+            Atan => self.call_external(external!(_frawk_atan), args),
+            Atan2 => self.call_external(external!(_frawk_atan2), args),
+            Log => self.call_external(external!(_frawk_log), args),
+            Log2 => self.call_external(external!(_frawk_log2), args),
+            Log10 => self.call_external(external!(_frawk_log10), args),
+            Sqrt => self.builder.ins().sqrt(args[0]),
+            Exp => self.call_external(external!(_frawk_exp), args),
+        }
     }
 }
 
@@ -355,8 +449,30 @@ impl<'a> CodeGenerator for View<'a> {
         self.const_int(c as *const _ as i64)
     }
 
+    fn call_void(&mut self, func: *const u8, args: &mut [Self::Val]) -> Result<()> {
+        Ok(self.call_external_void(func, args))
+    }
+
+    // TODO if all goes well, remove the Result<..> wrapper and migrate the callers.
     fn call_intrinsic(&mut self, func: Op, args: &mut [Self::Val]) -> Result<Self::Val> {
-        unimplemented!()
+        use Op::*;
+        match func {
+            Cmp { is_float, op } => Ok(self.cmp(op, is_float, args[0], args[1])),
+            Arith { is_float, op } => Ok(self.arith(op, is_float, args)),
+            Bitwise(bw) => Ok(self.bitwise(bw, args)),
+            Math(ff) => Ok(self.floatfunc(ff, args)),
+            Div => Ok(self.builder.ins().fdiv(args[0], args[1])),
+            Pow => Ok(self.call_external(external!(_frawk_pow), args)),
+            FloatToInt => {
+                let ty = self.get_ty(compile::Ty::Int);
+                Ok(self.builder.ins().fcvt_to_sint_sat(ty, args[0]))
+            }
+            IntToFloat => {
+                let ty = self.get_ty(compile::Ty::Float);
+                Ok(self.builder.ins().fcvt_from_sint(ty, args[0]))
+            }
+            Intrinsic(e) => Ok(self.call_external(e, args)),
+        }
     }
 
     // var-arg printing functions. The arguments here directly parallel the instruction

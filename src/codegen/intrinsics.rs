@@ -141,6 +141,14 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         update_used_fields(rt_ty);
         set_fi_entry(rt_ty, int_ty, int_ty);
 
+        // TODO: we are no longer relying on avoiding collisions with exisint library symbols
+        // (everything in this module was one no_mangle); we should look into removing the _frawk
+        // prefix.
+
+        // Floating-point functions. Note that aside from the last two operations, the LLVM backend
+        // uses intrinsics for these, whereas we use standard functions here instead.
+        [ReadOnly, ArgmemOnly] _frawk_fprem(float_ty, float_ty) -> float_ty;
+        [ReadOnly, ArgmemOnly] _frawk_pow(float_ty, float_ty) -> float_ty;
         [ReadOnly, ArgmemOnly] _frawk_atan(float_ty) -> float_ty;
         [ReadOnly, ArgmemOnly] _frawk_atan2(float_ty, float_ty) -> float_ty;
 
@@ -1057,14 +1065,48 @@ pub(crate) unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     try_abort!(rt, rt.core.write_files.close(file));
 }
 
+pub(crate) unsafe extern "C" fn _frawk_cos(f: Float) -> Float {
+    f.cos()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_sin(f: Float) -> Float {
+    f.sin()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_log(f: Float) -> Float {
+    f.ln()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_log2(f: Float) -> Float {
+    f.log2()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_log10(f: Float) -> Float {
+    f.log10()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_sqrt(f: Float) -> Float {
+    f.sqrt()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_exp(f: Float) -> Float {
+    f.exp()
+}
+
 pub(crate) unsafe extern "C" fn _frawk_atan(f: Float) -> Float {
-    std::ptr::read_volatile(&false);
     f.atan()
 }
 
 pub(crate) unsafe extern "C" fn _frawk_atan2(x: Float, y: Float) -> Float {
-    std::ptr::read_volatile(&false);
     x.atan2(y)
+}
+
+pub(crate) unsafe extern "C" fn _frawk_pow(x: Float, y: Float) -> Float {
+    Float::powf(x, y)
+}
+
+pub(crate) unsafe extern "C" fn _frawk_fprem(x: Float, y: Float) -> Float {
+    x % y
 }
 
 // And now for the shenanigans for implementing map operations. There are 48 functions here; we

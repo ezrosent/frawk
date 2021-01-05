@@ -153,6 +153,8 @@ impl Bitwise {
     }
 }
 
+// TODO: move the llvm-level code back into the LLVM module.
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum FloatFunc {
     Cos,

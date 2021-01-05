@@ -23,9 +23,15 @@ pub(crate) struct Sig<'a, C: Backend + ?Sized> {
     pub ret: Option<C::Ty>,
 }
 
+macro_rules! external {
+    ($name:ident) => {
+        crate::codegen::intrinsics::$name as *const u8
+    };
+}
+
 macro_rules! intrinsic {
     ($name:ident) => {
-        Op::Intrinsic(crate::codegen::intrinsics::$name as *const u8)
+        Op::Intrinsic(external!($name))
     };
 }
 
@@ -112,8 +118,26 @@ pub(crate) trait CodeGenerator: Backend {
     fn const_str<'a>(&mut self, s: &UniqueStr<'a>) -> Self::Val;
     fn const_ptr<'a, T>(&'a mut self, c: &'a T) -> Self::Val;
 
+    // NB: why &mut [..] everywhere instead of &[..] or impl Iterator<..>? The LLVM C API takes a
+    // sequence of arguments by a mutable pointer to the first element along with a length. We
+    // could take `args.as_ptr() as *mut _`, as most of these LLVM calls (probably?) don't actually
+    // modify the list, but we may as well err on the safe side and behave as though LLVM has
+    // mutable access to the contents of the slice.
+
     /// Call an intrinsic, given a pointer to the [`intrinsics`] module and a list of arguments.
     fn call_intrinsic(&mut self, func: Op, args: &mut [Self::Val]) -> Result<Self::Val>;
+
+    /// Call an external function that does not return a value.
+    ///
+    /// Some backends (LLVM) are fine with returning a "value" with no content; for that case we
+    /// simply delegate to [`call_intrinsic`]. However, in cranelift "void" functions simply do not
+    /// return a value. We could add a wrapper value type that permits "no value" as a member, but
+    /// then the rest of the code would have to have unwrap's everywhere (making the code less
+    /// clear and less type safe).
+    fn call_void(&mut self, func: *const u8, args: &mut [Self::Val]) -> Result<()> {
+        self.call_intrinsic(Op::Intrinsic(func), args)?;
+        Ok(())
+    }
 
     // var-arg printing functions. The arguments here directly parallel the instruction
     // definitions.
@@ -287,23 +311,21 @@ pub(crate) trait CodeGenerator: Backend {
     ///
     /// Assumes that the types of the input registers match up.
     fn store_map(&mut self, map: Ref, key: Ref, val: Ref) -> Result<()> {
-        assert_eq!(map.1.key()?, key.1);
-        assert_eq!(map.1.val()?, val.1);
         use compile::Ty::*;
         map_valid(map.1, key.1, val.1)?;
         let func = match map.1 {
-            MapIntInt => intrinsic!(insert_intint),
-            MapIntFloat => intrinsic!(insert_intfloat),
-            MapIntStr => intrinsic!(insert_intstr),
-            MapStrInt => intrinsic!(insert_strint),
-            MapStrFloat => intrinsic!(insert_strfloat),
-            MapStrStr => intrinsic!(insert_strstr),
+            MapIntInt => external!(insert_intint),
+            MapIntFloat => external!(insert_intfloat),
+            MapIntStr => external!(insert_intstr),
+            MapStrInt => external!(insert_strint),
+            MapStrFloat => external!(insert_strfloat),
+            MapStrStr => external!(insert_strstr),
             ty => return err!("non-map type: {:?}", ty),
         };
         let mapv = self.get_val(map)?;
         let keyv = self.get_val(key)?;
         let valv = self.get_val(val)?;
-        self.call_intrinsic(func, &mut [mapv, keyv, valv])?;
+        self.call_void(func, &mut [mapv, keyv, valv])?;
         Ok(())
     }
 
@@ -478,7 +500,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let rt = self.runtime_val();
                 let srcv = self.get_val(src.reflect())?;
                 let dstv = self.get_val(dst.reflect())?;
-                self.call_intrinsic(intrinsic!(set_col), &mut [rt, dstv, srcv])?;
+                self.call_void(external!(set_col), &mut [rt, dstv, srcv])?;
                 Ok(())
             }
             GetColumn(dst, src) => {
@@ -534,7 +556,7 @@ pub(crate) trait CodeGenerator: Backend {
             Close(file) => {
                 let rt = self.runtime_val();
                 let filev = self.get_val(file.reflect())?;
-                self.call_intrinsic(intrinsic!(close_file), &mut [rt, filev])?;
+                self.call_void(external!(close_file), &mut [rt, filev])?;
                 Ok(())
             }
             RunCmd(dst, cmd) => self.unop(intrinsic!(run_system), dst, cmd),
@@ -565,17 +587,17 @@ pub(crate) trait CodeGenerator: Backend {
             }
             NextLineStdinFused() => {
                 let rt = self.runtime_val();
-                self.call_intrinsic(intrinsic!(next_line_stdin_fused), &mut [rt])?;
+                self.call_void(external!(next_line_stdin_fused), &mut [rt])?;
                 Ok(())
             }
             NextFile() => {
                 let rt = self.runtime_val();
-                self.call_intrinsic(intrinsic!(next_file), &mut [rt])?;
+                self.call_void(external!(next_file), &mut [rt])?;
                 Ok(())
             }
             UpdateUsedFields() => {
                 let rt = self.runtime_val();
-                self.call_intrinsic(intrinsic!(update_used_fields), &mut [rt])?;
+                self.call_void(external!(update_used_fields), &mut [rt])?;
                 Ok(())
             }
             SetFI(key, val) => {
@@ -585,7 +607,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let rt = self.runtime_val();
                 let keyv = self.get_val(key.reflect())?;
                 let valv = self.get_val(val.reflect())?;
-                self.call_intrinsic(intrinsic!(set_fi_entry), &mut [rt, keyv, valv])?;
+                self.call_void(external!(set_fi_entry), &mut [rt, keyv, valv])?;
                 Ok(())
             }
             Lookup {
@@ -632,7 +654,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_intrinsic(intrinsic!(store_var_str), &mut [rt, varv, srcv])?;
+                self.call_void(external!(store_var_str), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadVarInt(dst, var) => {
@@ -647,7 +669,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_intrinsic(intrinsic!(store_var_int), &mut [rt, varv, srcv])?;
+                self.call_void(external!(store_var_int), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadVarIntMap(dst, var) => {
@@ -662,7 +684,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_intrinsic(intrinsic!(store_var_intmap), &mut [rt, varv, srcv])?;
+                self.call_void(external!(store_var_intmap), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadVarStrMap(dst, var) => {
@@ -677,7 +699,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_intrinsic(intrinsic!(store_var_strmap), &mut [rt, varv, srcv])?;
+                self.call_void(external!(store_var_strmap), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadSlot { ty, dst, slot } => self.load_slot((*dst, *ty), *slot),
