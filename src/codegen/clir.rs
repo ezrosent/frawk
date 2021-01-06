@@ -11,7 +11,6 @@ use crate::compile;
 use crate::runtime::UniqueStr;
 
 // TODO:
-// * do `mov`
 // * set up iterators
 // * do print_all
 // * do printf, sprintf
@@ -110,6 +109,7 @@ impl<'a> View<'a> {
         };
         self.call_external_void(func, &[v]);
     }
+
     /// Call and external function that returns a value.
     ///
     /// Panics if `func` has not been registered as an external function, or if it was not
@@ -496,7 +496,27 @@ impl<'a> CodeGenerator for View<'a> {
     }
 
     fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()> {
-        unimplemented!()
+        use compile::Ty::*;
+        let src = self.get_val((src, ty))?;
+        match ty {
+            Int | Float => self.bind_val((dst, ty), src)?,
+            Str => {
+                self.call_external_void(external!(ref_str), &[src]);
+                let str_ty = self.get_ty(Str);
+                let loaded = self.builder.ins().load(str_ty, MemFlags::trusted(), src, 0);
+                self.bind_val((dst, Str), loaded)?;
+            }
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                self.call_external_void(external!(ref_map), &[src]);
+                self.bind_val((dst, ty), src)?;
+            }
+            IterInt | IterStr => return err!("attempting to apply `mov` to an iterator!"),
+            Null => {
+                let zero = self.const_int(0);
+                self.bind_val((dst, ty), zero)?;
+            }
+        }
+        Ok(())
     }
 
     fn iter_begin(&mut self, dst: Ref, map: Ref) -> Result<()> {
@@ -510,9 +530,6 @@ impl<'a> CodeGenerator for View<'a> {
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
         unimplemented!()
     }
-
-    // The plumbing for builtin variable manipulation is mostly pretty wrote ... anything we can do
-    // here?
 
     fn var_loaded(&mut self, dst: Ref) -> Result<()> {
         unimplemented!()
