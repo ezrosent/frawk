@@ -11,7 +11,6 @@ use crate::compile;
 use crate::runtime::UniqueStr;
 
 // TODO:
-// * set up iterators
 // * do print_all
 // * do printf, sprintf
 // * figure out declarations, stack slots for strings, and frame setup.
@@ -47,10 +46,21 @@ struct VarRef {
     skip_drop: bool,
 }
 
+/// Iterator-specific variable state. This is treated differently from [`VarRef`] because iterators
+/// function in a much more restricted context when compared with variables.
+#[derive(Clone)]
+struct IterState {
+    // NB: a more compact representation would just be to store `start` and `end`, but we need to
+    // hold onto the true `start` in order to free the memory.
+    len: Variable,  // int
+    cur: Variable,  // int
+    base: Variable, // pointer
+}
+
 /// Function-level state
 struct Frame {
-    // Used for most lookups of variable information.
     vars: HashMap<Ref, VarRef>,
+    iters: HashMap<Ref, IterState>,
     runtime: Variable,
     n_params: usize,
     n_vars: usize,
@@ -208,7 +218,7 @@ impl<'a> View<'a> {
         }
     }
 
-    /// Apply the bitwise operation specified in `op` to args.
+    /// Apply the bitwise operation specified in `op` to `args`.
     ///
     /// Panics if args has the wrong arity (2 for all bitwise operations except for `Complement`).
     /// All of the entries in `args` should be integer values.
@@ -225,6 +235,11 @@ impl<'a> View<'a> {
         }
     }
 
+    /// Apply the [`FloatFunc`] operation specified in `op` to `args`.
+    ///
+    /// Panics if args has the wrong arity. Unlike LLVM, most of these functions do not have direct
+    /// instructions (or intrinsics), so they are implemented as function calls to rust functions
+    /// which in turn call into the standard library.
     fn floatfunc(&mut self, op: builtins::FloatFunc, args: &[Value]) -> Value {
         use builtins::FloatFunc::*;
         match op {
@@ -237,6 +252,14 @@ impl<'a> View<'a> {
             Log10 => self.call_external(external!(_frawk_log10), args),
             Sqrt => self.builder.ins().sqrt(args[0]),
             Exp => self.call_external(external!(_frawk_exp), args),
+        }
+    }
+
+    fn get_iter(&mut self, iter: Ref) -> Result<IterState> {
+        if let Some(x) = self.f.iters.get_mut(&iter).cloned() {
+            Ok(x)
+        } else {
+            err!("uninitialized iterator reference: {:?}", iter)
         }
     }
 }
@@ -520,15 +543,52 @@ impl<'a> CodeGenerator for View<'a> {
     }
 
     fn iter_begin(&mut self, dst: Ref, map: Ref) -> Result<()> {
-        unimplemented!()
+        use compile::Ty::*;
+        let (len_fn, begin_fn) = match map.1 {
+            MapIntInt => (external!(len_intint), external!(iter_intint)),
+            MapIntStr => (external!(len_intstr), external!(iter_intstr)),
+            MapIntFloat => (external!(len_intfloat), external!(iter_intfloat)),
+            MapStrInt => (external!(len_strint), external!(iter_strint)),
+            MapStrStr => (external!(len_strstr), external!(iter_strstr)),
+            MapStrFloat => (external!(len_strfloat), external!(iter_strfloat)),
+            IterInt | IterStr | Int | Float | Str | Null => {
+                return err!("iterating over non-map type: {:?}", map.1)
+            }
+        };
+        let map = self.get_val(map)?;
+        let IterState { len, cur, base } = self.get_iter(dst)?;
+        let ptr = self.call_external(begin_fn, &[map]);
+        let map_len = self.call_external(len_fn, &[map]);
+        let zero = self.const_int(0);
+        self.builder.def_var(cur, zero);
+        self.builder.def_var(len, map_len);
+        self.builder.def_var(base, ptr);
+        Ok(())
     }
 
     fn iter_hasnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
-        unimplemented!()
+        let IterState { len, cur, .. } = self.get_iter(iter)?;
+        let lenv = self.builder.use_var(len);
+        let curv = self.builder.use_var(cur);
+        let cmp = self.builder.ins().icmp(IntCC::UnsignedLessThan, curv, lenv);
+        let cmp_int = self.bool_to_int(cmp);
+        self.bind_val(dst, cmp_int)
     }
 
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
-        unimplemented!()
+        // Compute base+cur and load it into a value
+        let IterState { cur, base, .. } = self.get_iter(iter)?;
+        let base = self.builder.use_var(base);
+        let cur = self.builder.use_var(cur);
+        let ptr = self.builder.ins().iadd(base, cur);
+        let ty = self.get_ty(dst.1);
+        let contents = self.builder.ins().load(ty, MemFlags::trusted(), ptr, 0);
+
+        // Now bind it to `dst` and increment the refcount, if relevant.
+        self.bind_val(dst, contents)?;
+        let dst_ptr = self.get_val(dst)?;
+        self.ref_val(dst.1, dst_ptr);
+        Ok(())
     }
 
     fn var_loaded(&mut self, dst: Ref) -> Result<()> {
