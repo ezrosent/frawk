@@ -4,6 +4,7 @@ use cranelift_codegen::ir::StackSlot;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
 use hashbrown::{HashMap, HashSet};
+use smallvec::SmallVec;
 
 use crate::builtins;
 use crate::bytecode::Accum;
@@ -27,7 +28,7 @@ use std::mem;
 
 /// Information about a user-defined function needed by callers.
 struct FuncInfo {
-    globals: HashSet<Ref>,
+    globals: SmallVec<[Ref; 2]>,
     func_id: FuncId,
 }
 
@@ -43,6 +44,7 @@ struct Shared {
 }
 
 /// A cranelift [`Variable`] with frawk-specific metadata
+#[derive(Clone)]
 struct VarRef {
     var: Variable,
     is_global: bool,
@@ -65,6 +67,7 @@ struct Frame {
     vars: HashMap<Ref, VarRef>,
     iters: HashMap<Ref, IterState>,
     runtime: Variable,
+    entry_block: Block,
     n_params: usize,
     n_vars: usize,
 }
@@ -94,6 +97,86 @@ impl<'a> View<'a> {
         let data = StackSlotData::new(StackSlotKind::ExplicitSlot, bytes);
         self.builder.create_stack_slot(data)
     }
+    fn switch_to_entry(&mut self) -> Result<Block> {
+        let last_block = self
+            .builder
+            .current_block()
+            .map(Ok)
+            .unwrap_or_else(|| err!("generating instructions without a current block"))?;
+        self.builder.switch_to_block(self.f.entry_block);
+        Ok(last_block)
+    }
+
+    /// Initialize the `Variable` associated with a non-iterator and non-null local variable of
+    /// type `ty`.
+    fn declare_local(&mut self, ty: compile::Ty) -> Result<Variable> {
+        use compile::Ty::*;
+        let next_var = Variable::new(self.f.n_vars);
+        self.f.n_vars += 1;
+        let cl_ty = self.get_ty(ty);
+        // NB: should we preinitialize maps? We may have to do that in a separate pass after we
+        // finish the pass over the rest of the functions.
+        match ty {
+            Int | Float => self.builder.declare_var(next_var, cl_ty),
+            Str => {
+                // allocate a stack slot for the string, then assign next_var to point to that
+                // slot.
+                let last_block = self.switch_to_entry()?;
+                let ptr_ty = self.ptr_to(cl_ty);
+                let slot = self.stack_slot_bytes(mem::size_of::<runtime::Str>() as u32);
+                self.builder.declare_var(next_var, ptr_ty);
+                let addr = self.builder.ins().stack_addr(ptr_ty, slot, 0);
+                self.builder.def_var(next_var, addr);
+                // For good measure, write zeros here,
+                let zeros = self.builder.ins().iconst(cl_ty, 0);
+                self.builder.ins().stack_store(zeros, slot, 0);
+                self.builder.switch_to_block(last_block);
+            }
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                self.builder.declare_var(next_var, cl_ty);
+                let alloc_fn = match ty {
+                    MapIntInt => external!(alloc_intint),
+                    MapIntFloat => external!(alloc_intfloat),
+                    MapIntStr => external!(alloc_intstr),
+                    MapStrInt => external!(alloc_strint),
+                    MapStrFloat => external!(alloc_strfloat),
+                    MapStrStr => external!(alloc_strstr),
+                    _ => unreachable!(),
+                };
+                let last_block = self.switch_to_entry()?;
+                let new_map = self.call_external(alloc_fn, &[]);
+                self.builder.def_var(next_var, new_map);
+                self.builder.switch_to_block(last_block);
+            }
+            IterInt | IterStr | Null => {
+                return err!("invalid type for declare local (iterator or null)")
+            }
+        }
+        Ok(next_var)
+    }
+
+    /// Construct an [`IterState`] corresponding to an iterator of type `ty`.
+    fn declare_iterator(&mut self, ty: compile::Ty) -> Result<IterState> {
+        use compile::Ty::*;
+        match ty {
+            IterStr | IterInt => {
+                let len = Variable::new(self.f.n_vars);
+                let cur = Variable::new(self.f.n_vars + 1);
+                let base = Variable::new(self.f.n_vars + 2);
+                self.f.n_vars += 3;
+                self.builder.declare_var(len, types::I64);
+                self.builder.declare_var(cur, types::I64);
+                self.builder.declare_var(base, self.void_ptr_ty());
+                Ok(IterState { len, cur, base })
+            }
+            Null | Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt
+            | MapStrFloat | MapStrStr => err!(
+                "attempting to declare iterator variable for non-iterator type: {:?}",
+                ty
+            ),
+        }
+    }
+
     /// Increment the refcount of the value `v` of type `ty`.
     ///
     /// If `ty` is not an array or string type, this method is a noop.
@@ -263,10 +346,12 @@ impl<'a> View<'a> {
     }
 
     fn get_iter(&mut self, iter: Ref) -> Result<IterState> {
-        if let Some(x) = self.f.iters.get_mut(&iter).cloned() {
+        if let Some(x) = self.f.iters.get(&iter).cloned() {
             Ok(x)
         } else {
-            err!("uninitialized iterator reference: {:?}", iter)
+            let next = self.declare_iterator(iter.1)?;
+            self.f.iters.insert(iter, next.clone());
+            Ok(next)
         }
     }
 
@@ -305,6 +390,23 @@ impl<'a> View<'a> {
         }
         let num_args = self.const_int(len as _);
         Ok((arg_slot, type_slot, num_args))
+    }
+
+    /// Get the `VarRef` bound to `r` in the current frame, otherwise allocate a fresh local
+    /// variable and insert it into the frame's bindings.
+    fn get_var_default_local(&mut self, r: Ref) -> Result<VarRef> {
+        if let Some(v) = self.f.vars.get(&r) {
+            Ok(v.clone())
+        } else {
+            let var = self.declare_local(r.1)?;
+            let vref = VarRef {
+                var,
+                is_global: false,
+                skip_drop: false,
+            };
+            self.f.vars.insert(r, vref.clone());
+            Ok(vref)
+        }
     }
 }
 
@@ -413,11 +515,7 @@ impl<'a> CodeGenerator for View<'a> {
     // mappings to and from bytecode-level registers to IR-level values
     fn bind_val(&mut self, r: Ref, v: Self::Val) -> Result<()> {
         use compile::Ty::*;
-        let (var, is_global) = if let Some(VarRef { var, is_global, .. }) = self.f.vars.get(&r) {
-            (*var, *is_global)
-        } else {
-            return err!("unbound reference in current frame: {:?}", r);
-        };
+        let VarRef { var, is_global, .. } = self.get_var_default_local(r)?;
         match r.1 {
             Int | Float => {
                 if is_global {
@@ -470,11 +568,8 @@ impl<'a> CodeGenerator for View<'a> {
         if let Null = r.1 {
             return Ok(self.const_int(0));
         }
-        let (var, is_global) = if let Some(VarRef { var, is_global, .. }) = self.f.vars.get(&r) {
-            (*var, *is_global)
-        } else {
-            return err!("loading an unbound variable: {:?}", r);
-        };
+
+        let VarRef { var, is_global, .. } = self.get_var_default_local(r)?;
         let val = self.builder.use_var(var);
 
         match r.1 {
@@ -489,7 +584,7 @@ impl<'a> CodeGenerator for View<'a> {
             }
             Str => Ok(val),
             IterInt | IterStr => err!("attempting to load an iterator pointer"),
-            Null => unreachable!(),
+            Null => Ok(self.const_int(0)),
         }
     }
 
@@ -703,6 +798,13 @@ impl<'a> CodeGenerator for View<'a> {
     }
 
     fn var_loaded(&mut self, dst: Ref) -> Result<()> {
-        unimplemented!()
+        // `bind_val` will ref any maps that we store. Maps that come as the result of function
+        // calls (e.g. load_var_intmap) will not have been stored elsewhere, and will have a
+        // refcount already incremented.
+        if dst.1.is_array() {
+            let v = self.get_val(dst)?;
+            self.drop_val(dst.1, v);
+        }
+        Ok(())
     }
 }

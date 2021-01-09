@@ -158,6 +158,7 @@ impl<'a> CodeGenerator for View<'a> {
                         let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
                         self.drop_val(prev_global, val.1);
                         LLVMBuildStore(self.f.builder, new_global, param);
+                        self.call(intrinsic!(ref_map), &mut [param]);
                     }
                     Str => {
                         self.drop_val(param, Ty::Str);
@@ -186,7 +187,7 @@ impl<'a> CodeGenerator for View<'a> {
                     LLVMBuildStore(self.f.builder, to, loc);
                     // NB: we used to have this here, but it leaked. See a segfault? It's possible we
                     // are missing some refs elsewhere.
-                    //   self.call("ref_map", &mut [to]);
+                    //   self.call(intrinsic!(ref_map), &mut [to]);
                     // We had this for globals as well.
                     self.f.locals.insert(val, loc);
                     return Ok(());
