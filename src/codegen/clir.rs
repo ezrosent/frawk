@@ -1,17 +1,21 @@
 //! Cranelift code generation for frawk programs.
 use cranelift::prelude::*;
+use cranelift_codegen::ir::StackSlot;
+use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
-use cranelift_simplejit::{SimpleJITBuilder, SimpleJITModule};
 use hashbrown::{HashMap, HashSet};
 
 use crate::builtins;
+use crate::bytecode::Accum;
 use crate::codegen::{Backend, CodeGenerator, Op, Ref, Sig, StrReg};
 use crate::common::{CompileError, FileSpec, NumTy, Result};
 use crate::compile;
-use crate::runtime::UniqueStr;
+use crate::runtime::{self, UniqueStr};
+
+use std::convert::TryFrom;
+use std::mem;
 
 // TODO:
-// * do print_all
 // * do printf, sprintf
 // * figure out declarations, stack slots for strings, and frame setup.
 // * control flow, drops, etc.
@@ -31,7 +35,7 @@ struct FuncInfo {
 /// Function-independent data used in compilation
 struct Shared {
     codegen_ctx: codegen::Context,
-    module: SimpleJITModule,
+    module: JITModule,
     func_ids: Vec<FuncInfo>,
     external_funcs: HashMap<*const u8, FuncId>,
     // We need cranelift Signatures for declaring external functions. We put them here to reuse
@@ -87,6 +91,10 @@ macro_rules! external {
 }
 
 impl<'a> View<'a> {
+    fn stack_slot_bytes(&mut self, bytes: u32) -> StackSlot {
+        let data = StackSlotData::new(StackSlotKind::ExplicitSlot, bytes);
+        self.builder.create_stack_slot(data)
+    }
     /// Increment the refcount of the value `v` of type `ty`.
     ///
     /// If `ty` is not an array or string type, this method is a noop.
@@ -268,7 +276,7 @@ impl<'a> View<'a> {
 // module, so we actually implement `Backend` twice for each registration step.
 
 struct RegistrationState {
-    builder: SimpleJITBuilder,
+    builder: JITBuilder,
 }
 
 impl Backend for RegistrationState {
@@ -515,7 +523,38 @@ impl<'a> CodeGenerator for View<'a> {
     }
 
     fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()> {
-        unimplemented!()
+        // NB: Unlike LLVM, we do not generate custom stub methods here, we just inline the the
+        // "var args" implementation.
+
+        // First, allocate an array for all of the arguments on the stack.
+        let len = i32::try_from(args.len()).expect("too many arguments to print_all") as u32;
+        let bytes = len
+            .checked_mul(mem::size_of::<usize>() as u32)
+            .expect("too many arguments to print_all");
+        let slot = self.stack_slot_bytes(bytes);
+
+        // Now, store pointers to each of the strings into the array.
+        for (ix, reg) in args.iter().cloned().enumerate() {
+            let arg = self.get_val(reg.reflect())?;
+            self.builder.ins().stack_store(arg, slot, ix as i32);
+        }
+
+        let rt = self.runtime_val();
+        let ty = self.void_ptr_ty();
+        let addr = self.builder.ins().stack_addr(ty, slot, 0);
+        let num_args = self.const_int(len as _);
+
+        if let Some((out, spec)) = output {
+            let output = self.get_val(out.reflect())?;
+            let fspec = self.const_int(*spec as _);
+            self.call_external_void(
+                external!(print_all_file),
+                &[rt, addr, num_args, output, fspec],
+            );
+        } else {
+            self.call_external_void(external!(print_all_stdout), &[rt, addr, num_args]);
+        }
+        Ok(())
     }
 
     fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()> {
