@@ -16,7 +16,6 @@ use std::convert::TryFrom;
 use std::mem;
 
 // TODO:
-// * do printf, sprintf
 // * figure out declarations, stack slots for strings, and frame setup.
 // * control flow, drops, etc.
 //
@@ -270,6 +269,43 @@ impl<'a> View<'a> {
             err!("uninitialized iterator reference: {:?}", iter)
         }
     }
+
+    /// Process arguments to printf and sprintf into the form accepted by the corresponding
+    /// functions in the `intrinsics` module. We allocate space on the stack for the arguments as
+    /// well as information about the arguments' types and then store into those slots.
+    fn bundle_printf_args(
+        &mut self,
+        args: &Vec<Ref>,
+    ) -> Result<(
+        /* args */ StackSlot,
+        /* types */ StackSlot,
+        /* len */ Value,
+    )> {
+        let len = i32::try_from(args.len()).expect("too many arguments to print_all") as u32;
+        let slot_size = mem::size_of::<usize>() as i32;
+        // allocate an array for arguments on the stack
+        let arg_slot = self.stack_slot_bytes(
+            len.checked_mul(slot_size as u32)
+                .expect("too many arguments to print_all"),
+        );
+        // and for argument types
+        let type_slot = self.stack_slot_bytes(mem::size_of::<u32>() as u32 * len);
+
+        // Store arguments and types into the corresponding stack slot.
+        for (ix, rf) in args.iter().cloned().enumerate() {
+            let ix = ix as i32;
+            let arg = self.get_val(rf)?;
+            let ty = self.builder.ins().iconst(types::I32, rf.1 as i64);
+            self.builder
+                .ins()
+                .stack_store(arg, arg_slot, ix * slot_size);
+            self.builder
+                .ins()
+                .stack_store(ty, type_slot, ix * mem::size_of::<u32>() as i32);
+        }
+        let num_args = self.const_int(len as _);
+        Ok((arg_slot, type_slot, num_args))
+    }
 }
 
 // For Cranelift, we need to register function names in a lookup table before constructing a
@@ -515,11 +551,44 @@ impl<'a> CodeGenerator for View<'a> {
         fmt: &StrReg,
         args: &Vec<Ref>,
     ) -> Result<()> {
-        unimplemented!()
+        let (arg_slot, type_slot, num_args) = self.bundle_printf_args(args)?;
+
+        let rt = self.runtime_val();
+        let ty = self.void_ptr_ty();
+        let arg_addr = self.builder.ins().stack_addr(ty, arg_slot, 0);
+        let ty_addr = self.builder.ins().stack_addr(ty, type_slot, 0);
+        let fmt = self.get_val(fmt.reflect())?;
+
+        if let Some((out, spec)) = output {
+            let output = self.get_val(out.reflect())?;
+            let fspec = self.const_int(*spec as _);
+            self.call_external_void(
+                external!(printf_impl_file),
+                &[rt, fmt, arg_addr, ty_addr, num_args, output, fspec],
+            )
+        } else {
+            self.call_external_void(
+                external!(printf_impl_stdout),
+                &[rt, fmt, arg_addr, ty_addr, num_args],
+            )
+        }
+        Ok(())
     }
 
     fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &Vec<Ref>) -> Result<()> {
-        unimplemented!()
+        let (arg_slot, type_slot, num_args) = self.bundle_printf_args(args)?;
+
+        let rt = self.runtime_val();
+        let ty = self.void_ptr_ty();
+        let arg_addr = self.builder.ins().stack_addr(ty, arg_slot, 0);
+        let ty_addr = self.builder.ins().stack_addr(ty, type_slot, 0);
+        let fmt = self.get_val(fmt.reflect())?;
+
+        let res = self.call_external(
+            external!(sprintf_impl),
+            &[rt, fmt, arg_addr, ty_addr, num_args],
+        );
+        self.bind_val(dst.reflect(), res)
     }
 
     fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()> {
@@ -528,15 +597,18 @@ impl<'a> CodeGenerator for View<'a> {
 
         // First, allocate an array for all of the arguments on the stack.
         let len = i32::try_from(args.len()).expect("too many arguments to print_all") as u32;
+        let slot_size = mem::size_of::<usize>() as i32;
         let bytes = len
-            .checked_mul(mem::size_of::<usize>() as u32)
+            .checked_mul(slot_size as u32)
             .expect("too many arguments to print_all");
         let slot = self.stack_slot_bytes(bytes);
 
         // Now, store pointers to each of the strings into the array.
         for (ix, reg) in args.iter().cloned().enumerate() {
             let arg = self.get_val(reg.reflect())?;
-            self.builder.ins().stack_store(arg, slot, ix as i32);
+            self.builder
+                .ins()
+                .stack_store(arg, slot, ix as i32 * slot_size);
         }
 
         let rt = self.runtime_val();
