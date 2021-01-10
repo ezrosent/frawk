@@ -8,6 +8,13 @@ use crate::{
     runtime::{self, UniqueStr},
 };
 
+/// Options used to configure a code-generating backend.
+#[derive(Copy, Clone)]
+pub struct Config {
+    pub opt_level: usize,
+    pub num_workers: usize,
+}
+
 #[macro_use]
 pub(crate) mod intrinsics;
 pub(crate) mod clir;

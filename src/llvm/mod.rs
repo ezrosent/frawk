@@ -33,6 +33,8 @@ use std::ffi::{CStr, CString};
 use std::mem::{self, MaybeUninit};
 use std::ptr;
 
+pub(crate) use codegen::Config;
+
 type Pred = llvm_sys::LLVMIntPredicate;
 type FPred = llvm_sys::LLVMRealPredicate;
 type BuiltinFunc = builtin_functions::Function;
@@ -578,12 +580,6 @@ enum PrintfKind {
     Stdout,
     File,
     Sprintf,
-}
-
-#[derive(Copy, Clone)]
-pub(crate) struct Config {
-    pub opt_level: usize,
-    pub num_workers: usize,
 }
 
 pub(crate) struct Generator<'a, 'b> {

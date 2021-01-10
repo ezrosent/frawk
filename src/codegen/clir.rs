@@ -3,21 +3,20 @@ use cranelift::prelude::*;
 use cranelift_codegen::ir::StackSlot;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
-use hashbrown::{HashMap, HashSet};
+use hashbrown::HashMap;
 use smallvec::SmallVec;
 
 use crate::builtins;
 use crate::bytecode::Accum;
-use crate::codegen::{Backend, CodeGenerator, Op, Ref, Sig, StrReg};
-use crate::common::{CompileError, FileSpec, NumTy, Result};
-use crate::compile;
+use crate::codegen::{Backend, CodeGenerator, Config, Op, Ref, Sig, StrReg};
+use crate::common::{CompileError, FileSpec, NumTy, Result, Stage};
+use crate::compile::{self, Typer};
 use crate::runtime::{self, UniqueStr};
 
 use std::convert::TryFrom;
 use std::mem;
 
 // TODO:
-// * figure out declarations, stack slots for strings, and frame setup.
 // * control flow, drops, etc.
 //
 // TODO (cleanup; after tests are passing):
@@ -32,11 +31,27 @@ struct FuncInfo {
     func_id: FuncId,
 }
 
+/// After a function is declared, some additional information is required to map parameteres to
+/// variables. `Prelude` contains that information.
+struct Prelude {
+    /// The Cranelift-level signature for the function
+    sig: Signature,
+    /// The frawk-level Refs corresponding to each of the parameters enumerated in `sig`. Includes
+    /// a placeholder for the final parameter containing the frawk runtime for more convenient
+    /// iteration.
+    refs: SmallVec<[Ref; 4]>,
+    /// The number of parameters that contain "true function arguments". These are passed first.
+    /// The rest of the parameters correspond to global variables and the runtime. Because the
+    /// runtime is always the last parameter, a single offset is enough to identify all three
+    /// classes of parameters.
+    n_args: usize,
+}
+
 /// Function-independent data used in compilation
 struct Shared {
     codegen_ctx: codegen::Context,
     module: JITModule,
-    func_ids: Vec<FuncInfo>,
+    func_ids: Vec<Option<FuncInfo>>,
     external_funcs: HashMap<*const u8, FuncId>,
     // We need cranelift Signatures for declaring external functions. We put them here to reuse
     // them across calls to `register_external_fn`.
@@ -76,14 +91,160 @@ struct Frame {
 struct GlobalContext {
     shared: Shared,
     ctx: FunctionBuilderContext,
-    funcs: Vec<Frame>,
+    cctx: codegen::Context,
+    funcs: Vec<Option<Prelude>>,
+    mains: Stage<FuncId>,
 }
 
 /// The state required for generating code for the function at `f`.
 struct View<'a> {
-    f: &'a mut Frame,
+    f: Frame,
     builder: FunctionBuilder<'a>,
     shared: &'a mut Shared,
+}
+
+/// Map frawk-level type to its type when passed as a parameter to a cranelift function.
+///
+/// Null and Iterator types are disallowed; they are never passed as function parameterse.
+fn ty_to_param(ty: compile::Ty, ptr_ty: Type) -> Result<AbiParam> {
+    use compile::Ty::*;
+    let clif_ty = match ty {
+        Int => types::I64,
+        Float => types::F64,
+        MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr | Str => ptr_ty,
+        IterInt | IterStr => return err!("attempt to take iterator as parameter"),
+        // We assume that null parameters are omitted from the argument list ahead of time
+        Null => return err!("attempt to take null as parameter"),
+    };
+    Ok(AbiParam::new(clif_ty))
+}
+
+/// Map frawk-level types to a cranelift-level type.
+///
+/// Iterator types are disallowed; they do not correspond to a single type in cranelift and must be
+/// handled specially.
+fn ty_to_clifty(ty: compile::Ty, ptr_ty: Type) -> Result<Type> {
+    use compile::Ty::*;
+    match ty {
+        Null | Int => Ok(types::I64),
+        Float => Ok(types::F64),
+        Str => Ok(types::I128),
+        MapIntInt | MapIntFloat | MapIntStr => Ok(ptr_ty),
+        MapStrInt | MapStrFloat | MapStrStr => Ok(ptr_ty),
+        IterInt | IterStr => err!("taking type of an iterator"),
+    }
+}
+
+impl GlobalContext {
+    pub(crate) fn init(typer: &mut Typer, config: Config) -> Result<GlobalContext> {
+        unimplemented!()
+    }
+
+    /// Initialize a new user-defined function and prepare it for full code generation.
+    fn create_view<'a>(&'a mut self, Prelude { sig, refs, n_args }: Prelude) -> View<'a> {
+        // Initialize a frame for the function at the given offset, declare variables corresponding
+        // to globals and params, return a View to proceed with the rest of code generation.
+        let n_params = sig.params.len();
+        let param_tys: SmallVec<[(Ref, Type); 5]> = refs
+            .iter()
+            .cloned()
+            .zip(sig.params.iter().map(|p| p.value_type))
+            .collect();
+        self.cctx.func.signature = sig;
+        let mut builder = FunctionBuilder::new(&mut self.cctx.func, &mut self.ctx);
+        let entry_block = builder.create_block();
+        let mut res = View {
+            f: Frame {
+                n_params,
+                entry_block,
+                // this will get overwritten in process_args
+                runtime: Variable::new(0),
+                n_vars: 0,
+                vars: Default::default(),
+                iters: Default::default(),
+            },
+            builder,
+            shared: &mut self.shared,
+        };
+        res.process_args(param_tys.into_iter(), n_args);
+        res
+    }
+
+    /// Declare non-main functions and generate corresponding [`Prelude`]s, but do not generate
+    /// their bodies.
+    fn declare_local_funcs(&mut self, typer: &mut Typer) -> Result<()> {
+        let globals = typer.get_global_refs();
+        // TODO: see if this works, or if we should be using the same CallConv as the default in
+        // the module (as we are with the external function declarations).
+        let cc = isa::CallConv::Fast;
+        let ptr_ty = self.shared.module.target_config().pointer_type();
+        for (i, (info, refs)) in typer.func_info.iter().zip(globals.iter()).enumerate() {
+            if !typer.frames[i].is_called {
+                self.funcs.push(None);
+                self.shared.func_ids.push(None);
+                continue;
+            }
+            let mut sig = Signature::new(cc);
+            let total_args = info.arg_tys.len() + refs.len() + 1 /* runtime */;
+            sig.params.reserve(total_args);
+            // Used in FuncInfo to let callers know which values to pass.
+            let mut globals = SmallVec::with_capacity(refs.len());
+            let mut arg_refs = SmallVec::with_capacity(total_args);
+
+            // Used in Prelude to provide enough information to initialize variables corresponding
+            // to function parameters
+            let n_args = info.arg_tys.len();
+
+            let name = format!("udf{}", i);
+
+            // Build up a signature; there are three parts to a user-defined function parameter
+            // list (in order):
+            // 1. Function-level parameters,
+            // 2. Pointers to global variables required by the function,
+            // 3. A pointer to the runtime variable
+            //
+            // All functions are typed to return a single value.
+            for r in typer.frames[i]
+                .arg_regs
+                .iter()
+                .cloned()
+                .zip(info.arg_tys.iter().cloned())
+            {
+                let param = ty_to_param(r.1, ptr_ty)?;
+                sig.params.push(param);
+                arg_refs.push(r);
+            }
+            for r in refs.iter().cloned() {
+                globals.push(r);
+                // All globals are passed as pointers
+                sig.params.push(AbiParam::new(ptr_ty));
+                arg_refs.push(r);
+            }
+            // Put a placeholder in for the last argument
+            arg_refs.push((compile::UNUSED, compile::Ty::Null));
+
+            sig.params.push(AbiParam::new(ptr_ty)); // runtime
+            sig.returns
+                .push(AbiParam::new(ty_to_clifty(info.ret_ty, ptr_ty)?));
+
+            // Now, to create a function and prelude
+            let func_id = self
+                .shared
+                .module
+                .declare_function(name.as_str(), Linkage::Local, &sig)
+                .map_err(|e| CompileError(format!("cranelift module error: {}", e.to_string())))?;
+
+            self.funcs.push(Some(Prelude {
+                sig,
+                n_args,
+                refs: arg_refs,
+            }));
+            self.shared
+                .func_ids
+                .push(Some(FuncInfo { globals, func_id }));
+        }
+        Ok(())
+    }
 }
 
 macro_rules! external {
@@ -97,6 +258,7 @@ impl<'a> View<'a> {
         let data = StackSlotData::new(StackSlotKind::ExplicitSlot, bytes);
         self.builder.create_stack_slot(data)
     }
+
     fn switch_to_entry(&mut self) -> Result<Block> {
         let last_block = self
             .builder
@@ -105,6 +267,57 @@ impl<'a> View<'a> {
             .unwrap_or_else(|| err!("generating instructions without a current block"))?;
         self.builder.switch_to_block(self.f.entry_block);
         Ok(last_block)
+    }
+
+    /// Assign each incoming parameter to a Variable and an appropriate binding in the `vars` map.
+    ///
+    /// n_args signifies the length of the prefix of `param_tys` corresponding to
+    /// frawk-function-level parameters, where the remaining arguments contain global variables and
+    /// a pointer to the runtime.
+    fn process_args(&mut self, param_tys: impl Iterator<Item = (Ref, Type)>, n_args: usize) {
+        self.builder
+            .append_block_params_for_function_params(self.f.entry_block);
+        self.builder.switch_to_block(self.f.entry_block);
+        self.builder.seal_block(self.f.entry_block);
+
+        // need to copy params because we borrow builder mutably in the loop body.
+        let params: SmallVec<[Value; 5]> = self
+            .builder
+            .block_params(self.f.entry_block)
+            .iter()
+            .cloned()
+            .collect();
+        for (i, (val, (rf, ty))) in params.into_iter().zip(param_tys).enumerate() {
+            let var = Variable::new(self.f.n_vars);
+            self.f.n_vars += 1;
+            self.builder.declare_var(var, ty);
+            self.builder.def_var(var, val);
+            if i == self.f.n_params - 1 {
+                // runtime
+                self.f.runtime = var;
+            } else if i >= n_args {
+                // global
+                self.f.vars.insert(
+                    rf,
+                    VarRef {
+                        var,
+                        is_global: true,
+                        skip_drop: false,
+                    },
+                );
+            } else {
+                // normal arg. These behave like normal params, except we do not drop them (they
+                // are, in effect, borrowed).
+                self.f.vars.insert(
+                    rf,
+                    VarRef {
+                        var,
+                        is_global: false,
+                        skip_drop: true,
+                    },
+                );
+            }
+        }
     }
 
     /// Initialize the `Variable` associated with a non-iterator and non-null local variable of
@@ -466,15 +679,8 @@ impl<'a> Backend for View<'a> {
         types::I32
     }
     fn get_ty(&self, ty: compile::Ty) -> Self::Ty {
-        use compile::Ty::*;
-        match ty {
-            Null | Int => types::I64,
-            Float => types::F64,
-            Str => types::I128,
-            MapIntInt | MapIntFloat | MapIntStr => self.void_ptr_ty(),
-            MapStrInt | MapStrFloat | MapStrStr => self.void_ptr_ty(),
-            IterInt | IterStr => panic!("taking the type of an iterator"),
-        }
+        let ptr_ty = self.void_ptr_ty();
+        ty_to_clifty(ty, ptr_ty).expect("invalid type argument")
     }
 
     fn register_external_fn(
