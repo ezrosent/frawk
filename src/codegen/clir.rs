@@ -137,6 +137,13 @@ fn ty_to_clifty(ty: compile::Ty, ptr_ty: Type) -> Result<Type> {
 
 impl GlobalContext {
     pub(crate) fn init(typer: &mut Typer, config: Config) -> Result<GlobalContext> {
+        // for each function:
+        // * create_view
+        // * codegen
+        // * define_function
+        // * clear context
+        // Then, for main:
+        // TODO
         unimplemented!()
     }
 
@@ -317,6 +324,76 @@ impl<'a> View<'a> {
                     },
                 );
             }
+        }
+    }
+
+    fn drop_all(&mut self) {
+        let mut drops = Vec::new();
+        for (
+            (_, ty),
+            VarRef {
+                var,
+                is_global,
+                skip_drop,
+            },
+        ) in self.f.vars.iter()
+        {
+            if !is_global && !skip_drop {
+                use compile::Ty::*;
+                let drop_fn = match ty {
+                    MapIntInt => external!(drop_intint),
+                    MapIntFloat => external!(drop_intfloat),
+                    MapIntStr => external!(drop_intstr),
+                    MapStrInt => external!(drop_strint),
+                    MapStrFloat => external!(drop_strfloat),
+                    MapStrStr => external!(drop_strstr),
+                    Str => external!(drop_str),
+                    _ => continue,
+                };
+                let val = self.builder.use_var(*var);
+                drops.push((drop_fn, val));
+            }
+        }
+        for (drop_fn, val) in drops {
+            // NB: We could probably refactor call_external_void to only borrow non-f.vars fields
+            // and then avoid the auxiliary vector, but life is short, and we will only call this
+            // function once per live UDF.
+            self.call_external_void(drop_fn, &[val]);
+        }
+    }
+
+    fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
+        use compile::HighLevel::*;
+        match inst {
+            Call {
+                func_id,
+                dst_reg,
+                dst_ty,
+                args,
+            } => unimplemented!(),
+            Ret(reg, ty) => {
+                // NB: ensure that we visit the "ret" block last, otherwise drop_all could miss
+                // something.
+                self.drop_all();
+                let v = self.get_val((*reg, *ty))?;
+                self.builder.ins().return_(&[v]);
+                Ok(())
+            }
+            DropIter(reg, ty) => {
+                use compile::Ty::*;
+                let drop_fn = match ty {
+                    IterInt => external!(drop_iter_int),
+                    IterStr => external!(drop_iter_str),
+                    _ => return err!("can only drop iterators, got {:?}", ty),
+                };
+                let IterState { base, len, .. } = self.get_iter((*reg, *ty))?;
+                let base = self.builder.use_var(base);
+                let len = self.builder.use_var(len);
+                self.call_external_void(drop_fn, &[base, len]);
+                Ok(())
+            }
+            // Phis are handled in predecessor blocks
+            Phi(..) => Ok(()),
         }
     }
 
