@@ -148,6 +148,27 @@ impl GlobalContext {
         unimplemented!()
     }
 
+    fn define_main_function(&mut self, imp: FuncId) -> Result<FuncId> {
+        unimplemented!()
+    }
+
+    fn define_functions(&mut self, typer: &mut Typer) -> Result<()> {
+        self.declare_local_funcs(typer)?;
+        for (i, frame) in typer.frames.iter().enumerate() {
+            if let Some(prelude) = self.funcs[i].take() {
+                self.create_view(prelude).gen_function_body(frame)?;
+                // func_id and prelude entries should be initialized in lockstep.
+                let id = self.shared.func_ids[i].as_ref().unwrap().func_id;
+                self.shared
+                    .module
+                    .define_function(id, &mut self.cctx, &mut codegen::binemit::NullTrapSink {})
+                    .map_err(|e| CompileError(e.to_string()))?;
+                self.shared.module.clear_context(&mut self.cctx);
+            }
+        }
+        Ok(())
+    }
+
     /// Initialize a new user-defined function and prepare it for full code generation.
     fn create_view<'a>(&'a mut self, Prelude { sig, refs, n_args }: Prelude) -> View<'a> {
         // Initialize a frame for the function at the given offset, declare variables corresponding
@@ -419,6 +440,8 @@ impl<'a> View<'a> {
         }
     }
 
+    /// Issue end-of-function drop instructions to all local variables that have (a) a non-trivial
+    /// drop procedure and (b) have not been marked `skip_drop`.
     fn drop_all(&mut self) {
         let mut drops = Vec::new();
         for (
@@ -454,6 +477,7 @@ impl<'a> View<'a> {
         }
     }
 
+    /// Call a frawk-level (as opposed to builtin/external) function.
     fn call_udf(&mut self, id: NumTy, args: &[Ref]) -> Result<Value> {
         let mut to_pass = SmallVec::<[Value; 6]>::with_capacity(args.len() + 1);
         for arg in args.iter().cloned() {
@@ -485,7 +509,7 @@ impl<'a> View<'a> {
 
     /// Translate a high-level instruction. If the instruction is a `Ret`, we return the returned
     /// value for further processing. We want to process returns last because we can only be sure
-    /// that the `drop_all` method will catch all relevant local variables until we have processed
+    /// that the `drop_all` method will catch all relevant local variables once we have processed
     /// all of the other instructions.
     fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<Option<Ref>> {
         use compile::HighLevel::*;
