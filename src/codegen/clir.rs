@@ -26,6 +26,7 @@ use std::mem;
 // * doc fixups
 
 /// Information about a user-defined function needed by callers.
+#[derive(Clone)]
 struct FuncInfo {
     globals: SmallVec<[Ref; 2]>,
     func_id: FuncId,
@@ -362,6 +363,35 @@ impl<'a> View<'a> {
         }
     }
 
+    fn call_udf(&mut self, id: NumTy, args: &[Ref]) -> Result<Value> {
+        let mut to_pass = SmallVec::<[Value; 6]>::with_capacity(args.len() + 1);
+        for arg in args.iter().cloned() {
+            let v = self.get_val(arg)?;
+            to_pass.push(v);
+        }
+        let FuncInfo { globals, func_id } = self.shared.func_ids[id as usize]
+            .clone()
+            .expect("all referenced functions must be declared");
+        for global in globals.iter().cloned() {
+            let v = self.get_val(global)?;
+            to_pass.push(v);
+        }
+        let rt = self.builder.use_var(self.f.runtime);
+        to_pass.push(rt);
+        let fref = self
+            .shared
+            .module
+            .declare_func_in_func(func_id, self.builder.func);
+        let call_inst = self.builder.ins().call(fref, &to_pass[..]);
+        Ok(self
+            .builder
+            .inst_results(call_inst)
+            .iter()
+            .cloned()
+            .next()
+            .expect("all UDFs must return a value"))
+    }
+
     fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
         use compile::HighLevel::*;
         match inst {
@@ -370,7 +400,10 @@ impl<'a> View<'a> {
                 dst_reg,
                 dst_ty,
                 args,
-            } => unimplemented!(),
+            } => {
+                let res = self.call_udf(*func_id, args.as_slice())?;
+                self.bind_val((*dst_reg, *dst_ty), res)
+            }
             Ret(reg, ty) => {
                 // NB: ensure that we visit the "ret" block last, otherwise drop_all could miss
                 // something.
