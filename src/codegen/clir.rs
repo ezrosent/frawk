@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use crate::builtins;
 use crate::bytecode::Accum;
 use crate::codegen::{Backend, CodeGenerator, Config, Op, Ref, Sig, StrReg};
-use crate::common::{CompileError, FileSpec, NumTy, Result, Stage};
+use crate::common::{CompileError, Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Typer};
 use crate::runtime::{self, UniqueStr};
 
@@ -277,6 +277,97 @@ impl<'a> View<'a> {
         Ok(last_block)
     }
 
+    fn gen_function_body(&mut self, insts: &compile::Frame) -> Result<()> {
+        let mut exits = SmallVec::<[(usize, Ref); 1]>::with_capacity(1);
+        let nodes = insts.cfg.raw_nodes();
+        let bbs: Vec<_> = (0..nodes.len())
+            .map(|_| self.builder.create_block())
+            .collect();
+
+        for (i, node) in nodes.iter().enumerate() {
+            self.builder.switch_to_block(bbs[i]);
+            for inst in &node.weight {
+                match inst {
+                    Either::Left(ll) => self.gen_ll_inst(ll)?,
+                    Either::Right(hl) => {
+                        if let Some(r) = self.gen_hl_inst(hl)? {
+                            exits.push((i, r));
+                        }
+                    }
+                }
+            }
+            // branch-related metadata
+            let mut tcase = None;
+            let mut ecase = None;
+
+            let mut walker = insts.cfg.neighbors(NodeIx::new(i)).detach();
+            while let Some(e) = walker.next_edge(&insts.cfg) {
+                // Process any branch-related information
+                let (_, next) = insts.cfg.edge_endpoints(e).unwrap();
+                let bb = bbs[next.index()];
+                if let Some(e) = insts.cfg.edge_weight(e).unwrap().clone() {
+                    tcase = Some(((e, compile::Ty::Int), bb));
+                } else {
+                    ecase = Some(bb);
+                }
+
+                // Now scan any phi nodes in the successor block for references back to the current
+                // one. If we find one, we issue an assignment, though we skip the drop as it will
+                // be covered by predecessor blocks (alternatively, we could issue a "mov" here,
+                // but this does less work).
+                //
+                // NB We could avoid scanning duplicate Phis here by tracking dependencies a bit
+                // more carefully, but in practice the extra work done seems fairly low given the
+                // CFGs that we generate at time of writing.
+                for inst in &nodes[next.index()].weight {
+                    if let Either::Right(compile::HighLevel::Phi(dst_reg, ty, preds)) = inst {
+                        for src_reg in
+                            preds.iter().filter_map(
+                                |(bb, reg)| if bb.index() == i { Some(*reg) } else { None },
+                            )
+                        {
+                            let val = self.get_val((src_reg, *ty))?;
+                            self.bind_val_inner((*dst_reg, *ty), val, /*skip_drop=*/ true)?;
+                        }
+                    } else {
+                        // We can bail out once we see the first non-phi instruction. Those all go
+                        // at the top
+                        break;
+                    }
+                }
+            }
+
+            if let Some(ecase) = ecase {
+                self.branch(tcase, ecase)?;
+            }
+        }
+        // Now that we have filled in the other blocks, we can finally add in any returns and
+        // drops.
+        for (bb, rf) in exits {
+            self.builder.switch_to_block(bbs[bb]);
+            let v = self.get_val(rf)?;
+            self.drop_all();
+            self.builder.ins().return_(&[v]);
+        }
+
+        // Finally, jump to bbs[0] from our entry block. We didn't do this before because we
+        // declare variables in the entry block while generating code for the body of the function.
+        // We want this jump to go at the very end.
+        self.builder.switch_to_block(self.f.entry_block);
+        self.builder.ins().jump(bbs[0], &[]);
+        self.builder.seal_all_blocks();
+        Ok(())
+    }
+
+    fn branch(&mut self, tcase: Option<(Ref, Block)>, ecase: Block) -> Result<()> {
+        if let Some((cond, b)) = tcase {
+            let cv = self.get_val(cond)?;
+            self.builder.ins().brnz(cv, b, &[]);
+        }
+        self.builder.ins().jump(ecase, &[]);
+        Ok(())
+    }
+
     /// Assign each incoming parameter to a Variable and an appropriate binding in the `vars` map.
     ///
     /// n_args signifies the length of the prefix of `param_tys` corresponding to
@@ -392,7 +483,11 @@ impl<'a> View<'a> {
             .expect("all UDFs must return a value"))
     }
 
-    fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
+    /// Translate a high-level instruction. If the instruction is a `Ret`, we return the returned
+    /// value for further processing. We want to process returns last because we can only be sure
+    /// that the `drop_all` method will catch all relevant local variables until we have processed
+    /// all of the other instructions.
+    fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<Option<Ref>> {
         use compile::HighLevel::*;
         match inst {
             Call {
@@ -402,15 +497,12 @@ impl<'a> View<'a> {
                 args,
             } => {
                 let res = self.call_udf(*func_id, args.as_slice())?;
-                self.bind_val((*dst_reg, *dst_ty), res)
+                self.bind_val((*dst_reg, *dst_ty), res)?;
+                Ok(None)
             }
             Ret(reg, ty) => {
-                // NB: ensure that we visit the "ret" block last, otherwise drop_all could miss
-                // something.
-                self.drop_all();
-                let v = self.get_val((*reg, *ty))?;
-                self.builder.ins().return_(&[v]);
-                Ok(())
+                // Don't process the ret just yet
+                Ok(Some((*reg, *ty)))
             }
             DropIter(reg, ty) => {
                 use compile::Ty::*;
@@ -423,10 +515,10 @@ impl<'a> View<'a> {
                 let base = self.builder.use_var(base);
                 let len = self.builder.use_var(len);
                 self.call_external_void(drop_fn, &[base, len]);
-                Ok(())
+                Ok(None)
             }
             // Phis are handled in predecessor blocks
-            Phi(..) => Ok(()),
+            Phi(..) => Ok(None),
         }
     }
 
@@ -437,10 +529,18 @@ impl<'a> View<'a> {
         let next_var = Variable::new(self.f.n_vars);
         self.f.n_vars += 1;
         let cl_ty = self.get_ty(ty);
-        // NB: should we preinitialize maps? We may have to do that in a separate pass after we
-        // finish the pass over the rest of the functions.
         match ty {
-            Int | Float => self.builder.declare_var(next_var, cl_ty),
+            Int | Float => {
+                let last_block = self.switch_to_entry()?;
+                self.builder.declare_var(next_var, cl_ty);
+                let zero = if ty == Int {
+                    self.const_int(0)
+                } else {
+                    self.builder.ins().f64const(0.0)
+                };
+                self.builder.def_var(next_var, zero);
+                self.builder.switch_to_block(last_block);
+            }
             Str => {
                 // allocate a stack slot for the string, then assign next_var to point to that
                 // slot.
@@ -717,19 +817,70 @@ impl<'a> View<'a> {
 
     /// Get the `VarRef` bound to `r` in the current frame, otherwise allocate a fresh local
     /// variable and insert it into the frame's bindings.
-    fn get_var_default_local(&mut self, r: Ref) -> Result<VarRef> {
+    fn get_var_default_local(&mut self, r: Ref, skip_drop: bool) -> Result<VarRef> {
         if let Some(v) = self.f.vars.get(&r) {
             Ok(v.clone())
         } else {
             let var = self.declare_local(r.1)?;
             let vref = VarRef {
                 var,
+                skip_drop,
                 is_global: false,
-                skip_drop: false,
             };
             self.f.vars.insert(r, vref.clone());
             Ok(vref)
         }
+    }
+
+    fn bind_val_inner(&mut self, r: Ref, v: Value, skip_drop: bool) -> Result<()> {
+        use compile::Ty::*;
+        let VarRef { var, is_global, .. } = self.get_var_default_local(r, skip_drop)?;
+        match r.1 {
+            Int | Float => {
+                if is_global {
+                    let p = self.builder.use_var(var);
+                    self.builder.ins().store(MemFlags::trusted(), v, p, 0);
+                } else {
+                    self.builder.def_var(var, v);
+                }
+            }
+            Str => {
+                // NB: we assume that `v` is a string, not a pointer to a string.
+
+                // For now, we treat globals and locals the same for strings.
+                // TODO: Hopefully the stack slot mechanics don't ruin all of that...
+
+                // first, drop the value currently in the pointer
+                let p = self.builder.use_var(var);
+                self.drop_val(Str, p);
+                self.builder.ins().store(MemFlags::trusted(), v, p, 0);
+            }
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                // first, ref the new value
+                // TODO: can we skip the ref here?
+                self.ref_val(r.1, v);
+                if is_global {
+                    // then, drop the value currently in the pointer
+                    let p = self.builder.use_var(var);
+                    let pointee = self
+                        .builder
+                        .ins()
+                        // TODO: should this be a pointer type?
+                        .load(types::I64, MemFlags::trusted(), p, 0);
+                    self.drop_val(r.1, pointee);
+
+                    // And slot the new value in
+                    self.builder.ins().store(MemFlags::trusted(), v, p, 0);
+                } else {
+                    let cur = self.builder.use_var(var);
+                    self.drop_val(r.1, cur);
+                    self.builder.def_var(var, v);
+                }
+            }
+            Null => {}
+            IterInt | IterStr => return err!("attempting to store an iterator value"),
+        }
+        Ok(())
     }
 }
 
@@ -830,54 +981,7 @@ impl<'a> CodeGenerator for View<'a> {
 
     // mappings to and from bytecode-level registers to IR-level values
     fn bind_val(&mut self, r: Ref, v: Self::Val) -> Result<()> {
-        use compile::Ty::*;
-        let VarRef { var, is_global, .. } = self.get_var_default_local(r)?;
-        match r.1 {
-            Int | Float => {
-                if is_global {
-                    let p = self.builder.use_var(var);
-                    self.builder.ins().store(MemFlags::trusted(), v, p, 0);
-                } else {
-                    self.builder.def_var(var, v);
-                }
-            }
-            Str => {
-                // NB: we assume that `v` is a string, not a pointer to a string.
-
-                // For now, we treat globals and locals the same for strings.
-                // TODO: Hopefully the stack slot mechanics don't ruin all of that...
-
-                // first, drop the value currently in the pointer
-                let p = self.builder.use_var(var);
-                self.drop_val(Str, p);
-                self.builder.ins().store(MemFlags::trusted(), v, p, 0);
-            }
-            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
-                // first, ref the new value
-                // TODO: can we skip the ref here?
-                self.ref_val(r.1, v);
-                if is_global {
-                    // then, drop the value currently in the pointer
-                    let p = self.builder.use_var(var);
-                    let pointee = self
-                        .builder
-                        .ins()
-                        // TODO: should this be a pointer type?
-                        .load(types::I64, MemFlags::trusted(), p, 0);
-                    self.drop_val(r.1, pointee);
-
-                    // And slot the new value in
-                    self.builder.ins().store(MemFlags::trusted(), v, p, 0);
-                } else {
-                    let cur = self.builder.use_var(var);
-                    self.drop_val(r.1, cur);
-                    self.builder.def_var(var, v);
-                }
-            }
-            Null => {}
-            IterInt | IterStr => return err!("attempting to store an iterator value"),
-        }
-        Ok(())
+        self.bind_val_inner(r, v, /*skip_drop=*/ false)
     }
     fn get_val(&mut self, r: Ref) -> Result<Self::Val> {
         use compile::Ty::*;
@@ -885,7 +989,8 @@ impl<'a> CodeGenerator for View<'a> {
             return Ok(self.const_int(0));
         }
 
-        let VarRef { var, is_global, .. } = self.get_var_default_local(r)?;
+        let VarRef { var, is_global, .. } =
+            self.get_var_default_local(r, /*skip_drop=*/ false)?;
         let val = self.builder.use_var(var);
 
         match r.1 {
