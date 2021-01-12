@@ -1066,12 +1066,7 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     unsafe fn gen_main(&mut self) -> Result<Stage<(*const libc::c_char, LLVMValueRef)>> {
-        fn traverse<T>(o: Option<Result<T>>) -> Result<Option<T>> {
-            match o {
-                Some(e) => Ok(Some(e?)),
-                None => Ok(None),
-            }
-        }
+        use crate::common::traverse;
         match self.types.stage() {
             Stage::Main(main) => Ok(Stage::Main(
                 self.gen_main_function(main, c_str!("__frawk_main"))?,

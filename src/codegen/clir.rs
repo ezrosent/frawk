@@ -2,14 +2,14 @@
 use cranelift::prelude::*;
 use cranelift_codegen::ir::StackSlot;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_module::{default_libcall_names, FuncId, Linkage, Module};
 use hashbrown::HashMap;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use crate::builtins;
 use crate::bytecode::Accum;
-use crate::codegen::{Backend, CodeGenerator, Config, Op, Ref, Sig, StrReg};
-use crate::common::{CompileError, Either, FileSpec, NodeIx, NumTy, Result, Stage};
+use crate::codegen::{intrinsics, Backend, CodeGenerator, Config, Op, Ref, Sig, StrReg};
+use crate::common::{traverse, CompileError, Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Typer};
 use crate::runtime::{self, UniqueStr};
 
@@ -17,7 +17,7 @@ use std::convert::TryFrom;
 use std::mem;
 
 // TODO:
-// * control flow, drops, etc.
+// * initialize data-structures, call main
 //
 // TODO (cleanup; after tests are passing):
 // * move floatfunc/bitwise stuff into llvm module
@@ -31,6 +31,8 @@ struct FuncInfo {
     globals: SmallVec<[Ref; 2]>,
     func_id: FuncId,
 }
+
+const PLACEHOLDER: Ref = (compile::UNUSED, compile::Ty::Null);
 
 /// After a function is declared, some additional information is required to map parameteres to
 /// variables. `Prelude` contains that information.
@@ -47,18 +49,6 @@ struct Prelude {
     /// classes of parameters.
     n_args: usize,
 }
-
-/// Function-independent data used in compilation
-struct Shared {
-    codegen_ctx: codegen::Context,
-    module: JITModule,
-    func_ids: Vec<Option<FuncInfo>>,
-    external_funcs: HashMap<*const u8, FuncId>,
-    // We need cranelift Signatures for declaring external functions. We put them here to reuse
-    // them across calls to `register_external_fn`.
-    sig: Signature,
-}
-
 /// A cranelift [`Variable`] with frawk-specific metadata
 #[derive(Clone)]
 struct VarRef {
@@ -86,6 +76,16 @@ struct Frame {
     entry_block: Block,
     n_params: usize,
     n_vars: usize,
+}
+
+/// Function-independent data used in compilation
+struct Shared {
+    module: JITModule,
+    func_ids: Vec<Option<FuncInfo>>,
+    external_funcs: HashMap<*const u8, FuncId>,
+    // We need cranelift Signatures for declaring external functions. We put them here to reuse
+    // them across calls to `register_external_fn`.
+    sig: Signature,
 }
 
 /// Toplevel information
@@ -138,18 +138,131 @@ fn ty_to_clifty(ty: compile::Ty, ptr_ty: Type) -> Result<Type> {
 
 impl GlobalContext {
     pub(crate) fn init(typer: &mut Typer, config: Config) -> Result<GlobalContext> {
-        // for each function:
-        // * create_view
-        // * codegen
-        // * define_function
-        // * clear context
-        // Then, for main:
-        // TODO
-        unimplemented!()
+        let builder = JITBuilder::new(default_libcall_names());
+        let mut regstate = RegistrationState { builder };
+        intrinsics::register_all(&mut regstate)?;
+        let module = JITModule::new(regstate.builder);
+        let cctx = module.make_context();
+        let shared = Shared {
+            module,
+            func_ids: Default::default(),
+            external_funcs: Default::default(),
+            sig: cctx.func.signature.clone(),
+        };
+        // TODO: define codegen-specific data and only export that
+        let mut global = GlobalContext {
+            shared,
+            ctx: FunctionBuilderContext::new(),
+            cctx,
+            funcs: Default::default(),
+            // placeholder
+            mains: Stage::Main(FuncId::from_u32(0)),
+        };
+        global.define_functions(typer)?;
+        let stage = match typer.stage() {
+            Stage::Main(main) => Stage::Main(global.define_main_function("__frawk_main", main)?),
+            Stage::Par {
+                begin,
+                main_loop,
+                end,
+            } => Stage::Par {
+                begin: traverse(
+                    begin.map(|off| global.define_main_function("__frawk_begin", off)),
+                )?,
+                main_loop: traverse(
+                    main_loop.map(|off| global.define_main_function("__frawk_main_loop", off)),
+                )?,
+                end: traverse(end.map(|off| global.define_main_function("__frawk_end", off)))?,
+            },
+        };
+        global.mains = stage;
+        // TODO: finalize_definitions, finish, on module
+        Ok(global)
     }
 
-    fn define_main_function(&mut self, imp: FuncId) -> Result<FuncId> {
-        unimplemented!()
+    /// We get a set of UDFs that are idenfitied as "toplevel" or "main", but these will probably
+    /// reference global variables, which we have compiled to take as function parameters. This
+    /// method allocates those globals on the stack (while still taking a pointer to the runtime as
+    /// a parameter) and then calls into that function.
+    fn define_main_function(&mut self, name: &str, udf: usize) -> Result<FuncId> {
+        // first, synthesize a `Prelude` matching a main function. This is pretty simple.
+        let mut sig = Signature::new(isa::CallConv::SystemV);
+        let ptr_ty = self.shared.module.target_config().pointer_type();
+        sig.params.push(AbiParam::new(ptr_ty));
+        let res = self
+            .shared
+            .module
+            .declare_function(name, Linkage::Export, &sig)
+            .map_err(|e| {
+                CompileError(format!(
+                    "failed to declare main function: {}",
+                    e.to_string()
+                ))
+            })?;
+        let prelude = Prelude {
+            sig,
+            refs: smallvec![PLACEHOLDER],
+            n_args: 0,
+        };
+
+        // And now we allocate global variables. First, grab the globals we need from the FuncInfo
+        // stored for `udf`.
+        let globals = self.shared.func_ids[udf as usize]
+            .as_ref()
+            .unwrap()
+            .globals
+            .clone();
+
+        // We'll keep track of these variables and their types so we can drop them at the end.
+        let mut vars = Vec::with_capacity(globals.len());
+
+        // We'll reuse the existing function building machinery.
+        let mut view = self.create_view(prelude);
+
+        // Now, build each global variable "by hand". Allocate a variable for it, assign it to the
+        // address of a default value of the type in question on the stack.
+        for (reg, ty) in globals {
+            let var = Variable::new(view.f.n_vars);
+            vars.push((var, ty));
+            view.f.n_vars += 1;
+            let cl_ty = view.get_ty(ty);
+            let ptr_ty = view.ptr_to(cl_ty);
+            view.builder.declare_var(var, ptr_ty);
+
+            let slot = view.stack_slot_bytes(cl_ty.lane_bits() as u32 / 8);
+            let default = view.default_value(ty)?;
+            view.builder.ins().stack_store(default, slot, 0);
+            let addr = view.builder.ins().stack_addr(ptr_ty, slot, 0);
+            view.builder.def_var(var, addr);
+            view.f.vars.insert(
+                (reg, ty),
+                VarRef {
+                    var,
+                    is_global: true,
+                    skip_drop: true,
+                },
+            );
+        }
+
+        view.call_udf(NumTy::try_from(udf).expect("function Id too large"), &[])?;
+        for (var, ty) in vars {
+            let val = view.builder.use_var(var);
+            view.drop_val(ty, val);
+        }
+        view.builder.ins().return_(&[]);
+        view.builder.finalize();
+        mem::drop(view);
+        self.define_cur_function(res)?;
+        Ok(res)
+    }
+
+    fn define_cur_function(&mut self, id: FuncId) -> Result<()> {
+        self.shared
+            .module
+            .define_function(id, &mut self.cctx, &mut codegen::binemit::NullTrapSink {})
+            .map_err(|e| CompileError(e.to_string()))?;
+        self.shared.module.clear_context(&mut self.cctx);
+        Ok(())
     }
 
     fn define_functions(&mut self, typer: &mut Typer) -> Result<()> {
@@ -159,11 +272,7 @@ impl GlobalContext {
                 self.create_view(prelude).gen_function_body(frame)?;
                 // func_id and prelude entries should be initialized in lockstep.
                 let id = self.shared.func_ids[i].as_ref().unwrap().func_id;
-                self.shared
-                    .module
-                    .define_function(id, &mut self.cctx, &mut codegen::binemit::NullTrapSink {})
-                    .map_err(|e| CompileError(e.to_string()))?;
-                self.shared.module.clear_context(&mut self.cctx);
+                self.define_cur_function(id)?;
             }
         }
         Ok(())
@@ -250,7 +359,7 @@ impl GlobalContext {
                 arg_refs.push(r);
             }
             // Put a placeholder in for the last argument
-            arg_refs.push((compile::UNUSED, compile::Ty::Null));
+            arg_refs.push(PLACEHOLDER);
 
             sig.params.push(AbiParam::new(ptr_ty)); // runtime
             sig.returns
@@ -284,6 +393,7 @@ macro_rules! external {
 
 impl<'a> View<'a> {
     fn stack_slot_bytes(&mut self, bytes: u32) -> StackSlot {
+        debug_assert!(bytes > 0); // This signals a bug; all frawk types have positive size.
         let data = StackSlotData::new(StackSlotKind::ExplicitSlot, bytes);
         self.builder.create_stack_slot(data)
     }
@@ -377,9 +487,12 @@ impl<'a> View<'a> {
         self.builder.switch_to_block(self.f.entry_block);
         self.builder.ins().jump(bbs[0], &[]);
         self.builder.seal_all_blocks();
+        self.builder.finalize();
         Ok(())
     }
 
+    /// If `tcase` is set, jump to the given block if the given value is non-zero. Regardless, jump
+    /// unconditionally to `ecase`.
     fn branch(&mut self, tcase: Option<(Ref, Block)>, ecase: Block) -> Result<()> {
         if let Some((cond, b)) = tcase {
             let cv = self.get_val(cond)?;
@@ -546,41 +659,16 @@ impl<'a> View<'a> {
         }
     }
 
-    /// Initialize the `Variable` associated with a non-iterator and non-null local variable of
-    /// type `ty`.
-    fn declare_local(&mut self, ty: compile::Ty) -> Result<Variable> {
+    fn default_value(&mut self, ty: compile::Ty) -> Result<Value> {
         use compile::Ty::*;
-        let next_var = Variable::new(self.f.n_vars);
-        self.f.n_vars += 1;
-        let cl_ty = self.get_ty(ty);
         match ty {
-            Int | Float => {
-                let last_block = self.switch_to_entry()?;
-                self.builder.declare_var(next_var, cl_ty);
-                let zero = if ty == Int {
-                    self.const_int(0)
-                } else {
-                    self.builder.ins().f64const(0.0)
-                };
-                self.builder.def_var(next_var, zero);
-                self.builder.switch_to_block(last_block);
-            }
+            Null | Int => Ok(self.const_int(0)),
+            Float => Ok(self.builder.ins().f64const(0.0)),
             Str => {
-                // allocate a stack slot for the string, then assign next_var to point to that
-                // slot.
-                let last_block = self.switch_to_entry()?;
-                let ptr_ty = self.ptr_to(cl_ty);
-                let slot = self.stack_slot_bytes(mem::size_of::<runtime::Str>() as u32);
-                self.builder.declare_var(next_var, ptr_ty);
-                let addr = self.builder.ins().stack_addr(ptr_ty, slot, 0);
-                self.builder.def_var(next_var, addr);
-                // For good measure, write zeros here,
-                let zeros = self.builder.ins().iconst(cl_ty, 0);
-                self.builder.ins().stack_store(zeros, slot, 0);
-                self.builder.switch_to_block(last_block);
+                let cl_ty = self.get_ty(compile::Ty::Str);
+                Ok(self.builder.ins().iconst(cl_ty, 0))
             }
             MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
-                self.builder.declare_var(next_var, cl_ty);
                 let alloc_fn = match ty {
                     MapIntInt => external!(alloc_intint),
                     MapIntFloat => external!(alloc_intfloat),
@@ -590,15 +678,48 @@ impl<'a> View<'a> {
                     MapStrStr => external!(alloc_strstr),
                     _ => unreachable!(),
                 };
-                let last_block = self.switch_to_entry()?;
-                let new_map = self.call_external(alloc_fn, &[]);
-                self.builder.def_var(next_var, new_map);
-                self.builder.switch_to_block(last_block);
+                Ok(self.call_external(alloc_fn, &[]))
+            }
+            IterInt | IterStr => err!("iterators do not have default values"),
+        }
+    }
+
+    /// Initialize the `Variable` associated with a non-iterator and non-null local variable of
+    /// type `ty`.
+    fn declare_local(&mut self, ty: compile::Ty) -> Result<Variable> {
+        use compile::Ty::*;
+        let next_var = Variable::new(self.f.n_vars);
+        self.f.n_vars += 1;
+        let cl_ty = self.get_ty(ty);
+        // We'll be doing things like "allocate a map" or "assign this variable to 0"; let's make
+        // sure we are doing it only once, and at the top of the function.
+        let last_block = self.switch_to_entry()?;
+        let default_v = self.default_value(ty)?;
+        match ty {
+            Int | Float => {
+                self.builder.declare_var(next_var, cl_ty);
+                self.builder.def_var(next_var, default_v);
+            }
+            Str => {
+                // allocate a stack slot for the string, then assign next_var to point to that
+                // slot.
+                let ptr_ty = self.ptr_to(cl_ty);
+                let slot = self.stack_slot_bytes(mem::size_of::<runtime::Str>() as u32);
+                self.builder.declare_var(next_var, ptr_ty);
+                let addr = self.builder.ins().stack_addr(ptr_ty, slot, 0);
+                self.builder.def_var(next_var, addr);
+                // For good measure, write zeros here,
+                self.builder.ins().stack_store(default_v, slot, 0);
+            }
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                self.builder.declare_var(next_var, cl_ty);
+                self.builder.def_var(next_var, default_v);
             }
             IterInt | IterStr | Null => {
                 return err!("invalid type for declare local (iterator or null)")
             }
         }
+        self.builder.switch_to_block(last_block);
         Ok(next_var)
     }
 

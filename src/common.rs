@@ -347,6 +347,13 @@ impl Default for FileSpec {
     }
 }
 
+pub(crate) fn traverse<T>(o: Option<Result<T>>) -> Result<Option<T>> {
+            match o {
+                Some(e) => Ok(Some(e?)),
+                None => Ok(None),
+            }
+        }
+
 #[cfg(test)]
 mod tests {
     use super::*;
