@@ -3,10 +3,14 @@
 use crate::{
     builtins,
     bytecode::{self, Accum},
-    common::{FileSpec, NumTy, Result},
+    common::{FileSpec, NumTy, Result, Stage},
     compile,
+    pushdown::FieldSet,
     runtime::{self, UniqueStr},
 };
+
+use std::marker::PhantomData;
+use std::mem;
 
 /// Options used to configure a code-generating backend.
 #[derive(Copy, Clone)]
@@ -17,9 +21,9 @@ pub struct Config {
 
 #[macro_use]
 pub(crate) mod intrinsics;
-pub(crate) mod clir;
+pub(crate) mod clif;
 
-// TODO: start on clir
+use intrinsics::Runtime;
 
 pub(crate) type Ref = (NumTy, compile::Ty);
 pub(crate) type StrReg<'a> = bytecode::Reg<runtime::Str<'a>>;
@@ -84,6 +88,149 @@ fn cmp(op: Cmp, is_float: bool) -> Op {
 pub enum FunctionAttr {
     ReadOnly,
     ArgmemOnly,
+}
+
+/// A handle around a generated main function, potentially allocated dynamically with the given
+/// lifetime.
+#[derive(Copy, Clone)]
+pub(crate) struct MainFunction<'a> {
+    fn_ptr: *const u8,
+    _marker: PhantomData<&'a ()>,
+}
+
+unsafe impl<'a> Send for MainFunction<'a> {}
+
+impl<'a> MainFunction<'a> {
+    /// Create a `MainFunction` of arbitrary lifetime.
+    ///
+    /// This is only called from the default impl in the `Jit` trait. General use is extra unsafe
+    /// as it allows the caller to "cook up" whatever lifetime suits them.
+    fn from_ptr(fn_ptr: *const u8) -> MainFunction<'a> {
+        MainFunction {
+            fn_ptr,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Call the generated function on the given runtime.
+    ///
+    /// Unsafe because it pretends an arbitrary memory location contains code, and then runs that
+    /// code.
+    pub(crate) unsafe fn invoke<'b>(&self, rt: &mut Runtime<'b>) {
+        mem::transmute::<*const u8, unsafe extern "C" fn(*mut Runtime<'b>)>(self.fn_ptr)(rt)
+    }
+}
+
+pub(crate) trait Jit: Sized {
+    fn main_pointers(&mut self) -> Result<Stage<*const u8>>;
+    fn main_functions<'a>(&'a mut self) -> Result<Stage<MainFunction<'a>>> {
+        Ok(self.main_pointers()?.map(MainFunction::from_ptr))
+    }
+}
+
+/// Run the main function (or functions, for parallel scripts) given a [`Jit`] and the various
+/// other parameters required to construct a runtime.
+pub(crate) unsafe fn run_main<R, FF, J>(
+    mut jit: J,
+    stdin: R,
+    ff: FF,
+    used_fields: &FieldSet,
+    named_columns: Option<Vec<&[u8]>>,
+    num_workers: usize,
+) -> Result<()>
+where
+    R: intrinsics::IntoRuntime,
+    FF: runtime::writers::FileFactory,
+    J: Jit,
+{
+    let mut rt = stdin.into_runtime(ff, used_fields, named_columns);
+    let main = jit.main_functions()?;
+    match main {
+        Stage::Main(m) => Ok(m.invoke(&mut rt)),
+        Stage::Par {
+            begin,
+            main_loop,
+            end,
+        } => {
+            rt.concurrent = true;
+            // This triply-nested macro is here to allow mutable access to a "runtime" struct
+            // as well as mutable access to the same "read_files" value. The generated code is
+            // pretty awful; It may be worth a RefCell just to clean up.
+            with_input!(&mut rt.input_data, |(_, read_files)| {
+                let reads = read_files.try_resize(num_workers.saturating_sub(1));
+                if num_workers <= 1 || reads.len() == 0 || main_loop.is_none() {
+                    // execute serially.
+                    for main in begin.into_iter().chain(main_loop).chain(end) {
+                        main.invoke(&mut rt);
+                    }
+                    return Ok(());
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    std::panic::set_hook(Box::new(|pi| {
+                        if let Some(s) = pi.payload().downcast_ref::<&str>() {
+                            if s.len() > 0 {
+                                eprintln_ignore!("{}", s);
+                            }
+                        }
+                    }));
+                }
+                if let Some(begin) = begin {
+                    begin.invoke(&mut rt);
+                }
+                if let Err(_) = rt.core.write_files.flush_stdout() {
+                    return Ok(());
+                }
+                let (sender, receiver) = crossbeam_channel::bounded(reads.len());
+                let launch_data: Vec<_> = reads
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, reader)| {
+                        (
+                            reader,
+                            sender.clone(),
+                            rt.core.shuttle(i as runtime::Int + 2),
+                        )
+                    })
+                    .collect();
+                with_input!(&mut rt.input_data, |(_, read_files)| {
+                    let old_read_files = mem::replace(&mut read_files.inputs, Default::default());
+                    let main_loop_fn = main_loop.unwrap();
+                    let scope_res = crossbeam::scope(|s| {
+                        for (reader, sender, shuttle) in launch_data.into_iter() {
+                            s.spawn(move |_| {
+                                let mut runtime = Runtime {
+                                    concurrent: true,
+                                    core: shuttle(),
+                                    input_data: reader().into(),
+                                };
+                                main_loop_fn.invoke(&mut runtime);
+                                sender.send(runtime.core.extract_result()).unwrap();
+                            });
+                        }
+                        rt.core.vars.pid = 1;
+                        main_loop_fn.invoke(&mut rt);
+                        rt.core.vars.pid = 0;
+                        mem::drop(sender);
+                        with_input!(&mut rt.input_data, |(_, read_files)| {
+                            while let Ok(res) = receiver.recv() {
+                                rt.core.combine(res);
+                            }
+                            rt.concurrent = false;
+                            if let Some(end) = end {
+                                read_files.inputs = old_read_files;
+                                end.invoke(&mut rt);
+                            }
+                        });
+                    });
+                    if let Err(_) = scope_res {
+                        return err!("failed to execute parallel script");
+                    }
+                });
+            });
+            Ok(())
+        }
+    }
 }
 
 pub(crate) trait Backend {

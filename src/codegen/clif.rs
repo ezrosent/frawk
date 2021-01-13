@@ -8,17 +8,15 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::builtins;
 use crate::bytecode::Accum;
-use crate::codegen::{intrinsics, Backend, CodeGenerator, Config, Op, Ref, Sig, StrReg};
+use crate::codegen::{intrinsics, Backend, CodeGenerator, Config, Jit, Op, Ref, Sig, StrReg};
 use crate::common::{traverse, CompileError, Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Typer};
 use crate::runtime::{self, UniqueStr};
 
 use std::convert::TryFrom;
+use std::io;
 use std::mem;
 
-// TODO:
-// * initialize data-structures, call main
-//
 // TODO (cleanup; after tests are passing):
 // * move floatfunc/bitwise stuff into llvm module
 // * move llvm module under codegen
@@ -33,6 +31,9 @@ struct FuncInfo {
 }
 
 const PLACEHOLDER: Ref = (compile::UNUSED, compile::Ty::Null);
+
+// for debugging
+const DUMP_IR: bool = false;
 
 /// After a function is declared, some additional information is required to map parameteres to
 /// variables. `Prelude` contains that information.
@@ -89,7 +90,7 @@ struct Shared {
 }
 
 /// Toplevel information
-struct GlobalContext {
+pub(crate) struct Generator {
     shared: Shared,
     ctx: FunctionBuilderContext,
     cctx: codegen::Context,
@@ -136,8 +137,16 @@ fn ty_to_clifty(ty: compile::Ty, ptr_ty: Type) -> Result<Type> {
     }
 }
 
-impl GlobalContext {
-    pub(crate) fn init(typer: &mut Typer, config: Config) -> Result<GlobalContext> {
+impl Jit for Generator {
+    fn main_pointers(&mut self) -> Result<Stage<*const u8>> {
+        Ok(self
+            .mains
+            .map_ref(|id| self.shared.module.get_finalized_function(*id)))
+    }
+}
+
+impl Generator {
+    pub(crate) fn init(typer: &mut Typer, config: Config) -> Result<Generator> {
         let builder = JITBuilder::new(default_libcall_names());
         let mut regstate = RegistrationState { builder };
         intrinsics::register_all(&mut regstate)?;
@@ -150,7 +159,7 @@ impl GlobalContext {
             sig: cctx.func.signature.clone(),
         };
         // TODO: define codegen-specific data and only export that
-        let mut global = GlobalContext {
+        let mut global = Generator {
             shared,
             ctx: FunctionBuilderContext::new(),
             cctx,
@@ -176,7 +185,7 @@ impl GlobalContext {
             },
         };
         global.mains = stage;
-        // TODO: finalize_definitions, finish, on module
+        global.shared.module.finalize_definitions();
         Ok(global)
     }
 
@@ -488,6 +497,9 @@ impl<'a> View<'a> {
         self.builder.ins().jump(bbs[0], &[]);
         self.builder.seal_all_blocks();
         self.builder.finalize();
+        if DUMP_IR {
+            eprintln!("{}", self.builder.display(None));
+        }
         Ok(())
     }
 

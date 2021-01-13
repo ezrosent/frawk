@@ -4,19 +4,14 @@ pub(crate) mod intrinsics;
 
 use crate::bytecode::Accum;
 use crate::codegen::{
-    self,
-    intrinsics::{register_all, IntoRuntime, Runtime},
-    Backend, CodeGenerator, Ref, Sig, StrReg,
+    self, intrinsics::register_all, Backend, CodeGenerator, Jit, Ref, Sig, StrReg,
 };
 use crate::common::{Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Ty, Typer};
 use crate::libc::c_char;
-use crate::pushdown::FieldSet;
 use crate::runtime;
 
 use crate::smallvec::{self, smallvec};
-use crossbeam::scope;
-use crossbeam_channel::bounded;
 use hashbrown::{HashMap, HashSet};
 use llvm_sys::{
     analysis::{LLVMVerifierFailureAction, LLVMVerifyModule},
@@ -160,7 +155,7 @@ impl<'a> CodeGenerator for View<'a> {
                         let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
                         self.drop_val(prev_global, val.1);
                         LLVMBuildStore(self.f.builder, new_global, param);
-                        self.call(intrinsic!(ref_map), &mut [param]);
+                        self.call(intrinsic!(ref_map), &mut [new_global]);
                     }
                     Str => {
                         self.drop_val(param, Ty::Str);
@@ -673,6 +668,17 @@ macro_rules! view_at {
     };
 }
 
+impl<'a, 'b> Jit for Generator<'a, 'b> {
+    fn main_pointers(&mut self) -> Result<Stage<*const u8>> {
+        unsafe {
+            let main = self.gen_main()?;
+            self.verify()?;
+            self.optimize(main.iter().map(|(_, x)| x).cloned())?;
+            Ok(main.map(|(name, _)| LLVMGetFunctionAddress(self.engine, name) as *const u8))
+        }
+    }
+}
+
 impl<'a, 'b> Generator<'a, 'b> {
     pub unsafe fn optimize(&mut self, mains: impl Iterator<Item = LLVMValueRef>) -> Result<()> {
         // Based on optimize_module in weld, in turn based on similar code in the LLVM opt tool.
@@ -789,115 +795,6 @@ impl<'a, 'b> Generator<'a, 'b> {
         let addr = LLVMGetFunctionAddress(self.engine, c_str!("__frawk_main"));
         ptr::read_volatile(&addr);
         Ok(())
-    }
-
-    unsafe fn run_function(&self, rt: &mut Runtime, name: *const libc::c_char) {
-        let addr = LLVMGetFunctionAddress(self.engine, name);
-        let func = mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(addr);
-        func(rt as *mut _ as *mut libc::c_void);
-    }
-
-    pub unsafe fn run_main(
-        &mut self,
-        stdin: impl IntoRuntime,
-        ff: impl runtime::writers::FileFactory,
-        used_fields: &FieldSet,
-        named_columns: Option<Vec<&[u8]>>,
-        num_workers: usize,
-    ) -> Result<()> {
-        let mut rt = stdin.into_runtime(ff, used_fields, named_columns);
-        let main = self.gen_main()?;
-        self.verify()?;
-        self.optimize(main.iter().map(|(_, x)| x).cloned())?;
-        match main {
-            Stage::Main((main_name, _)) => Ok(self.run_function(&mut rt, main_name)),
-            Stage::Par {
-                begin,
-                main_loop,
-                end,
-            } => {
-                rt.concurrent = true;
-                // This triply-nested macro is here to allow mutable access to a "runtime" struct
-                // as well as mutable access to the same "read_files" value. The generated code is
-                // pretty awful; It may be worth a RefCell just to clean up.
-                with_input!(&mut rt.input_data, |(_, read_files)| {
-                    let reads = read_files.try_resize(num_workers.saturating_sub(1));
-                    if num_workers <= 1 || reads.len() == 0 || main_loop.is_none() {
-                        // execute serially.
-                        for name in begin.into_iter().chain(main_loop).chain(end) {
-                            self.run_function(&mut rt, name.0);
-                        }
-                        return Ok(());
-                    }
-                    #[cfg(not(debug_assertions))]
-                    {
-                        std::panic::set_hook(Box::new(|pi| {
-                            if let Some(s) = pi.payload().downcast_ref::<&str>() {
-                                if s.len() > 0 {
-                                    eprintln_ignore!("{}", s);
-                                }
-                            }
-                        }));
-                    }
-                    if let Some((begin_name, _)) = begin {
-                        self.run_function(&mut rt, begin_name);
-                    }
-                    if let Err(_) = rt.core.write_files.flush_stdout() {
-                        return Ok(());
-                    }
-                    let (sender, receiver) = bounded(reads.len());
-                    let launch_data: Vec<_> = reads
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, reader)| {
-                            (
-                                reader,
-                                sender.clone(),
-                                rt.core.shuttle(i as runtime::Int + 2),
-                            )
-                        })
-                        .collect();
-                    with_input!(&mut rt.input_data, |(_, read_files)| {
-                        let old_read_files =
-                            mem::replace(&mut read_files.inputs, Default::default());
-                        let main_addr = LLVMGetFunctionAddress(self.engine, main_loop.unwrap().0);
-                        let main_func =
-                            mem::transmute::<u64, extern "C" fn(*mut libc::c_void)>(main_addr);
-                        let scope_res = scope(|s| {
-                            for (reader, sender, shuttle) in launch_data.into_iter() {
-                                s.spawn(move |_| {
-                                    let mut runtime = Runtime {
-                                        concurrent: true,
-                                        core: shuttle(),
-                                        input_data: reader().into(),
-                                    };
-                                    main_func(&mut runtime as *mut _ as *mut libc::c_void);
-                                    sender.send(runtime.core.extract_result()).unwrap();
-                                });
-                            }
-                            rt.core.vars.pid = 1;
-                            main_func(&mut rt as *mut _ as *mut libc::c_void);
-                            rt.core.vars.pid = 0;
-                            mem::drop(sender);
-                            with_input!(&mut rt.input_data, |(_, read_files)| {
-                                while let Ok(res) = receiver.recv() {
-                                    rt.core.combine(res);
-                                }
-                                rt.concurrent = false;
-                                if let Some((end_name, _)) = end {
-                                    read_files.inputs = old_read_files;
-                                    self.run_function(&mut rt, end_name);
-                                }
-                            });
-                        });
-                        if let Err(_) = scope_res {
-                            return err!("failed to execute parallel script");
-                        }
-                    });
-                });
-                Ok(())
-            }
-        }
     }
 
     unsafe fn build_map(&mut self) {

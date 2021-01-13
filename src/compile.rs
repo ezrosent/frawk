@@ -216,8 +216,24 @@ pub(crate) fn run_llvm<'a>(
     let used_fields = typer.used_fields.clone();
     let named_cols = typer.named_columns.take();
     unsafe {
-        let mut gen = Generator::init(&mut typer, cfg)?;
-        gen.run_main(reader, ff, &used_fields, named_cols, cfg.num_workers)
+        let gen = Generator::init(&mut typer, cfg)?;
+        codegen::run_main(gen, reader, ff, &used_fields, named_cols, cfg.num_workers)
+    }
+}
+
+pub(crate) fn run_cranelift<'a>(
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
+    reader: impl codegen::intrinsics::IntoRuntime,
+    ff: impl runtime::writers::FileFactory,
+    cfg: codegen::Config,
+) -> Result<()> {
+    use codegen::clif::Generator;
+    let mut typer = Typer::init_from_ctx(ctx)?;
+    let used_fields = typer.used_fields.clone();
+    let named_cols = typer.named_columns.take();
+    unsafe {
+        let gen = Generator::init(&mut typer, cfg)?;
+        codegen::run_main(gen, reader, ff, &used_fields, named_cols, cfg.num_workers)
     }
 }
 
