@@ -1071,7 +1071,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         let mut dfs_walker = Dfs::new(&frame.cfg, NodeIx::new(0));
         while let Some(n) = dfs_walker.next(&frame.cfg) {
             let i = n.index();
-            let bb = frame.cfg.node_weight(n).unwrap();
+            let bb = &frame.cfg.node_weight(n).unwrap().insts;
             LLVMPositionBuilderAtEnd(view.f.builder, bbs[i]);
             // Generate instructions for this basic block.
             for (j, inst) in bb.iter().enumerate() {
@@ -1113,7 +1113,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         // We don't do return statements when we first find them, because returns are responsible
         // for dropping all local variables, and we aren't guaranteed that our traversal will visit
         // the exit block last.
-        let node_weight = |bb, inst| &frame.cfg.node_weight(NodeIx::new(bb)).unwrap()[inst];
+        let node_weight = |bb, inst| &frame.cfg.node_weight(NodeIx::new(bb)).unwrap().insts[inst];
         let mut placeholder_intrinsics = IntrinsicMap::new(view.module, view.ctx);
         for (exit_bb, return_inst) in exits.into_iter() {
             LLVMPositionBuilderAtEnd(view.f.builder, bbs[exit_bb]);

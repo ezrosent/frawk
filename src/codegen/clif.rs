@@ -14,7 +14,6 @@ use crate::compile::{self, Typer};
 use crate::runtime::{self, UniqueStr};
 
 use std::convert::TryFrom;
-use std::io;
 use std::mem;
 
 // TODO (cleanup; after tests are passing):
@@ -33,7 +32,7 @@ struct FuncInfo {
 const PLACEHOLDER: Ref = (compile::UNUSED, compile::Ty::Null);
 
 // for debugging
-const DUMP_IR: bool = false;
+const DUMP_IR: bool = true;
 
 /// After a function is declared, some additional information is required to map parameteres to
 /// variables. `Prelude` contains that information.
@@ -73,8 +72,19 @@ struct IterState {
 struct Frame {
     vars: HashMap<Ref, VarRef>,
     iters: HashMap<Ref, IterState>,
+    header_actions: Vec<EntryAction>,
     runtime: Variable,
+    // The entry block is the entry to the function. It is filled in first and contains argument
+    // initialization code. It jumps unconditionally to the header block.
     entry_block: Block,
+    // The header block is filled in last. It contains any local variable initializations, we
+    // "discover" which initializations are required during code generation.
+    //
+    // Neither the entry block nor the header block contain any explicit branches, but Cranelift
+    // requires that basic blocks are in a more-or-less finished state before jumping away from
+    // them (LLVM does not have this restriction, so the code for that backend is structured
+    // somewhat differently).
+    header_block: Block,
     n_params: usize,
     n_vars: usize,
 }
@@ -103,6 +113,16 @@ struct View<'a> {
     f: Frame,
     builder: FunctionBuilder<'a>,
     shared: &'a mut Shared,
+}
+
+/// An action specifying instructions to append to the end of the entry block.
+///
+/// We cannot simply `switch_to_block` back to the entry as we do in LLVM and append the
+/// instructions immediately because the Cranelift frontend requires that the current block is
+/// fully terminated before we can switch to another one.
+enum EntryAction {
+    // Make this a standalone struct if we end up only requiring this action.
+    InitVar(Variable, compile::Ty),
 }
 
 /// Map frawk-level type to its type when passed as a parameter to a cranelift function.
@@ -146,7 +166,7 @@ impl Jit for Generator {
 }
 
 impl Generator {
-    pub(crate) fn init(typer: &mut Typer, config: Config) -> Result<Generator> {
+    pub(crate) fn init(typer: &mut Typer, _config: Config) -> Result<Generator> {
         let builder = JITBuilder::new(default_libcall_names());
         let mut regstate = RegistrationState { builder };
         intrinsics::register_all(&mut regstate)?;
@@ -158,7 +178,6 @@ impl Generator {
             external_funcs: Default::default(),
             sig: cctx.func.signature.clone(),
         };
-        // TODO: define codegen-specific data and only export that
         let mut global = Generator {
             shared,
             ctx: FunctionBuilderContext::new(),
@@ -278,7 +297,11 @@ impl Generator {
         self.declare_local_funcs(typer)?;
         for (i, frame) in typer.frames.iter().enumerate() {
             if let Some(prelude) = self.funcs[i].take() {
-                self.create_view(prelude).gen_function_body(frame)?;
+                let mut view = self.create_view(prelude);
+                if i == 0 {
+                    intrinsics::register_all(&mut view)?;
+                }
+                view.gen_function_body(frame)?;
                 // func_id and prelude entries should be initialized in lockstep.
                 let id = self.shared.func_ids[i].as_ref().unwrap().func_id;
                 self.define_cur_function(id)?;
@@ -300,15 +323,18 @@ impl Generator {
         self.cctx.func.signature = sig;
         let mut builder = FunctionBuilder::new(&mut self.cctx.func, &mut self.ctx);
         let entry_block = builder.create_block();
+        let header_block = builder.create_block();
         let mut res = View {
             f: Frame {
                 n_params,
                 entry_block,
+                header_block,
                 // this will get overwritten in process_args
                 runtime: Variable::new(0),
                 n_vars: 0,
                 vars: Default::default(),
                 iters: Default::default(),
+                header_actions: Default::default(),
             },
             builder,
             shared: &mut self.shared,
@@ -407,93 +433,89 @@ impl<'a> View<'a> {
         self.builder.create_stack_slot(data)
     }
 
-    fn switch_to_entry(&mut self) -> Result<Block> {
-        let last_block = self
-            .builder
-            .current_block()
-            .map(Ok)
-            .unwrap_or_else(|| err!("generating instructions without a current block"))?;
-        self.builder.switch_to_block(self.f.entry_block);
-        Ok(last_block)
-    }
-
     fn gen_function_body(&mut self, insts: &compile::Frame) -> Result<()> {
-        let mut exits = SmallVec::<[(usize, Ref); 1]>::with_capacity(1);
         let nodes = insts.cfg.raw_nodes();
         let bbs: Vec<_> = (0..nodes.len())
             .map(|_| self.builder.create_block())
             .collect();
+        let mut to_visit: Vec<_> = (0..nodes.len()).collect();
+        let mut to_visit_next = Vec::with_capacity(1);
 
-        for (i, node) in nodes.iter().enumerate() {
-            self.builder.switch_to_block(bbs[i]);
-            for inst in &node.weight {
-                match inst {
-                    Either::Left(ll) => self.gen_ll_inst(ll)?,
-                    Either::Right(hl) => {
-                        if let Some(r) = self.gen_hl_inst(hl)? {
-                            exits.push((i, r));
-                        }
+        for round in 0..2 {
+            while let Some(i) = to_visit.pop() {
+                let node = &nodes[i];
+                if node.weight.exit && round == 0 {
+                    // We defer processing exit nodes to the end.
+                    to_visit_next.push(i);
+                    continue;
+                }
+                self.builder.switch_to_block(bbs[i]);
+                for inst in &node.weight.insts {
+                    match inst {
+                        Either::Left(ll) => self.gen_ll_inst(ll)?,
+                        Either::Right(hl) => self.gen_hl_inst(hl)?,
                     }
                 }
-            }
-            // branch-related metadata
-            let mut tcase = None;
-            let mut ecase = None;
+                // branch-related metadata
+                let mut tcase = None;
+                let mut ecase = None;
 
-            let mut walker = insts.cfg.neighbors(NodeIx::new(i)).detach();
-            while let Some(e) = walker.next_edge(&insts.cfg) {
-                // Process any branch-related information
-                let (_, next) = insts.cfg.edge_endpoints(e).unwrap();
-                let bb = bbs[next.index()];
-                if let Some(e) = insts.cfg.edge_weight(e).unwrap().clone() {
-                    tcase = Some(((e, compile::Ty::Int), bb));
-                } else {
-                    ecase = Some(bb);
-                }
-
-                // Now scan any phi nodes in the successor block for references back to the current
-                // one. If we find one, we issue an assignment, though we skip the drop as it will
-                // be covered by predecessor blocks (alternatively, we could issue a "mov" here,
-                // but this does less work).
-                //
-                // NB We could avoid scanning duplicate Phis here by tracking dependencies a bit
-                // more carefully, but in practice the extra work done seems fairly low given the
-                // CFGs that we generate at time of writing.
-                for inst in &nodes[next.index()].weight {
-                    if let Either::Right(compile::HighLevel::Phi(dst_reg, ty, preds)) = inst {
-                        for src_reg in
-                            preds.iter().filter_map(
-                                |(bb, reg)| if bb.index() == i { Some(*reg) } else { None },
-                            )
-                        {
-                            let val = self.get_val((src_reg, *ty))?;
-                            self.bind_val_inner((*dst_reg, *ty), val, /*skip_drop=*/ true)?;
-                        }
+                let mut walker = insts.cfg.neighbors(NodeIx::new(i)).detach();
+                while let Some(e) = walker.next_edge(&insts.cfg) {
+                    // TODO: do the scan for a return ahead of time; we can't just switch back.
+                    // Process any branch-related information
+                    let (_, next) = insts.cfg.edge_endpoints(e).unwrap();
+                    let bb = bbs[next.index()];
+                    if let Some(e) = insts.cfg.edge_weight(e).unwrap().clone() {
+                        tcase = Some(((e, compile::Ty::Int), bb));
                     } else {
-                        // We can bail out once we see the first non-phi instruction. Those all go
-                        // at the top
-                        break;
+                        ecase = Some(bb);
+                    }
+
+                    // Now scan any phi nodes in the successor block for references back to the current
+                    // one. If we find one, we issue an assignment, though we skip the drop as it will
+                    // be covered by predecessor blocks (alternatively, we could issue a "mov" here,
+                    // but this does less work).
+                    //
+                    // NB We could avoid scanning duplicate Phis here by tracking dependencies a bit
+                    // more carefully, but in practice the extra work done seems fairly low given the
+                    // CFGs that we generate at time of writing.
+                    for inst in &nodes[next.index()].weight.insts {
+                        if let Either::Right(compile::HighLevel::Phi(dst_reg, ty, preds)) = inst {
+                            for src_reg in preds.iter().filter_map(|(bb, reg)| {
+                                if bb.index() == i {
+                                    Some(*reg)
+                                } else {
+                                    None
+                                }
+                            }) {
+                                let val = self.get_val((src_reg, *ty))?;
+                                self.bind_val_inner(
+                                    (*dst_reg, *ty),
+                                    val,
+                                    /*skip_drop=*/ true,
+                                )?;
+                            }
+                        } else {
+                            // We can bail out once we see the first non-phi instruction. Those all go
+                            // at the top
+                            break;
+                        }
                     }
                 }
-            }
 
-            if let Some(ecase) = ecase {
-                self.branch(tcase, ecase)?;
+                if let Some(ecase) = ecase {
+                    self.branch(tcase, ecase)?;
+                }
             }
-        }
-        // Now that we have filled in the other blocks, we can finally add in any returns and
-        // drops.
-        for (bb, rf) in exits {
-            self.builder.switch_to_block(bbs[bb]);
-            let v = self.get_val(rf)?;
-            self.drop_all();
-            self.builder.ins().return_(&[v]);
+            mem::swap(&mut to_visit, &mut to_visit_next);
         }
 
-        // Finally, jump to bbs[0] from our entry block. We didn't do this before because we
-        // declare variables in the entry block while generating code for the body of the function.
-        // We want this jump to go at the very end.
-        self.builder.switch_to_block(self.f.entry_block);
+        // Finally, fill in our "header block" containing variable initializations and jump to
+        // bbs[0].
+        self.builder.switch_to_block(self.f.header_block);
+        self.builder.seal_block(self.f.header_block);
+        self.execute_actions()?;
         self.builder.ins().jump(bbs[0], &[]);
         self.builder.seal_all_blocks();
         self.builder.finalize();
@@ -563,6 +585,7 @@ impl<'a> View<'a> {
                 );
             }
         }
+        self.builder.ins().jump(self.f.header_block, &[]);
     }
 
     /// Issue end-of-function drop instructions to all local variables that have (a) a non-trivial
@@ -636,7 +659,7 @@ impl<'a> View<'a> {
     /// value for further processing. We want to process returns last because we can only be sure
     /// that the `drop_all` method will catch all relevant local variables once we have processed
     /// all of the other instructions.
-    fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<Option<Ref>> {
+    fn gen_hl_inst(&mut self, inst: &compile::HighLevel) -> Result<()> {
         use compile::HighLevel::*;
         match inst {
             Call {
@@ -647,11 +670,13 @@ impl<'a> View<'a> {
             } => {
                 let res = self.call_udf(*func_id, args.as_slice())?;
                 self.bind_val((*dst_reg, *dst_ty), res)?;
-                Ok(None)
+                Ok(())
             }
             Ret(reg, ty) => {
-                // Don't process the ret just yet
-                Ok(Some((*reg, *ty)))
+                let v = self.get_val((*reg, *ty))?;
+                self.drop_all();
+                self.builder.ins().return_(&[v]);
+                Ok(())
             }
             DropIter(reg, ty) => {
                 use compile::Ty::*;
@@ -664,10 +689,10 @@ impl<'a> View<'a> {
                 let base = self.builder.use_var(base);
                 let len = self.builder.use_var(len);
                 self.call_external_void(drop_fn, &[base, len]);
-                Ok(None)
+                Ok(())
             }
             // Phis are handled in predecessor blocks
-            Phi(..) => Ok(None),
+            Phi(..) => Ok(()),
         }
     }
 
@@ -696,6 +721,42 @@ impl<'a> View<'a> {
         }
     }
 
+    fn execute_actions(&mut self) -> Result<()> {
+        let header_actions = mem::replace(&mut self.f.header_actions, Default::default());
+        use compile::Ty::*;
+        for a in header_actions {
+            match a {
+                EntryAction::InitVar(var, ty) => {
+                    let cl_ty = self.get_ty(ty);
+                    let default_v = self.default_value(ty)?;
+                    match ty {
+                        Int | Float => {
+                            self.builder.def_var(var, default_v);
+                        }
+                        Str => {
+                            // allocate a stack slot for the string, then assign var to point to that
+                            // slot.
+                            let ptr_ty = self.ptr_to(cl_ty);
+                            let slot = self.stack_slot_bytes(mem::size_of::<runtime::Str>() as u32);
+                            let addr = self.builder.ins().stack_addr(ptr_ty, slot, 0);
+                            self.builder.def_var(var, addr);
+                            // For good measure, write zeros here,
+                            self.builder.ins().stack_store(default_v, slot, 0);
+                        }
+                        MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
+                        | MapStrStr => {
+                            self.builder.def_var(var, default_v);
+                        }
+                        IterInt | IterStr | Null => {
+                            return err!("invalid type for declare local (iterator or null)")
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Initialize the `Variable` associated with a non-iterator and non-null local variable of
     /// type `ty`.
     fn declare_local(&mut self, ty: compile::Ty) -> Result<Variable> {
@@ -703,35 +764,25 @@ impl<'a> View<'a> {
         let next_var = Variable::new(self.f.n_vars);
         self.f.n_vars += 1;
         let cl_ty = self.get_ty(ty);
-        // We'll be doing things like "allocate a map" or "assign this variable to 0"; let's make
-        // sure we are doing it only once, and at the top of the function.
-        let last_block = self.switch_to_entry()?;
-        let default_v = self.default_value(ty)?;
+        // Remember to allocate/initialize this variable in the header
+        self.f
+            .header_actions
+            .push(EntryAction::InitVar(next_var, ty));
         match ty {
             Int | Float => {
                 self.builder.declare_var(next_var, cl_ty);
-                self.builder.def_var(next_var, default_v);
             }
             Str => {
-                // allocate a stack slot for the string, then assign next_var to point to that
-                // slot.
                 let ptr_ty = self.ptr_to(cl_ty);
-                let slot = self.stack_slot_bytes(mem::size_of::<runtime::Str>() as u32);
                 self.builder.declare_var(next_var, ptr_ty);
-                let addr = self.builder.ins().stack_addr(ptr_ty, slot, 0);
-                self.builder.def_var(next_var, addr);
-                // For good measure, write zeros here,
-                self.builder.ins().stack_store(default_v, slot, 0);
             }
             MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
                 self.builder.declare_var(next_var, cl_ty);
-                self.builder.def_var(next_var, default_v);
             }
             IterInt | IterStr | Null => {
                 return err!("invalid type for declare local (iterator or null)")
             }
         }
-        self.builder.switch_to_block(last_block);
         Ok(next_var)
     }
 

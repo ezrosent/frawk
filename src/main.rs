@@ -245,6 +245,17 @@ fn run_interp_with_context<'a>(
     }
 }
 
+fn run_cranelift_with_context<'a>(
+    mut ctx: cfg::ProgramContext<'a, &'a str>,
+    stdin: impl IntoRuntime,
+    ff: impl runtime::writers::FileFactory,
+    cfg: llvm::Config,
+) {
+    if let Err(e) = compile::run_cranelift(&mut ctx, stdin, ff, cfg) {
+        fail!("error compiling cranelift: {}", e)
+    }
+}
+
 cfg_if::cfg_if! {
     if #[cfg(feature = "llvm_backend")] {
         fn run_llvm_with_context<'a>(
@@ -656,11 +667,21 @@ fn main() {
     }
 
     if matches.is_present("bytecode") {
-        opt_level = -1;
+        opt_level = -2;
     }
 
-    if opt_level < 0 {
+    if opt_level < -1 {
         with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup, num_workers))
+    } else if opt_level == -1 {
+        with_io!(|inp, oup| run_cranelift_with_context(
+            ctx,
+            inp,
+            oup,
+            llvm::Config {
+                opt_level: opt_level as usize,
+                num_workers,
+            },
+        ));
     } else {
         cfg_if::cfg_if! {
             if #[cfg(feature = "llvm_backend")] {

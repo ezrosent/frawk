@@ -297,9 +297,15 @@ impl RegStatuses {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct Node<'a> {
+    pub insts: VecDeque<Instr<'a>>,
+    pub exit: bool,
+}
+
 pub(crate) type LL<'a> = bytecode::Instr<'a>;
 type Instr<'a> = Either<LL<'a>, HighLevel>;
-type CFG<'a> = Graph<VecDeque<Instr<'a>>, Option<NumTy /* Int register */>>;
+type CFG<'a> = Graph<Node<'a>, Option<NumTy /* Int register */>>;
 type CallGraph = Graph<HashSet<(NumTy, Ty)>, ()>;
 
 // Typer contains much of the state necessary for generating a typed CFG, which in turn can
@@ -397,7 +403,7 @@ impl<'a> Frame<'a> {
         for reg in regs {
             let slot = ctr.get_slot(reg);
             if let Some(inst) = cross_stage::load_slot_instr(reg.0, reg.1, slot)? {
-                stream.push_front(Either::Left(inst))
+                stream.insts.push_front(Either::Left(inst))
             }
         }
         Ok(())
@@ -411,7 +417,7 @@ impl<'a> Frame<'a> {
         for reg in regs {
             let slot = ctr.get_slot(reg);
             if let Some(inst) = cross_stage::store_slot_instr(reg.0, reg.1, slot)? {
-                stream.push_front(Either::Left(inst))
+                stream.insts.push_front(Either::Left(inst))
             }
         }
         Ok(())
@@ -428,7 +434,7 @@ struct View<'a, 'b> {
     func_info: &'b Vec<FuncInfo>,
     // The current basic block being filled; It'll be swaped into `frame.cfg` as we translate a
     // given function cfg.
-    stream: &'b mut VecDeque<Instr<'a>>,
+    stream: &'b mut Node<'a>,
 }
 
 fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
@@ -580,7 +586,7 @@ impl<'a> Typer<'a> {
             for (j, n) in frame.cfg.raw_nodes().iter().enumerate() {
                 bb_map.push(instrs.len());
                 use HighLevel::*;
-                for stmt in n.weight.iter() {
+                for stmt in &n.weight.insts {
                     match stmt {
                         Either::Left(ll) => instrs.push(ll.clone()),
                         Either::Right(Call {
@@ -646,7 +652,7 @@ impl<'a> Typer<'a> {
                 let ix = NodeIx::new(j);
                 // Now handle phi nodes
                 for neigh in frame.cfg.neighbors(ix) {
-                    for stmt in frame.cfg.node_weight(neigh).unwrap() {
+                    for stmt in &frame.cfg.node_weight(neigh).unwrap().insts {
                         if let Either::Right(Phi(reg, ty, preds)) = stmt {
                             for (pred, src_reg) in preds.iter() {
                                 if pred == &ix {
@@ -769,7 +775,7 @@ impl<'a> Typer<'a> {
         gen.local_globals = local_globals;
         for frame in gen.frames.iter_mut() {
             let src_func = frame.src_function as usize;
-            let mut stream = VecDeque::new();
+            let mut stream = Default::default();
             View {
                 frame,
                 regs: &mut gen.regs,
@@ -794,7 +800,7 @@ impl<'a> Typer<'a> {
         let mut refs = SmallVec::new();
         for (fix, frame) in self.frames.iter().enumerate() {
             for (bbix, bb) in frame.cfg.raw_nodes().iter().enumerate() {
-                for (stmtix, stmt) in bb.weight.iter().enumerate() {
+                for (stmtix, stmt) in bb.weight.insts.iter().enumerate() {
                     // not tracking function calls
                     visit_used_fields(stmt, frame.cur_ident, &mut ufa);
                     if let Some(tsa) = &mut self.taint_analysis {
@@ -839,6 +845,7 @@ impl<'a> Typer<'a> {
                         .cfg
                         .node_weight_mut(NodeIx::new(bb))
                         .unwrap()
+                        .insts
                         .get_mut(stmt)
                         .unwrap();
                     let new_inst: Instr = match inst {
@@ -921,7 +928,7 @@ impl<'a> Typer<'a> {
             let stats = &self.regs.stats;
             let cg = &mut self.callgraph;
             for bb in frame.cfg.raw_nodes() {
-                for stmt in bb.weight.iter() {
+                for stmt in &bb.weight.insts {
                     accum(stmt, |reg, ty| {
                         if reg == UNUSED {
                             return;
@@ -1039,7 +1046,8 @@ impl<'a, 'b> View<'a, 'b> {
             // In the interim, someone may have added some instructions to our basic block when
             // processing a Phi function. Merge in any of those changes.
             let cur_bb = self.frame.cfg.node_weight_mut(ix).unwrap();
-            self.stream.extend(cur_bb.drain(..));
+            self.stream.insts.extend(cur_bb.insts.drain(..));
+            self.stream.exit |= cur_bb.exit;
             mem::swap(cur_bb, self.stream);
         }
         Ok(())
@@ -1076,7 +1084,7 @@ impl<'a, 'b> View<'a, 'b> {
     fn pushl(&mut self, i: LL<'a>) {
         // NB: unlike pushr, this isn't the sole entrypoint for adding LLs to the stream. See also
         // the load_slots and store_slots functions.
-        self.stream.push_back(Either::Left(i))
+        self.stream.insts.push_back(Either::Left(i))
     }
 
     fn pushr(&mut self, i: HighLevel) {
@@ -1092,7 +1100,7 @@ impl<'a, 'b> View<'a, 'b> {
                 (),
             );
         }
-        self.stream.push_back(Either::Right(i))
+        self.stream.insts.push_back(Either::Right(i))
     }
 
     // Get the register associated with a value. For identifiers this has the same semantics as
@@ -1843,6 +1851,7 @@ impl<'a, 'b> View<'a, 'b> {
                 let ret_ty = self.func_info[self.frame.cur_ident as usize].ret_ty;
                 v_reg = self.ensure_ty(v_reg, v_ty, ret_ty)?;
                 self.pushr(HighLevel::Ret(v_reg, ret_ty));
+                self.stream.exit = true;
             }
             PrimStmt::PrintAll(args, out) => {
                 use bytecode::Instr::PrintAll;
