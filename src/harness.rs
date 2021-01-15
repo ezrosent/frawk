@@ -250,6 +250,46 @@ cfg_if! {
     }
 }
 
+pub(crate) fn run_cranelift(
+    prog: &str,
+    stdin: impl Into<String>,
+    esc: Escaper,
+    ifmt: Option<InputFormat>,
+    strat: ExecutionStrategy,
+) -> Result<String> {
+    let a = Arena::default();
+    let stmt = parse_program(prog, &a, esc, strat)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+    ctx.fold_regex_constants = true;
+    let sep_analysis = ctx.analyze_sep_assignments();
+    if _PRINT_DEBUG_INFO {
+        let mut buf = Vec::<u8>::new();
+        ctx.dbg_print(&mut buf).unwrap();
+        eprintln!("{}", String::from_utf8(buf).unwrap());
+    }
+    let fake_fs = FakeFs::default();
+    if let Some(ifmt) = ifmt {
+        compile::run_cranelift(
+            &mut ctx,
+            simulate_stdin_csv(ifmt, stdin, strat),
+            fake_fs.clone(),
+            llvm::Config {
+                opt_level: LLVM_CONFIG.opt_level,
+                num_workers: strat.num_workers(),
+            },
+        )?;
+    } else {
+        with_reader!(sep_analysis, stdin, |reader| {
+            compile::run_cranelift(&mut ctx, reader, fake_fs.clone(), LLVM_CONFIG)?;
+        });
+    }
+    let v = fake_fs.stdout.read_data();
+    match String::from_utf8(v) {
+        Ok(s) => Ok(s),
+        Err(e) => err!("program produced invalid unicode: {}", e),
+    }
+}
+
 #[cfg(feature = "unstable")]
 pub(crate) fn bench_program(
     prog: &str,
@@ -521,6 +561,15 @@ mod tests {
                         Err(e) => panic!("failed to run program: {}", e),
                     }
                 }
+
+                #[test]
+                fn cranelift() {
+                    match run_cranelift($e, $inp, $esc, $csv, ExecutionStrategy::Serial) {
+                        Ok(out) => assert_eq!(out, $out),
+                        Err(e) => panic!("{}", e),
+                    }
+                }
+
                 #[cfg(feature = "llvm_backend")]
                 #[test]
                 fn llvm() {
@@ -763,6 +812,8 @@ it has one more line"#
           "3.0\n",
           @input "help,1\nsomeone,2\nout,3\n"
     );
+
+    // NB current cranelift failure reproduced with '{m=1?$2:m} END {print m;}'
     test_program_csv!(
         csv_no_escaping_partial,
         r#"function max(x, y) { return x<(y+0)?y:x; }

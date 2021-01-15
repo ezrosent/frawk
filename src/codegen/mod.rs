@@ -407,17 +407,17 @@ pub(crate) trait CodeGenerator: Backend {
         use compile::Ty::*;
         map_key_valid(map.1, key.1)?;
         let func = match map.1 {
-            MapIntInt => intrinsic!(delete_intint),
-            MapIntFloat => intrinsic!(delete_intfloat),
-            MapIntStr => intrinsic!(delete_intstr),
-            MapStrInt => intrinsic!(delete_strint),
-            MapStrFloat => intrinsic!(delete_strfloat),
-            MapStrStr => intrinsic!(delete_strstr),
+            MapIntInt => external!(delete_intint),
+            MapIntFloat => external!(delete_intfloat),
+            MapIntStr => external!(delete_intstr),
+            MapStrInt => external!(delete_strint),
+            MapStrFloat => external!(delete_strfloat),
+            MapStrStr => external!(delete_strstr),
             ty => return err!("non-map type: {:?}", ty),
         };
         let mapv = self.get_val(map)?;
         let keyv = self.get_val(key)?;
-        self.call_intrinsic(func, &mut [mapv, keyv])?;
+        self.call_void(func, &mut [mapv, keyv])?;
         Ok(())
     }
 

@@ -127,16 +127,16 @@ enum EntryAction {
 
 /// Map frawk-level type to its type when passed as a parameter to a cranelift function.
 ///
-/// Null and Iterator types are disallowed; they are never passed as function parameterse.
+/// Iterator types are disallowed; they are never passed as function parameterse.
 fn ty_to_param(ty: compile::Ty, ptr_ty: Type) -> Result<AbiParam> {
     use compile::Ty::*;
     let clif_ty = match ty {
-        Int => types::I64,
+        Null | Int => types::I64,
         Float => types::F64,
         MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr | Str => ptr_ty,
         IterInt | IterStr => return err!("attempt to take iterator as parameter"),
         // We assume that null parameters are omitted from the argument list ahead of time
-        Null => return err!("attempt to take null as parameter"),
+        // Null => return err!("attempt to take null as parameter"),
     };
     Ok(AbiParam::new(clif_ty))
 }
@@ -246,6 +246,8 @@ impl Generator {
 
         // We'll reuse the existing function building machinery.
         let mut view = self.create_view(prelude);
+        view.builder.switch_to_block(view.f.header_block);
+        view.builder.seal_block(view.f.header_block);
 
         // Now, build each global variable "by hand". Allocate a variable for it, assign it to the
         // address of a default value of the type in question on the stack.
@@ -259,7 +261,12 @@ impl Generator {
 
             let slot = view.stack_slot_bytes(cl_ty.lane_bits() as u32 / 8);
             let default = view.default_value(ty)?;
-            view.builder.ins().stack_store(default, slot, 0);
+            if let compile::Ty::Str = ty {
+                view.store_string(slot, default);
+            } else {
+                view.builder.ins().stack_store(default, slot, 0);
+            }
+
             let addr = view.builder.ins().stack_addr(ptr_ty, slot, 0);
             view.builder.def_var(var, addr);
             view.f.vars.insert(
@@ -288,7 +295,7 @@ impl Generator {
         self.shared
             .module
             .define_function(id, &mut self.cctx, &mut codegen::binemit::NullTrapSink {})
-            .map_err(|e| CompileError(e.to_string()))?;
+            .map_err(|e| CompileError(format!("{:?}", e) /* e.to_string() TODO replace? */))?;
         self.shared.module.clear_context(&mut self.cctx);
         Ok(())
     }
@@ -673,7 +680,11 @@ impl<'a> View<'a> {
                 Ok(())
             }
             Ret(reg, ty) => {
-                let v = self.get_val((*reg, *ty))?;
+                let mut v = self.get_val((*reg, *ty))?;
+                if let compile::Ty::Str = ty {
+                    let str_ty = self.get_ty(*ty);
+                    v = self.builder.ins().load(str_ty, MemFlags::trusted(), v, 0);
+                }
                 self.drop_all();
                 self.builder.ins().return_(&[v]);
                 Ok(())
@@ -702,8 +713,9 @@ impl<'a> View<'a> {
             Null | Int => Ok(self.const_int(0)),
             Float => Ok(self.builder.ins().f64const(0.0)),
             Str => {
-                let cl_ty = self.get_ty(compile::Ty::Str);
-                Ok(self.builder.ins().iconst(cl_ty, 0))
+                // cranelift does not currently support iconst for I128
+                let zero64 = self.builder.ins().iconst(types::I64, 0);
+                Ok(self.builder.ins().iconcat(zero64, zero64))
             }
             MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
                 let alloc_fn = match ty {
@@ -721,6 +733,12 @@ impl<'a> View<'a> {
         }
     }
 
+    fn store_string(&mut self, ss: StackSlot, v: Value) {
+        let (lo, hi) = self.builder.ins().isplit(v);
+        self.builder.ins().stack_store(lo, ss, 0);
+        self.builder.ins().stack_store(hi, ss, 8);
+    }
+
     fn execute_actions(&mut self) -> Result<()> {
         let header_actions = mem::replace(&mut self.f.header_actions, Default::default());
         use compile::Ty::*;
@@ -730,7 +748,7 @@ impl<'a> View<'a> {
                     let cl_ty = self.get_ty(ty);
                     let default_v = self.default_value(ty)?;
                     match ty {
-                        Int | Float => {
+                        Null | Int | Float => {
                             self.builder.def_var(var, default_v);
                         }
                         Str => {
@@ -740,15 +758,14 @@ impl<'a> View<'a> {
                             let slot = self.stack_slot_bytes(mem::size_of::<runtime::Str>() as u32);
                             let addr = self.builder.ins().stack_addr(ptr_ty, slot, 0);
                             self.builder.def_var(var, addr);
-                            // For good measure, write zeros here,
-                            self.builder.ins().stack_store(default_v, slot, 0);
+                            self.store_string(slot, default_v);
                         }
                         MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
                         | MapStrStr => {
                             self.builder.def_var(var, default_v);
                         }
-                        IterInt | IterStr | Null => {
-                            return err!("invalid type for declare local (iterator or null)")
+                        IterInt | IterStr => {
+                            return err!("attempting to default-initialize iterator type")
                         }
                     }
                 }
@@ -757,8 +774,7 @@ impl<'a> View<'a> {
         Ok(())
     }
 
-    /// Initialize the `Variable` associated with a non-iterator and non-null local variable of
-    /// type `ty`.
+    /// Initialize the `Variable` associated with a non-iterator local variable of type `ty`.
     fn declare_local(&mut self, ty: compile::Ty) -> Result<Variable> {
         use compile::Ty::*;
         let next_var = Variable::new(self.f.n_vars);
@@ -769,7 +785,7 @@ impl<'a> View<'a> {
             .header_actions
             .push(EntryAction::InitVar(next_var, ty));
         match ty {
-            Int | Float => {
+            Null | Int | Float => {
                 self.builder.declare_var(next_var, cl_ty);
             }
             Str => {
@@ -779,9 +795,7 @@ impl<'a> View<'a> {
             MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
                 self.builder.declare_var(next_var, cl_ty);
             }
-            IterInt | IterStr | Null => {
-                return err!("invalid type for declare local (iterator or null)")
-            }
+            IterInt | IterStr => return err!("iterators cannot be declared"),
         }
         Ok(next_var)
     }
