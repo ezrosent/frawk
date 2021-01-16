@@ -813,7 +813,6 @@ it has one more line"#
           @input "help,1\nsomeone,2\nout,3\n"
     );
 
-    // NB current cranelift failure reproduced with '{m=1?$2:m} END {print m;}'
     test_program_csv!(
         csv_no_escaping_partial,
         r#"function max(x, y) { return x<(y+0)?y:x; }

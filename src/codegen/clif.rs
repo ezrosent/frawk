@@ -496,12 +496,7 @@ impl<'a> View<'a> {
                                     None
                                 }
                             }) {
-                                let val = self.get_val((src_reg, *ty))?;
-                                self.bind_val_inner(
-                                    (*dst_reg, *ty),
-                                    val,
-                                    /*skip_drop=*/ true,
-                                )?;
+                                self.mov_inner(*ty, *dst_reg, src_reg, /*skip_drop=*/ true)?;
                             }
                         } else {
                             // We can bail out once we see the first non-phi instruction. Those all go
@@ -680,7 +675,9 @@ impl<'a> View<'a> {
                 Ok(())
             }
             Ret(reg, ty) => {
+                // TODO: add to skip_drop (this is likely causing some failures).
                 let mut v = self.get_val((*reg, *ty))?;
+                self.do_not_drop((*reg, *ty));
                 if let compile::Ty::Str = ty {
                     let str_ty = self.get_ty(*ty);
                     v = self.builder.ins().load(str_ty, MemFlags::trusted(), v, 0);
@@ -734,9 +731,13 @@ impl<'a> View<'a> {
     }
 
     fn store_string(&mut self, ss: StackSlot, v: Value) {
-        let (lo, hi) = self.builder.ins().isplit(v);
-        self.builder.ins().stack_store(lo, ss, 0);
-        self.builder.ins().stack_store(hi, ss, 8);
+        let str_ty = self.get_ty(compile::Ty::Str);
+        let ptr_ty = self.ptr_to(str_ty);
+        let addr = self.builder.ins().stack_addr(ptr_ty, ss, 0);
+        self.builder.ins().store(MemFlags::trusted(), v, addr, 0);
+        // let (lo, hi) = self.builder.ins().isplit(v);
+        // self.builder.ins().stack_store(lo, ss, 0);
+        // self.builder.ins().stack_store(hi, ss, 8);
     }
 
     fn execute_actions(&mut self) -> Result<()> {
@@ -964,7 +965,7 @@ impl<'a> View<'a> {
             And => self.builder.ins().band(args[0], args[1]),
             Or => self.builder.ins().bor(args[0], args[1]),
             LogicalRightShift => self.builder.ins().ushr(args[0], args[1]),
-            ArithmeticRightShift => self.builder.ins().ushr(args[0], args[1]),
+            ArithmeticRightShift => self.builder.ins().sshr(args[0], args[1]),
             LeftShift => self.builder.ins().ishl(args[0], args[1]),
             Xor => self.builder.ins().bxor(args[0], args[1]),
         }
@@ -1054,6 +1055,12 @@ impl<'a> View<'a> {
         }
     }
 
+    fn do_not_drop(&mut self, r: Ref) {
+        if let Some(VarRef { skip_drop, .. }) = self.f.vars.get_mut(&r) {
+            *skip_drop = true;
+        }
+    }
+
     fn bind_val_inner(&mut self, r: Ref, v: Value, skip_drop: bool) -> Result<()> {
         use compile::Ty::*;
         let VarRef { var, is_global, .. } = self.get_var_default_local(r, skip_drop)?;
@@ -1101,6 +1108,36 @@ impl<'a> View<'a> {
             }
             Null => {}
             IterInt | IterStr => return err!("attempting to store an iterator value"),
+        }
+        Ok(())
+    }
+
+    fn mov_inner(
+        &mut self,
+        ty: compile::Ty,
+        dst: NumTy,
+        src: NumTy,
+        skip_drop: bool,
+    ) -> Result<()> {
+        use compile::Ty::*;
+        let src = self.get_val((src, ty))?;
+        match ty {
+            Int | Float => self.bind_val_inner((dst, ty), src, skip_drop)?,
+            Str => {
+                self.call_external_void(external!(ref_str), &[src]);
+                let str_ty = self.get_ty(Str);
+                let loaded = self.builder.ins().load(str_ty, MemFlags::trusted(), src, 0);
+                self.bind_val_inner((dst, Str), loaded, skip_drop)?;
+            }
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                self.call_external_void(external!(ref_map), &[src]);
+                self.bind_val_inner((dst, ty), src, skip_drop)?;
+            }
+            IterInt | IterStr => return err!("attempting to apply `mov` to an iterator!"),
+            Null => {
+                let zero = self.const_int(0);
+                self.bind_val_inner((dst, ty), zero, skip_drop)?;
+            }
         }
         Ok(())
     }
@@ -1205,6 +1242,7 @@ impl<'a> CodeGenerator for View<'a> {
     fn bind_val(&mut self, r: Ref, v: Self::Val) -> Result<()> {
         self.bind_val_inner(r, v, /*skip_drop=*/ false)
     }
+
     fn get_val(&mut self, r: Ref) -> Result<Self::Val> {
         use compile::Ty::*;
         if let Null = r.1 {
@@ -1368,27 +1406,7 @@ impl<'a> CodeGenerator for View<'a> {
     }
 
     fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()> {
-        use compile::Ty::*;
-        let src = self.get_val((src, ty))?;
-        match ty {
-            Int | Float => self.bind_val((dst, ty), src)?,
-            Str => {
-                self.call_external_void(external!(ref_str), &[src]);
-                let str_ty = self.get_ty(Str);
-                let loaded = self.builder.ins().load(str_ty, MemFlags::trusted(), src, 0);
-                self.bind_val((dst, Str), loaded)?;
-            }
-            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
-                self.call_external_void(external!(ref_map), &[src]);
-                self.bind_val((dst, ty), src)?;
-            }
-            IterInt | IterStr => return err!("attempting to apply `mov` to an iterator!"),
-            Null => {
-                let zero = self.const_int(0);
-                self.bind_val((dst, ty), zero)?;
-            }
-        }
-        Ok(())
+        self.mov_inner(ty, dst, src, /*skip_drop=*/ false)
     }
 
     fn iter_begin(&mut self, dst: Ref, map: Ref) -> Result<()> {
