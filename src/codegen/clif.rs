@@ -63,9 +63,9 @@ struct VarRef {
 struct IterState {
     // NB: a more compact representation would just be to store `start` and `end`, but we need to
     // hold onto the true `start` in order to free the memory.
-    len: Variable,  // int
-    cur: Variable,  // int
-    base: Variable, // pointer
+    bytes: Variable, // int, the length of the map multiplied by the type size
+    cur: Variable,   // int, the current byte offset of the iteration
+    base: Variable,  // pointer
 }
 
 /// Function-level state
@@ -697,9 +697,11 @@ impl<'a> View<'a> {
                     IterStr => external!(drop_iter_str),
                     _ => return err!("can only drop iterators, got {:?}", ty),
                 };
-                let IterState { base, len, .. } = self.get_iter((*reg, *ty))?;
+                let IterState { base, bytes, .. } = self.get_iter((*reg, *ty))?;
                 let base = self.builder.use_var(base);
-                let len = self.builder.use_var(len);
+                let bytes = self.builder.use_var(bytes);
+                let key_ty = self.get_ty(ty.iter()?);
+                let len = self.div_by_type_size(key_ty, bytes)?;
                 self.call_external_void(drop_fn, &[base, len]);
                 Ok(())
             }
@@ -808,14 +810,14 @@ impl<'a> View<'a> {
         use compile::Ty::*;
         match ty {
             IterStr | IterInt => {
-                let len = Variable::new(self.f.n_vars);
+                let bytes = Variable::new(self.f.n_vars);
                 let cur = Variable::new(self.f.n_vars + 1);
                 let base = Variable::new(self.f.n_vars + 2);
                 self.f.n_vars += 3;
-                self.builder.declare_var(len, types::I64);
+                self.builder.declare_var(bytes, types::I64);
                 self.builder.declare_var(cur, types::I64);
                 self.builder.declare_var(base, self.void_ptr_ty());
-                Ok(IterState { len, cur, base })
+                Ok(IterState { bytes, cur, base })
             }
             Null | Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt
             | MapStrFloat | MapStrStr => err!(
@@ -1078,9 +1080,6 @@ impl<'a> View<'a> {
             Str => {
                 // NB: we assume that `v` is a string, not a pointer to a string.
 
-                // For now, we treat globals and locals the same for strings.
-                // TODO: Hopefully the stack slot mechanics don't ruin all of that...
-
                 // first, drop the value currently in the pointer
                 let p = self.builder.use_var(var);
                 self.drop_val(Str, p);
@@ -1096,7 +1095,6 @@ impl<'a> View<'a> {
                     let pointee = self
                         .builder
                         .ins()
-                        // TODO: should this be a pointer type?
                         .load(types::I64, MemFlags::trusted(), p, 0);
                     self.drop_val(r.1, pointee);
 
@@ -1142,6 +1140,28 @@ impl<'a> View<'a> {
             }
         }
         Ok(())
+    }
+
+    /// For a type whose size is a power of two, divide the multiply the integer Value v by that
+    /// size
+    fn mul_by_type_size(&mut self, ty: Type, v: Value) -> Result<Value> {
+        let ty_bytes = ty.lane_bits() / 8;
+        if !ty_bytes.is_power_of_two() {
+            return err!("unsupported type size");
+        }
+        let shift = self.const_int(ty_bytes.trailing_zeros() as i64);
+        Ok(self.builder.ins().ishl(v, shift))
+    }
+
+    /// For a type whose size is a power of two, divide the divide the integer Value v by that
+    /// size
+    fn div_by_type_size(&mut self, ty: Type, v: Value) -> Result<Value> {
+        let ty_bytes = ty.lane_bits() / 8;
+        if !ty_bytes.is_power_of_two() {
+            return err!("unsupported type size");
+        }
+        let shift = self.const_int(ty_bytes.trailing_zeros() as i64);
+        Ok(self.builder.ins().ushr(v, shift))
     }
 }
 
@@ -1424,20 +1444,22 @@ impl<'a> CodeGenerator for View<'a> {
                 return err!("iterating over non-map type: {:?}", map.1)
             }
         };
+        let key_ty = self.get_ty(dst.1.iter()?);
         let map = self.get_val(map)?;
-        let IterState { len, cur, base } = self.get_iter(dst)?;
+        let IterState { bytes, cur, base } = self.get_iter(dst)?;
         let ptr = self.call_external(begin_fn, &[map]);
         let map_len = self.call_external(len_fn, &[map]);
+        let total_bytes = self.mul_by_type_size(key_ty, map_len)?;
         let zero = self.const_int(0);
         self.builder.def_var(cur, zero);
-        self.builder.def_var(len, map_len);
+        self.builder.def_var(bytes, total_bytes);
         self.builder.def_var(base, ptr);
         Ok(())
     }
 
     fn iter_hasnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
-        let IterState { len, cur, .. } = self.get_iter(iter)?;
-        let lenv = self.builder.use_var(len);
+        let IterState { bytes, cur, .. } = self.get_iter(iter)?;
+        let lenv = self.builder.use_var(bytes);
         let curv = self.builder.use_var(cur);
         let cmp = self.builder.ins().icmp(IntCC::UnsignedLessThan, curv, lenv);
         let cmp_int = self.bool_to_int(cmp);
@@ -1446,6 +1468,10 @@ impl<'a> CodeGenerator for View<'a> {
 
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
         // Compute base+cur and load it into a value
+        //
+        // ... this is wrong, right?
+        // ... this is just byte-addressing. We need to multiply by the size of the type.
+        //
         let IterState { cur, base, .. } = self.get_iter(iter)?;
         let base = self.builder.use_var(base);
         let cur_val = self.builder.use_var(cur);
@@ -1454,8 +1480,9 @@ impl<'a> CodeGenerator for View<'a> {
         let contents = self.builder.ins().load(ty, MemFlags::trusted(), ptr, 0);
 
         // Increment cur
-        let one = self.const_int(1);
-        let inc_cur = self.builder.ins().iadd(cur_val, one);
+        let type_size = self.get_ty(dst.1).lane_bits() / 8;
+        let inc = self.const_int(type_size as i64);
+        let inc_cur = self.builder.ins().iadd(cur_val, inc);
         self.builder.def_var(cur, inc_cur);
 
         // bind the result to `dst` and increment the refcount, if relevant.
