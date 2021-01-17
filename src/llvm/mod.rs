@@ -340,7 +340,7 @@ impl<'a> CodeGenerator for View<'a> {
         &mut self,
         output: &Option<(StrReg, FileSpec)>,
         fmt: &StrReg,
-        args: &Vec<Ref>,
+        args: &[Ref],
     ) -> Result<()> {
         unsafe {
             // First, extract the types and use that to get a handle on a wrapped printf
@@ -379,7 +379,7 @@ impl<'a> CodeGenerator for View<'a> {
         }
         Ok(())
     }
-    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &Vec<Ref>) -> Result<()> {
+    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &[Ref]) -> Result<()> {
         unsafe {
             let arg_tys: SmallVec<_> = args.iter().map(|x| x.1).collect();
             let sprintf_fn = self.wrapped_printf((arg_tys, PrintfKind::Sprintf));
@@ -399,7 +399,7 @@ impl<'a> CodeGenerator for View<'a> {
             self.bind_val(dst.reflect(), resv)
         }
     }
-    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()> {
+    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &[StrReg]) -> Result<()> {
         unsafe {
             let print_fn = self.print_all_fn(args.len(), /*is_stdout=*/ output.is_none())?;
             let mut args_v =

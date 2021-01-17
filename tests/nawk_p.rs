@@ -17,9 +17,9 @@ use std::io::Write;
 use tempfile::tempdir;
 
 #[cfg(feature = "llvm_backend")]
-const BACKEND_ARGS: &'static [&'static str] = &["-b", "-O3"];
+const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bllvm", "-bcranelift"];
 #[cfg(not(feature = "llvm_backend"))]
-const BACKEND_ARGS: &'static [&'static str] = &["-b"];
+const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bcranelift"];
 
 const COUNTRIES: &'static str = r#"Russia	8650	262	Asia
 Canada	3852	24	North America

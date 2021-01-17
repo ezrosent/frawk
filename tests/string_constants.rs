@@ -4,9 +4,9 @@ use std::io::Write;
 use tempfile::tempdir;
 
 #[cfg(feature = "llvm_backend")]
-const BACKEND_ARGS: &'static [&'static str] = &["-b", "-O3"];
+const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bllvm", "-bcranelift"];
 #[cfg(not(feature = "llvm_backend"))]
-const BACKEND_ARGS: &'static [&'static str] = &["-b"];
+const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bcranelift"];
 
 // A simple function that looks for the "constant folded" regex instructions in the generated
 // output. This is a function that is possible to fool: test cases should be mindful of how it is

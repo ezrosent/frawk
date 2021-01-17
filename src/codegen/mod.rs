@@ -300,12 +300,12 @@ pub(crate) trait CodeGenerator: Backend {
         &mut self,
         output: &Option<(StrReg, FileSpec)>,
         fmt: &StrReg,
-        args: &Vec<Ref>,
+        args: &[Ref],
     ) -> Result<()>;
 
-    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &Vec<Ref>) -> Result<()>;
+    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &[Ref]) -> Result<()>;
 
-    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()>;
+    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &[StrReg]) -> Result<()>;
 
     /// Moves the contents of `src` into `dst`, taking refcounts into consideration if necessary.
     fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()>;
@@ -360,20 +360,20 @@ pub(crate) trait CodeGenerator: Backend {
         use compile::Ty::*;
         let slot_v = self.const_int(slot);
         let func = match src.1 {
-            Int => intrinsic!(store_slot_int),
-            Float => intrinsic!(store_slot_float),
-            Str => intrinsic!(store_slot_str),
-            MapIntInt => intrinsic!(store_slot_intint),
-            MapIntFloat => intrinsic!(store_slot_intfloat),
-            MapIntStr => intrinsic!(store_slot_intstr),
-            MapStrInt => intrinsic!(store_slot_strint),
-            MapStrFloat => intrinsic!(store_slot_strfloat),
-            MapStrStr => intrinsic!(store_slot_strstr),
+            Int => external!(store_slot_int),
+            Float => external!(store_slot_float),
+            Str => external!(store_slot_str),
+            MapIntInt => external!(store_slot_intint),
+            MapIntFloat => external!(store_slot_intfloat),
+            MapIntStr => external!(store_slot_intstr),
+            MapStrInt => external!(store_slot_strint),
+            MapStrFloat => external!(store_slot_strfloat),
+            MapStrStr => external!(store_slot_strstr),
             _ => unreachable!(),
         };
         let rt = self.runtime_val();
         let arg = self.get_val(src)?;
-        self.call_intrinsic(func, &mut [rt, slot_v, arg])?;
+        self.call_void(func, &mut [rt, slot_v, arg])?;
         Ok(())
     }
 
@@ -704,9 +704,9 @@ pub(crate) trait CodeGenerator: Backend {
                     self.call_intrinsic(intrinsic!(split_str), &mut [rt, tsv, arrv, patv])?;
                 self.bind_val(flds.reflect(), fldsv)
             }
-            Printf { output, fmt, args } => self.printf(output, fmt, args),
-            Sprintf { dst, fmt, args } => self.sprintf(dst, fmt, args),
-            PrintAll { output, args } => self.print_all(output, args),
+            Printf { output, fmt, args } => self.printf(output, fmt, &args[..]),
+            Sprintf { dst, fmt, args } => self.sprintf(dst, fmt, &args[..]),
+            PrintAll { output, args } => self.print_all(output, &args[..]),
             Close(file) => {
                 let rt = self.runtime_val();
                 let filev = self.get_val(file.reflect())?;

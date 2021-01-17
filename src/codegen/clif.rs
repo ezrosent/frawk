@@ -1010,7 +1010,7 @@ impl<'a> View<'a> {
     /// well as information about the arguments' types and then store into those slots.
     fn bundle_printf_args(
         &mut self,
-        args: &Vec<Ref>,
+        args: &[Ref],
     ) -> Result<(
         /* args */ StackSlot,
         /* types */ StackSlot,
@@ -1347,8 +1347,12 @@ impl<'a> CodeGenerator for View<'a> {
         &mut self,
         output: &Option<(StrReg, FileSpec)>,
         fmt: &StrReg,
-        args: &Vec<Ref>,
+        args: &[Ref],
     ) -> Result<()> {
+        // For empty args, just delegate to print_all
+        if args.len() == 0 {
+            return self.print_all(output, &[*fmt]);
+        }
         let (arg_slot, type_slot, num_args) = self.bundle_printf_args(args)?;
 
         let rt = self.runtime_val();
@@ -1373,7 +1377,12 @@ impl<'a> CodeGenerator for View<'a> {
         Ok(())
     }
 
-    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &Vec<Ref>) -> Result<()> {
+    fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &[Ref]) -> Result<()> {
+        // For empty args, just move fmt into dst.
+        if args.len() == 0 {
+            return self.mov(compile::Ty::Str, dst.reflect().0, fmt.reflect().0);
+        }
+
         let (arg_slot, type_slot, num_args) = self.bundle_printf_args(args)?;
 
         let rt = self.runtime_val();
@@ -1389,7 +1398,7 @@ impl<'a> CodeGenerator for View<'a> {
         self.bind_val(dst.reflect(), res)
     }
 
-    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &Vec<StrReg>) -> Result<()> {
+    fn print_all(&mut self, output: &Option<(StrReg, FileSpec)>, args: &[StrReg]) -> Result<()> {
         // NB: Unlike LLVM, we do not generate custom stub methods here, we just inline the the
         // "var args" implementation.
 
