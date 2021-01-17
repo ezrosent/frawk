@@ -1202,6 +1202,7 @@ macro_rules! map_impl {
             }
 
             pub(crate) unsafe extern "C" fn [< iter_ $ty >](map: *mut c_void) -> iter_ty!($k) {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let iter: Vec<_> = map.to_vec();
                 mem::forget(map);
@@ -1210,6 +1211,7 @@ macro_rules! map_impl {
             }
 
             pub(crate) unsafe extern "C" fn [<len_ $ty>](map: *mut c_void) -> Int {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let res = map.len();
                 mem::forget(map);
@@ -1217,6 +1219,7 @@ macro_rules! map_impl {
             }
 
             pub(crate) unsafe extern "C" fn [<lookup_ $ty>](map: *mut c_void, k: in_ty!($k)) -> out_ty!($v) {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 let res = map.get(key).unwrap_or_else(Default::default);
@@ -1225,6 +1228,7 @@ macro_rules! map_impl {
             }
 
             pub(crate) unsafe extern "C" fn [<contains_ $ty>](map: *mut c_void, k: in_ty!($k)) -> Int {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 let res = map.get(key).is_some() as Int;
@@ -1233,6 +1237,7 @@ macro_rules! map_impl {
             }
 
             pub(crate) unsafe extern "C" fn [<insert_ $ty>](map: *mut c_void, k: in_ty!($k), v: in_ty!($v)) {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 let val = convert_in!($v, &v);
@@ -1241,6 +1246,7 @@ macro_rules! map_impl {
             }
 
             pub(crate) unsafe extern "C" fn [<delete_ $ty>](map: *mut c_void, k: in_ty!($k)) {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 map.delete(key);
@@ -1248,6 +1254,7 @@ macro_rules! map_impl {
             }
 
             pub(crate) unsafe extern "C" fn [<drop_ $ty>](map: *mut c_void) {
+                debug_assert!(!map.is_null());
                 drop_map_generic::<$k, $v>(map)
             }
         }

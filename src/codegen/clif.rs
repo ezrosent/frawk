@@ -32,7 +32,7 @@ struct FuncInfo {
 const PLACEHOLDER: Ref = (compile::UNUSED, compile::Ty::Null);
 
 // for debugging
-const DUMP_IR: bool = true;
+const DUMP_IR: bool = false;
 
 /// After a function is declared, some additional information is required to map parameteres to
 /// variables. `Prelude` contains that information.
@@ -449,7 +449,7 @@ impl<'a> View<'a> {
         let mut to_visit_next = Vec::with_capacity(1);
 
         for round in 0..2 {
-            while let Some(i) = to_visit.pop() {
+            for i in to_visit.drain(..) {
                 let node = &nodes[i];
                 if node.weight.exit && round == 0 {
                     // We defer processing exit nodes to the end.
@@ -635,18 +635,23 @@ impl<'a> View<'a> {
             to_pass.push(v);
         }
         let FuncInfo { globals, func_id } = self.shared.func_ids[id as usize]
-            .clone()
+            .as_ref()
             .expect("all referenced functions must be declared");
-        for global in globals.iter().cloned() {
-            let v = self.get_val(global)?;
-            to_pass.push(v);
+        for global in globals {
+            // We don't use get_val here because we want to pass the pointer to the global, and
+            // get_val will issue a load.
+            match self.f.vars.get(global) {
+                Some(VarRef { var, is_global, .. }) if *is_global => {
+                    to_pass.push(self.builder.use_var(*var));
+                }
+                _ => return err!("internal error, functions disagree on if reference is global"),
+            }
         }
-        let rt = self.builder.use_var(self.f.runtime);
-        to_pass.push(rt);
+        to_pass.push(self.builder.use_var(self.f.runtime));
         let fref = self
             .shared
             .module
-            .declare_func_in_func(func_id, self.builder.func);
+            .declare_func_in_func(*func_id, self.builder.func);
         let call_inst = self.builder.ins().call(fref, &to_pass[..]);
         Ok(self
             .builder
@@ -675,7 +680,6 @@ impl<'a> View<'a> {
                 Ok(())
             }
             Ret(reg, ty) => {
-                // TODO: add to skip_drop (this is likely causing some failures).
                 let mut v = self.get_val((*reg, *ty))?;
                 self.do_not_drop((*reg, *ty));
                 if let compile::Ty::Str = ty {
@@ -733,11 +737,9 @@ impl<'a> View<'a> {
     fn store_string(&mut self, ss: StackSlot, v: Value) {
         let str_ty = self.get_ty(compile::Ty::Str);
         let ptr_ty = self.ptr_to(str_ty);
+        // We get an error if we do a direct stack_store here
         let addr = self.builder.ins().stack_addr(ptr_ty, ss, 0);
         self.builder.ins().store(MemFlags::trusted(), v, addr, 0);
-        // let (lo, hi) = self.builder.ins().isplit(v);
-        // self.builder.ins().stack_store(lo, ss, 0);
-        // self.builder.ins().stack_store(hi, ss, 8);
     }
 
     fn execute_actions(&mut self) -> Result<()> {
@@ -1446,12 +1448,17 @@ impl<'a> CodeGenerator for View<'a> {
         // Compute base+cur and load it into a value
         let IterState { cur, base, .. } = self.get_iter(iter)?;
         let base = self.builder.use_var(base);
-        let cur = self.builder.use_var(cur);
-        let ptr = self.builder.ins().iadd(base, cur);
+        let cur_val = self.builder.use_var(cur);
+        let ptr = self.builder.ins().iadd(base, cur_val);
         let ty = self.get_ty(dst.1);
         let contents = self.builder.ins().load(ty, MemFlags::trusted(), ptr, 0);
 
-        // Now bind it to `dst` and increment the refcount, if relevant.
+        // Increment cur
+        let one = self.const_int(1);
+        let inc_cur = self.builder.ins().iadd(cur_val, one);
+        self.builder.def_var(cur, inc_cur);
+
+        // bind the result to `dst` and increment the refcount, if relevant.
         self.bind_val(dst, contents)?;
         let dst_ptr = self.get_val(dst)?;
         self.ref_val(dst.1, dst_ptr);
