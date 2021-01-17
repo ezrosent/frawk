@@ -288,6 +288,8 @@ pub(crate) trait CodeGenerator: Backend {
     /// return a value. We could add a wrapper value type that permits "no value" as a member, but
     /// then the rest of the code would have to have unwrap's everywhere (making the code less
     /// clear and less type safe).
+    ///
+    /// [`call_intrinsic`]:[crate::codegen::CodeGenerator::call_intrinsic]
     fn call_void(&mut self, func: *const u8, args: &mut [Self::Val]) -> Result<()> {
         self.call_intrinsic(Op::Intrinsic(func), args)?;
         Ok(())

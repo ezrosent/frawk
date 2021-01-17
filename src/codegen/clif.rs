@@ -980,6 +980,8 @@ impl<'a> View<'a> {
     /// Panics if args has the wrong arity. Unlike LLVM, most of these functions do not have direct
     /// instructions (or intrinsics), so they are implemented as function calls to rust functions
     /// which in turn call into the standard library.
+    ///
+    /// [`FloatFunc`]: [crate::builtins::FloatFunc]
     fn floatfunc(&mut self, op: builtins::FloatFunc, args: &[Value]) -> Value {
         use builtins::FloatFunc::*;
         match op {

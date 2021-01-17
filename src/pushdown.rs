@@ -18,14 +18,18 @@
 //! where an edge from node X to node Y indicates that Y can take on at least any of the values
 //! that X can. Schematically, with constants in `[square brackets]`
 //!
-//!     StoreConstInt(dst, [c]) : [c] =>  dst
-//!     MovInt(dst, src) : src => dst
-//!     Phi(dst, Int, ..., pred_i, ...]) : ... pred_i-1 => dst, pred_i => dst ...
+//! ```text
+//! StoreConstInt(dst, [c]) : [c] =>  dst
+//! MovInt(dst, src) : src => dst
+//! Phi(dst, Int, ..., pred_i, ...]) : ... pred_i-1 => dst, pred_i => dst ...
+//! ```
 //!
 //! This graph corresponds to a set of (recursive) equation of the form
 //!
-//!     Fields([c]) = {c}
-//!     Fields(node) = union_{n s.t. (n, node) is an edge} Fields(n)
+//! ```text
+//! Fields([c]) = {c}
+//! Fields(node) = union_{n s.t. (n, node) is an edge} Fields(n)
+//! ```
 //!
 //! By convention, empty unions produce the empty set {}. Starting off all non-constant nodes at
 //! the empty set and then iterating this rule will converge to the least fixed point of these
@@ -36,9 +40,11 @@
 //! GetCol! Well, not quite. The rules for generating equations don't cover more complex operations
 //! like math, or functions. Suppose we had the following sequence:
 //!
-//!     GetCol(1, [2])
-//!     StrToInt(0, 1)
-//!     GetCol(dst, 0)
+//! ```text
+//! GetCol(1, [2])
+//! StrToInt(0, 1)
+//! GetCol(dst, 0)
+//! ```
 //!
 //! Which corresponds roughly to the AWK snippet `$$2`, or "the field corresponding to the value of
 //! the second column." We cannot predict this value ahead of time, for cases like this, we

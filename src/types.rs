@@ -172,53 +172,65 @@
 //!
 //! # Solving Constraints
 //!
-//! Once we have this graph, can push values of type [State] around according to the constraints
+//! Once we have this graph, can push values of type [`State`] around according to the constraints
 //! along the edges. Once we reach a fixed point (i.e. our guess about the types of variables stops
 //! changing), we return our answer. When the answer is under-specified, we just make a guess. For
 //! statements like
 //!
-//!     x = 1
+//! ```text
+//! x = 1
+//! ```
 //!
 //! We have the graph
 //!
-//!     x <--Flows-- 1
+//! ```text
+//! x <--Flows-- 1
+//! ```
 //!
 //! It starts off as
 //!
-//!     x <--Flows-- 1
-//!     ?            Scalar(Int)
+//! ```text
+//! x <--Flows-- 1
+//! ?            Scalar(Int)
+//! ```
 //!
 //! And then stabilizes at
 //!
-//!     x <--Flows-- 1
-//!     Scalar(Int)  Scalar(Int)
+//! ```text
+//! x <--Flows-- 1
+//! Scalar(Int)  Scalar(Int)
+//! ```
 //!
 //! For the more complicated
 //!
-//!     b = 1
-//!     c = b + 1
-//!     a = b
-//!     a = a "3"
+//! ```text
+//! b = 1
+//! c = b + 1
+//! a = b
+//! a = a "3"
+//! ```
 //!
 //! We might have
 //!
-//!     +--------
-//!     |       |
-//!     |       v
-//!     a <--(concat)<--3
-//!     ^
-//!     |
-//!     Flows
-//!     |
-//!     b <--Flows-- 1
-//!     |            |
-//!     v            |
-//!     +<-----------+
-//!     |
-//!     Call
-//!     |
-//!     v
-//!     c
+//! ```text
+//! +--------
+//! |       |
+//! |       v
+//! a <--(concat)<--3
+//! ^
+//! |
+//! Flows
+//! |
+//! b <--Flows-- 1
+//! |            |
+//! v            |
+//! +<-----------+
+//! |
+//! Call
+//! |
+//! v
+//! c
+//! ```
 //!
 //! We would start with `a`, `b` and `c` all having no information associated with them. The "no
 //! information" output for `concat` is String, and for `+` is Int, so in the first full iteration
@@ -234,6 +246,7 @@
 //! [Propagators]: https://dspace.mit.edu/handle/1721.1/44215
 //! [static analysis algorithms]: https://cs.au.dk/~amoeller/spa/
 //! [Hindley-Milner]: https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
+//! [`State`]: [crate::types::State]
 use crate::builtins;
 use crate::cfg::{self, Function, Ident, ProgramContext};
 use crate::common::{self, NodeIx, NumTy, Result};
