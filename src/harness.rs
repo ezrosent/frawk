@@ -3,7 +3,7 @@
 #[cfg(feature = "unstable")]
 use crate::bytecode::Interp;
 #[cfg(feature = "llvm_backend")]
-use crate::llvm;
+use crate::codegen::llvm;
 use crate::{
     arena::Arena,
     ast,
