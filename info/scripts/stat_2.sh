@@ -143,10 +143,14 @@ for i in {1..5}; do
     set -x
     time $MAWK -F'\t' -f "$SCRIPT_FILE" "${TSV2}"
     time $GAWK -F'\t' -f "$SCRIPT_FILE" "${TSV2}"
-    time $FRAWK -itsv -f "$SCRIPT_FILE" "${TSV2}"
-    time $FRAWK -icsv -f "$SCRIPT_FILE" "${CSV2}"
-    time $FRAWK -pr -j4 -itsv -f "$PARALLEL_SCRIPT_FILE" "${TSV2}"
-    time $FRAWK -pr -j4 -icsv -f "$PARALLEL_SCRIPT_FILE" "${CSV2}"
+    time $FRAWK -bllvm -itsv -f "$SCRIPT_FILE" "${TSV2}"
+    time $FRAWK -bllvm -icsv -f "$SCRIPT_FILE" "${CSV2}"
+    time $FRAWK -bllvm -pr -j3 -itsv -f "$PARALLEL_SCRIPT_FILE" "${TSV2}"
+    time $FRAWK -bllvm -pr -j3 -icsv -f "$PARALLEL_SCRIPT_FILE" "${CSV2}"
+    time $FRAWK -bcranelift -itsv -f "$SCRIPT_FILE" "${TSV2}"
+    time $FRAWK -bcranelift -icsv -f "$SCRIPT_FILE" "${CSV2}"
+    time $FRAWK -bcranelift -pr -j3 -itsv -f "$PARALLEL_SCRIPT_FILE" "${TSV2}"
+    time $FRAWK -bcranelift -pr -j3 -icsv -f "$PARALLEL_SCRIPT_FILE" "${CSV2}"
     time $XSV stats -s5,6 "${CSV2}"
     time $XSV stats -s5,6 -d'\t' "${TSV2}"
     # caveate: doing a lot less work here.
