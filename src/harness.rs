@@ -939,22 +939,6 @@ print w,z;
         "1 3 5 7 9 11 13 15 17 19\n"
     );
 
-    // NB: this test is "correct" if the lines are printed in either order. If this shows up too
-    // often we can consider making it possible to mark tests as "order independent".
-    test_program!(
-        mixed_map,
-        r#"BEGIN {
-m[1]=2
-m["1"]++
-m["hi"]=5
-for (k in m) {
-    print k,k+0,  m[k]
-}}"#,
-        "hi 0.0 5\n1 1.0 3\n",
-        @input "",
-        @types [ m :: MapStrInt, k :: Str ]
-    );
-
     test_program!(
         basic_regex,
         r#"BEGIN {
@@ -1311,12 +1295,6 @@ this as well"#
     );
 
     test_program!(
-        nested_loops,
-        "BEGIN { m[0]=0; m[1]=1; m[2]=2; for (i in m) for (j in m) print i,j; }",
-        "0 0\n0 1\n0 2\n1 0\n1 1\n1 2\n2 0\n2 1\n2 2\n"
-    );
-
-    test_program!(
         int_conversions,
         r#"BEGIN {
         x="123.456"
@@ -1331,21 +1309,6 @@ this as well"#
         basic_subsep,
         "BEGIN { m[1,2] = 3; for (k in m) { split(k, arr, SUBSEP); print arr[1], arr[2], m[k]; } }",
         "1 2 3\n"
-    );
-
-    test_program!(
-        iter_across_functions,
-        r#"
-        function update(h, k, v) {
-            h[k] += v*v+v;
-        }
-        BEGIN {FS=",";}
-        {
-            update(h,$3,$5) }
-        END {for (k in h) { print k, h[k]; }}
-        "#,
-        "3 62.0\n4 30.0\n",
-        @input ",,3,,4\n,,3,,6\n,,4,,5"
     );
 
     test_program!(

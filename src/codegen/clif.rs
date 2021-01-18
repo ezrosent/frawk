@@ -19,8 +19,6 @@ use std::mem;
 // TODO (cleanup; after tests are passing):
 // * move floatfunc/bitwise stuff into llvm module
 // * move llvm module under codegen
-// * make sure cargo doc builds
-// * doc fixups
 
 /// Information about a user-defined function needed by callers.
 #[derive(Clone)]

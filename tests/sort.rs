@@ -17,7 +17,7 @@ fn numbers_str(n: usize) -> (String, String) {
     (input, sorted)
 }
 
-const N: usize = 10_000;
+const N: usize = 5_000;
 
 #[cfg(feature = "llvm_backend")]
 const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bllvm", "-bcranelift"];
@@ -58,6 +58,7 @@ fn sort_command_multi_threaded() {
     }
     let prog: String = r#"{ print $0 | "sort -n"; }"#.into();
     for backend_arg in BACKEND_ARGS {
+        eprintln!("backend={:?}", backend_arg);
         Command::cargo_bin("frawk")
             .unwrap()
             .arg(String::from(*backend_arg))
