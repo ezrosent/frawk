@@ -26,8 +26,8 @@ frawk is dual-licensed under MIT or Apache 2.0.
 
 ## Installation
 
-In addition to [installing Rust](https://rustup.rs/), you will need an
-installation of LLVM 10.0 on your machine: 
+You will need to [install Rust](https://rustup.rs/).  If you would like to use
+the LLVM backend, you will need an installation of LLVM 10.0 on your machine: 
 
 * See [this site](https://apt.llvm.org/) for installation instructions on some debian-based Linux distros.
 * On Arch `pacman -Sy llvm llvm-libs` and a C compiler (e.g. `clang`) are sufficient as of September 2020.
@@ -35,13 +35,25 @@ installation of LLVM 10.0 on your machine:
 
 Depending on where your package manager puts these libraries, you may need to
 point `LLVM_SYS_100_PREFIX` at the llvm library installation (e.g.
-`/usr/lib/llvm-10`). While the LLVM backend is recommended, it is possible to
-build frawk only with support for its bytecode interpreter: to do so, build
-without the `llvm_backend` feature.
+`/usr/lib/llvm-10`).
+
+### Building Without LLVM
+
+While the LLVM backend is recommended, it is possible to build frawk only with
+support for the Cranelift-based JIT and its bytecode interpreter. To do this,
+build without the `llvm_backend` feature. The Cranelift backend provides
+comparable performance to LLVM for smaller scripts, but LLVM's optimizations
+can sometimes deliver a substantial performance boost over Cranelift (see the
+[benchmarks](https://github.com/ezrosent/frawk/blob/master/info/performance.md)
+document for some examples of this).
+
+### Building Using Stable
 
 frawk currently requires a nightly compiler by default. To compile frawk using stable,
 compile without the `unstable` feature. Using `rustup default nightly`, or some other
 method to run a nightly compiler release is otherwise required to build frawk.
+
+### Building a Binary
 
 With those prerequisites, cloning this repository and a `cargo build --release`
 or `cargo [+nightly] install --path <frawk repo path>` will produce a binary that you can
@@ -52,7 +64,7 @@ $ cd <frawk repo path>
 # With LLVM
 $ cargo +nightly install --path .
 # Without LLVM, but with other recommended defaults
-$ cargo +nightly install --path . --no-default-features --features use_jemalloc,allow_avx2 
+$ cargo +nightly install --path . --no-default-features --features use_jemalloc,allow_avx2,unstable
 ```
 
 frawk is now on [crates.io](https://crates.io/crates/frawk), so running 
