@@ -22,8 +22,6 @@ pub mod harness;
 mod input_taint;
 pub mod interp;
 pub mod lexer;
-#[cfg(feature = "llvm_backend")]
-pub mod llvm;
 #[allow(unused_parens)] // Warnings appear in generated code
 pub mod parsing;
 pub mod pushdown;

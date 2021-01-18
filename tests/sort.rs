@@ -17,7 +17,7 @@ fn numbers_str(n: usize) -> (String, String) {
     (input, sorted)
 }
 
-const N: usize = 5_000;
+const N: usize = 10_000;
 
 #[cfg(feature = "llvm_backend")]
 const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bllvm", "-bcranelift"];

@@ -1,7 +1,9 @@
+//! LLVM code generation for frawk programs.
 mod attr;
 pub(crate) mod builtin_functions;
 pub(crate) mod intrinsics;
 
+use crate::builtins;
 use crate::bytecode::Accum;
 use crate::codegen::{
     self, intrinsics::register_all, Backend, CodeGenerator, Jit, Ref, Sig, StrReg,
@@ -206,6 +208,7 @@ impl<'a> CodeGenerator for View<'a> {
         }
         Ok(())
     }
+
     fn get_val(&mut self, r: Ref) -> Result<Self::Val> {
         match unsafe {
             self.get_local_inner(r, /*array_ptr=*/ false)
@@ -223,14 +226,17 @@ impl<'a> CodeGenerator for View<'a> {
             )
         }
     }
+
     fn const_int(&mut self, i: i64) -> Self::Val {
         unsafe {
             LLVMConstInt(self.get_ty(Ty::Int), i as u64, /*sign_extend=*/ 0)
         }
     }
+
     fn const_float(&mut self, f: f64) -> Self::Val {
         unsafe { LLVMConstReal(self.get_ty(Ty::Float), f) }
     }
+
     fn const_str<'b>(&mut self, s: &runtime::UniqueStr<'b>) -> Self::Val {
         // We don't know where we're storing this string literal. If it's in the middle of
         // a loop, we could be calling drop on it repeatedly. If the string is boxed, that
@@ -248,6 +254,7 @@ impl<'a> CodeGenerator for View<'a> {
             LLVMConstIntOfString(ty, as_hex.as_ptr(), /*radix=*/ 16)
         }
     }
+
     fn const_ptr<'b, T>(&'b mut self, c: &'b T) -> Self::Val {
         let voidp = self.tmap.runtime_ty;
         let int_ty = self.tmap.get_ty(Ty::Int);
@@ -282,6 +289,22 @@ impl<'a> CodeGenerator for View<'a> {
                 })
             }
         }
+        fn translate_float_func(
+            ff: builtins::FloatFunc,
+        ) -> Either<*const u8, builtin_functions::Function> {
+            use builtins::FloatFunc::*;
+            match ff {
+                Cos => Either::Right(builtin_functions::Function::Cos),
+                Sin => Either::Right(builtin_functions::Function::Sin),
+                Log => Either::Right(builtin_functions::Function::Log),
+                Log2 => Either::Right(builtin_functions::Function::Log2),
+                Log10 => Either::Right(builtin_functions::Function::Log10),
+                Sqrt => Either::Right(builtin_functions::Function::Sqrt),
+                Exp => Either::Right(builtin_functions::Function::Exp),
+                Atan => Either::Left(codegen::intrinsics::_frawk_atan as _),
+                Atan2 => Either::Left(codegen::intrinsics::_frawk_atan2 as _),
+            }
+        }
         unsafe {
             match func {
                 Cmp { is_float, op } => Ok(self.cmp(to_pred(op, is_float), args[0], args[1])),
@@ -309,12 +332,28 @@ impl<'a> CodeGenerator for View<'a> {
                     };
                     Ok(res)
                 }
-                Bitwise(bw) => Ok(match args.len() {
-                    1 => bw.llvm1(self.f.builder, args[0], self.get_ty(Ty::Int)),
-                    2 => bw.llvm2(self.f.builder, args[0], args[1]),
-                    x => panic!("too many ({}) operands for int builtin: {:?}", x, bw),
-                }),
-                Math(ff) => Ok(match ff.intrinsic_name() {
+                Bitwise(bw) => {
+                    use builtins::Bitwise::*;
+                    Ok(match bw {
+                        Complement => LLVMBuildXor(
+                            self.f.builder,
+                            args[0],
+                            LLVMConstInt(self.get_ty(Ty::Int), !0, /*sign_extend=*/ 1),
+                            c_str!(""),
+                        ),
+                        And => LLVMBuildAnd(self.f.builder, args[0], args[1], c_str!("")),
+                        Or => LLVMBuildOr(self.f.builder, args[0], args[1], c_str!("")),
+                        LogicalRightShift => {
+                            LLVMBuildLShr(self.f.builder, args[0], args[1], c_str!(""))
+                        }
+                        ArithmeticRightShift => {
+                            LLVMBuildAShr(self.f.builder, args[0], args[1], c_str!(""))
+                        }
+                        LeftShift => LLVMBuildShl(self.f.builder, args[0], args[1], c_str!("")),
+                        Xor => LLVMBuildXor(self.f.builder, args[0], args[1], c_str!("")),
+                    })
+                }
+                Math(ff) => Ok(match translate_float_func(ff) {
                     Either::Left(fname) => self.call(fname, args),
                     Either::Right(builtin) => self.call_builtin(builtin, args),
                 }),

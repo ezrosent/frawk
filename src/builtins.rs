@@ -6,8 +6,6 @@ use crate::common::{NodeIx, Result};
 use crate::compile;
 use crate::runtime::{Int, IntMap, Str, StrMap};
 use crate::types::{self, SmallVec};
-#[cfg(feature = "llvm_backend")]
-use llvm_sys::{core::*, prelude::*};
 use smallvec::smallvec;
 
 use std::convert::TryFrom;
@@ -98,45 +96,6 @@ impl Bitwise {
             Complement => panic!("bitwise: mismatched arity!"),
         }
     }
-    #[cfg(feature = "llvm_backend")]
-    pub unsafe fn llvm1(
-        &self,
-        builder: LLVMBuilderRef,
-        x: LLVMValueRef,
-        int_ty: LLVMTypeRef,
-    ) -> LLVMValueRef {
-        use Bitwise::*;
-        match self {
-            // LLVM does not have a bitwise complement instruction. We use xor with all 1s.
-            Complement => LLVMBuildXor(
-                builder,
-                x,
-                LLVMConstInt(int_ty, !0, /*sign_extend=*/ 1),
-                c_str!(""),
-            ),
-            And | Or | LogicalRightShift | ArithmeticRightShift | LeftShift | Xor => {
-                panic!("bitwise: mismatched arity!")
-            }
-        }
-    }
-    #[cfg(feature = "llvm_backend")]
-    pub unsafe fn llvm2(
-        &self,
-        builder: LLVMBuilderRef,
-        lhs: LLVMValueRef,
-        rhs: LLVMValueRef,
-    ) -> LLVMValueRef {
-        use Bitwise::*;
-        match self {
-            And => LLVMBuildAnd(builder, lhs, rhs, c_str!("")),
-            Or => LLVMBuildOr(builder, lhs, rhs, c_str!("")),
-            LogicalRightShift => LLVMBuildLShr(builder, lhs, rhs, c_str!("")),
-            ArithmeticRightShift => LLVMBuildAShr(builder, lhs, rhs, c_str!("")),
-            LeftShift => LLVMBuildShl(builder, lhs, rhs, c_str!("")),
-            Xor => LLVMBuildXor(builder, lhs, rhs, c_str!("")),
-            Complement => panic!("bitwise: mismatched arity!"),
-        }
-    }
     pub fn arity(&self) -> usize {
         use Bitwise::*;
         match self {
@@ -209,27 +168,6 @@ impl FloatFunc {
             Sqrt => "sqrt",
             Atan2 => "atan2",
             Exp => "exp",
-        }
-    }
-
-    #[cfg(feature = "llvm_backend")]
-    pub fn intrinsic_name(
-        &self,
-    ) -> crate::common::Either<*const u8, crate::llvm::builtin_functions::Function> {
-        use FloatFunc::*;
-        type LLVMFunc = crate::llvm::builtin_functions::Function;
-        // NB these must match the corresponding function name in llvm/intrinsics. New functions
-        // added here must also be stubbed out there with semantics matching the `eval` methods.
-        match self {
-            Cos => Either::Right(LLVMFunc::Cos),
-            Sin => Either::Right(LLVMFunc::Sin),
-            Log => Either::Right(LLVMFunc::Log),
-            Log2 => Either::Right(LLVMFunc::Log2),
-            Log10 => Either::Right(LLVMFunc::Log10),
-            Sqrt => Either::Right(LLVMFunc::Sqrt),
-            Exp => Either::Right(LLVMFunc::Exp),
-            Atan => Either::Left(crate::codegen::intrinsics::_frawk_atan as _),
-            Atan2 => Either::Left(crate::codegen::intrinsics::_frawk_atan2 as _),
         }
     }
 

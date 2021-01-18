@@ -1,5 +1,7 @@
 //! The `codegen` module provides general tools for implementing different backends for frawk
 //! programs based on the output of the `compile` module.
+//!
+//! The module root contains code that is shared by the cranelift and LLVM backends.
 use crate::{
     builtins,
     bytecode::{self, Accum},
@@ -22,6 +24,8 @@ pub struct Config {
 #[macro_use]
 pub(crate) mod intrinsics;
 pub(crate) mod clif;
+#[cfg(feature = "llvm_backend")]
+pub(crate) mod llvm;
 
 use intrinsics::Runtime;
 

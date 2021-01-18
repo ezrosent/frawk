@@ -2,11 +2,11 @@ use crate::builtins;
 use crate::bytecode;
 use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, ProgramContext};
 use crate::codegen;
+#[cfg(feature = "llvm_backend")]
+use crate::codegen::llvm;
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
-#[cfg(feature = "llvm_backend")]
-use crate::llvm;
 use crate::pushdown::{FieldSet, UsedFieldAnalysis};
 use crate::runtime::{self, Str};
 use crate::smallvec::{self, smallvec};
@@ -211,7 +211,7 @@ pub(crate) fn run_llvm<'a>(
     ff: impl runtime::writers::FileFactory,
     cfg: llvm::Config,
 ) -> Result<()> {
-    use crate::llvm::Generator;
+    use llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
     let used_fields = typer.used_fields.clone();
     let named_cols = typer.named_columns.take();

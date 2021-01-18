@@ -1,4 +1,22 @@
 //! Cranelift code generation for frawk programs.
+//!
+//! A few notes on how frawk typed IR is translated into CLIF (from which cranelift can JIT machine
+//! code):
+//! * Integers are I64s
+//! * Floats are F64s
+//! * Strings are I128s
+//! * Maps are I64s (pointers, in actuality, but we have no need for cranelift's special handling
+//! of reference types)
+//! * Iterators are separate variables for the base pointer, the current offset, and the length of
+//! the array of keys. We can get away without packaging these together into their own stack slots
+//! because iterators are always local to the current function scope.
+//!
+//! Global variables are allocated on the entry function's stack and passed as extra function
+//! parameters to the main function and UDFs. We include metadata in [`VarRef`] to ensure we can
+//! emit separate code for assignments into global and local variables, as necessary.
+//!
+//! Strings are passed "by reference" to functions, so we explicitly allocate string variables on
+//! the stack and then pass pointers to them.
 use cranelift::prelude::*;
 use cranelift_codegen::ir::StackSlot;
 use cranelift_jit::{JITBuilder, JITModule};
@@ -15,10 +33,6 @@ use crate::runtime::{self, UniqueStr};
 
 use std::convert::TryFrom;
 use std::mem;
-
-// TODO (cleanup; after tests are passing):
-// * move floatfunc/bitwise stuff into llvm module
-// * move llvm module under codegen
 
 /// Information about a user-defined function needed by callers.
 #[derive(Clone)]
@@ -70,7 +84,7 @@ struct IterState {
 struct Frame {
     vars: HashMap<Ref, VarRef>,
     iters: HashMap<Ref, IterState>,
-    header_actions: Vec<EntryAction>,
+    header_actions: Vec<EntryDeclaration>,
     runtime: Variable,
     // The entry block is the entry to the function. It is filled in first and contains argument
     // initialization code. It jumps unconditionally to the header block.
@@ -113,14 +127,14 @@ struct View<'a> {
     shared: &'a mut Shared,
 }
 
-/// An action specifying instructions to append to the end of the entry block.
+/// A specification of a declaration to append to the top of the function.
 ///
-/// We cannot simply `switch_to_block` back to the entry as we do in LLVM and append the
-/// instructions immediately because the Cranelift frontend requires that the current block is
-/// fully terminated before we can switch to another one.
-enum EntryAction {
-    // Make this a standalone struct if we end up only requiring this action.
-    InitVar(Variable, compile::Ty),
+/// We cannot simply `switch_to_block` back to the entry block as we do in LLVM and append the
+/// instructions immediately as we discover they are needed because the Cranelift frontend requires
+/// that the current block is fully terminated before we can switch to another one.
+struct EntryDeclaration {
+    var: Variable,
+    ty: compile::Ty,
 }
 
 /// Map frawk-level type to its type when passed as a parameter to a cranelift function.
@@ -293,7 +307,7 @@ impl Generator {
         self.shared
             .module
             .define_function(id, &mut self.cctx, &mut codegen::binemit::NullTrapSink {})
-            .map_err(|e| CompileError(format!("{:?}", e) /* e.to_string() TODO replace? */))?;
+            .map_err(|e| CompileError(e.to_string()))?;
         self.shared.module.clear_context(&mut self.cctx);
         Ok(())
     }
@@ -352,8 +366,6 @@ impl Generator {
     /// their bodies.
     fn declare_local_funcs(&mut self, typer: &mut Typer) -> Result<()> {
         let globals = typer.get_global_refs();
-        // TODO: see if this works, or if we should be using the same CallConv as the default in
-        // the module (as we are with the external function declarations).
         let cc = isa::CallConv::Fast;
         let ptr_ty = self.shared.module.target_config().pointer_type();
         for (i, (info, refs)) in typer.func_info.iter().zip(globals.iter()).enumerate() {
@@ -467,8 +479,6 @@ impl<'a> View<'a> {
 
                 let mut walker = insts.cfg.neighbors(NodeIx::new(i)).detach();
                 while let Some(e) = walker.next_edge(&insts.cfg) {
-                    // TODO: do the scan for a return ahead of time; we can't just switch back.
-                    // Process any branch-related information
                     let (_, next) = insts.cfg.edge_endpoints(e).unwrap();
                     let bb = bbs[next.index()];
                     if let Some(e) = insts.cfg.edge_weight(e).unwrap().clone() {
@@ -744,34 +754,27 @@ impl<'a> View<'a> {
 
     fn execute_actions(&mut self) -> Result<()> {
         let header_actions = mem::replace(&mut self.f.header_actions, Default::default());
-        use compile::Ty::*;
-        for a in header_actions {
-            match a {
-                EntryAction::InitVar(var, ty) => {
-                    let cl_ty = self.get_ty(ty);
-                    let default_v = self.default_value(ty)?;
-                    match ty {
-                        Null | Int | Float => {
-                            self.builder.def_var(var, default_v);
-                        }
-                        Str => {
-                            // allocate a stack slot for the string, then assign var to point to that
-                            // slot.
-                            let ptr_ty = self.ptr_to(cl_ty);
-                            let slot = self.stack_slot_bytes(mem::size_of::<runtime::Str>() as u32);
-                            let addr = self.builder.ins().stack_addr(ptr_ty, slot, 0);
-                            self.builder.def_var(var, addr);
-                            self.store_string(slot, default_v);
-                        }
-                        MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat
-                        | MapStrStr => {
-                            self.builder.def_var(var, default_v);
-                        }
-                        IterInt | IterStr => {
-                            return err!("attempting to default-initialize iterator type")
-                        }
-                    }
+        for EntryDeclaration { var, ty } in header_actions {
+            use compile::Ty::*;
+            let cl_ty = self.get_ty(ty);
+            let default_v = self.default_value(ty)?;
+            match ty {
+                Null | Int | Float => {
+                    self.builder.def_var(var, default_v);
                 }
+                Str => {
+                    // allocate a stack slot for the string, then assign var to point to that
+                    // slot.
+                    let ptr_ty = self.ptr_to(cl_ty);
+                    let slot = self.stack_slot_bytes(mem::size_of::<runtime::Str>() as u32);
+                    let addr = self.builder.ins().stack_addr(ptr_ty, slot, 0);
+                    self.builder.def_var(var, addr);
+                    self.store_string(slot, default_v);
+                }
+                MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                    self.builder.def_var(var, default_v);
+                }
+                IterInt | IterStr => return err!("attempting to default-initialize iterator type"),
             }
         }
         Ok(())
@@ -786,7 +789,7 @@ impl<'a> View<'a> {
         // Remember to allocate/initialize this variable in the header
         self.f
             .header_actions
-            .push(EntryAction::InitVar(next_var, ty));
+            .push(EntryDeclaration { ty, var: next_var });
         match ty {
             Null | Int | Float => {
                 self.builder.declare_var(next_var, cl_ty);
@@ -1087,8 +1090,8 @@ impl<'a> View<'a> {
             }
             MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
                 // first, ref the new value
-                // TODO: can we skip the ref here?
-                self.ref_val(r.1, v);
+                // NB: we used to have a ref here, but it appears to be unnecessary
+                //   self.ref_val(r.1, v);
                 if is_global {
                     // then, drop the value currently in the pointer
                     let p = self.builder.use_var(var);
@@ -1318,7 +1321,7 @@ impl<'a> CodeGenerator for View<'a> {
         Ok(self.call_external_void(func, args))
     }
 
-    // TODO if all goes well, remove the Result<..> wrapper and migrate the callers.
+    // TODO We may eventually want to remove the `Result` return value here
     fn call_intrinsic(&mut self, func: Op, args: &mut [Self::Val]) -> Result<Self::Val> {
         use Op::*;
         match func {
@@ -1501,14 +1504,9 @@ impl<'a> CodeGenerator for View<'a> {
         Ok(())
     }
 
-    fn var_loaded(&mut self, dst: Ref) -> Result<()> {
-        // `bind_val` will ref any maps that we store. Maps that come as the result of function
-        // calls (e.g. load_var_intmap) will not have been stored elsewhere, and will have a
-        // refcount already incremented.
-        if dst.1.is_array() {
-            let v = self.get_val(dst)?;
-            self.drop_val(dst.1, v);
-        }
+    fn var_loaded(&mut self, _dst: Ref) -> Result<()> {
+        // The LLVM backend refs maps more aggressively, so we use this as a hook to insert drops.
+        // They don't appear to be needed for cranelift
         Ok(())
     }
 }
