@@ -105,8 +105,8 @@ benchmarks. All benchmarks include `frawk`, of course; in this case both the
   v0.13.0 on both platforms
 * [`tsv-utils`](https://github.com/eBay/tsv-utils) is a set of command-line
   utilities offering a similar feature-set to xsv, but with a focus on TSV data. I
-  used tsv-utils `v1.6.1_osx-x86_64_ldc2` and `v2.1.1_linux-x86_64_ldc2`
-  downloaded from the repo for MacOS and Linux, respectively.
+  used tsv-utils `v2.1.1_linux-x86_64_ldc2` downloaded from the repo for MacOS
+  and Linux.
 
 There are plenty of other tools I could put here (see the benchmarks referenced
 on xsv and tsv-utils' pages for more), but I chose a small set of tools that
