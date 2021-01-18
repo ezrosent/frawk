@@ -127,7 +127,6 @@ pub enum Either<L, R> {
 }
 
 // borrowed from weld project.
-#[cfg(feature = "llvm_backend")]
 macro_rules! c_str {
     ($s:expr) => {
         concat!($s, "\0").as_ptr() as *const crate::libc::c_char

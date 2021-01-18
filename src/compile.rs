@@ -1329,7 +1329,7 @@ impl<'a, 'b> View<'a, 'b> {
                     _ => return err!("unexpected operands for {}", stringify!($op)),
                 }
             }
-        };
+        }
 
         // This match has grown into a bit of a cludge. It maps a (now typed) invocation of a
         // builtin function at the cfg-level to a bytecode instruction. Most of it is pretty

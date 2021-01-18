@@ -61,7 +61,6 @@ use clap::{App, Arg};
 
 use arena::Arena;
 use cfg::Escaper;
-#[cfg(feature = "llvm_backend")]
 use codegen::intrinsics::IntoRuntime;
 use common::{ExecutionStrategy, Stage};
 use runtime::{
@@ -249,7 +248,7 @@ fn run_cranelift_with_context<'a>(
     mut ctx: cfg::ProgramContext<'a, &'a str>,
     stdin: impl IntoRuntime,
     ff: impl runtime::writers::FileFactory,
-    cfg: llvm::Config,
+    cfg: codegen::Config,
 ) {
     if let Err(e) = compile::run_cranelift(&mut ctx, stdin, ff, cfg) {
         fail!("error compiling cranelift: {}", e)
@@ -262,14 +261,14 @@ cfg_if::cfg_if! {
             mut ctx: cfg::ProgramContext<'a, &'a str>,
             stdin: impl IntoRuntime,
             ff: impl runtime::writers::FileFactory,
-            cfg: llvm::Config,
+            cfg: codegen::Config,
         ) {
             if let Err(e) = compile::run_llvm(&mut ctx, stdin, ff, cfg) {
                 fail!("error compiling llvm: {}", e)
             }
         }
 
-        fn dump_llvm(prog: &str, cfg: llvm::Config, raw: &RawPrelude) -> String {
+        fn dump_llvm(prog: &str, cfg: codegen::Config, raw: &RawPrelude) -> String {
             let a = Arena::default();
             let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
             match compile::dump_llvm(&mut ctx, cfg) {
@@ -485,7 +484,7 @@ fn main() {
         if #[cfg(feature="llvm_backend")] {
             let opt_dump_llvm = matches.is_present("dump-llvm");
             if opt_dump_llvm {
-                let config = llvm::Config {
+                let config = codegen::Config {
                     opt_level: if opt_level < 0 { 3 } else { opt_level as usize },
                     num_workers,
                 };
@@ -675,7 +674,7 @@ fn main() {
                             ctx,
                             inp,
                             oup,
-                            llvm::Config {
+                            codegen::Config {
                                 opt_level: opt_level as usize,
                                 num_workers,
                             },
@@ -693,7 +692,7 @@ fn main() {
                 ctx,
                 inp,
                 oup,
-                llvm::Config {
+                codegen::Config {
                     opt_level: opt_level as usize,
                     num_workers,
                 },
