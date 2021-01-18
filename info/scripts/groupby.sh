@@ -23,10 +23,14 @@ for i in {1..5}; do
 	set -x
 	time $MAWK -F'\t' -f "$SCRIPT_FILE" "${TSV}"
 	time $GAWK -F'\t' -f "$SCRIPT_FILE" "${TSV}"
-	time $FRAWK -itsv -f "$SCRIPT_FILE" "${TSV}"
-	time $FRAWK -icsv -f "$SCRIPT_FILE" "${CSV}"
-	time $FRAWK -itsv -pr -j4 -f "$SCRIPT_FILE" "${TSV}"
-	time $FRAWK -icsv -pr -j4 -f "$SCRIPT_FILE" "${CSV}"
+	time $FRAWK -bllvm -itsv -f "$SCRIPT_FILE" "${TSV}"
+	time $FRAWK -bllvm -icsv -f "$SCRIPT_FILE" "${CSV}"
+	time $FRAWK -bllvm -itsv -pr -j3 -f "$SCRIPT_FILE" "${TSV}"
+	time $FRAWK -bllvm -icsv -pr -j3 -f "$SCRIPT_FILE" "${CSV}"
+	time $FRAWK -bcranelift -itsv -f "$SCRIPT_FILE" "${TSV}"
+	time $FRAWK -bcranelift -icsv -f "$SCRIPT_FILE" "${CSV}"
+	time $FRAWK -bcranelift -itsv -pr -j3 -f "$SCRIPT_FILE" "${TSV}"
+	time $FRAWK -bcranelift -icsv -pr -j3 -f "$SCRIPT_FILE" "${CSV}"
 	time $TSV_UTILS_BIN/tsv-summarize -H --group-by 6 --mean 2  ${TSV}
 	set +x
 done

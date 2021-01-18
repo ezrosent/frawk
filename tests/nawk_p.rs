@@ -17,9 +17,9 @@ use std::io::Write;
 use tempfile::tempdir;
 
 #[cfg(feature = "llvm_backend")]
-const BACKEND_ARGS: &'static [&'static str] = &["-b", "-O3"];
+const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bllvm", "-bcranelift"];
 #[cfg(not(feature = "llvm_backend"))]
-const BACKEND_ARGS: &'static [&'static str] = &["-b"];
+const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bcranelift"];
 
 const COUNTRIES: &'static str = r#"Russia	8650	262	Asia
 Canada	3852	24	North America
@@ -1871,6 +1871,42 @@ India	1269	637	Asia
             .arg(String::from(
                 r#"BEGIN	{ srand(10); k = 3; n = 10 }
 {	if (n <= 0) exit
+	if (rand() <= k/n) { print; k-- }
+	n--
+}"#,
+            ))
+            .arg(data_string.clone())
+            .arg(data_string.clone())
+            .assert()
+            .stdout(expected.clone());
+    }
+}
+
+// 48b, in its use of `exit` --- not currently supported by frawk --- inadvertently tests nan
+// comparison behavior. As a result, we'll keep it around, but will replicate the original `exit`
+// semantics in the _mod test.
+#[test]
+fn p_test_48b_mod() {
+    let expected = String::from(
+        r#"Russia	8650	262	Asia
+USA	3615	219	North America
+India	1269	637	Asia
+"#,
+    );
+    let tmpdir = tempdir().unwrap();
+    let data_path = tmpdir.path().join("test.countries");
+    let data_string = data_path.clone().into_os_string().into_string().unwrap();
+    {
+        let mut file = File::create(data_path).unwrap();
+        write!(file, "{}", COUNTRIES).unwrap();
+    }
+    for backend_arg in BACKEND_ARGS {
+        Command::cargo_bin("frawk")
+            .unwrap()
+            .arg(String::from(*backend_arg))
+            .arg(String::from(
+                r#"BEGIN	{ srand(10); k = 3; n = 10 }
+{	if (n <= 0) nextfile
 	if (rand() <= k/n) { print; k-- }
 	n--
 }"#,

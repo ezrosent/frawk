@@ -28,22 +28,28 @@
 //! However, some of these things are also harder. AWK variables can have multiple types over the
 //! course of a program. It's quite easy to write:
 //!
-//!     x = 1         : Int
-//!     x = "hello"   : String??
+//! ```text
+//! x = 1         : Int
+//! x = "hello"   : String??
+//! ```
 //!
 //! An easy way to implement this would be to interpret all variables as a big sum type, and
 //! changing the dynamic type of a variable as it progresses through the program. We do not do
 //! this, instead we convert the program to SSA form, where most instances of this pattern become
 //!
-//!     x_0 = 1       : Int
-//!     x_1 = "hello" : String
+//! ```text
+//! x_0 = 1       : Int
+//! x_1 = "hello" : String
+//! ```
 //!
 //! Thereby keeping each variable to a single type. For variables that we cannot move into SSA form
 //! (global variables, map keys), we insert coercions. Were `x` a global variable the example would
 //! become:
 //!
-//!     x = int-to-str(1)  : String
-//!     x = "hello"        : String
+//! ```text
+//! x = int-to-str(1)  : String
+//! x = "hello"        : String
+//! ```
 //!
 //! *Digression*: This is probably slower than a fully dynamic implementation, but the hypothesis when
 //! implementing this was that global variables that are assigned multiple types are fairly rare.
@@ -55,15 +61,19 @@
 //! tricky to interpret the types of even very simple expressions. For example, if we just consider
 //! the statement:
 //!
-//!     a = b + c
+//! ```text
+//! a = b + c
+//! ```
 //!
 //! The type of `a` will be a `Float` if either `b` or `c` are floats; otherwise it will be an
 //! integer. That doesn't sound too disturbing, but what if the whole program is something like
 //! (supposing for the moment that `b` and `c` are global):
 //!
-//!     a = b + c
-//!     b = a + c
-//!     c = a
+//! ```text
+//! a = b + c
+//! b = a + c
+//! c = a
+//! ```
 //!
 //! This is all perfectly valid; like AWK, frawk does not require variables to be declared before
 //! they are used. But it is a little strange: the types of `a`, `b` and `c` all depend on the
@@ -86,11 +96,15 @@
 //! about its type, but as new information arrives at a given node, it propagates that information
 //! along its outgoing edges. The most common edge type is `Flows`: for assignment statements like
 //!
-//!     a = b
+//! ```text
+//! a = b
+//! ```
 //!
 //! We might add to the graph
 //!
-//!     b --Flows--> a
+//! ```text
+//! b --Flows--> a
+//! ```
 //!
 //! ## Edges are Directed
 //!
@@ -99,10 +113,12 @@
 //! of `b` flows into `a`, but not vice-versa. To see why, consider the following example,
 //! (supposing all of these variables are global, and no SSA tricks can save us):
 //!
-//!     b = 1
-//!     c = b + 1
-//!     a = b
-//!     a = a "3"
+//! ```text
+//! b = 1
+//! c = b + 1
+//! a = b
+//! a = a "3"
+//! ```
 //!
 //! `b` is assigned a single integer value: we'd like to give it the type `Int`. However, `a` is
 //! assigned to `b` as well as to the result of a string concatenation operation. String
@@ -121,22 +137,30 @@
 //!
 //! For the statement:
 //!
-//!     m[a] = 1
+//! ```text
+//! m[a] = 1
+//! ```
 //!
 //! We would have the subgraph:
 //!
-//!     +---ValIn---Int
-//!     |
-//!     v
-//!     m <--KeyIn-- a
+//! ```text
+//! +---ValIn---Int
+//! |
+//! v
+//! m <--KeyIn-- a
+//! ```
 //!
 //! Similarly, loading from a map creates a different constraint. For:
 //!
-//!     x = m[a]
+//! ```text
+//! x = m[a]
+//! ```
 //!
 //! We would have
 //!
-//!     x <--Val-- m <--KeyIn-- a
+//! ```text
+//! x <--Val-- m <--KeyIn-- a
+//! ```
 //!
 //! There are corresponding constraints for iterators (the objects emitted by foreach loops).
 //!
@@ -144,7 +168,9 @@
 //!
 //! We mentioned earlier that functions made some of this trickier. Let's focus on addition:
 //!
-//!     a = b + c
+//! ```text
+//! a = b + c
+//! ```
 //!
 //! By this point in the pipeline, the `+` expression is regarded as calling a "builtin function".
 //! Every builtin function provides a "best guess" on its result type given partial information.
@@ -159,7 +185,9 @@
 //! User-defined functions are a great deal more complicated. Some AWK functions are polymorphic;
 //! consider the function:
 //!
-//!     function x(a, b) { return length(a) + b; }
+//! ```text
+//! function x(a, b) { return length(a) + b; }
+//! ```
 //!
 //! It is value to pass a string _or_ any map type to parameter `a`, and it is possible to pass any
 //! scalar as parameter `b`. Depending on how you count, that could be a few dozen possible
@@ -172,53 +200,65 @@
 //!
 //! # Solving Constraints
 //!
-//! Once we have this graph, can push values of type [State] around according to the constraints
+//! Once we have this graph, can push values of type [`State`] around according to the constraints
 //! along the edges. Once we reach a fixed point (i.e. our guess about the types of variables stops
 //! changing), we return our answer. When the answer is under-specified, we just make a guess. For
 //! statements like
 //!
-//!     x = 1
+//! ```text
+//! x = 1
+//! ```
 //!
 //! We have the graph
 //!
-//!     x <--Flows-- 1
+//! ```text
+//! x <--Flows-- 1
+//! ```
 //!
 //! It starts off as
 //!
-//!     x <--Flows-- 1
-//!     ?            Scalar(Int)
+//! ```text
+//! x <--Flows-- 1
+//! ?            Scalar(Int)
+//! ```
 //!
 //! And then stabilizes at
 //!
-//!     x <--Flows-- 1
-//!     Scalar(Int)  Scalar(Int)
+//! ```text
+//! x <--Flows-- 1
+//! Scalar(Int)  Scalar(Int)
+//! ```
 //!
 //! For the more complicated
 //!
-//!     b = 1
-//!     c = b + 1
-//!     a = b
-//!     a = a "3"
+//! ```text
+//! b = 1
+//! c = b + 1
+//! a = b
+//! a = a "3"
+//! ```
 //!
 //! We might have
 //!
-//!     +--------
-//!     |       |
-//!     |       v
-//!     a <--(concat)<--3
-//!     ^
-//!     |
-//!     Flows
-//!     |
-//!     b <--Flows-- 1
-//!     |            |
-//!     v            |
-//!     +<-----------+
-//!     |
-//!     Call
-//!     |
-//!     v
-//!     c
+//! ```text
+//! +--------
+//! |       |
+//! |       v
+//! a <--(concat)<--3
+//! ^
+//! |
+//! Flows
+//! |
+//! b <--Flows-- 1
+//! |            |
+//! v            |
+//! +<-----------+
+//! |
+//! Call
+//! |
+//! v
+//! c
+//! ```
 //!
 //! We would start with `a`, `b` and `c` all having no information associated with them. The "no
 //! information" output for `concat` is String, and for `+` is Int, so in the first full iteration
@@ -234,6 +274,7 @@
 //! [Propagators]: https://dspace.mit.edu/handle/1721.1/44215
 //! [static analysis algorithms]: https://cs.au.dk/~amoeller/spa/
 //! [Hindley-Milner]: https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
+//! [`State`]: [crate::types::State]
 use crate::builtins;
 use crate::cfg::{self, Function, Ident, ProgramContext};
 use crate::common::{self, NodeIx, NumTy, Result};

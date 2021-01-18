@@ -10,6 +10,8 @@ pub mod ast;
 pub mod builtins;
 pub mod bytecode;
 pub mod cfg;
+#[macro_use]
+pub mod codegen;
 pub mod compile;
 pub mod cross_stage;
 pub mod dataflow;
@@ -20,8 +22,6 @@ pub mod harness;
 mod input_taint;
 pub mod interp;
 pub mod lexer;
-#[cfg(feature = "llvm_backend")]
-pub mod llvm;
 #[allow(unused_parens)] // Warnings appear in generated code
 pub mod parsing;
 pub mod pushdown;
@@ -59,9 +59,8 @@ use clap::{App, Arg};
 
 use arena::Arena;
 use cfg::Escaper;
+use codegen::intrinsics::IntoRuntime;
 use common::{ExecutionStrategy, Stage};
-#[cfg(feature = "llvm_backend")]
-use llvm::IntoRuntime;
 use runtime::{
     splitter::{
         batch::{ByteReader, CSVReader, InputFormat},
@@ -243,20 +242,31 @@ fn run_interp_with_context<'a>(
     }
 }
 
+fn run_cranelift_with_context<'a>(
+    mut ctx: cfg::ProgramContext<'a, &'a str>,
+    stdin: impl IntoRuntime,
+    ff: impl runtime::writers::FileFactory,
+    cfg: codegen::Config,
+) {
+    if let Err(e) = compile::run_cranelift(&mut ctx, stdin, ff, cfg) {
+        fail!("error compiling cranelift: {}", e)
+    }
+}
+
 cfg_if::cfg_if! {
     if #[cfg(feature = "llvm_backend")] {
         fn run_llvm_with_context<'a>(
             mut ctx: cfg::ProgramContext<'a, &'a str>,
             stdin: impl IntoRuntime,
             ff: impl runtime::writers::FileFactory,
-            cfg: llvm::Config,
+            cfg: codegen::Config,
         ) {
             if let Err(e) = compile::run_llvm(&mut ctx, stdin, ff, cfg) {
                 fail!("error compiling llvm: {}", e)
             }
         }
 
-        fn dump_llvm(prog: &str, cfg: llvm::Config, raw: &RawPrelude) -> String {
+        fn dump_llvm(prog: &str, cfg: codegen::Config, raw: &RawPrelude) -> String {
             let a = Arena::default();
             let mut ctx = get_context(prog, &a, get_prelude(&a, raw));
             match compile::dump_llvm(&mut ctx, cfg) {
@@ -265,11 +275,10 @@ cfg_if::cfg_if! {
             }
         }
 
-        const DEFAULT_OPT_LEVEL: i32 = 3;
-    } else {
-        const DEFAULT_OPT_LEVEL: i32 = -1;
     }
 }
+
+const DEFAULT_OPT_LEVEL: i32 = 3;
 
 fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
     use std::io::Cursor;
@@ -313,7 +322,7 @@ fn main() {
              .long("opt-level")
              .short('O')
              .about("the optimization level for the program. Positive levels determine the optimization level for LLVM. Level -1 forces bytecode interpretation")
-             .possible_values(&["-1", "0", "1", "2", "3"]))
+             .possible_values(&["0", "1", "2", "3"]))
         .arg("--out-file=[FILE] 'the output file used in place of standard input'")
         .arg("--utf8 'validate all input as UTF-8, returning an error if it is invalid'")
         .arg("--dump-cfg 'print untyped SSA form for input program'")
@@ -335,7 +344,11 @@ fn main() {
              .takes_value(true)
              .about("Has the form <identifier>=<expr>"))
         .arg("-F, --field-separator=[SEPARATOR] 'Field separator for frawk program.'")
-        .arg("-b, --bytecode 'Execute the program with the bytecode interpreter'")
+        .arg(Arg::new("backend")
+             .long("backend")
+             .short('b')
+             .about("The backend used to run the frawk program, ranging from fastest to compile and slowest to execute, and slowest to compile and fastest to execute. Cranelift is the default")
+             .possible_values(&["interp", "cranelift", "llvm"]))
         .arg(Arg::new("output-format")
              .long("output-format")
              .short('o')
@@ -438,7 +451,7 @@ fn main() {
     let arbitrary_shell = matches.is_present("arbitrary-shell");
     let parse_header = matches.is_present("parse-header");
 
-    let mut opt_level: i32 = match matches.value_of("opt-level") {
+    let opt_level: i32 = match matches.value_of("opt-level") {
         Some("3") => 3,
         Some("2") => 2,
         Some("1") => 1,
@@ -470,7 +483,7 @@ fn main() {
         if #[cfg(feature="llvm_backend")] {
             let opt_dump_llvm = matches.is_present("dump-llvm");
             if opt_dump_llvm {
-                let config = llvm::Config {
+                let config = codegen::Config {
                     opt_level: if opt_level < 0 { 3 } else { opt_level as usize },
                     num_workers,
                 };
@@ -652,28 +665,40 @@ fn main() {
             }
         };
     }
-
-    if matches.is_present("bytecode") {
-        opt_level = -1;
-    }
-
-    if opt_level < 0 {
-        with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup, num_workers))
-    } else {
-        cfg_if::cfg_if! {
-            if #[cfg(feature = "llvm_backend")] {
-                with_io!(|inp, oup| run_llvm_with_context(
-                        ctx,
-                        inp,
-                        oup,
-                        llvm::Config {
-                            opt_level: opt_level as usize,
-                            num_workers,
-                        },
-                ));
-            } else {
-                fail!("opt level is {} but compiled without LLVM support", opt_level);
+    match matches.value_of("backend") {
+        Some("llvm") => {
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "llvm_backend")] {
+                    with_io!(|inp, oup| run_llvm_with_context(
+                            ctx,
+                            inp,
+                            oup,
+                            codegen::Config {
+                                opt_level: opt_level as usize,
+                                num_workers,
+                            },
+                    ));
+                } else {
+                    fail!("backend specified as LLVM, but compiled without LLVM support");
+                }
             }
+        }
+        Some("interp") => {
+            with_io!(|inp, oup| run_interp_with_context(ctx, inp, oup, num_workers))
+        }
+        None | Some("cranelift") => {
+            with_io!(|inp, oup| run_cranelift_with_context(
+                ctx,
+                inp,
+                oup,
+                codegen::Config {
+                    opt_level: opt_level as usize,
+                    num_workers,
+                },
+            ));
+        }
+        Some(b) => {
+            fail!("invalid backend: {:?}", b);
         }
     }
 }

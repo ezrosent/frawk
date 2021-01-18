@@ -2,10 +2,13 @@
 //! "everything but main" end to end; there's a test suite at the end.
 #[cfg(feature = "unstable")]
 use crate::bytecode::Interp;
+#[cfg(feature = "llvm_backend")]
+use crate::codegen::llvm;
 use crate::{
     arena::Arena,
     ast,
     cfg::{self, Escaper},
+    codegen::{self, intrinsics::IntoRuntime},
     common::{ExecutionStrategy, Result},
     compile, lexer,
     parsing::syntax,
@@ -13,7 +16,7 @@ use crate::{
     runtime::{
         self,
         splitter::{
-            batch::{CSVReader, InputFormat},
+            batch::{ByteReader, CSVReader, InputFormat},
             regex::RegexSplitter,
         },
         writers::testing::FakeFs,
@@ -21,8 +24,6 @@ use crate::{
     },
     types::{self, get_types},
 };
-#[cfg(feature = "llvm_backend")]
-use crate::{llvm, runtime::splitter::batch::ByteReader};
 
 use cfg_if::cfg_if;
 use hashbrown::HashMap;
@@ -45,113 +46,94 @@ fn split_stdin(
         .collect();
     inputs.into_iter()
 }
-
-cfg_if! {
-    if #[cfg(feature="llvm_backend")] {
-        fn simulate_stdin<LR: runtime::LineReader>(
-            inp: impl Into<String>,
-            mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
-        ) -> ChainedReader<LR>
-        where
-            ChainedReader<LR>: llvm::IntoRuntime,
-        {
-            ChainedReader::new(split_stdin(inp.into()).map(|(r, name)| f(r, name)))
-        }
-
-        fn simulate_stdin_csv(
-            ifmt: InputFormat,
-            inp: impl Into<String>,
-            strat: ExecutionStrategy,
-        ) -> impl llvm::IntoRuntime + runtime::LineReader {
-            CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, /*check_utf8=*/ true,strat)
-        }
-
-        fn simulate_stdin_regex(
-            inp: impl Into<String>
-        ) -> impl llvm::IntoRuntime + runtime::LineReader {
-            simulate_stdin(inp, |reader, name| {
-                RegexSplitter::new(reader, runtime::CHUNK_SIZE, name, /*check_utf8=*/false )
-            })
-        }
-
-        fn simulate_stdin_whitespace(
-            inp: impl Into<String>,
-        ) -> impl llvm::IntoRuntime + runtime::LineReader {
-            ByteReader::new_whitespace(split_stdin(inp.into()), runtime::CHUNK_SIZE, /*check_utf8=*/true, ExecutionStrategy::Serial)
-        }
-
-        fn simulate_stdin_singlechar(
-            field_sep: u8,
-            record_sep: u8,
-            inp: impl Into<String>,
-        ) -> impl llvm::IntoRuntime + runtime::LineReader {
-            ByteReader::new(
-                split_stdin(inp.into()),
+macro_rules! with_reader {
+    ($report:expr, $inp:expr, |$id:ident| $body:expr) => {
+        match $report {
+            cfg::SepAssign::Unsure => {
+                let $id = simulate_stdin_regex($inp);
+                $body
+            }
+            cfg::SepAssign::Potential {
                 field_sep,
                 record_sep,
-                runtime::CHUNK_SIZE,
-                /*check_utf8=*/true,
-                ExecutionStrategy::Serial,
-            )
-        }
-        macro_rules! with_reader {
-            ($report:expr, $inp:expr, |$id:ident| $body:expr) => {
-                match $report {
-                    cfg::SepAssign::Unsure => {
-                        let $id = simulate_stdin_regex($inp);
+            } => {
+                // TODO: unify this code with the code in main.
+                let field_sep = field_sep.unwrap_or(b" ");
+                let record_sep = record_sep.unwrap_or(b"\n");
+                if field_sep.len() == 1 && record_sep.len() == 1 {
+                    if field_sep == b" " && record_sep == b"\n" {
+                        let $id = simulate_stdin_whitespace($inp);
+                        $body
+                    } else {
+                        let $id = simulate_stdin_singlechar(field_sep[0], record_sep[0], $inp);
                         $body
                     }
-                    cfg::SepAssign::Potential {
-                        field_sep,
-                        record_sep,
-                    } => {
-                        // TODO: unify this code with the code in main.
-                        let field_sep = field_sep.unwrap_or(b" ");
-                        let record_sep = record_sep.unwrap_or(b"\n");
-                        if field_sep.len() == 1 && record_sep.len() == 1 {
-                            if field_sep == b" " && record_sep == b"\n" {
-                                let $id = simulate_stdin_whitespace($inp);
-                                $body
-                            } else  {
-                                let $id = simulate_stdin_singlechar(
-                                    field_sep[0],
-                                    record_sep[0],
-                                    $inp,
-                                );
-                                $body
-                            }
-                        } else {
-                            let $id = simulate_stdin_regex($inp);
-                            $body
-                        }
-                    }
+                } else {
+                    let $id = simulate_stdin_regex($inp);
+                    $body
                 }
-            };
+            }
         }
-} else {
-        fn simulate_stdin<LR: runtime::LineReader>(
-            inp: impl Into<String>,
-            mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
-        ) -> ChainedReader<LR> {
-            ChainedReader::new(split_stdin(inp.into()).map(|(r, name)| f(r, name)))
-        }
+    };
+}
 
-        fn simulate_stdin_csv(
-            ifmt: InputFormat,
-            inp: impl Into<String>,
-            strat: ExecutionStrategy,
-        ) -> impl runtime::LineReader {
-            CSVReader::new(split_stdin(inp.into()), ifmt, runtime::CHUNK_SIZE, /*check_utf8=*/false, strat)
-        }
+fn simulate_stdin_singlechar(
+    field_sep: u8,
+    record_sep: u8,
+    inp: impl Into<String>,
+) -> impl IntoRuntime + runtime::LineReader {
+    ByteReader::new(
+        split_stdin(inp.into()),
+        field_sep,
+        record_sep,
+        runtime::CHUNK_SIZE,
+        /*check_utf8=*/ true,
+        ExecutionStrategy::Serial,
+    )
+}
 
-        fn simulate_stdin_regex(
-            inp: impl Into<String>
-        ) -> impl runtime::LineReader {
-            simulate_stdin(inp, |reader, name| {
-                RegexSplitter::new(reader, runtime::CHUNK_SIZE, name, /*check_utf8=*/true)
-            })
-        }
-    }
+fn simulate_stdin_whitespace(inp: impl Into<String>) -> impl IntoRuntime + runtime::LineReader {
+    ByteReader::new_whitespace(
+        split_stdin(inp.into()),
+        runtime::CHUNK_SIZE,
+        /*check_utf8=*/ true,
+        ExecutionStrategy::Serial,
+    )
+}
+
+fn simulate_stdin<LR: runtime::LineReader>(
+    inp: impl Into<String>,
+    mut f: impl FnMut(Box<dyn io::Read + Send>, String) -> LR,
+) -> ChainedReader<LR>
+where
+    ChainedReader<LR>: IntoRuntime,
+{
+    ChainedReader::new(split_stdin(inp.into()).map(|(r, name)| f(r, name)))
+}
+
+fn simulate_stdin_csv(
+    ifmt: InputFormat,
+    inp: impl Into<String>,
+    strat: ExecutionStrategy,
+) -> impl IntoRuntime + runtime::LineReader {
+    CSVReader::new(
+        split_stdin(inp.into()),
+        ifmt,
+        runtime::CHUNK_SIZE,
+        /*check_utf8=*/ true,
+        strat,
+    )
+}
+
+fn simulate_stdin_regex(inp: impl Into<String>) -> impl IntoRuntime + runtime::LineReader {
+    simulate_stdin(inp, |reader, name| {
+        RegexSplitter::new(
+            reader,
+            runtime::CHUNK_SIZE,
+            name,
+            /*check_utf8=*/ false,
+        )
+    })
 }
 
 const _PRINT_DEBUG_INFO: bool = false;
@@ -164,8 +146,7 @@ type ProgResult<'a> = Result<(
     HashMap<&'a str, compile::Ty>, /* type info */
 )>;
 
-#[cfg(feature = "llvm_backend")]
-const LLVM_CONFIG: llvm::Config = llvm::Config {
+const CODEGEN_CONFIG: codegen::Config = codegen::Config {
     opt_level: 0,
     num_workers: 1,
 };
@@ -188,7 +169,7 @@ cfg_if! {
             let a = Arena::default();
             let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
             let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
-            compile::compile_llvm(&mut ctx, LLVM_CONFIG)
+            compile::compile_llvm(&mut ctx, CODEGEN_CONFIG)
         }
     }
 }
@@ -199,7 +180,7 @@ cfg_if! {
             let a = Arena::default();
             let stmt = parse_program(prog, &a, esc, ExecutionStrategy::Serial)?;
             let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
-            compile::dump_llvm(&mut ctx, LLVM_CONFIG)
+            compile::dump_llvm(&mut ctx, CODEGEN_CONFIG)
         }
 
         // The run_llvm path implements a subset of the logic in main that specializes the input
@@ -230,13 +211,13 @@ cfg_if! {
                     simulate_stdin_csv(ifmt, stdin, strat),
                     fake_fs.clone(),
                     llvm::Config {
-                        opt_level: LLVM_CONFIG.opt_level,
+                        opt_level: CODEGEN_CONFIG.opt_level,
                         num_workers: strat.num_workers(),
                     },
                 )?;
             } else {
                 with_reader!(sep_analysis, stdin, |reader| {
-                    compile::run_llvm(&mut ctx, reader, fake_fs.clone(), LLVM_CONFIG)?;
+                    compile::run_llvm(&mut ctx, reader, fake_fs.clone(), CODEGEN_CONFIG)?;
                 });
             }
             let v = fake_fs.stdout.read_data();
@@ -245,6 +226,46 @@ cfg_if! {
                 Err(e) => err!("program produced invalid unicode: {}", e),
             }
         }
+    }
+}
+
+pub(crate) fn run_cranelift(
+    prog: &str,
+    stdin: impl Into<String>,
+    esc: Escaper,
+    ifmt: Option<InputFormat>,
+    strat: ExecutionStrategy,
+) -> Result<String> {
+    let a = Arena::default();
+    let stmt = parse_program(prog, &a, esc, strat)?;
+    let mut ctx = cfg::ProgramContext::from_prog(&a, stmt, esc)?;
+    ctx.fold_regex_constants = true;
+    let sep_analysis = ctx.analyze_sep_assignments();
+    if _PRINT_DEBUG_INFO {
+        let mut buf = Vec::<u8>::new();
+        ctx.dbg_print(&mut buf).unwrap();
+        eprintln!("{}", String::from_utf8(buf).unwrap());
+    }
+    let fake_fs = FakeFs::default();
+    if let Some(ifmt) = ifmt {
+        compile::run_cranelift(
+            &mut ctx,
+            simulate_stdin_csv(ifmt, stdin, strat),
+            fake_fs.clone(),
+            codegen::Config {
+                opt_level: CODEGEN_CONFIG.opt_level,
+                num_workers: strat.num_workers(),
+            },
+        )?;
+    } else {
+        with_reader!(sep_analysis, stdin, |reader| {
+            compile::run_cranelift(&mut ctx, reader, fake_fs.clone(), CODEGEN_CONFIG)?;
+        });
+    }
+    let v = fake_fs.stdout.read_data();
+    match String::from_utf8(v) {
+        Ok(s) => Ok(s),
+        Err(e) => err!("program produced invalid unicode: {}", e),
     }
 }
 
@@ -519,6 +540,15 @@ mod tests {
                         Err(e) => panic!("failed to run program: {}", e),
                     }
                 }
+
+                #[test]
+                fn cranelift() {
+                    match run_cranelift($e, $inp, $esc, $csv, ExecutionStrategy::Serial) {
+                        Ok(out) => assert_eq!(out, $out),
+                        Err(e) => panic!("{}", e),
+                    }
+                }
+
                 #[cfg(feature = "llvm_backend")]
                 #[test]
                 fn llvm() {
@@ -761,6 +791,7 @@ it has one more line"#
           "3.0\n",
           @input "help,1\nsomeone,2\nout,3\n"
     );
+
     test_program_csv!(
         csv_no_escaping_partial,
         r#"function max(x, y) { return x<(y+0)?y:x; }
@@ -885,22 +916,6 @@ print w,z;
         print res
 }"#,
         "1 3 5 7 9 11 13 15 17 19\n"
-    );
-
-    // NB: this test is "correct" if the lines are printed in either order. If this shows up too
-    // often we can consider making it possible to mark tests as "order independent".
-    test_program!(
-        mixed_map,
-        r#"BEGIN {
-m[1]=2
-m["1"]++
-m["hi"]=5
-for (k in m) {
-    print k,k+0,  m[k]
-}}"#,
-        "hi 0.0 5\n1 1.0 3\n",
-        @input "",
-        @types [ m :: MapStrInt, k :: Str ]
     );
 
     test_program!(
@@ -1259,12 +1274,6 @@ this as well"#
     );
 
     test_program!(
-        nested_loops,
-        "BEGIN { m[0]=0; m[1]=1; m[2]=2; for (i in m) for (j in m) print i,j; }",
-        "0 0\n0 1\n0 2\n1 0\n1 1\n1 2\n2 0\n2 1\n2 2\n"
-    );
-
-    test_program!(
         int_conversions,
         r#"BEGIN {
         x="123.456"
@@ -1279,21 +1288,6 @@ this as well"#
         basic_subsep,
         "BEGIN { m[1,2] = 3; for (k in m) { split(k, arr, SUBSEP); print arr[1], arr[2], m[k]; } }",
         "1 2 3\n"
-    );
-
-    test_program!(
-        iter_across_functions,
-        r#"
-        function update(h, k, v) {
-            h[k] += v*v+v;
-        }
-        BEGIN {FS=",";}
-        {
-            update(h,$3,$5) }
-        END {for (k in h) { print k, h[k]; }}
-        "#,
-        "3 62.0\n4 30.0\n",
-        @input ",,3,,4\n,,3,,6\n,,4,,5"
     );
 
     test_program!(

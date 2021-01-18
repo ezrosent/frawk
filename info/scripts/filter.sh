@@ -20,10 +20,14 @@ for i in {1..5}; do
 	time $MAWK -F'\t' "$AWK_SCRIPT" "$TSV1" > /dev/null
 	time $GAWK -F,    "$AWK_SCRIPT" "$CSV1" > /dev/null
 	time $GAWK -F'\t' "$AWK_SCRIPT" "$TSV1" > /dev/null
-	time $FRAWK -icsv --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
-	time $FRAWK -itsv --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
-	time $FRAWK -icsv -pr -j4 --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
-	time $FRAWK -itsv -pr -j4 --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
+	time $FRAWK -bllvm -icsv --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
+	time $FRAWK -bllvm -itsv --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
+	time $FRAWK -bllvm -icsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
+	time $FRAWK -bllvm -itsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
+	time $FRAWK -bcranelift -icsv --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
+	time $FRAWK -bcranelift -itsv --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
+	time $FRAWK -bcranelift -icsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
+	time $FRAWK -bcranelift -itsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
 	time $TSV_UTILS_BIN/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 "$TSV1" > /dev/null
 	set +x
 done

@@ -1,330 +1,330 @@
 + mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m10.933s
-user	0m9.430s
-sys	0m1.468s
-+ mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m10.930s
-user	0m8.965s
-sys	0m1.955s
-+ gawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m42.911s
-user	0m41.598s
-sys	0m1.312s
-+ gawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m42.843s
-user	0m41.363s
-sys	0m1.480s
-+ frawk -bllvm -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m8.480s
-user	0m8.672s
-sys	0m2.603s
-+ frawk -bllvm -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m8.210s
-user	0m8.516s
-sys	0m2.341s
-+ frawk -bllvm -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.698s
-user	0m14.500s
-sys	0m4.530s
-+ frawk -bllvm -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.122s
-user	0m13.889s
-sys	0m3.594s
-+ frawk -bcranelift -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m8.323s
-user	0m8.695s
-sys	0m2.429s
-+ frawk -bcranelift -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m8.235s
-user	0m8.410s
-sys	0m2.604s
-+ frawk -bcranelift -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.741s
-user	0m14.917s
-sys	0m4.419s
-+ frawk -bcranelift -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.251s
-user	0m14.165s
-sys	0m3.668s
-+ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
-
-real	0m3.651s
-user	0m2.753s
-sys	0m0.880s
-+ set +x
-+ mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m9.706s
-user	0m8.538s
-sys	0m1.168s
-+ mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m10.048s
-user	0m8.808s
-sys	0m1.240s
-+ gawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m42.957s
-user	0m42.008s
-sys	0m0.948s
-+ gawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m43.484s
-user	0m42.214s
-sys	0m1.268s
-+ frawk -bllvm -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m8.584s
-user	0m8.664s
-sys	0m2.744s
-+ frawk -bllvm -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m8.377s
-user	0m8.714s
-sys	0m2.358s
-+ frawk -bllvm -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.521s
-user	0m14.352s
-sys	0m4.087s
-+ frawk -bllvm -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.207s
-user	0m14.045s
-sys	0m3.732s
-+ frawk -bcranelift -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m8.431s
-user	0m8.762s
-sys	0m1.939s
-+ frawk -bcranelift -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m8.058s
-user	0m8.346s
-sys	0m2.455s
-+ frawk -bcranelift -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.838s
-user	0m14.755s
-sys	0m4.735s
-+ frawk -bcranelift -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.136s
-user	0m13.322s
-sys	0m4.106s
-+ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
-
-real	0m3.675s
-user	0m2.687s
-sys	0m0.988s
-+ set +x
-+ mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m10.090s
-user	0m8.525s
-sys	0m1.564s
-+ mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m10.173s
-user	0m8.757s
-sys	0m1.416s
-+ gawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m42.866s
-user	0m41.565s
-sys	0m1.300s
-+ gawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m41.854s
-user	0m40.442s
-sys	0m1.412s
-+ frawk -bllvm -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m8.314s
-user	0m8.539s
-sys	0m2.585s
-+ frawk -bllvm -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m8.258s
-user	0m8.352s
-sys	0m2.674s
-+ frawk -bllvm -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.316s
-user	0m13.512s
-sys	0m4.210s
-+ frawk -bllvm -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.230s
-user	0m14.066s
-sys	0m3.820s
-+ frawk -bcranelift -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m8.432s
-user	0m8.505s
-sys	0m2.052s
-+ frawk -bcranelift -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m7.977s
-user	0m8.303s
-sys	0m2.450s
-+ frawk -bcranelift -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.737s
-user	0m14.716s
-sys	0m4.506s
-+ frawk -bcranelift -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.135s
-user	0m13.540s
-sys	0m3.859s
-+ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
-
-real	0m3.488s
-user	0m2.692s
-sys	0m0.796s
-+ set +x
-+ mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m10.428s
+real	0m10.612s
 user	0m9.280s
-sys	0m1.148s
+sys	0m1.314s
 + mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m9.932s
-user	0m8.667s
-sys	0m1.264s
+real	0m10.677s
+user	0m9.354s
+sys	0m1.313s
 + gawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m42.775s
-user	0m41.699s
-sys	0m1.076s
+real	0m16.795s
+user	0m15.860s
+sys	0m0.929s
 + gawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m42.093s
-user	0m40.889s
-sys	0m1.204s
+real	0m16.529s
+user	0m15.616s
+sys	0m0.910s
 + frawk -bllvm -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m8.112s
-user	0m8.581s
-sys	0m2.372s
+real	0m7.521s
+user	0m9.216s
+sys	0m1.278s
 + frawk -bllvm -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m8.026s
-user	0m8.346s
-sys	0m2.460s
+real	0m7.287s
+user	0m8.961s
+sys	0m1.266s
 + frawk -bllvm -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m4.707s
-user	0m14.438s
-sys	0m4.553s
+real	0m2.173s
+user	0m9.298s
+sys	0m0.965s
 + frawk -bllvm -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m4.740s
-user	0m14.390s
-sys	0m4.547s
+real	0m2.188s
+user	0m9.374s
+sys	0m0.957s
 + frawk -bcranelift -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m8.194s
-user	0m8.490s
-sys	0m2.502s
+real	0m7.518s
+user	0m9.206s
+sys	0m1.264s
 + frawk -bcranelift -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m8.155s
-user	0m8.421s
-sys	0m2.531s
+real	0m7.354s
+user	0m9.038s
+sys	0m1.283s
 + frawk -bcranelift -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m5.030s
-user	0m14.892s
-sys	0m4.908s
+real	0m2.170s
+user	0m9.359s
+sys	0m0.963s
 + frawk -bcranelift -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m4.264s
-user	0m13.683s
-sys	0m4.186s
+real	0m2.182s
+user	0m9.422s
+sys	0m0.947s
 + ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
 
-real	0m3.925s
-user	0m2.845s
-sys	0m1.081s
+real	0m2.332s
+user	0m1.895s
+sys	0m0.425s
 + set +x
 + mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m10.195s
-user	0m8.827s
-sys	0m1.368s
+real	0m10.484s
+user	0m9.413s
+sys	0m1.068s
 + mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m10.178s
-user	0m8.801s
-sys	0m1.376s
+real	0m10.291s
+user	0m9.231s
+sys	0m1.058s
 + gawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m42.030s
-user	0m40.769s
-sys	0m1.260s
+real	0m16.472s
+user	0m15.566s
+sys	0m0.902s
 + gawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m43.251s
-user	0m41.950s
-sys	0m1.300s
+real	0m16.457s
+user	0m15.559s
+sys	0m0.895s
 + frawk -bllvm -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m8.267s
-user	0m8.602s
-sys	0m2.475s
+real	0m7.773s
+user	0m9.432s
+sys	0m1.302s
 + frawk -bllvm -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m8.150s
-user	0m8.606s
-sys	0m2.345s
+real	0m7.328s
+user	0m9.011s
+sys	0m1.293s
 + frawk -bllvm -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m4.800s
-user	0m14.596s
-sys	0m4.536s
+real	0m2.178s
+user	0m9.330s
+sys	0m0.966s
 + frawk -bllvm -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m4.123s
-user	0m13.773s
-sys	0m3.633s
+real	0m2.195s
+user	0m9.412s
+sys	0m0.960s
 + frawk -bcranelift -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m8.120s
-user	0m8.649s
-sys	0m2.252s
+real	0m7.546s
+user	0m9.231s
+sys	0m1.294s
 + frawk -bcranelift -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m7.948s
-user	0m8.246s
-sys	0m2.424s
+real	0m7.338s
+user	0m9.011s
+sys	0m1.276s
 + frawk -bcranelift -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m4.806s
-user	0m14.572s
-sys	0m4.618s
+real	0m2.158s
+user	0m9.320s
+sys	0m0.949s
 + frawk -bcranelift -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m4.235s
-user	0m13.876s
-sys	0m3.822s
+real	0m2.307s
+user	0m9.953s
+sys	0m0.972s
 + ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
 
-real	0m3.554s
-user	0m2.698s
-sys	0m0.856s
+real	0m2.361s
+user	0m1.927s
+sys	0m0.431s
++ set +x
++ mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m10.321s
+user	0m9.257s
+sys	0m1.062s
++ mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m10.296s
+user	0m9.245s
+sys	0m1.049s
++ gawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m16.488s
+user	0m15.560s
+sys	0m0.924s
++ gawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m16.442s
+user	0m15.558s
+sys	0m0.881s
++ frawk -bllvm -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m7.571s
+user	0m9.220s
+sys	0m1.322s
++ frawk -bllvm -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m7.313s
+user	0m8.972s
+sys	0m1.299s
++ frawk -bllvm -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m2.182s
+user	0m9.334s
+sys	0m0.965s
++ frawk -bllvm -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m2.194s
+user	0m9.418s
+sys	0m0.961s
++ frawk -bcranelift -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m7.606s
+user	0m9.285s
+sys	0m1.293s
++ frawk -bcranelift -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m7.392s
+user	0m9.087s
+sys	0m1.291s
++ frawk -bcranelift -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m2.229s
+user	0m9.597s
+sys	0m0.989s
++ frawk -bcranelift -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m2.186s
+user	0m9.429s
+sys	0m0.968s
++ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
+
+real	0m2.332s
+user	0m1.901s
+sys	0m0.430s
++ set +x
++ mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m10.303s
+user	0m9.242s
+sys	0m1.058s
++ mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m10.239s
+user	0m9.189s
+sys	0m1.048s
++ gawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m16.399s
+user	0m15.497s
+sys	0m0.897s
++ gawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m16.488s
+user	0m15.580s
+sys	0m0.904s
++ frawk -bllvm -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m7.541s
+user	0m9.250s
+sys	0m1.311s
++ frawk -bllvm -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m7.323s
+user	0m9.021s
+sys	0m1.273s
++ frawk -bllvm -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m2.188s
+user	0m9.375s
+sys	0m0.958s
++ frawk -bllvm -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m2.079s
+user	0m8.916s
+sys	0m0.934s
++ frawk -bcranelift -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m7.543s
+user	0m9.234s
+sys	0m1.277s
++ frawk -bcranelift -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m7.298s
+user	0m8.993s
+sys	0m1.252s
++ frawk -bcranelift -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m2.196s
+user	0m9.471s
+sys	0m0.963s
++ frawk -bcranelift -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m2.176s
+user	0m9.389s
+sys	0m0.969s
++ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
+
+real	0m2.317s
+user	0m1.888s
+sys	0m0.427s
++ set +x
++ mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m10.390s
+user	0m9.322s
+sys	0m1.065s
++ mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m10.418s
+user	0m9.350s
+sys	0m1.066s
++ gawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m16.369s
+user	0m15.459s
+sys	0m0.906s
++ gawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m16.564s
+user	0m15.653s
+sys	0m0.908s
++ frawk -bllvm -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m7.488s
+user	0m9.141s
+sys	0m1.277s
++ frawk -bllvm -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m7.292s
+user	0m8.975s
+sys	0m1.273s
++ frawk -bllvm -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m2.173s
+user	0m9.331s
+sys	0m0.944s
++ frawk -bllvm -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m2.217s
+user	0m9.499s
+sys	0m0.961s
++ frawk -bcranelift -icsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m7.582s
+user	0m9.267s
+sys	0m1.300s
++ frawk -bcranelift -itsv --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m7.364s
+user	0m9.043s
+sys	0m1.282s
++ frawk -bcranelift -icsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m2.183s
+user	0m9.430s
+sys	0m0.960s
++ frawk -bcranelift -itsv -pr -j3 --out-file=/dev/null '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m2.191s
+user	0m9.435s
+sys	0m0.970s
++ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
+
+real	0m2.311s
+user	0m1.883s
+sys	0m0.426s
 + set +x

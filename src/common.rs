@@ -127,7 +127,6 @@ pub enum Either<L, R> {
 }
 
 // borrowed from weld project.
-#[cfg(feature = "llvm_backend")]
 macro_rules! c_str {
     ($s:expr) => {
         concat!($s, "\0").as_ptr() as *const crate::libc::c_char
@@ -344,6 +343,13 @@ impl std::convert::TryFrom<i64> for FileSpec {
 impl Default for FileSpec {
     fn default() -> FileSpec {
         FileSpec::Append
+    }
+}
+
+pub(crate) fn traverse<T>(o: Option<Result<T>>) -> Result<Option<T>> {
+    match o {
+        Some(e) => Ok(Some(e?)),
+        None => Ok(None),
     }
 }
 

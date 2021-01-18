@@ -3,12 +3,7 @@
 //! There is quite a lot of code here at this point, but most of it is "glue". Where possible we
 //! try and hew closely to the steps in the `interp` module, with most functionality in the
 //! underlying runtime library.
-use super::attr::{self, FunctionAttr};
-use crate::builtins::Variable;
-use crate::common::{Either, FileSpec};
-use crate::compile::Ty;
-use crate::libc::c_void;
-use crate::pushdown::FieldSet;
+use super::{Backend, FunctionAttr, Sig};
 use crate::runtime::{
     self,
     printf::{printf, FormatArg},
@@ -19,17 +14,23 @@ use crate::runtime::{
     },
     ChainedReader, FileRead, Float, Int, IntMap, Line, LineReader, RegexCache, Str, StrMap,
 };
-
-use hashbrown::HashMap;
-use llvm_sys::{
-    self,
-    prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
-    support::LLVMAddSymbol,
+use crate::{
+    builtins::Variable,
+    common::{FileSpec, Result},
+    compile::Ty,
+    pushdown::FieldSet,
 };
+
+use libc::c_void;
 use paste::paste;
 use rand::{self, Rng};
 use regex::bytes::Regex;
 use smallvec;
+
+use std::convert::TryFrom;
+use std::io;
+use std::mem;
+use std::slice;
 
 type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 
@@ -41,246 +42,59 @@ type SmallVec<T> = smallvec::SmallVec<[T; 4]>;
 #[repr(C)]
 pub struct U128(u64, u64);
 
-use std::cell::RefCell;
-use std::convert::TryFrom;
-use std::io;
-use std::mem;
-use std::slice;
-
-macro_rules! fail {
-    ($rt:expr, $($es:expr),+) => {{
-        #[cfg(test)]
-        {
-            panic!("failure in runtime {}. Halting execution", format!($($es),*))
-        }
-        #[cfg(not(test))]
-        {
-            eprintln_ignore!("failure in runtime {}. Halting execution", format!($($es),*));
-            exit!($rt, 1, format!($($es),*))
-        }
-    }}
-}
-
-macro_rules! try_abort {
-    ($rt:expr, $e:expr, $msg:expr) => {
-        match $e {
-            Ok(res) => res,
-            Err(e) => fail!($rt, concat!($msg, " {}"), e),
-        }
-    };
-    ($rt:expr, $e:expr) => {
-        try_abort!($rt, $e, "")
-    };
-}
-
-macro_rules! exit {
-    ($runtime:expr) => {
-        exit!($runtime, 0, "")
-    };
-    ($runtime:expr, $code:expr, $msg:expr) => {{
-        let rt = $runtime as *const _ as *mut Runtime;
-        let concurrent = (*rt).concurrent;
-        if concurrent {
-            // Use panic to allow 'graceful' shutdown of other worker threads.
-            panic!($msg)
-        } else {
-            std::ptr::drop_in_place(rt);
-            std::process::exit($code)
-        }
-    }};
-}
-
-macro_rules! with_input {
-    ($inp:expr, |$p:pat| $body:expr) => {
-        match $inp {
-            $crate::llvm::intrinsics::InputData::V1($p) => $body,
-            $crate::llvm::intrinsics::InputData::V2($p) => $body,
-            $crate::llvm::intrinsics::InputData::V3($p) => $body,
-            $crate::llvm::intrinsics::InputData::V4($p) => $body,
-        }
-    };
-}
-
-pub(crate) type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
-pub(crate) enum InputData {
-    V1(InputTuple<CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>),
-    V2(InputTuple<ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>>>),
-    V3(InputTuple<ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>),
-    V4(InputTuple<ChainedReader<RegexSplitter<Box<dyn io::Read + Send>>>>),
-}
-
-pub(crate) trait IntoRuntime {
-    fn into_runtime<'a>(
-        self,
-        ff: impl runtime::writers::FileFactory,
-        used_fields: &FieldSet,
-        named_columns: Option<Vec<&[u8]>>,
-    ) -> Runtime<'a>;
-}
-
-macro_rules! impl_into_runtime {
-    ($ty:ty, $var:tt) => {
-        impl IntoRuntime for $ty {
-            fn into_runtime<'a>(
-                self,
-                ff: impl runtime::writers::FileFactory,
-                used_fields: &FieldSet,
-                named_columns: Option<Vec<&[u8]>>,
-            ) -> Runtime<'a> {
-                Runtime {
-                    concurrent: false,
-                    input_data: InputData::$var((
-                        Default::default(),
-                        FileRead::new(self, used_fields.clone(), named_columns),
-                    )),
-                    core: crate::interp::Core::new(ff),
-                }
-            }
-        }
-
-        impl From<FileRead<$ty>> for InputData {
-            fn from(v: FileRead<$ty>) -> InputData {
-                InputData::$var((Default::default(), v))
-            }
-        }
-    };
-}
-
-impl_into_runtime!(CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V1);
-impl_into_runtime!(
-    ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>>,
-    V2
-);
-impl_into_runtime!(ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V3);
-impl_into_runtime!(ChainedReader<RegexSplitter<Box<dyn io::Read + Send>>>, V4);
-
-pub(crate) struct Runtime<'a> {
-    pub(crate) core: crate::interp::Core<'a>,
-    pub(crate) input_data: InputData,
-    #[allow(unused)]
-    pub(crate) concurrent: bool,
-}
-
-impl<'a> Runtime<'a> {
-    fn reset_file_vars(&mut self) {
-        self.core.vars.fnr = 0;
-        self.core.vars.filename = with_input!(&mut self.input_data, |(_, read_files)| {
-            read_files.stdin_filename().upcast()
-        });
-    }
-}
-
-struct Intrinsic {
-    name: *const libc::c_char,
-    data: RefCell<Either<LLVMTypeRef, LLVMValueRef>>,
-    attrs: smallvec::SmallVec<[FunctionAttr; 1]>,
-    _func: *mut c_void,
-}
-
-// A map of intrinsics that lazily declares them when they are used in codegen.
-pub(crate) struct IntrinsicMap {
-    module: LLVMModuleRef,
-    ctx: LLVMContextRef,
-    map: HashMap<&'static str, Intrinsic>,
-}
-
-impl IntrinsicMap {
-    fn new(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
-        IntrinsicMap {
-            ctx,
-            module,
-            map: Default::default(),
-        }
-    }
-    fn register(
-        &mut self,
-        name: &'static str,
-        cname: *const libc::c_char,
-        ty: LLVMTypeRef,
-        attrs: &[FunctionAttr],
-        _func: *mut c_void,
-    ) {
-        assert!(self
-            .map
-            .insert(
-                name,
-                Intrinsic {
-                    name: cname,
-                    data: RefCell::new(Either::Left(ty)),
-                    attrs: attrs.iter().cloned().collect(),
-                    _func,
-                }
-            )
-            .is_none())
-    }
-
-    pub(crate) unsafe fn get(&self, name: &'static str) -> LLVMValueRef {
-        use llvm_sys::core::*;
-        let intr = &self.map[name];
-        let mut val = intr.data.borrow_mut();
-
-        let ty = match &mut *val {
-            Either::Left(ty) => *ty,
-            Either::Right(v) => return *v,
-        };
-        LLVMAddSymbol(intr.name, intr._func);
-        let func = LLVMAddFunction(self.module, intr.name, ty);
-        LLVMSetLinkage(func, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
-        if intr.attrs.len() > 0 {
-            attr::add_function_attrs(self.ctx, func, &intr.attrs[..]);
-        }
-        *val = Either::Right(func);
-        func
-    }
-}
-
 /// Lazily registers all runtime functions with the given LLVM module and context.
-pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> IntrinsicMap {
-    use llvm_sys::core::*;
-    let int_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Int>() * 8) as libc::c_uint);
-    let float_ty = LLVMDoubleTypeInContext(ctx);
-    let void_ty = LLVMVoidTypeInContext(ctx);
-    let str_ty = LLVMIntTypeInContext(ctx, (mem::size_of::<Str>() * 8) as libc::c_uint);
-    let rt_ty = LLVMPointerType(void_ty, 0);
-    let fmt_args_ty = LLVMPointerType(int_ty, 0);
-    let fmt_tys_ty = LLVMPointerType(LLVMIntTypeInContext(ctx, 32), 0);
-    let map_ty = rt_ty;
-    let str_ref_ty = LLVMPointerType(str_ty, 0);
-    let pa_args_ty = LLVMPointerType(str_ref_ty, 0);
-    let iter_int_ty = LLVMPointerType(int_ty, 0);
-    let iter_str_ty = LLVMPointerType(str_ty, 0);
-    let mut table = IntrinsicMap::new(module, ctx);
+pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
+    let int_ty = cg.get_ty(Ty::Int);
+    let float_ty = cg.get_ty(Ty::Float);
+    let str_ty = cg.get_ty(Ty::Str);
+    let rt_ty = cg.void_ptr_ty();
+    let fmt_args_ty = cg.ptr_to(int_ty.clone());
+    let fmt_tys_ty = cg.ptr_to(cg.u32_ty());
+    // we assume that maps are all represented the same
+    let map_ty = cg.get_ty(Ty::MapIntInt);
+    let str_ref_ty = cg.ptr_to(str_ty.clone());
+    let pa_args_ty = cg.ptr_to(str_ref_ty.clone());
+    let iter_int_ty = cg.ptr_to(int_ty.clone());
+    let iter_str_ty = str_ref_ty.clone();
     macro_rules! register_inner {
-        ($name:ident, [ $($param:expr),* ], [$($attr:tt),*], $ret:expr) => { {
-            // Try and make sure the linker doesn't strip the function out.
-            let mut params = [$($param),*];
-            let ty = LLVMFunctionType($ret, params.as_mut_ptr(), params.len() as u32, 0);
-            table.register(
+        ($name:ident, [ $($param:expr),* ], [$($attr:tt),*], $ret:expr) => {
+            cg.register_external_fn(
                 stringify!($name),
-                c_str!(stringify!($name)),
-                ty,
-                &[$(FunctionAttr::$attr),*],
-                $name as *mut c_void,
-            );
-        }};
+                c_str!(stringify!($name)) as *const _,
+                $name as *const u8,
+                Sig {
+                    attrs: &[$(FunctionAttr::$attr),*],
+                    args: &mut [$($param.clone()),*],
+                    ret: $ret,
+                }
+            )?;
+        };
+    }
+    macro_rules! wrap_ret {
+        ([]) => {
+            None
+        };
+        ($ret:tt) => {
+            Some($ret.clone())
+        };
     }
     macro_rules! register {
         ($name:ident ($($param:expr),*); $($rest:tt)*) => {
-            register!($name($($param),*) -> void_ty; $($rest)*);
+            register!($name($($param),*) -> []; $($rest)*);
         };
-        ($name:ident ($($param:expr),*) -> $ret:expr; $($rest:tt)*) => {
+        ($name:ident ($($param:expr),*) -> $ret:tt; $($rest:tt)*) => {
             register!([] $name($($param),*) -> $ret; $($rest)*);
         };
-        ([$($attr:tt),*] $name:ident ($($param:expr),*) -> $ret:expr; $($rest:tt)*) => {
-            register_inner!($name, [ $($param),* ], [$($attr),*], $ret);
+        ([$($attr:tt),*] $name:ident ($($param:expr),*) -> $ret:tt; $($rest:tt)*) => {
+            register_inner!($name, [ $($param),* ], [$($attr),*], wrap_ret!($ret));
             register!($($rest)*);
         };
-
         () => {};
     }
 
     register! {
         ref_str(str_ref_ty);
+        drop_str(str_ref_ty);
         drop_str_slow(str_ref_ty, int_ty);
         ref_map(map_ty);
         [ReadOnly] int_to_str(int_ty) -> str_ty;
@@ -327,7 +141,21 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         update_used_fields(rt_ty);
         set_fi_entry(rt_ty, int_ty, int_ty);
 
+        // TODO: we are no longer relying on avoiding collisions with exisint library symbols
+        // (everything in this module was one no_mangle); we should look into removing the _frawk
+        // prefix.
+
+        // Floating-point functions. Note that aside from the last two operations, the LLVM backend
+        // uses intrinsics for these, whereas we use standard functions here instead.
+        [ReadOnly, ArgmemOnly] _frawk_fprem(float_ty, float_ty) -> float_ty;
+        [ReadOnly, ArgmemOnly] _frawk_pow(float_ty, float_ty) -> float_ty;
         [ReadOnly, ArgmemOnly] _frawk_atan(float_ty) -> float_ty;
+        [ReadOnly, ArgmemOnly] _frawk_cos(float_ty) -> float_ty;
+        [ReadOnly, ArgmemOnly] _frawk_sin(float_ty) -> float_ty;
+        [ReadOnly, ArgmemOnly] _frawk_log(float_ty) -> float_ty;
+        [ReadOnly, ArgmemOnly] _frawk_log2(float_ty) -> float_ty;
+        [ReadOnly, ArgmemOnly] _frawk_log10(float_ty) -> float_ty;
+        [ReadOnly, ArgmemOnly] _frawk_exp(float_ty) -> float_ty;
         [ReadOnly, ArgmemOnly] _frawk_atan2(float_ty, float_ty) -> float_ty;
 
         load_var_str(rt_ty, int_ty) -> str_ty;
@@ -422,30 +250,157 @@ pub(crate) unsafe fn register(module: LLVMModuleRef, ctx: LLVMContextRef) -> Int
         store_slot_strfloat(rt_ty, int_ty, map_ty);
         store_slot_strstr(rt_ty, int_ty, map_ty);
     };
-    table
+    Ok(())
 }
 
-unsafe extern "C" fn run_system(cmd: *mut U128) -> Int {
+macro_rules! fail {
+    ($rt:expr, $($es:expr),+) => {{
+        #[cfg(test)]
+        {
+            panic!("failure in runtime {}. Halting execution", format!($($es),*))
+        }
+        #[cfg(not(test))]
+        {
+            eprintln_ignore!("failure in runtime {}. Halting execution", format!($($es),*));
+            exit!($rt, 1, format!($($es),*))
+        }
+    }}
+}
+
+macro_rules! try_abort {
+    ($rt:expr, $e:expr, $msg:expr) => {
+        match $e {
+            Ok(res) => res,
+            Err(e) => fail!($rt, concat!($msg, " {}"), e),
+        }
+    };
+    ($rt:expr, $e:expr) => {
+        try_abort!($rt, $e, "")
+    };
+}
+
+macro_rules! exit {
+    ($runtime:expr) => {
+        exit!($runtime, 0, "")
+    };
+    ($runtime:expr, $code:expr, $msg:expr) => {{
+        let rt = $runtime as *const _ as *mut Runtime;
+        let concurrent = (*rt).concurrent;
+        if concurrent {
+            // Use panic to allow 'graceful' shutdown of other worker threads.
+            panic!($msg)
+        } else {
+            std::ptr::drop_in_place(rt);
+            std::process::exit($code)
+        }
+    }};
+}
+
+macro_rules! with_input {
+    ($inp:expr, |$p:pat| $body:expr) => {
+        match $inp {
+            $crate::codegen::intrinsics::InputData::V1($p) => $body,
+            $crate::codegen::intrinsics::InputData::V2($p) => $body,
+            $crate::codegen::intrinsics::InputData::V3($p) => $body,
+            $crate::codegen::intrinsics::InputData::V4($p) => $body,
+        }
+    };
+}
+
+pub(crate) type InputTuple<LR> = (<LR as LineReader>::Line, FileRead<LR>);
+pub(crate) enum InputData {
+    V1(InputTuple<CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>),
+    V2(InputTuple<ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>>>),
+    V3(InputTuple<ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>>),
+    V4(InputTuple<ChainedReader<RegexSplitter<Box<dyn io::Read + Send>>>>),
+}
+
+pub(crate) trait IntoRuntime {
+    fn into_runtime<'a>(
+        self,
+        ff: impl runtime::writers::FileFactory,
+        used_fields: &FieldSet,
+        named_columns: Option<Vec<&[u8]>>,
+    ) -> Runtime<'a>;
+}
+
+macro_rules! impl_into_runtime {
+    ($ty:ty, $var:tt) => {
+        impl IntoRuntime for $ty {
+            fn into_runtime<'a>(
+                self,
+                ff: impl runtime::writers::FileFactory,
+                used_fields: &FieldSet,
+                named_columns: Option<Vec<&[u8]>>,
+            ) -> Runtime<'a> {
+                Runtime {
+                    concurrent: false,
+                    input_data: InputData::$var((
+                        Default::default(),
+                        FileRead::new(self, used_fields.clone(), named_columns),
+                    )),
+                    core: crate::interp::Core::new(ff),
+                }
+            }
+        }
+
+        impl From<FileRead<$ty>> for InputData {
+            fn from(v: FileRead<$ty>) -> InputData {
+                InputData::$var((Default::default(), v))
+            }
+        }
+    };
+}
+
+impl_into_runtime!(CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V1);
+impl_into_runtime!(
+    ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>>,
+    V2
+);
+impl_into_runtime!(ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>>, V3);
+impl_into_runtime!(ChainedReader<RegexSplitter<Box<dyn io::Read + Send>>>, V4);
+
+pub(crate) struct Runtime<'a> {
+    pub(crate) core: crate::interp::Core<'a>,
+    pub(crate) input_data: InputData,
+    #[allow(unused)]
+    pub(crate) concurrent: bool,
+}
+
+impl<'a> Runtime<'a> {
+    fn reset_file_vars(&mut self) {
+        self.core.vars.fnr = 0;
+        self.core.vars.filename = with_input!(&mut self.input_data, |(_, read_files)| {
+            read_files.stdin_filename().upcast()
+        });
+    }
+}
+
+pub(crate) unsafe extern "C" fn run_system(cmd: *mut U128) -> Int {
     let s: &Str = &*(cmd as *mut Str);
     s.with_bytes(runtime::run_command)
 }
 
-unsafe extern "C" fn rand_float(runtime: *mut c_void) -> f64 {
+pub(crate) unsafe extern "C" fn rand_float(runtime: *mut c_void) -> f64 {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.rng.gen_range(0.0, 1.0)
 }
 
-unsafe extern "C" fn seed_rng(runtime: *mut c_void, seed: Int) -> Int {
+pub(crate) unsafe extern "C" fn seed_rng(runtime: *mut c_void, seed: Int) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.reseed(seed as u64) as Int
 }
 
-unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
+pub(crate) unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.reseed_random() as Int
 }
 
-unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void, is_file: Int) -> Int {
+pub(crate) unsafe extern "C" fn read_err(
+    runtime: *mut c_void,
+    file: *mut c_void,
+    is_file: Int,
+) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         runtime,
@@ -462,13 +417,13 @@ unsafe extern "C" fn read_err(runtime: *mut c_void, file: *mut c_void, is_file: 
     res
 }
 
-unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
+pub(crate) unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     with_input!(&mut runtime.input_data, |(_, read_files)| read_files
         .read_err_stdin())
 }
 
-unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
+pub(crate) unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let changed = try_abort!(
         runtime,
@@ -485,7 +440,7 @@ unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn next_file(runtime: *mut c_void) {
+pub(crate) unsafe extern "C" fn next_file(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     try_abort!(
         runtime,
@@ -495,7 +450,7 @@ unsafe extern "C" fn next_file(runtime: *mut c_void) {
     );
 }
 
-unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
+pub(crate) unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let (changed, res) = try_abort!(
         runtime,
@@ -513,7 +468,11 @@ unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     mem::transmute::<Str, U128>(res)
 }
 
-unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_file: Int) -> U128 {
+pub(crate) unsafe extern "C" fn next_line(
+    runtime: *mut c_void,
+    file: *mut c_void,
+    is_file: Int,
+) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let file = &*(file as *mut Str);
     let res = with_input!(&mut runtime.input_data, |(_, read_files)| {
@@ -528,7 +487,7 @@ unsafe extern "C" fn next_line(runtime: *mut c_void, file: *mut c_void, is_file:
     }
 }
 
-unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
+pub(crate) unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let fi = &runtime.core.vars.fi;
     with_input!(&mut runtime.input_data, |(_, read_files)| {
@@ -536,14 +495,14 @@ unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
     });
 }
 
-unsafe extern "C" fn set_fi_entry(runtime: *mut c_void, key: Int, val: Int) {
+pub(crate) unsafe extern "C" fn set_fi_entry(runtime: *mut c_void, key: Int, val: Int) {
     let rt = &mut *(runtime as *mut Runtime);
     let fi = &rt.core.vars.fi;
     let k = mem::transmute::<U128, Str>(get_col(runtime, key));
     fi.insert(k, val);
 }
 
-unsafe extern "C" fn split_str(
+pub(crate) unsafe extern "C" fn split_str(
     runtime: *mut c_void,
     to_split: *mut c_void,
     into_arr: *mut c_void,
@@ -565,7 +524,7 @@ unsafe extern "C" fn split_str(
     res
 }
 
-unsafe extern "C" fn split_int(
+pub(crate) unsafe extern "C" fn split_int(
     runtime: *mut c_void,
     to_split: *mut c_void,
     into_arr: *mut c_void,
@@ -587,7 +546,7 @@ unsafe extern "C" fn split_int(
     res
 }
 
-unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
+pub(crate) unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let col_str = with_input!(&mut runtime.input_data, |(line, _)| {
         line.get_col(
@@ -604,7 +563,7 @@ unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
     mem::transmute::<Str, U128>(res)
 }
 
-unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
+pub(crate) unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
     let sep: Str<'static> = ",".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
@@ -622,7 +581,7 @@ unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U12
     mem::transmute::<Str, U128>(res)
 }
 
-unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
+pub(crate) unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
     let sep: Str<'static> = "\t".into();
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
@@ -640,7 +599,12 @@ unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> U12
     mem::transmute::<Str, U128>(res)
 }
 
-unsafe extern "C" fn join_cols(runtime: *mut c_void, start: Int, end: Int, sep: *mut U128) -> U128 {
+pub(crate) unsafe extern "C" fn join_cols(
+    runtime: *mut c_void,
+    start: Int,
+    end: Int,
+    sep: *mut U128,
+) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let res = try_abort!(
         runtime,
@@ -657,7 +621,7 @@ unsafe extern "C" fn join_cols(runtime: *mut c_void, start: Int, end: Int, sep: 
     mem::transmute::<Str, U128>(res)
 }
 
-unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
+pub(crate) unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let s = &*(s as *mut Str);
     if let Err(e) = with_input!(&mut runtime.input_data, |(line, _)| line.set_col(
@@ -670,21 +634,25 @@ unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
+pub(crate) unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
     let s = &*(s as *mut Str);
     let res = s.len();
     mem::forget(s);
     res
 }
 
-unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128 {
+pub(crate) unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128 {
     let s1 = &*(s1 as *mut Str);
     let s2 = &*(s2 as *mut Str);
     let res = Str::concat(s1.clone(), s2.clone());
     mem::transmute::<Str, U128>(res)
 }
 
-unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *mut c_void) -> Int {
+pub(crate) unsafe extern "C" fn match_pat(
+    runtime: *mut c_void,
+    s: *mut c_void,
+    pat: *mut c_void,
+) -> Int {
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
@@ -697,13 +665,17 @@ unsafe extern "C" fn match_pat(runtime: *mut c_void, s: *mut c_void, pat: *mut c
     res as Int
 }
 
-unsafe extern "C" fn match_const_pat(s: *mut c_void, pat: *mut c_void) -> Int {
+pub(crate) unsafe extern "C" fn match_const_pat(s: *mut c_void, pat: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let pat = &*(pat as *const Regex);
     RegexCache::regex_const_match(pat, s) as Int
 }
 
-unsafe extern "C" fn match_pat_loc(runtime: *mut c_void, s: *mut c_void, pat: *mut c_void) -> Int {
+pub(crate) unsafe extern "C" fn match_pat_loc(
+    runtime: *mut c_void,
+    s: *mut c_void,
+    pat: *mut c_void,
+) -> Int {
     let runtime = runtime as *mut Runtime;
     let s = &*(s as *mut Str);
     let pat = &*(pat as *mut Str);
@@ -716,7 +688,7 @@ unsafe extern "C" fn match_pat_loc(runtime: *mut c_void, s: *mut c_void, pat: *m
     res as Int
 }
 
-unsafe extern "C" fn match_const_pat_loc(
+pub(crate) unsafe extern "C" fn match_const_pat_loc(
     runtime: *mut c_void,
     s: *mut c_void,
     pat: *mut c_void,
@@ -731,13 +703,13 @@ unsafe extern "C" fn match_const_pat_loc(
     )
 }
 
-unsafe extern "C" fn substr_index(s: *mut U128, t: *mut U128) -> Int {
+pub(crate) unsafe extern "C" fn substr_index(s: *mut U128, t: *mut U128) -> Int {
     let s = &*(s as *mut Str);
     let t = &*(t as *mut Str);
     runtime::string_search::index_substr(/*needle*/ t, /*haystack*/ s)
 }
 
-unsafe extern "C" fn subst_first(
+pub(crate) unsafe extern "C" fn subst_first(
     runtime: *mut c_void,
     pat: *mut U128,
     s: *mut U128,
@@ -758,7 +730,7 @@ unsafe extern "C" fn subst_first(
     new as Int
 }
 
-unsafe extern "C" fn subst_all(
+pub(crate) unsafe extern "C" fn subst_all(
     runtime: *mut c_void,
     pat: *mut U128,
     s: *mut U128,
@@ -779,15 +751,15 @@ unsafe extern "C" fn subst_all(
     nsubs
 }
 
-unsafe extern "C" fn escape_csv(s: *mut U128) -> U128 {
+pub(crate) unsafe extern "C" fn escape_csv(s: *mut U128) -> U128 {
     mem::transmute::<Str, U128>(runtime::escape_csv(&*(s as *mut Str)))
 }
 
-unsafe extern "C" fn escape_tsv(s: *mut U128) -> U128 {
+pub(crate) unsafe extern "C" fn escape_tsv(s: *mut U128) -> U128 {
     mem::transmute::<Str, U128>(runtime::escape_tsv(&*(s as *mut Str)))
 }
 
-unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 {
+pub(crate) unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 {
     use std::cmp::{max, min};
     let base = &*(base as *mut Str);
     let len = base.len();
@@ -796,11 +768,16 @@ unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 {
     mem::transmute::<Str, U128>(base.slice(l as usize, r))
 }
 
-unsafe extern "C" fn ref_str(s: *mut c_void) {
+pub(crate) unsafe extern "C" fn ref_str(s: *mut c_void) {
     mem::forget((&*(s as *mut Str)).clone())
 }
 
-unsafe extern "C" fn drop_str_slow(s: *mut U128, tag: u64) {
+// This is a "slow path" drop, used by cranelift only for the time being.
+pub(crate) unsafe extern "C" fn drop_str(s: *mut U128) {
+    std::ptr::drop_in_place(s as *mut Str)
+}
+
+pub(crate) unsafe extern "C" fn drop_str_slow(s: *mut U128, tag: u64) {
     (&*(s as *mut Str)).drop_with_tag(tag)
 }
 
@@ -815,37 +792,37 @@ unsafe fn drop_map_generic<K, V>(m: *mut c_void) {
 // XXX: relying on this doing the same thing regardless of type. We probably want a custom Rc to
 // guarantee this.
 
-unsafe extern "C" fn ref_map(m: *mut c_void) {
+pub(crate) unsafe extern "C" fn ref_map(m: *mut c_void) {
     ref_map_generic::<Int, Str>(m)
 }
 
-unsafe extern "C" fn int_to_str(i: Int) -> U128 {
+pub(crate) unsafe extern "C" fn int_to_str(i: Int) -> U128 {
     mem::transmute::<Str, U128>(runtime::convert::<Int, Str>(i))
 }
 
-unsafe extern "C" fn float_to_str(f: Float) -> U128 {
+pub(crate) unsafe extern "C" fn float_to_str(f: Float) -> U128 {
     mem::transmute::<Str, U128>(runtime::convert::<Float, Str>(f))
 }
 
-unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
+pub(crate) unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let res = runtime::convert::<&Str, Int>(&s);
     res
 }
 
-unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
+pub(crate) unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let res = s.with_bytes(runtime::hextoi);
     res
 }
 
-unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
+pub(crate) unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
     let s = &*(s as *mut Str);
     let res = runtime::convert::<&Str, Float>(&s);
     res
 }
 
-unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
+pub(crate) unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_str(var));
@@ -855,7 +832,7 @@ unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
     }
 }
 
-unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) {
+pub(crate) unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let s = (&*(s as *mut Str)).clone();
@@ -865,7 +842,7 @@ unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) 
     }
 }
 
-unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
+pub(crate) unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         if let Variable::NF = var {
@@ -882,7 +859,7 @@ unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     }
 }
 
-unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
+pub(crate) unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         try_abort!(runtime, runtime.core.vars.store_int(var, i));
@@ -891,7 +868,7 @@ unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
     }
 }
 
-unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
+pub(crate) unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_intmap(var));
@@ -901,7 +878,7 @@ unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void
     }
 }
 
-unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_void) {
+pub(crate) unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, IntMap<Str>>(map);
@@ -912,7 +889,7 @@ unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_v
     }
 }
 
-unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void {
+pub(crate) unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let runtime = &*(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_strmap(var));
@@ -922,7 +899,7 @@ unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void
     }
 }
 
-unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut c_void) {
+pub(crate) unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, StrMap<Int>>(map);
@@ -936,7 +913,7 @@ unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut c_v
 macro_rules! str_compare_inner {
     ($name:ident, $op:tt) => {
 
-        unsafe extern "C" fn $name(s1: *mut c_void, s2: *mut c_void) -> Int {
+        pub(crate) unsafe extern "C" fn $name(s1: *mut c_void, s2: *mut c_void) -> Int {
             let s1 = &*(s1 as *mut Str);
             let s2 = &*(s2 as *mut Str);
             let res = s1.with_bytes(|bs1| s2.with_bytes(|bs2| bs1 $op bs2)) as Int;
@@ -953,11 +930,11 @@ str_compare! {
     str_lt(<); str_gt(>); str_lte(<=); str_gte(>=); str_eq(==);
 }
 
-unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
+pub(crate) unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(iter, len)))
 }
 
-unsafe extern "C" fn drop_iter_str(iter: *mut U128, len: usize) {
+pub(crate) unsafe extern "C" fn drop_iter_str(iter: *mut U128, len: usize) {
     let p = iter as *mut Str;
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
 }
@@ -996,14 +973,14 @@ unsafe fn wrap_args<'a>(
     format_args
 }
 
-unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usize, num_args: Int) {
+pub(crate) unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usize, num_args: Int) {
     let args_wrapped: &[&Str] =
         slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
     let rt = rt as *mut Runtime;
     try_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
 }
 
-unsafe extern "C" fn print_all_file(
+pub(crate) unsafe extern "C" fn print_all_file(
     rt: *mut c_void,
     args: *mut usize,
     num_args: Int,
@@ -1027,7 +1004,7 @@ unsafe extern "C" fn print_all_file(
     )
 }
 
-unsafe extern "C" fn printf_impl_file(
+pub(crate) unsafe extern "C" fn printf_impl_file(
     rt: *mut c_void,
     spec: *mut U128,
     args: *mut usize,
@@ -1051,7 +1028,7 @@ unsafe extern "C" fn printf_impl_file(
     )
 }
 
-unsafe extern "C" fn sprintf_impl(
+pub(crate) unsafe extern "C" fn sprintf_impl(
     rt: *mut c_void,
     spec: *mut U128,
     args: *mut usize,
@@ -1069,7 +1046,7 @@ unsafe extern "C" fn sprintf_impl(
     mem::transmute::<Str, U128>(buf.into_str())
 }
 
-unsafe extern "C" fn printf_impl_stdout(
+pub(crate) unsafe extern "C" fn printf_impl_stdout(
     rt: *mut c_void,
     spec: *mut U128,
     args: *mut usize,
@@ -1087,21 +1064,51 @@ unsafe extern "C" fn printf_impl_stdout(
     }
 }
 
-unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
+pub(crate) unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
     with_input!(&mut rt.input_data, |(_, read_files)| read_files.close(file));
     try_abort!(rt, rt.core.write_files.close(file));
 }
 
-unsafe extern "C" fn _frawk_atan(f: Float) -> Float {
-    std::ptr::read_volatile(&false);
+pub(crate) unsafe extern "C" fn _frawk_cos(f: Float) -> Float {
+    f.cos()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_sin(f: Float) -> Float {
+    f.sin()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_log(f: Float) -> Float {
+    f.ln()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_log2(f: Float) -> Float {
+    f.log2()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_log10(f: Float) -> Float {
+    f.log10()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_exp(f: Float) -> Float {
+    f.exp()
+}
+
+pub(crate) unsafe extern "C" fn _frawk_atan(f: Float) -> Float {
     f.atan()
 }
 
-unsafe extern "C" fn _frawk_atan2(x: Float, y: Float) -> Float {
-    std::ptr::read_volatile(&false);
+pub(crate) unsafe extern "C" fn _frawk_atan2(x: Float, y: Float) -> Float {
     x.atan2(y)
+}
+
+pub(crate) unsafe extern "C" fn _frawk_pow(x: Float, y: Float) -> Float {
+    Float::powf(x, y)
+}
+
+pub(crate) unsafe extern "C" fn _frawk_fprem(x: Float, y: Float) -> Float {
+    x % y
 }
 
 // And now for the shenanigans for implementing map operations. There are 48 functions here; we
@@ -1189,12 +1196,13 @@ macro_rules! convert_out {
 macro_rules! map_impl {
     ($ty:ident, $k:tt, $v:tt) => {
         paste! {
-            unsafe extern "C" fn [< alloc_ $ty >]() -> *mut c_void {
+            pub(crate) unsafe extern "C" fn [< alloc_ $ty >]() -> *mut c_void {
                 let res: runtime::SharedMap<$k, $v> = Default::default();
                 mem::transmute::<runtime::SharedMap<$k, $v>, *mut c_void>(res)
             }
 
-            unsafe extern "C" fn [< iter_ $ty >](map: *mut c_void) -> iter_ty!($k) {
+            pub(crate) unsafe extern "C" fn [< iter_ $ty >](map: *mut c_void) -> iter_ty!($k) {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let iter: Vec<_> = map.to_vec();
                 mem::forget(map);
@@ -1202,14 +1210,16 @@ macro_rules! map_impl {
                 Box::into_raw(b) as _
             }
 
-            unsafe extern "C" fn [<len_ $ty>](map: *mut c_void) -> Int {
+            pub(crate) unsafe extern "C" fn [<len_ $ty>](map: *mut c_void) -> Int {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let res = map.len();
                 mem::forget(map);
                 res as Int
             }
 
-            unsafe extern "C" fn [<lookup_ $ty>](map: *mut c_void, k: in_ty!($k)) -> out_ty!($v) {
+            pub(crate) unsafe extern "C" fn [<lookup_ $ty>](map: *mut c_void, k: in_ty!($k)) -> out_ty!($v) {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 let res = map.get(key).unwrap_or_else(Default::default);
@@ -1217,7 +1227,8 @@ macro_rules! map_impl {
                 convert_out!($v, res)
             }
 
-            unsafe extern "C" fn [<contains_ $ty>](map: *mut c_void, k: in_ty!($k)) -> Int {
+            pub(crate) unsafe extern "C" fn [<contains_ $ty>](map: *mut c_void, k: in_ty!($k)) -> Int {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 let res = map.get(key).is_some() as Int;
@@ -1225,7 +1236,8 @@ macro_rules! map_impl {
                 res
             }
 
-            unsafe extern "C" fn [<insert_ $ty>](map: *mut c_void, k: in_ty!($k), v: in_ty!($v)) {
+            pub(crate) unsafe extern "C" fn [<insert_ $ty>](map: *mut c_void, k: in_ty!($k), v: in_ty!($v)) {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 let val = convert_in!($v, &v);
@@ -1233,14 +1245,16 @@ macro_rules! map_impl {
                 mem::forget(map);
             }
 
-            unsafe extern "C" fn [<delete_ $ty>](map: *mut c_void, k: in_ty!($k)) {
+            pub(crate) unsafe extern "C" fn [<delete_ $ty>](map: *mut c_void, k: in_ty!($k)) {
+                debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 map.delete(key);
                 mem::forget(map);
             }
 
-            unsafe extern "C" fn [<drop_ $ty>](map: *mut c_void) {
+            pub(crate) unsafe extern "C" fn [<drop_ $ty>](map: *mut c_void) {
+                debug_assert!(!map.is_null());
                 drop_map_generic::<$k, $v>(map)
             }
         }
@@ -1257,12 +1271,12 @@ map_impl!(strstr, Str, Str);
 macro_rules! slot_impl {
     ($name:ident, $ty:tt) => {
         paste! {
-            unsafe extern "C" fn [<load_slot_ $name>](runtime: *mut c_void, slot: Int) -> out_ty!($ty) {
+            pub(crate) unsafe extern "C" fn [<load_slot_ $name>](runtime: *mut c_void, slot: Int) -> out_ty!($ty) {
                 let runtime = &mut *(runtime as *mut Runtime);
                 convert_out!($ty, runtime.core.[<load_ $name>](slot as usize))
             }
 
-            unsafe extern "C" fn [<store_slot_ $name>](runtime: *mut c_void, slot: Int, v: in_ty!($ty)) {
+            pub(crate) unsafe extern "C" fn [<store_slot_ $name>](runtime: *mut c_void, slot: Int, v: in_ty!($ty)) {
                 let runtime = &mut *(runtime as *mut Runtime);
                 runtime
                     .core

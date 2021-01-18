@@ -63,7 +63,7 @@ use crate::runtime::{command::command_for_write, Str};
 const IO_CHAN_SIZE: usize = 16;
 
 /// The size of client-side batches.
-const BUFFER_SIZE: usize = 8 << 10;
+const BUFFER_SIZE: usize = 4 << 10;
 
 /// FileFactory abstracts over the portions of the file system used for the output of a frawk
 /// program. It includes "file objects" as well as "stdout", which both implement the io::Write
@@ -333,7 +333,12 @@ impl<F: FileFactory> Root for RootImpl<F> {
             move |_| local_factory.cmd(&*local_name),
             /*is_stdout=*/ true,
         );
-        cmds.insert(global_name, handle.clone());
+        let _old = cmds.insert(global_name, handle.clone());
+        debug_assert!(
+            _old.is_none(),
+            "duplicate insertion of command: {}",
+            String::from_utf8_lossy(cmd)
+        );
         handle
     }
     fn get_handle(&self, fname: &str) -> RawHandle {
@@ -665,6 +670,7 @@ struct WriteBatch {
     io_vec: Vec<io::IoSlice<'static>>,
     requests: Vec<Request>,
     n_writes: usize,
+    write_bytes: usize,
     flush: bool,
     close: bool,
 }
@@ -692,7 +698,9 @@ impl WriteBatch {
     }
 
     fn issue(&mut self, w: &mut impl Write) -> io::Result</*close=*/ bool> {
-        write_all(self, w)?;
+        if self.write_bytes > 0 {
+            write_all(self, w)?;
+        }
         if self.flush || self.close {
             w.flush()?;
         }
@@ -714,7 +722,9 @@ impl WriteBatch {
             Request::Write { data, flush, .. } => {
                 // TODO: this does not handle payloads larger than 4GB on windows, see
                 // documentation for IoSlice. Should be an easy fix if this comes up.
-                self.io_vec.push(io::IoSlice::new(unsafe { &**data }));
+                let io_slice = io::IoSlice::new(unsafe { &**data });
+                self.write_bytes += io_slice.len();
+                self.io_vec.push(io_slice);
                 self.n_writes += 1;
                 self.flush |= *flush;
             }
@@ -732,6 +742,7 @@ impl WriteBatch {
         self.close = false;
         self.flush = false;
         self.n_writes = 0;
+        self.write_bytes = 0;
     }
     fn clear_error(&mut self) {
         self.clear_batch(ErrorCode::set_error)
