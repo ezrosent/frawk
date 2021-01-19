@@ -521,8 +521,8 @@ configuration), tsv-utils unquestionably performs better per core than frawk,
 while preserving the input's row ordering.
 
 **MacOS**
-| Program | Running Time | Throughput |
-| -- | -- | -- |
+| Program | Format | Running Time | Throughput |
+| -- | -- | -- | -- |
 | frawk (cranelift) | CSV | 4.2s (5.0s + 1.0s) | 1232.67 MB/s |
 | frawk (cranelift) | TSV | 4.1s (4.9s + 1.0s) | 1267.67 MB/s |
 | frawk (cranelift, parallel) | CSV | 2.1s (8.6s + 1.1s) | 2469.45 MB/s |
