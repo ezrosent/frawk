@@ -104,6 +104,25 @@ fn simple_fi() {
     }
 }
 
+// Tests for v args. For now, we require "--" to separate the `v`s from the program. This appears
+// to be a clap limitation.
+
+#[test]
+fn simple_v_arg() {
+    let expected = "1\n";
+    let prog: String = r#"BEGIN {print x;}"#.into();
+    for backend_arg in BACKEND_ARGS {
+        Command::cargo_bin("frawk")
+            .unwrap()
+            .arg(String::from(*backend_arg))
+            .arg(String::from("-vx=1"))
+            .arg(String::from("--"))
+            .arg(prog.clone())
+            .assert()
+            .stdout(expected.clone());
+    }
+}
+
 #[test]
 fn mixed_map() {
     let expected = "hi 0.0 5\n1 1.0 3\n";
