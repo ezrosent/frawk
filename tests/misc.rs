@@ -104,22 +104,58 @@ fn simple_fi() {
     }
 }
 
-// Tests for v args. For now, we require "--" to separate the `v`s from the program. This appears
-// to be a clap limitation.
+mod v_args {
+    //! Tests for v args. For now, we require "--" to separate the `v`s from the program. This appears
+    //! to be a clap limitation.
+    use super::*;
 
-#[test]
-fn simple_v_arg() {
-    let expected = "1\n";
-    let prog: String = r#"BEGIN {print x;}"#.into();
-    for backend_arg in BACKEND_ARGS {
-        Command::cargo_bin("frawk")
-            .unwrap()
-            .arg(String::from(*backend_arg))
-            .arg(String::from("-vx=1"))
-            .arg(String::from("--"))
-            .arg(prog.clone())
-            .assert()
-            .stdout(expected.clone());
+    #[test]
+    fn simple() {
+        let expected = "1\n";
+        let prog: String = r#"BEGIN {print x;}"#.into();
+        for backend_arg in BACKEND_ARGS {
+            Command::cargo_bin("frawk")
+                .unwrap()
+                .arg(String::from(*backend_arg))
+                .arg(String::from("-vx=1"))
+                .arg(String::from("--"))
+                .arg(prog.clone())
+                .assert()
+                .stdout(expected.clone());
+        }
+    }
+
+    #[test]
+    fn ident_v_arg() {
+        let expected = "var-with-dash\n";
+        let prog: String = r#"BEGIN {print x;}"#.into();
+        for backend_arg in BACKEND_ARGS {
+            Command::cargo_bin("frawk")
+                .unwrap()
+                .arg(String::from(*backend_arg))
+                .arg(String::from("-vx=var-with-dash"))
+                .arg(String::from("--"))
+                .arg(prog.clone())
+                .assert()
+                .stdout(expected.clone());
+        }
+    }
+
+    #[test]
+    fn ident_v_arg_escape() {
+        let expected = "var-with\n-dash 1+1\n";
+        let prog: String = r#"BEGIN {print x, y;}"#.into();
+        for backend_arg in BACKEND_ARGS {
+            Command::cargo_bin("frawk")
+                .unwrap()
+                .arg(String::from(*backend_arg))
+                .arg(String::from("-vx=var-with\\n-dash"))
+                .arg(String::from("-vy=1+1"))
+                .arg(String::from("--"))
+                .arg(prog.clone())
+                .assert()
+                .stdout(expected.clone());
+        }
     }
 }
 

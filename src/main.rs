@@ -151,24 +151,30 @@ fn get_vars<'a, 'b>(
     a: &'a Arena,
     buf: &mut Vec<u8>,
 ) -> Vec<(&'a str, &'a ast::Expr<'a, 'a, &'a str>)> {
-    let mut stmts = Vec::new();
-    for (i, var) in vars.enumerate() {
+    let mut res = Vec::new();
+    let mut split_buf = Vec::new();
+    for var in vars {
         buf.clear();
-        let var = a.alloc_str(var);
-        let lexer = lexer::Tokenizer::new(var);
-        let parser = parsing::syntax::VarDefParser::new();
-        let mut _prog = ast::Prog::from_stage(Stage::Main(()));
-        match parser.parse(a, buf, &mut _prog, lexer) {
-            Ok(stmt) => stmts.push(stmt),
-            Err(e) => fail!(
-                "failed to parse var at index {}:\n{}\nerror:{:?}",
-                i + 1,
+        split_buf.clear();
+        split_buf.extend(var.splitn(2, '='));
+        if split_buf.len() != 2 {
+            fail!(
+                "received -v flag without an '=' sign: {} (split_buf={:?})",
                 var,
-                e
-            ),
+                split_buf
+            );
         }
+        let ident = a.alloc_str(split_buf[0].trim());
+        if !lexer::is_ident(ident) {
+            fail!(
+                "invalid identifier for left-hand side of -v flag: {}",
+                ident
+            );
+        }
+        let str_lit = lexer::parse_string_literal(split_buf[1], a, buf);
+        res.push((ident, a.alloc_v(ast::Expr::StrLit(str_lit))))
     }
-    stmts
+    res
 }
 
 fn get_prelude<'a>(a: &'a Arena, raw: &RawPrelude) -> Prelude<'a> {
