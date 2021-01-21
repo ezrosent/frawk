@@ -220,6 +220,18 @@ pub struct Tokenizer<'a> {
     lines: Vec<usize>,
 }
 
+pub fn is_ident(s: &str) -> bool {
+    for (i, c) in s.chars().enumerate() {
+        if i == 0 && !is_id_start(c) {
+            return false;
+        }
+        if i > 0 && !is_id_body(c) {
+            return false;
+        }
+    }
+    true
+}
+
 fn is_id_start(c: char) -> bool {
     c == '_' || c.is_xid_start()
 }

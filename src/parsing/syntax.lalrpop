@@ -17,10 +17,6 @@ grammar<'a, 'outer>(
   prog: &mut Prog<'a, 'a, &'a str>,
 );
 
-pub VarDef: (&'a str, &'a Expr<'a, 'a, &'a str>) = {
-    <id:"IDENT"> "=" <e:BaseTerm> "\n"* => (id, e),
-}
-
 ToplevelBase: () = {
    <Begin> =>? {
      if prog.begin.is_some() {
@@ -417,8 +413,6 @@ LeafTerm: &'a Expr<'a,'a, &'a str> = {
   <i:CallStart> <args:Args?> ")" =>
         arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
 }
-
-
 
 And: () = { "&&" "\n"* }
 Or: () = { "||" "\n"* }
