@@ -105,8 +105,7 @@ fn simple_fi() {
 }
 
 mod v_args {
-    //! Tests for v args. For now, we require "--" to separate the `v`s from the program. This appears
-    //! to be a clap limitation.
+    //! Tests for v args.
     use super::*;
 
     #[test]
@@ -118,7 +117,6 @@ mod v_args {
                 .unwrap()
                 .arg(String::from(*backend_arg))
                 .arg(String::from("-vx=1"))
-                .arg(String::from("--"))
                 .arg(prog.clone())
                 .assert()
                 .stdout(expected.clone());
@@ -134,7 +132,6 @@ mod v_args {
                 .unwrap()
                 .arg(String::from(*backend_arg))
                 .arg(String::from("-vx=var-with-dash"))
-                .arg(String::from("--"))
                 .arg(prog.clone())
                 .assert()
                 .stdout(expected.clone());
@@ -151,7 +148,6 @@ mod v_args {
                 .arg(String::from(*backend_arg))
                 .arg(String::from("-vx=var-with\\n-dash"))
                 .arg(String::from("-vy=1+1"))
-                .arg(String::from("--"))
                 .arg(prog.clone())
                 .assert()
                 .stdout(expected.clone());
