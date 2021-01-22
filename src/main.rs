@@ -348,6 +348,7 @@ fn main() {
              .short('v')
              .multiple(true)
              .takes_value(true)
+             .number_of_values(1)
              .about("Has the form <identifier>=<expr>"))
         .arg("-F, --field-separator=[SEPARATOR] 'Field separator for frawk program.'")
         .arg(Arg::new("backend")
