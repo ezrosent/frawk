@@ -135,6 +135,7 @@ impl<'a> Line<'a> for DefaultLine {
         Ok(sep
             .clone()
             .unmoor()
+            // TODO: update join_slice to work for this case
             .join(self.fields[start..end].iter().cloned().map(trans))
             .upcast())
     }
@@ -171,7 +172,7 @@ impl<'a> Line<'a> for DefaultLine {
                 }
                 self.fields = new_vec;
             }
-            let res = ofs.clone().unmoor().join(self.fields.iter().cloned());
+            let res = ofs.join_slice(&self.fields[..]);
             self.line = res.clone();
             self.diverged = false;
             res

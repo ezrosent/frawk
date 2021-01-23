@@ -447,6 +447,19 @@ impl<'a> Str<'a> {
         });
     }
 
+    pub fn join_slice<'other, 'b>(&self, inps: &[Str<'other>]) -> Str<'b> {
+        let sep_bytes: &[u8] = unsafe { &*self.get_bytes() };
+        let mut buf = DynamicBuf::new(inps.len() * sep_bytes.len());
+        for (i, inp) in inps.iter().enumerate() {
+            let inp_bytes = unsafe { &*inp.get_bytes() };
+            buf.write(inp_bytes).unwrap();
+            if i < inps.len() - 1 {
+                buf.write(sep_bytes).unwrap();
+            }
+        }
+        unsafe { buf.into_str() }
+    }
+
     pub fn join(&self, mut ss: impl Iterator<Item = Str<'a>>) -> Str<'a> {
         let mut res = if let Some(s) = ss.next() {
             s
