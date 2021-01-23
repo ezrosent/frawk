@@ -11,7 +11,7 @@ pub mod regex;
 
 use super::str_impl::{Buf, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
-use super::{Int, LazyVec, RegexCache};
+use super::{Int, RegexCache};
 use crate::common::Result;
 use crate::pushdown::FieldSet;
 
@@ -85,7 +85,7 @@ fn normalize_join_indexes(start: Int, end: Int, nf: usize) -> Result<(usize, usi
 pub struct DefaultLine {
     line: Str<'static>,
     used_fields: FieldSet,
-    fields: LazyVec<Str<'static>>,
+    fields: Vec<Str<'static>>,
     // Has someone assigned into `fields` without us regenerating `line`?
     // AWK lets you do
     //  $1 = "turnip"
@@ -102,7 +102,7 @@ impl Default for DefaultLine {
         DefaultLine {
             line: Str::default(),
             used_fields: FieldSet::all(),
-            fields: LazyVec::new(),
+            fields: Vec::new(),
             diverged: false,
         }
     }
@@ -132,9 +132,10 @@ impl<'a> Line<'a> for DefaultLine {
         // Should have split before calling this function.
         debug_assert!(self.fields.len() > 0);
         let (start, end) = normalize_join_indexes(start, end, nf)?;
-        Ok(self
-            .fields
-            .join_by(&sep.clone().unmoor(), start, end, trans)
+        Ok(sep
+            .clone()
+            .unmoor()
+            .join(self.fields[start..end].iter().cloned().map(trans))
             .upcast())
     }
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize> {
@@ -157,16 +158,20 @@ impl<'a> Line<'a> for DefaultLine {
                 // place; so once we hit this condition we overwrite the used fields with all() so
                 // this doesn't happen again for a while.
                 let old_set = std::mem::replace(&mut self.used_fields, FieldSet::all());
-                let mut new_vec = LazyVec::new();
+                let mut new_vec = Vec::with_capacity(self.fields.len());
                 rc.split_regex(pat, &self.line, &self.used_fields, &mut new_vec)?;
-                for k in self.fields.keys() {
-                    if old_set.get(k + 1) {
-                        new_vec.insert(k, self.fields.get(k).unwrap_or_else(Str::default));
+
+                for (i, field) in self.fields.iter().enumerate().rev() {
+                    if i >= new_vec.len() {
+                        new_vec.resize_with(i + 1, Str::default);
+                    }
+                    if old_set.get(i + 1) {
+                        new_vec[i] = field.clone()
                     }
                 }
                 self.fields = new_vec;
             }
-            let res = self.fields.join_all(&ofs.clone().unmoor());
+            let res = ofs.clone().unmoor().join(self.fields.iter().cloned());
             self.line = res.clone();
             self.diverged = false;
             res
@@ -174,6 +179,7 @@ impl<'a> Line<'a> for DefaultLine {
             self.split_if_needed(pat, rc)?;
             self.fields
                 .get((col - 1) as usize)
+                .cloned()
                 .unwrap_or_else(Str::default)
         };
         Ok(res.upcast())
@@ -188,7 +194,11 @@ impl<'a> Line<'a> for DefaultLine {
             return err!("attempt to access field {}; field must be nonnegative", col);
         }
         self.split_if_needed(pat, rc)?;
-        self.fields.insert(col as usize - 1, s.clone().unmoor());
+        let col = col as usize - 1;
+        if col >= self.fields.len() {
+            self.fields.resize_with(col + 1, Str::default);
+        }
+        self.fields[col] = s.clone().unmoor();
         self.diverged = true;
         Ok(())
     }
