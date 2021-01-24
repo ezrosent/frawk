@@ -448,13 +448,23 @@ impl<'a> Str<'a> {
     }
 
     pub fn join_slice<'other, 'b>(&self, inps: &[Str<'other>]) -> Str<'b> {
+        // We've noticed that performance of `join_slice` is very sensitive to the number of
+        // `realloc` calls that happen when pushing onto DynamicBufHeap, so we spend the extra time
+        // of computing the size of the joined string ahead of time exactly.
+        let mut sv = SmallVec::<[&[u8]; 16]>::with_capacity(inps.len());
         let sep_bytes: &[u8] = unsafe { &*self.get_bytes() };
-        // pre-initialize the buffer based on the assumption of 4-byte fields. If we guess
-        // completely wrong, into_str() will shrink the allocation back for us,
-        let mut buf = DynamicBufHeap::new(inps.len() * sep_bytes.len() * 4);
+        let mut size = 0;
         for (i, inp) in inps.iter().enumerate() {
             let inp_bytes = unsafe { &*inp.get_bytes() };
-            buf.write(inp_bytes).unwrap();
+            sv.push(inp_bytes);
+            size += inp_bytes.len();
+            if i < inps.len() - 1 {
+                size += sep_bytes.len()
+            }
+        }
+        let mut buf = DynamicBufHeap::new(size);
+        for (i, inp) in sv.into_iter().enumerate() {
+            buf.write(inp).unwrap();
             if i < inps.len() - 1 {
                 buf.write(sep_bytes).unwrap();
             }
@@ -942,12 +952,17 @@ impl DynamicBufHeap {
         self.data.into_buf()
     }
     pub unsafe fn into_str<'a>(mut self) -> Str<'a> {
+        // TODO: we can probably make this safe? I think this was unsafe from back when strings had
+        // to be utf8.
         // Shrink the buffer to fit.
         self.realloc(self.write_head);
         self.data.into_buf().into_str()
     }
     unsafe fn realloc(&mut self, new_cap: usize) {
         let cap = self.size();
+        if cap == new_cap {
+            return;
+        }
         let new_buf = realloc(
             self.data.0 as *mut u8,
             UniqueBuf::layout(cap),

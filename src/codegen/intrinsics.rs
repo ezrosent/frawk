@@ -280,6 +280,17 @@ macro_rules! try_abort {
     };
 }
 
+// we use a "silent" abort for write errors to play nicely with unix tools like "head" which
+// deliberately close pipes prematurely.
+macro_rules! try_silent_abort {
+    ($rt:expr, $e:expr) => {
+        match $e {
+            Ok(res) => res,
+            Err(_) => exit!($rt),
+        }
+    };
+}
+
 macro_rules! exit {
     ($runtime:expr) => {
         exit!($runtime, 0, "")
@@ -990,7 +1001,7 @@ pub(crate) unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usi
     let args_wrapped: &[&Str] =
         slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
     let rt = rt as *mut Runtime;
-    try_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
+    try_silent_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
 }
 
 pub(crate) unsafe extern "C" fn print_all_file(
@@ -1008,7 +1019,7 @@ pub(crate) unsafe extern "C" fn print_all_file(
         try_abort!(rt, FileSpec::try_from(append)),
     ));
 
-    try_abort!(
+    try_silent_abort!(
         rt,
         (*rt)
             .core
