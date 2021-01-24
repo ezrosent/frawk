@@ -60,10 +60,10 @@ use crate::common::{CompileError, FileSpec, Notification, Result};
 use crate::runtime::{command::command_for_write, Str};
 
 /// The maximum number of pending requests in the per-file channels.
-const IO_CHAN_SIZE: usize = 16;
+const IO_CHAN_SIZE: usize = 8;
 
 /// The size of client-side batches.
-const BUFFER_SIZE: usize = 4 << 10;
+const BUFFER_SIZE: usize = 64 << 10;
 
 /// FileFactory abstracts over the portions of the file system used for the output of a frawk
 /// program. It includes "file objects" as well as "stdout", which both implement the io::Write
