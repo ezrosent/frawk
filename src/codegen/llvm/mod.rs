@@ -6,7 +6,7 @@ pub(crate) mod intrinsics;
 use crate::builtins;
 use crate::bytecode::Accum;
 use crate::codegen::{
-    self, intrinsics::register_all, Backend, CodeGenerator, Jit, Ref, Sig, StrReg,
+    self, intrinsics::register_all, Backend, CodeGenerator, Handles, Jit, Ref, Sig, StrReg,
 };
 use crate::common::{Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Ty, Typer};
@@ -77,6 +77,7 @@ struct View<'a> {
     module: LLVMModuleRef,
     printfs: &'a mut HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
     prints: &'a mut HashMap<(usize, /*stdout*/ bool), LLVMValueRef>,
+    handles: &'a mut Handles,
     drop_str: LLVMValueRef,
     // We keep an extra builder always pointed at the start of the function. This is because
     // binding new string values requires an `alloca`; and we do not want to call `alloca` where a
@@ -255,13 +256,17 @@ impl<'a> CodeGenerator for View<'a> {
         }
     }
 
-    fn const_ptr<'b, T>(&'b mut self, c: &'b T) -> Self::Val {
+    fn const_ptr<T>(&mut self, c: *const T) -> Self::Val {
         let voidp = self.tmap.runtime_ty;
         let int_ty = self.tmap.get_ty(Ty::Int);
         unsafe {
-            let bits = LLVMConstInt(int_ty, c as *const T as u64, /*sign_extend=*/ 0);
+            let bits = LLVMConstInt(int_ty, c as u64, /*sign_extend=*/ 0);
             LLVMBuildIntToPtr(self.f.builder, bits, voidp, c_str!(""))
         }
+    }
+
+    fn handles(&mut self) -> &mut Handles {
+        self.handles
     }
 
     fn call_intrinsic(&mut self, func: codegen::Op, args: &mut [Self::Val]) -> Result<Self::Val> {
@@ -623,6 +628,7 @@ pub(crate) struct Generator<'a, 'b> {
     engine: LLVMExecutionEngineRef,
     decls: Vec<FuncInfo>,
     funcs: Vec<Function>,
+    handles: Handles,
     type_map: TypeMap,
     intrinsics: IntrinsicMap,
     printfs: HashMap<(SmallVec<Ty>, PrintfKind), LLVMValueRef>,
@@ -696,6 +702,7 @@ macro_rules! view_at {
             f: &mut $slf.funcs[$func_id],
             tmap: &$slf.type_map,
             intrinsics: &mut $slf.intrinsics,
+            handles: &mut $slf.handles,
             decls: &$slf.decls,
             printfs: &mut $slf.printfs,
             prints: &mut $slf.prints,
@@ -795,6 +802,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             intrinsics: IntrinsicMap::new(module, ctx),
             printfs: Default::default(),
             prints: Default::default(),
+            handles: Default::default(),
             cfg,
             drop_str: ptr::null_mut(),
         };

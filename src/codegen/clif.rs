@@ -26,7 +26,9 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::builtins;
 use crate::bytecode::Accum;
-use crate::codegen::{intrinsics, Backend, CodeGenerator, Config, Jit, Op, Ref, Sig, StrReg};
+use crate::codegen::{
+    intrinsics, Backend, CodeGenerator, Config, Handles, Jit, Op, Ref, Sig, StrReg,
+};
 use crate::common::{traverse, CompileError, Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Typer};
 use crate::runtime::{self, UniqueStr};
@@ -109,6 +111,7 @@ struct Shared {
     // We need cranelift Signatures for declaring external functions. We put them here to reuse
     // them across calls to `register_external_fn`.
     sig: Signature,
+    handles: Handles,
 }
 
 /// Toplevel information
@@ -189,6 +192,7 @@ impl Generator {
             func_ids: Default::default(),
             external_funcs: Default::default(),
             sig: cctx.func.signature.clone(),
+            handles: Default::default(),
         };
         let mut global = Generator {
             shared,
@@ -1313,8 +1317,11 @@ impl<'a> CodeGenerator for View<'a> {
         let high_v = self.builder.ins().iconst(types::I64, high);
         self.builder.ins().iconcat(low_v, high_v)
     }
-    fn const_ptr<'b, T>(&'b mut self, c: &'b T) -> Self::Val {
+    fn const_ptr<T>(&mut self, c: *const T) -> Self::Val {
         self.const_int(c as *const _ as i64)
+    }
+    fn handles(&mut self) -> &mut Handles {
+        &mut self.shared.handles
     }
 
     fn call_void(&mut self, func: *const u8, args: &mut [Self::Val]) -> Result<()> {

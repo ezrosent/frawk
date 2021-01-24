@@ -11,8 +11,11 @@ use crate::{
     runtime::{self, UniqueStr},
 };
 
+use regex::bytes::Regex;
+
 use std::marker::PhantomData;
 use std::mem;
+use std::sync::Arc;
 
 /// Options used to configure a code-generating backend.
 #[derive(Copy, Clone)]
@@ -237,6 +240,13 @@ where
     }
 }
 
+/// Handles to ensure the liveness of rust objects passed by pointer into generated code.
+#[derive(Default)]
+pub(crate) struct Handles {
+    res: Vec<Arc<Regex>>,
+    slices: Vec<Arc<[u8]>>,
+}
+
 pub(crate) trait Backend {
     type Ty: Clone;
     // mappings from compile::Ty to Self::Ty
@@ -274,7 +284,24 @@ pub(crate) trait CodeGenerator: Backend {
     fn const_int(&mut self, i: i64) -> Self::Val;
     fn const_float(&mut self, f: f64) -> Self::Val;
     fn const_str<'a>(&mut self, s: &UniqueStr<'a>) -> Self::Val;
-    fn const_ptr<'a, T>(&'a mut self, c: &'a T) -> Self::Val;
+
+    // const ptr should not be called directly.
+    fn const_ptr<T>(&mut self, r: *const T) -> Self::Val;
+    fn handles(&mut self) -> &mut Handles;
+
+    // const_{re,slice} take an `Arc` so that it can store a pointer to `c` and ensure references
+    // to `c` will live as long as the generated code.
+
+    fn const_re(&mut self, pat: Arc<Regex>) -> Self::Val {
+        let res = self.const_ptr(&*pat);
+        self.handles().res.push(pat);
+        res
+    }
+    fn const_slice(&mut self, bs: Arc<[u8]>) -> Self::Val {
+        let res = self.const_ptr(bs.as_ptr());
+        self.handles().slices.push(bs);
+        res
+    }
 
     // NB: why &mut [..] everywhere instead of &[..] or impl Iterator<..>? The LLVM C API takes a
     // sequence of arguments by a mutable pointer to the first element along with a length. We
@@ -584,6 +611,13 @@ pub(crate) trait CodeGenerator: Backend {
                 self.bind_val(dst.reflect(), res)
             }
             Concat(dst, l, r) => self.binop(intrinsic!(concat), dst, l, r),
+            StartsWithConst(dst, s, bs) => {
+                let s = self.get_val(s.reflect())?;
+                let ptr = self.const_slice(bs.clone());
+                let len = self.const_int(bs.len() as i64);
+                let res = self.call_intrinsic(intrinsic!(starts_with_const), &mut [s, ptr, len])?;
+                self.bind_val(dst.reflect(), res)
+            }
             Match(dst, l, r) => {
                 let lv = self.get_val(l.reflect())?;
                 let rv = self.get_val(r.reflect())?;
@@ -601,14 +635,14 @@ pub(crate) trait CodeGenerator: Backend {
             MatchConst(res, src, pat) => {
                 let rt = self.runtime_val();
                 let srcv = self.get_val(src.reflect())?;
-                let patv = self.const_ptr(&**pat);
+                let patv = self.const_re(pat.clone());
                 let resv =
                     self.call_intrinsic(intrinsic!(match_const_pat_loc), &mut [rt, srcv, patv])?;
                 self.bind_val(res.reflect(), resv)
             }
             IsMatchConst(res, src, pat) => {
                 let srcv = self.get_val(src.reflect())?;
-                let patv = self.const_ptr(&**pat);
+                let patv = self.const_re(pat.clone());
                 let resv = self.call_intrinsic(intrinsic!(match_const_pat), &mut [srcv, patv])?;
                 self.bind_val(res.reflect(), resv)
             }

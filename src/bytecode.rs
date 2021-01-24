@@ -113,6 +113,7 @@ pub(crate) enum Instr<'a> {
 
     // String processing
     Concat(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Str<'a>>),
+    StartsWithConst(Reg<Int>, Reg<Str<'a>>, Arc<[u8]>),
     IsMatch(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
     IsMatchConst(Reg<Int>, Reg<Str<'a>>, Arc<Regex>),
     Match(Reg<Int>, Reg<Str<'a>>, Reg<Str<'a>>),
@@ -499,6 +500,10 @@ impl<'a> Instr<'a> {
                 seed.accum(&mut f)
             }
             ReseedRng(res) => res.accum(&mut f),
+            StartsWithConst(res, s, _) => {
+                res.accum(&mut f);
+                s.accum(&mut f);
+            }
             Concat(res, l, r) => {
                 res.accum(&mut f);
                 l.accum(&mut f);

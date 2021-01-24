@@ -103,6 +103,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] hex_str_to_int(str_ref_ty) -> int_ty;
         [ReadOnly] str_to_float(str_ref_ty) -> float_ty;
         [ReadOnly] str_len(str_ref_ty) -> int_ty;
+        starts_with_const(str_ref_ty, rt_ty, int_ty) -> int_ty;
         concat(str_ref_ty, str_ref_ty) -> str_ty;
         [ReadOnly] match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         [ReadOnly] match_const_pat(str_ref_ty, rt_ty) -> int_ty;
@@ -639,6 +640,18 @@ pub(crate) unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
     let res = s.len();
     mem::forget(s);
     res
+}
+
+pub(crate) unsafe extern "C" fn starts_with_const(
+    s1: *mut c_void,
+    base: *const u8,
+    len: Int,
+) -> Int {
+    debug_assert!(len >= 0);
+    let other = slice::from_raw_parts(base, len as usize);
+    let s1 = &*(s1 as *const Str);
+    let s1_bytes = &*s1.get_bytes();
+    ((s1_bytes.len() >= other.len()) && &s1_bytes[..other.len()] == other) as Int
 }
 
 pub(crate) unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128 {
