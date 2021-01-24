@@ -449,7 +449,9 @@ impl<'a> Str<'a> {
 
     pub fn join_slice<'other, 'b>(&self, inps: &[Str<'other>]) -> Str<'b> {
         let sep_bytes: &[u8] = unsafe { &*self.get_bytes() };
-        let mut buf = DynamicBuf::new(inps.len() * sep_bytes.len());
+        // pre-initialize the buffer based on the assumption of 4-byte fields. If we guess
+        // completely wrong, into_str() will shrink the allocation back for us,
+        let mut buf = DynamicBufHeap::new(inps.len() * sep_bytes.len() * 4);
         for (i, inp) in inps.iter().enumerate() {
             let inp_bytes = unsafe { &*inp.get_bytes() };
             buf.write(inp_bytes).unwrap();
@@ -1155,13 +1157,6 @@ impl Buf {
         let len = to.saturating_sub(from);
         if len == 0 {
             Str::default()
-        } else if len <= MAX_INLINE_SIZE {
-            unsafe {
-                Str::from_rep(
-                    Inline::from_raw(self.as_ptr().offset(std::cmp::max(0, from as isize)), len)
-                        .into(),
-                )
-            }
         } else if likely(from <= u32::max_value() as usize && to <= u32::max_value() as usize) {
             Str::from_rep(
                 Shared {
