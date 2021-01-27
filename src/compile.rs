@@ -762,7 +762,7 @@ impl<'a> Typer<'a> {
             );
             if let Some(old) = map.insert(*id, (reg, *ty)) {
                 return err!(
-                    "internal error: duplicate entries for same local in types  at id={:?}; {:?} vs {:?}",
+                    "internal error: duplicate entries for same local in types at id={:?}; {:?} vs {:?}",
                     id,
                     old,
                     (reg, *ty)
@@ -830,44 +830,6 @@ impl<'a> Typer<'a> {
             }
         }
 
-        fn extract_anchored_literal(text: &str) -> Option<Arc<[u8]>> {
-            use regex_syntax::ast::{parse, Assertion, AssertionKind, Ast, Concat};
-            // We should only call extract_anchored_literal
-            let re_ast = parse::Parser::new().parse(text).unwrap();
-            let mut bs = Vec::new();
-            if let Ast::Concat(Concat { asts, .. }) = &re_ast {
-                if asts.len() >= 2
-                    && matches!(
-                        asts[0],
-                        Ast::Assertion(Assertion {
-                            kind: AssertionKind::StartLine,
-                            ..
-                        })
-                    )
-                {
-                    for ast in &asts[1..] {
-                        if let Ast::Literal(l) = ast {
-                            if let Some(b) = l.byte() {
-                                bs.push(b);
-                                continue;
-                            }
-                            let cur = bs.len();
-                            for _ in 0..l.c.len_utf8() {
-                                bs.push(0);
-                            }
-                            l.c.encode_utf8(&mut bs[cur..]);
-                        } else {
-                            return None;
-                        }
-                    }
-                } else {
-                    return None;
-                }
-            } else {
-                return None;
-            }
-            Some(bs.into())
-        }
         if let Some(sca) = &mut self.string_constants {
             let mut strs = Vec::new();
             if sca.cfg().query_regex {
@@ -1951,4 +1913,47 @@ impl<'a, 'b> View<'a, 'b> {
         };
         Ok(())
     }
+}
+
+/// For regex patterns of the form "^<literal>", return a copy of the literal.
+///
+/// This works as a special case for regex constant folding, where we can compile matches into
+/// simple "startswith" calls. This sort of trick is still only used in a few places.
+fn extract_anchored_literal(text: &str) -> Option<Arc<[u8]>> {
+    use regex_syntax::ast::{parse, Assertion, AssertionKind, Ast, Concat};
+    // We should only call extract_anchored_literal
+    let re_ast = parse::Parser::new().parse(text).unwrap();
+    let mut bs = Vec::new();
+    if let Ast::Concat(Concat { asts, .. }) = &re_ast {
+        if asts.len() >= 2
+            && matches!(
+                asts[0],
+                Ast::Assertion(Assertion {
+                    kind: AssertionKind::StartLine,
+                    ..
+                })
+            )
+        {
+            for ast in &asts[1..] {
+                if let Ast::Literal(l) = ast {
+                    if let Some(b) = l.byte() {
+                        bs.push(b);
+                        continue;
+                    }
+                    let cur = bs.len();
+                    for _ in 0..l.c.len_utf8() {
+                        bs.push(0);
+                    }
+                    l.c.encode_utf8(&mut bs[cur..]);
+                } else {
+                    return None;
+                }
+            }
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    }
+    Some(bs.into())
 }

@@ -39,6 +39,8 @@ impl<I: fmt::Display> fmt::Display for FunctionName<I> {
 
 impl<I> FunctionName<I> {
     fn is_main(&self) -> bool {
+        // TODO: does the slot mechanism mean that we can have this hold for any not-named
+        // FunctionName?
         matches!(self, FunctionName::MainLoop)
     }
 }

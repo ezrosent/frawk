@@ -1172,7 +1172,14 @@ impl Buf {
         let len = to.saturating_sub(from);
         if len == 0 {
             Str::default()
-        } else if likely(from <= u32::max_value() as usize && to <= u32::max_value() as usize) {
+        } else /*if len <= MAX_INLINE_SIZE {
+            unsafe {
+                Str::from_rep(
+                    Inline::from_raw(self.as_ptr().offset(std::cmp::max(0, from as isize)), len)
+                        .into(),
+                )
+            }
+        } else*/ if likely(from <= u32::max_value() as usize && to <= u32::max_value() as usize) {
             Str::from_rep(
                 Shared {
                     buf: self.clone(),
