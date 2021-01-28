@@ -158,12 +158,12 @@ impl<'a> CodeGenerator for View<'a> {
                         let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
                         self.drop_val(prev_global, val.1);
                         LLVMBuildStore(self.f.builder, new_global, param);
-                        self.call(intrinsic!(ref_map), &mut [new_global]);
+                        // self.call(intrinsic!(ref_map), &mut [new_global]);
                     }
                     Str => {
                         self.drop_val(param, Ty::Str);
                         LLVMBuildStore(self.f.builder, new_global, param);
-                        self.call(intrinsic!(ref_str), &mut [param]);
+                        // self.call(intrinsic!(ref_str), &mut [param]);
                     }
                     _ => {
                         LLVMBuildStore(self.f.builder, new_global, param);
@@ -469,13 +469,12 @@ impl<'a> CodeGenerator for View<'a> {
     }
     fn mov(&mut self, ty: compile::Ty, dst: NumTy, src: NumTy) -> Result<()> {
         unsafe {
+            let sv = self.get_val((src, ty))?;
             if let Ty::Str = ty {
-                let sv = self.get_val((src, Ty::Str))?;
                 self.call(intrinsic!(ref_str), &mut [sv]);
                 let loaded = LLVMBuildLoad(self.f.builder, sv, c_str!(""));
                 self.bind_val((dst, Ty::Str), loaded)
             } else {
-                let sv = self.get_val((src, ty))?;
                 if ty.is_array() {
                     self.call(intrinsic!(ref_map), &mut [sv]);
                 }
@@ -982,10 +981,12 @@ impl<'a, 'b> Generator<'a, 'b> {
         // pass them as arguments, along with the runtime.
         let main_info = &self.decls[main_offset];
         let mut args: SmallVec<_> = smallvec![ptr::null_mut(); main_info.num_args];
+        let mut to_drop = SmallVec::with_capacity(args.len());
         for ((_reg, ty), arg_ix) in main_info.globals.iter() {
             let local = self.alloc_local(builder, *ty)?;
             let param = if ty.is_array() || matches!(ty, Ty::Str) {
                 // Already a pointer; we're good to go!
+                to_drop.push((local, *ty));
                 local
             } else {
                 let loc = LLVMBuildAlloca(builder, self.llvm_ty(*ty), c_str!(""));
@@ -1003,6 +1004,26 @@ impl<'a, 'b> Generator<'a, 'b> {
             args.len() as libc::c_uint,
             c_str!(""),
         );
+
+        // now, drop the globals
+        for (mut local, ty) in to_drop {
+            if let Ty::Str = ty {
+                // drop the reference directly
+                LLVMBuildCall(builder, self.drop_str, &mut local, 1, c_str!(""));
+            } else {
+                // issue the load, then call drop.
+                debug_assert!(ty.is_array());
+                let drop_fn = self.intrinsics.map_drop_fn(ty).unwrap();
+
+                LLVMBuildCall(
+                    builder,
+                    drop_fn,
+                    &mut LLVMBuildLoad(builder, local, c_str!("")),
+                    1,
+                    c_str!(""),
+                );
+            }
+        }
 
         LLVMBuildRetVoid(builder);
         LLVMDisposeBuilder(builder);
@@ -1306,12 +1327,7 @@ impl<'a> View<'a> {
     unsafe fn drop_val(&mut self, mut val: LLVMValueRef, ty: Ty) {
         use Ty::*;
         let func = match ty {
-            MapIntInt => self.intrinsics.get(intrinsic!(drop_intint)),
-            MapIntFloat => self.intrinsics.get(intrinsic!(drop_intfloat)),
-            MapIntStr => self.intrinsics.get(intrinsic!(drop_intstr)),
-            MapStrInt => self.intrinsics.get(intrinsic!(drop_strint)),
-            MapStrFloat => self.intrinsics.get(intrinsic!(drop_strfloat)),
-            MapStrStr => self.intrinsics.get(intrinsic!(drop_strstr)),
+            ty if ty.is_array() => self.intrinsics.map_drop_fn(ty).unwrap(),
             Str => self.drop_str,
             _ => return,
         };

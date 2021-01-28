@@ -5,6 +5,7 @@
 use super::attr;
 use crate::codegen::FunctionAttr;
 use crate::common::Either;
+use crate::compile::Ty;
 use crate::libc::c_void;
 
 use hashbrown::HashMap;
@@ -36,6 +37,19 @@ impl IntrinsicMap {
             ctx,
             module,
             map: Default::default(),
+        }
+    }
+
+    pub(crate) unsafe fn map_drop_fn(&self, ty: Ty) -> Option<LLVMValueRef> {
+        use Ty::*;
+        match ty {
+            MapIntInt => Some(self.get(external!(drop_intint))),
+            MapIntFloat => Some(self.get(external!(drop_intfloat))),
+            MapIntStr => Some(self.get(external!(drop_intstr))),
+            MapStrInt => Some(self.get(external!(drop_strint))),
+            MapStrFloat => Some(self.get(external!(drop_strfloat))),
+            MapStrStr => Some(self.get(external!(drop_strstr))),
+            _ => return None,
         }
     }
     pub(crate) fn register(

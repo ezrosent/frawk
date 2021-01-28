@@ -24,6 +24,12 @@ pub struct Config {
     pub num_workers: usize,
 }
 
+macro_rules! external {
+    ($name:ident) => {
+        crate::codegen::intrinsics::$name as *const u8
+    };
+}
+
 #[macro_use]
 pub(crate) mod intrinsics;
 pub(crate) mod clif;
@@ -39,12 +45,6 @@ pub(crate) struct Sig<'a, C: Backend + ?Sized> {
     pub attrs: &'a [FunctionAttr],
     pub args: &'a mut [C::Ty],
     pub ret: Option<C::Ty>,
-}
-
-macro_rules! external {
-    ($name:ident) => {
-        crate::codegen::intrinsics::$name as *const u8
-    };
 }
 
 macro_rules! intrinsic {
