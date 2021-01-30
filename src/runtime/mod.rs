@@ -549,7 +549,7 @@ where
 // NB These are repr(transparent) because we pass them around as void* when compiling with LLVM.
 #[repr(transparent)]
 #[derive(Debug)]
-pub(crate) struct SharedMap<K, V>(Rc<RefCell<HashMap<K, V>>>);
+pub(crate) struct SharedMap<K, V>(pub(crate) Rc<RefCell<HashMap<K, V>>>);
 
 impl<K, V> Default for SharedMap<K, V> {
     fn default() -> SharedMap<K, V> {

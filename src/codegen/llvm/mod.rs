@@ -40,9 +40,9 @@ type SmallVec<T> = smallvec::SmallVec<[T; 2]>;
 
 #[derive(Clone)]
 struct IterState {
-    iter_ptr: LLVMValueRef,  /* ptr to elt type */
-    cur_index: LLVMValueRef, /* ptr to integer */
-    len: LLVMValueRef,       /* integer */
+    iter_ptr: LLVMValueRef,  // ptr to elt type
+    cur_index: LLVMValueRef, // ptr to integer
+    len: LLVMValueRef,       // integer
 }
 
 struct Function {
@@ -185,10 +185,6 @@ impl<'a> CodeGenerator for View<'a> {
                     let prev = LLVMBuildLoad(self.f.builder, loc, c_str!(""));
                     self.drop_val(prev, val.1);
                     LLVMBuildStore(self.f.builder, to, loc);
-                    // NB: we used to have this here, but it leaked. See a segfault? It's possible we
-                    // are missing some refs elsewhere.
-                    //   self.call(intrinsic!(ref_map), &mut [to]);
-                    // We had this for globals as well.
                     self.f.locals.insert(val, loc);
                     return Ok(());
                 }
@@ -553,9 +549,9 @@ impl<'a> CodeGenerator for View<'a> {
         self.bind_val(dst, res)
     }
     fn var_loaded(&mut self, dst: Ref) -> Result<()> {
-        if (dst.1.is_array() || dst.1 == Ty::Str) && self.is_global(dst) {
-            unsafe { self.drop_reg(dst)? };
-        }
+        // if (dst.1.is_array() || dst.1 == Ty::Str) && self.is_global(dst) {
+        //     unsafe { self.drop_reg(dst)? };
+        // }
         Ok(())
     }
 }
@@ -1123,6 +1119,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             // to avoid the extra ref/drop for string params. We _do_ use bind_val on array
             // parameters because they may need to be alloca'd here. Strings have an alloca path in
             // bind_val, but it isn't needed for params because strings are passed by pointer.
+
             if arg.1.is_array() {
                 view.bind_val(arg, argv)?;
             } else {
@@ -1324,6 +1321,16 @@ impl<'a> View<'a> {
         Ok(())
     }
 
+    unsafe fn ref_val(&mut self, mut val: LLVMValueRef, ty: Ty) {
+        use Ty::*;
+        let func = match ty {
+            ty if ty.is_array() => self.intrinsics.get(intrinsic!(ref_map)),
+            Str => self.intrinsics.get(intrinsic!(ref_str)),
+            _ => return,
+        };
+        LLVMBuildCall(self.f.builder, func, &mut val, 1, c_str!(""));
+    }
+
     unsafe fn drop_val(&mut self, mut val: LLVMValueRef, ty: Ty) {
         use Ty::*;
         let func = match ty {
@@ -1441,6 +1448,8 @@ impl<'a> View<'a> {
 
     unsafe fn ret(&mut self, val: (NumTy, Ty)) -> Result<()> {
         let ret = self.get_val(val)?;
+        // We don't want to ref locals, but we will drop this local again anyway
+        self.ref_val(ret, val.1);
         self.ret_val(ret, val.1)
     }
 

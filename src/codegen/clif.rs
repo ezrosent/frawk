@@ -693,7 +693,7 @@ impl<'a> View<'a> {
             }
             Ret(reg, ty) => {
                 let mut v = self.get_val((*reg, *ty))?;
-                self.do_not_drop((*reg, *ty));
+                self.ref_val(*ty, v);
                 if let compile::Ty::Str = ty {
                     let str_ty = self.get_ty(*ty);
                     v = self.builder.ins().load(str_ty, MemFlags::trusted(), v, 0);
@@ -1063,12 +1063,6 @@ impl<'a> View<'a> {
             };
             self.f.vars.insert(r, vref.clone());
             Ok(vref)
-        }
-    }
-
-    fn do_not_drop(&mut self, r: Ref) {
-        if let Some(VarRef { skip_drop, .. }) = self.f.vars.get_mut(&r) {
-            *skip_drop = true;
         }
     }
 
@@ -1487,10 +1481,6 @@ impl<'a> CodeGenerator for View<'a> {
 
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
         // Compute base+cur and load it into a value
-        //
-        // ... this is wrong, right?
-        // ... this is just byte-addressing. We need to multiply by the size of the type.
-        //
         let IterState { cur, base, .. } = self.get_iter(iter)?;
         let base = self.builder.use_var(base);
         let cur_val = self.builder.use_var(cur);

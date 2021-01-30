@@ -810,7 +810,9 @@ unsafe fn ref_map_generic<K, V>(m: *mut c_void) {
 }
 
 unsafe fn drop_map_generic<K, V>(m: *mut c_void) {
-    mem::drop(mem::transmute::<*mut c_void, runtime::SharedMap<K, V>>(m))
+    let map_ref = mem::transmute::<*mut c_void, runtime::SharedMap<K, V>>(m);
+    debug_assert!(std::rc::Rc::strong_count(&map_ref.0) > 0);
+    mem::drop(map_ref)
 }
 
 // XXX: relying on this doing the same thing regardless of type. We probably want a custom Rc to
