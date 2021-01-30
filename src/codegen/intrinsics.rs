@@ -1199,7 +1199,7 @@ macro_rules! convert_in_val {
         $e
     };
     (Map, $e:expr) => {
-        mem::transmute::<*mut c_void, runtime::SharedMap<_, _>>($e)
+        mem::transmute::<&*mut c_void, &runtime::SharedMap<_, _>>(&$e).clone()
     };
 }
 

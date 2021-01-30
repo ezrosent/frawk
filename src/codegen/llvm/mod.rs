@@ -158,12 +158,10 @@ impl<'a> CodeGenerator for View<'a> {
                         let prev_global = LLVMBuildLoad(self.f.builder, param, c_str!(""));
                         self.drop_val(prev_global, val.1);
                         LLVMBuildStore(self.f.builder, new_global, param);
-                        // self.call(intrinsic!(ref_map), &mut [new_global]);
                     }
                     Str => {
                         self.drop_val(param, Ty::Str);
                         LLVMBuildStore(self.f.builder, new_global, param);
-                        // self.call(intrinsic!(ref_str), &mut [param]);
                     }
                     _ => {
                         LLVMBuildStore(self.f.builder, new_global, param);
@@ -547,12 +545,6 @@ impl<'a> CodeGenerator for View<'a> {
             unsafe { self.call(intrinsic!(ref_str), &mut [res_loc]) };
         }
         self.bind_val(dst, res)
-    }
-    fn var_loaded(&mut self, dst: Ref) -> Result<()> {
-        // if (dst.1.is_array() || dst.1 == Ty::Str) && self.is_global(dst) {
-        //     unsafe { self.drop_reg(dst)? };
-        // }
-        Ok(())
     }
 }
 
@@ -1005,6 +997,7 @@ impl<'a, 'b> Generator<'a, 'b> {
         for (mut local, ty) in to_drop {
             if let Ty::Str = ty {
                 // drop the reference directly
+                // TODO replace with this line with a call to drop_str
                 LLVMBuildCall(builder, self.drop_str, &mut local, 1, c_str!(""));
             } else {
                 // issue the load, then call drop.
@@ -1315,12 +1308,6 @@ impl<'a> View<'a> {
         self.decls[self.f.id].globals.get(&reg).is_some()
     }
 
-    unsafe fn drop_reg(&mut self, reg: (NumTy, Ty)) -> Result<()> {
-        let val = self.get_val(reg)?;
-        self.drop_val(val, reg.1);
-        Ok(())
-    }
-
     unsafe fn ref_val(&mut self, mut val: LLVMValueRef, ty: Ty) {
         use Ty::*;
         let func = match ty {
@@ -1448,8 +1435,15 @@ impl<'a> View<'a> {
 
     unsafe fn ret(&mut self, val: (NumTy, Ty)) -> Result<()> {
         let ret = self.get_val(val)?;
-        // We don't want to ref locals, but we will drop this local again anyway
-        self.ref_val(ret, val.1);
+        if self.is_global(val) || self.f.args.contains(&val) {
+            // We are returning a reference to a global or a function parameter. Increment the
+            // refcount.
+            self.ref_val(ret, val.1);
+        } else {
+            // If we are returning a local variable, we want to make sure we don't drop it (the
+            // reference will outlive the current frame).
+            self.f.skip_drop.insert(val);
+        }
         self.ret_val(ret, val.1)
     }
 
@@ -1466,9 +1460,6 @@ impl<'a> View<'a> {
                 continue;
             }
             let llval = self.get_val(l)?;
-            if llval == to_return {
-                continue;
-            }
             self.drop_val(llval, l.1);
         }
         if let Ty::Str = ty {

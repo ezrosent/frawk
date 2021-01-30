@@ -353,14 +353,6 @@ pub(crate) trait CodeGenerator: Backend {
     /// Advances the iterator in `iter` to the next element and stores the current element in `dst`
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()>;
 
-    // The plumbing for builtin variable manipulation is mostly pretty wrote ... anything we can do
-    // here?
-
-    /// Method called after loading a builtin variable into `dst`.
-    ///
-    /// This is included to help clean up ref-counts on string or map builtins, if necessary.
-    fn var_loaded(&mut self, dst: Ref) -> Result<()>;
-
     // derived functions
 
     /// Loads contents of given slot into dst.
@@ -841,8 +833,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let varv = self.const_int(*var as i64);
                 let res = self.call_intrinsic(intrinsic!(load_var_str), &mut [rt, varv])?;
                 let dref = dst.reflect();
-                self.bind_val(dref, res)?;
-                self.var_loaded(dref)
+                self.bind_val(dref, res)
             }
             StoreVarStr(var, src) => {
                 let rt = self.runtime_val();
@@ -856,8 +847,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let varv = self.const_int(*var as i64);
                 let res = self.call_intrinsic(intrinsic!(load_var_int), &mut [rt, varv])?;
                 let dref = dst.reflect();
-                self.bind_val(dref, res)?;
-                self.var_loaded(dref)
+                self.bind_val(dref, res)
             }
             StoreVarInt(var, src) => {
                 let rt = self.runtime_val();
@@ -871,23 +861,20 @@ pub(crate) trait CodeGenerator: Backend {
                 let varv = self.const_int(*var as i64);
                 let res = self.call_intrinsic(intrinsic!(load_var_intmap), &mut [rt, varv])?;
                 let dref = dst.reflect();
-                self.bind_val(dref, res)?;
-                self.var_loaded(dref)
+                self.bind_val(dref, res)
             }
             StoreVarIntMap(var, src) => {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_void(external!(store_var_intmap), &mut [rt, varv, srcv])?;
-                Ok(())
+                self.call_void(external!(store_var_intmap), &mut [rt, varv, srcv])
             }
             LoadVarStrMap(dst, var) => {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let res = self.call_intrinsic(intrinsic!(load_var_strmap), &mut [rt, varv])?;
                 let dref = dst.reflect();
-                self.bind_val(dref, res)?;
-                self.var_loaded(dref)
+                self.bind_val(dref, res)
             }
             StoreVarStrMap(var, src) => {
                 let rt = self.runtime_val();

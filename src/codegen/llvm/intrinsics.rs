@@ -52,6 +52,7 @@ impl IntrinsicMap {
             _ => return None,
         }
     }
+
     pub(crate) fn register(
         &mut self,
         name: &str,
