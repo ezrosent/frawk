@@ -279,24 +279,6 @@ impl<'a> StrRep<'a> {
     }
 }
 
-// TODO: remove this block
-impl<'a> Str<'a> {
-    pub unsafe fn get_count(&self) -> (usize, &'static str) {
-        let rep = &mut *self.0.get();
-        let tag = rep.get_tag();
-        match tag {
-            StrTag::Inline => (!0, "INLINE"),
-            StrTag::Literal => (!0, "LITERAL"),
-            StrTag::Shared => (rep.view_as(|s: &Shared| (&*s.buf.0).count.get()), "SHARED"),
-            StrTag::Boxed => (rep.view_as(|b: &Boxed| (&*b.buf.0).count.get()), "BOXED"),
-            StrTag::Concat => (
-                rep.view_as(|c: &Concat| std::rc::Rc::strong_count(&c.inner)),
-                "CONCAT",
-            ),
-        }
-    }
-}
-
 impl<'a> Drop for StrRep<'a> {
     fn drop(&mut self) {
         // Drop shows up on a lot of profiles. It doesn't appear as though drop is particularly
@@ -1099,20 +1081,6 @@ impl Drop for UniqueBuf {
     }
 }
 
-impl Buf {
-    pub fn drop_print(&mut self, s: &str) {
-        let header: &BufHeader = unsafe { &(*self.0) };
-        let cur = header.count.get();
-        eprintln!("[{}] dropping from {}", cur, s);
-        debug_assert!(cur > 0);
-        if cur == 1 {
-            mem::drop(UniqueBuf(self.0 as *mut _));
-            return;
-        }
-        header.count.set(cur - 1);
-    }
-}
-
 impl Drop for Buf {
     fn drop(&mut self) {
         let header: &BufHeader = unsafe { &(*self.0) };
@@ -1204,7 +1172,15 @@ impl Buf {
         if len == 0 {
             Str::default()
         } else
-        /*if len <= MAX_INLINE_SIZE {
+        /* NB: we could also have the following.
+         * This creates a tradeoff: in scripts where we split several fields, performing this copy
+         * has a noticeable impact on performance.
+         *
+         * In scripts that mainly read a small number of columns, the additional indirection layer
+         * of indirection leads to a marginal performance hit when reading this data. For now, we
+         * opt for the faster `slice` operation, but there's a solid case for either one, to the
+         * point where we may want this to be configurable.
+         * if len <= MAX_INLINE_SIZE {
             unsafe {
                 Str::from_rep(
                     Inline::from_raw(self.as_ptr().offset(std::cmp::max(0, from as isize)), len)
