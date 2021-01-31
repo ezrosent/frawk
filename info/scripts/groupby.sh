@@ -1,13 +1,14 @@
-MAWK=mawk
-GAWK=gawk
+MAWK=../mawk
+GAWK="../gawk -b"
 TSV_UTILS_BIN=../bin
-FRAWK=frawk
+FRAWK=../frawk
 
 CSV=../TREE_GRM_ESTN.csv
 TSV=../TREE_GRM_ESTN.tsv
 
 AWK_SCRIPT='
-NR > 1 { N[$6]++; SUM[$6]+=$2; }
+BEGIN { getline; }
+{ N[$6]++; SUM[$6]+=$2; }
 END {
     OFS="\t"
     for (k in N) {

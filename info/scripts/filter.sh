@@ -1,9 +1,9 @@
 # Filter fields in all_train based on numeric values
-MAWK=mawk
-GAWK=gawk
+MAWK=../mawk
+GAWK="../gawk -b"
 TSV_UTILS_BIN=../bin
 XSV=xsv
-FRAWK=frawk
+FRAWK=../frawk
 
 CSV1=../all_train.csv
 CSV2=../TREE_GRM_ESTN.csv
@@ -20,14 +20,14 @@ for i in {1..5}; do
 	time $MAWK -F'\t' "$AWK_SCRIPT" "$TSV1" > /dev/null
 	time $GAWK -F,    "$AWK_SCRIPT" "$CSV1" > /dev/null
 	time $GAWK -F'\t' "$AWK_SCRIPT" "$TSV1" > /dev/null
-	time $FRAWK -bllvm -icsv --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
-	time $FRAWK -bllvm -itsv --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
-	time $FRAWK -bllvm -icsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
-	time $FRAWK -bllvm -itsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
-	time $FRAWK -bcranelift -icsv --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
-	time $FRAWK -bcranelift -itsv --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
-	time $FRAWK -bcranelift -icsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT" "$CSV1" 
-	time $FRAWK -bcranelift -itsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT" "$TSV1" 
+	time $FRAWK -bllvm -icsv "$AWK_SCRIPT" "$CSV1"  > /dev/null
+	time $FRAWK -bllvm -itsv "$AWK_SCRIPT" "$TSV1"  > /dev/null
+	time $FRAWK -bllvm -icsv -pr -j3 "$AWK_SCRIPT" "$CSV1"  > /dev/null
+	time $FRAWK -bllvm -itsv -pr -j3 "$AWK_SCRIPT" "$TSV1"  > /dev/null
+	time $FRAWK -bcranelift -icsv "$AWK_SCRIPT" "$CSV1" > /dev/null
+	time $FRAWK -bcranelift -itsv "$AWK_SCRIPT" "$TSV1" > /dev/null
+	time $FRAWK -bcranelift -icsv -pr -j3 "$AWK_SCRIPT" "$CSV1" > /dev/null
+	time $FRAWK -bcranelift -itsv -pr -j3 "$AWK_SCRIPT" "$TSV1" > /dev/null
 	time $TSV_UTILS_BIN/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 "$TSV1" > /dev/null
 	set +x
 done
