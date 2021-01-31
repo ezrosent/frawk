@@ -529,7 +529,7 @@ impl<'a> View<'a> {
                                     None
                                 }
                             }) {
-                                self.mov_inner(*ty, *dst_reg, src_reg, /*skip_drop=*/ true)?;
+                                self.mov_inner(*ty, *dst_reg, src_reg, /*skip_drop=*/ false)?;
                             }
                         } else {
                             // We can bail out once we see the first non-phi instruction. Those all go
@@ -1112,9 +1112,8 @@ impl<'a> View<'a> {
                 self.builder.ins().store(MemFlags::trusted(), v, p, 0);
             }
             MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
-                // first, ref the new value
                 if let VarKind::Global = kind {
-                    // then, drop the value currently in the pointer
+                    // Drop the value currently in the pointer
                     let p = self.builder.use_var(var);
                     let pointee = self
                         .builder
