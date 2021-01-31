@@ -1180,14 +1180,14 @@ impl Buf {
          * of indirection leads to a marginal performance hit when reading this data. For now, we
          * opt for the faster `slice` operation, but there's a solid case for either one, to the
          * point where we may want this to be configurable.
-         * if len <= MAX_INLINE_SIZE {
+        if len <= MAX_INLINE_SIZE {
             unsafe {
                 Str::from_rep(
                     Inline::from_raw(self.as_ptr().offset(std::cmp::max(0, from as isize)), len)
                         .into(),
                 )
             }
-        } else*/
+        } else */
         if likely(from <= u32::max_value() as usize && to <= u32::max_value() as usize) {
             Str::from_rep(
                 Shared {

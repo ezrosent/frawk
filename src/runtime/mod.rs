@@ -563,12 +563,25 @@ impl<K, V> Clone for SharedMap<K, V> {
     }
 }
 
+// For a subset of map operations, we ignore the refcell checks in a release build. This is because
+// the public API for SharedMap does not permit taking capturing a reference to an element of the
+// map (e.g. keys and iterators clone the relevant entries in the map).
+//
+// We keep borrow_mut() in debug builds to catch regressions.
+
 impl<K: Hash + Eq, V> SharedMap<K, V> {
     pub(crate) fn len(&self) -> usize {
         self.0.borrow().len()
     }
     pub(crate) fn insert(&self, k: K, v: V) {
-        self.0.borrow_mut().insert(k, v);
+        #[cfg(debug_assertions)]
+        {
+            self.0.borrow_mut().insert(k, v);
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            unsafe { &mut *self.0.as_ptr() }.insert(k, v);
+        }
     }
     pub(crate) fn delete(&self, k: &K) {
         self.0.borrow_mut().remove(k);
@@ -602,7 +615,14 @@ impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
 
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     pub(crate) fn get(&self, k: &K) -> Option<V> {
-        self.0.borrow().get(k).cloned()
+        #[cfg(debug_assertions)]
+        {
+            self.0.borrow().get(k).cloned()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            unsafe { &mut *self.0.as_ptr() }.get(k).cloned()
+        }
     }
 }
 
