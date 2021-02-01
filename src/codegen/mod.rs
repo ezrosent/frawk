@@ -899,7 +899,7 @@ pub(crate) trait CodeGenerator: Backend {
             AllocMap(_, _) => {
                 err!("unexpected AllocMap (allocs are handled differently in LLVM)")
             }
-            Ret | Halt | Jmp(_) | JmpIf(_, _) | Call(_) => {
+            Ret | Jmp(_) | JmpIf(_, _) | Call(_) => {
                 err!("unexpected bytecode-level control flow")
             }
         }

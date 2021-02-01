@@ -370,7 +370,6 @@ pub(crate) mod boilerplate {
             | IterHasNext{..}
             | JmpIf(..)
             | Jmp(_)
-            | Halt
             | Push(..)
             | Pop(..)
             // We consume high-level instructions, so calls and returns are handled by visit_hl

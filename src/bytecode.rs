@@ -286,7 +286,6 @@ pub(crate) enum Instr<'a> {
     // Control
     JmpIf(Reg<Int>, Label),
     Jmp(Label),
-    Halt,
 
     // Functions
     // TODO: we may need to push iterators as well?
@@ -770,8 +769,7 @@ impl<'a> Instr<'a> {
                 key.accum(&mut f);
                 val.accum(&mut f);
             }
-            UpdateUsedFields() | NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret
-            | Halt => {}
+            UpdateUsedFields() | NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret => {}
         }
     }
 }
