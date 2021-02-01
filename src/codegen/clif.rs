@@ -26,7 +26,9 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::builtins;
 use crate::bytecode::Accum;
-use crate::codegen::{intrinsics, Backend, CodeGenerator, Config, Jit, Op, Ref, Sig, StrReg};
+use crate::codegen::{
+    intrinsics, Backend, CodeGenerator, Config, Handles, Jit, Op, Ref, Sig, StrReg,
+};
 use crate::common::{traverse, CompileError, Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Typer};
 use crate::runtime::{self, UniqueStr};
@@ -65,8 +67,30 @@ struct Prelude {
 #[derive(Clone)]
 struct VarRef {
     var: Variable,
-    is_global: bool,
-    skip_drop: bool,
+    kind: VarKind,
+}
+
+/// The different kinds of variables we track
+#[derive(Copy, Clone)]
+enum VarKind {
+    /// Variables defined locally in the a function. Under some circumstances, we do not drop these
+    /// variables (e.g. at join points, or when returning them from a function).
+    Local { skip_drop: bool },
+    /// frawk-level function parameters. These are treated very similarly to local variables with
+    /// skip_drop set to true, the only difference is that parameters are reffed before being
+    /// returned from a function, whereas we simply skip dropping.
+    Param,
+    /// Global variables. These are treated specially throughout, as even integers and floats are
+    /// passed by reference. Like params, these are reffed before being returned.
+    Global,
+}
+
+impl VarKind {
+    fn skip_drop(&mut self) {
+        if let VarKind::Local { skip_drop } = self {
+            *skip_drop = true;
+        }
+    }
 }
 
 /// Iterator-specific variable state. This is treated differently from [`VarRef`] because iterators
@@ -109,6 +133,7 @@ struct Shared {
     // We need cranelift Signatures for declaring external functions. We put them here to reuse
     // them across calls to `register_external_fn`.
     sig: Signature,
+    handles: Handles,
 }
 
 /// Toplevel information
@@ -189,6 +214,7 @@ impl Generator {
             func_ids: Default::default(),
             external_funcs: Default::default(),
             sig: cctx.func.signature.clone(),
+            handles: Default::default(),
         };
         let mut global = Generator {
             shared,
@@ -285,8 +311,7 @@ impl Generator {
                 (reg, ty),
                 VarRef {
                     var,
-                    is_global: true,
-                    skip_drop: true,
+                    kind: VarKind::Global,
                 },
             );
         }
@@ -504,7 +529,7 @@ impl<'a> View<'a> {
                                     None
                                 }
                             }) {
-                                self.mov_inner(*ty, *dst_reg, src_reg, /*skip_drop=*/ true)?;
+                                self.mov_inner(*ty, *dst_reg, src_reg, /*skip_drop=*/ false)?;
                             }
                         } else {
                             // We can bail out once we see the first non-phi instruction. Those all go
@@ -578,19 +603,17 @@ impl<'a> View<'a> {
                     rf,
                     VarRef {
                         var,
-                        is_global: true,
-                        skip_drop: false,
+                        kind: VarKind::Global,
                     },
                 );
             } else {
-                // normal arg. These behave like normal params, except we do not drop them (they
+                // normal arg. These behave like normal variables, except we do not drop them (they
                 // are, in effect, borrowed).
                 self.f.vars.insert(
                     rf,
                     VarRef {
                         var,
-                        is_global: false,
-                        skip_drop: true,
+                        kind: VarKind::Param,
                     },
                 );
             }
@@ -602,16 +625,8 @@ impl<'a> View<'a> {
     /// drop procedure and (b) have not been marked `skip_drop`.
     fn drop_all(&mut self) {
         let mut drops = Vec::new();
-        for (
-            (_, ty),
-            VarRef {
-                var,
-                is_global,
-                skip_drop,
-            },
-        ) in self.f.vars.iter()
-        {
-            if !is_global && !skip_drop {
+        for ((_, ty), VarRef { var, kind }) in self.f.vars.iter() {
+            if let VarKind::Local { skip_drop: false } = kind {
                 use compile::Ty::*;
                 let drop_fn = match ty {
                     MapIntInt => external!(drop_intint),
@@ -649,7 +664,11 @@ impl<'a> View<'a> {
             // We don't use get_val here because we want to pass the pointer to the global, and
             // get_val will issue a load.
             match self.f.vars.get(global) {
-                Some(VarRef { var, is_global, .. }) if *is_global => {
+                Some(VarRef {
+                    var,
+                    kind: VarKind::Global,
+                    ..
+                }) => {
                     to_pass.push(self.builder.use_var(*var));
                 }
                 _ => return err!("internal error, functions disagree on if reference is global"),
@@ -689,7 +708,18 @@ impl<'a> View<'a> {
             }
             Ret(reg, ty) => {
                 let mut v = self.get_val((*reg, *ty))?;
-                self.do_not_drop((*reg, *ty));
+                if matches!(
+                    self.f.vars.get_mut(&(*reg, *ty)).map(|x| {
+                        // if this is a local, we want to avoid dropping it.
+                        x.kind.skip_drop();
+                        &x.kind
+                    }),
+                    Some(VarKind::Param) | Some(VarKind::Global)
+                ) {
+                    // This was passed in as a parameter, so us returning it will introduce a new
+                    // reference.
+                    self.ref_val(*ty, v);
+                }
                 if let compile::Ty::Str = ty {
                     let str_ty = self.get_ty(*ty);
                     v = self.builder.ins().load(str_ty, MemFlags::trusted(), v, 0);
@@ -1054,26 +1084,19 @@ impl<'a> View<'a> {
             let var = self.declare_local(r.1)?;
             let vref = VarRef {
                 var,
-                skip_drop,
-                is_global: false,
+                kind: VarKind::Local { skip_drop },
             };
             self.f.vars.insert(r, vref.clone());
             Ok(vref)
         }
     }
 
-    fn do_not_drop(&mut self, r: Ref) {
-        if let Some(VarRef { skip_drop, .. }) = self.f.vars.get_mut(&r) {
-            *skip_drop = true;
-        }
-    }
-
     fn bind_val_inner(&mut self, r: Ref, v: Value, skip_drop: bool) -> Result<()> {
         use compile::Ty::*;
-        let VarRef { var, is_global, .. } = self.get_var_default_local(r, skip_drop)?;
+        let VarRef { var, kind } = self.get_var_default_local(r, skip_drop)?;
         match r.1 {
             Int | Float => {
-                if is_global {
+                if let VarKind::Global = kind {
                     let p = self.builder.use_var(var);
                     self.builder.ins().store(MemFlags::trusted(), v, p, 0);
                 } else {
@@ -1089,11 +1112,8 @@ impl<'a> View<'a> {
                 self.builder.ins().store(MemFlags::trusted(), v, p, 0);
             }
             MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
-                // first, ref the new value
-                // NB: we used to have a ref here, but it appears to be unnecessary
-                //   self.ref_val(r.1, v);
-                if is_global {
-                    // then, drop the value currently in the pointer
+                if let VarKind::Global = kind {
+                    // Drop the value currently in the pointer
                     let p = self.builder.use_var(var);
                     let pointee = self
                         .builder
@@ -1274,8 +1294,8 @@ impl<'a> CodeGenerator for View<'a> {
             return Ok(self.const_int(0));
         }
 
-        let VarRef { var, is_global, .. } =
-            self.get_var_default_local(r, /*skip_drop=*/ false)?;
+        let VarRef { var, kind, .. } = self.get_var_default_local(r, /*skip_drop=*/ false)?;
+        let is_global = matches!(kind, VarKind::Global);
         let val = self.builder.use_var(var);
 
         match r.1 {
@@ -1313,8 +1333,11 @@ impl<'a> CodeGenerator for View<'a> {
         let high_v = self.builder.ins().iconst(types::I64, high);
         self.builder.ins().iconcat(low_v, high_v)
     }
-    fn const_ptr<'b, T>(&'b mut self, c: &'b T) -> Self::Val {
+    fn const_ptr<T>(&mut self, c: *const T) -> Self::Val {
         self.const_int(c as *const _ as i64)
+    }
+    fn handles(&mut self) -> &mut Handles {
+        &mut self.shared.handles
     }
 
     fn call_void(&mut self, func: *const u8, args: &mut [Self::Val]) -> Result<()> {
@@ -1480,10 +1503,6 @@ impl<'a> CodeGenerator for View<'a> {
 
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()> {
         // Compute base+cur and load it into a value
-        //
-        // ... this is wrong, right?
-        // ... this is just byte-addressing. We need to multiply by the size of the type.
-        //
         let IterState { cur, base, .. } = self.get_iter(iter)?;
         let base = self.builder.use_var(base);
         let cur_val = self.builder.use_var(cur);
@@ -1501,12 +1520,6 @@ impl<'a> CodeGenerator for View<'a> {
         self.bind_val(dst, contents)?;
         let dst_ptr = self.get_val(dst)?;
         self.ref_val(dst.1, dst_ptr);
-        Ok(())
-    }
-
-    fn var_loaded(&mut self, _dst: Ref) -> Result<()> {
-        // The LLVM backend refs maps more aggressively, so we use this as a hook to insert drops.
-        // They don't appear to be needed for cranelift
         Ok(())
     }
 }

@@ -31,8 +31,6 @@ use std::rc::Rc;
 use std::slice;
 use std::str;
 
-// TODO look into a design based on unions
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(usize)]
 enum StrTag {
@@ -447,6 +445,31 @@ impl<'a> Str<'a> {
         });
     }
 
+    pub fn join_slice<'other, 'b>(&self, inps: &[Str<'other>]) -> Str<'b> {
+        // We've noticed that performance of `join_slice` is very sensitive to the number of
+        // `realloc` calls that happen when pushing onto DynamicBufHeap, so we spend the extra time
+        // of computing the size of the joined string ahead of time exactly.
+        let mut sv = SmallVec::<[&[u8]; 16]>::with_capacity(inps.len());
+        let sep_bytes: &[u8] = unsafe { &*self.get_bytes() };
+        let mut size = 0;
+        for (i, inp) in inps.iter().enumerate() {
+            let inp_bytes = unsafe { &*inp.get_bytes() };
+            sv.push(inp_bytes);
+            size += inp_bytes.len();
+            if i < inps.len() - 1 {
+                size += sep_bytes.len()
+            }
+        }
+        let mut buf = DynamicBufHeap::new(size);
+        for (i, inp) in sv.into_iter().enumerate() {
+            buf.write(inp).unwrap();
+            if i < inps.len() - 1 {
+                buf.write(sep_bytes).unwrap();
+            }
+        }
+        unsafe { buf.into_str() }
+    }
+
     pub fn join(&self, mut ss: impl Iterator<Item = Str<'a>>) -> Str<'a> {
         let mut res = if let Some(s) = ss.next() {
             s
@@ -856,6 +879,7 @@ impl<'a> From<String> for Str<'a> {
 
 impl<'a> From<Int> for Str<'a> {
     fn from(i: Int) -> Str<'a> {
+        // TODO: use itoa, and optimize further
         let digit_guess = if i >= 1000000000000000 || i <= -100000000000000 {
             // Allocate on the heap; this is the maximum length we expect to see.
             21
@@ -927,12 +951,17 @@ impl DynamicBufHeap {
         self.data.into_buf()
     }
     pub unsafe fn into_str<'a>(mut self) -> Str<'a> {
+        // TODO: we can probably make this safe? I think this was unsafe from back when strings had
+        // to be utf8.
         // Shrink the buffer to fit.
         self.realloc(self.write_head);
         self.data.into_buf().into_str()
     }
     unsafe fn realloc(&mut self, new_cap: usize) {
         let cap = self.size();
+        if cap == new_cap {
+            return;
+        }
         let new_buf = realloc(
             self.data.0 as *mut u8,
             UniqueBuf::layout(cap),
@@ -1142,14 +1171,24 @@ impl Buf {
         let len = to.saturating_sub(from);
         if len == 0 {
             Str::default()
-        } else if len <= MAX_INLINE_SIZE {
+        } else
+        /* NB: we could also have the following.
+         * This creates a tradeoff: in scripts where we split several fields, performing this copy
+         * has a noticeable impact on performance.
+         *
+         * In scripts that mainly read a small number of columns, the additional indirection layer
+         * of indirection leads to a marginal performance hit when reading this data. For now, we
+         * opt for the faster `slice` operation, but there's a solid case for either one, to the
+         * point where we may want this to be configurable.
+        if len <= MAX_INLINE_SIZE {
             unsafe {
                 Str::from_rep(
                     Inline::from_raw(self.as_ptr().offset(std::cmp::max(0, from as isize)), len)
                         .into(),
                 )
             }
-        } else if likely(from <= u32::max_value() as usize && to <= u32::max_value() as usize) {
+        } else */
+        if likely(from <= u32::max_value() as usize && to <= u32::max_value() as usize) {
             Str::from_rep(
                 Shared {
                     buf: self.clone(),

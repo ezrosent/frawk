@@ -234,6 +234,7 @@ pub(crate) mod boilerplate {
                 f(dst.into(), Some(x.into()));
                 f(dst.into(), Some(y.into()));
             }
+            StartsWithConst(dst, x, _) => f(dst.into(), Some(x.into())),
 
             // NB: this assumes that regexes that have been constant-folded are not tainted by
             // user-input. That is certainly true today, but any kind of dynamic simplification or

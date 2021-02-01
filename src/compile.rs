@@ -762,7 +762,7 @@ impl<'a> Typer<'a> {
             );
             if let Some(old) = map.insert(*id, (reg, *ty)) {
                 return err!(
-                    "internal error: duplicate entries for same local in types  at id={:?}; {:?} vs {:?}",
+                    "internal error: duplicate entries for same local in types at id={:?}; {:?} vs {:?}",
                     id,
                     old,
                     (reg, *ty)
@@ -822,9 +822,14 @@ impl<'a> Typer<'a> {
         self.used_fields = ufa.solve();
         if let Some(tsa) = &mut self.taint_analysis {
             if !tsa.ok() {
-                return err!("command potentially containing interpolated user input detected.\nIf this is a false positive, you can pass the -A flag to bypass this check.");
+                return err!(concat!(
+                    "command potentially containing interpolated user ",
+                    "input detected.\nIf this is a false positive, you can pass the -A flag ",
+                    "to bypass this check."
+                ));
             }
         }
+
         if let Some(sca) = &mut self.string_constants {
             let mut strs = Vec::new();
             if sca.cfg().query_regex {
@@ -841,6 +846,7 @@ impl<'a> Typer<'a> {
                     let re = Arc::new(Regex::new(text).map_err(|err| {
                         CompileError(format!("regex parse error during compilation: {}", err))
                     })?);
+                    // TODO: finish up
                     let inst = self.frames[frame]
                         .cfg
                         .node_weight_mut(NodeIx::new(bb))
@@ -850,7 +856,11 @@ impl<'a> Typer<'a> {
                         .unwrap();
                     let new_inst: Instr = match inst {
                         Either::Left(LL::IsMatch(dst, s, _)) => {
-                            Either::Left(LL::IsMatchConst(*dst, *s, re))
+                            if let Some(bs) = extract_anchored_literal(text) {
+                                Either::Left(LL::StartsWithConst(*dst, *s, bs))
+                            } else {
+                                Either::Left(LL::IsMatchConst(*dst, *s, re))
+                            }
                         }
                         Either::Left(LL::Match(dst, s, _)) => {
                             Either::Left(LL::MatchConst(*dst, *s, re))
@@ -1903,4 +1913,47 @@ impl<'a, 'b> View<'a, 'b> {
         };
         Ok(())
     }
+}
+
+/// For regex patterns of the form "^<literal>", return a copy of the literal.
+///
+/// This works as a special case for regex constant folding, where we can compile matches into
+/// simple "startswith" calls. This sort of trick is still only used in a few places.
+fn extract_anchored_literal(text: &str) -> Option<Arc<[u8]>> {
+    use regex_syntax::ast::{parse, Assertion, AssertionKind, Ast, Concat};
+    // We should only call extract_anchored_literal
+    let re_ast = parse::Parser::new().parse(text).unwrap();
+    let mut bs = Vec::new();
+    if let Ast::Concat(Concat { asts, .. }) = &re_ast {
+        if asts.len() >= 2
+            && matches!(
+                asts[0],
+                Ast::Assertion(Assertion {
+                    kind: AssertionKind::StartLine,
+                    ..
+                })
+            )
+        {
+            for ast in &asts[1..] {
+                if let Ast::Literal(l) = ast {
+                    if let Some(b) = l.byte() {
+                        bs.push(b);
+                        continue;
+                    }
+                    let cur = bs.len();
+                    for _ in 0..l.c.len_utf8() {
+                        bs.push(0);
+                    }
+                    l.c.encode_utf8(&mut bs[cur..]);
+                } else {
+                    return None;
+                }
+            }
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    }
+    Some(bs.into())
 }

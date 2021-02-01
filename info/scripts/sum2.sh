@@ -1,10 +1,10 @@
 # Sum 2 numeric fields
 
-MAWK=mawk
-GAWK=gawk
+MAWK=../mawk
+GAWK="../gawk -b"
 TSV_UTILS_BIN=../bin
 XSV=xsv
-FRAWK=frawk
+FRAWK=../frawk
 
 CSV1=../all_train.csv
 CSV2=../TREE_GRM_ESTN.csv

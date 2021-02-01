@@ -794,6 +794,11 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     ReseedRng(res) => {
                         *index_mut(&mut self.ints, res) = self.core.reseed_random() as Int;
                     }
+                    StartsWithConst(res, s, bs) => {
+                        let s_bytes = unsafe { &*index(&self.strs, s).get_bytes() };
+                        *index_mut(&mut self.ints, res) =
+                            (bs.len() <= s_bytes.len() && &s_bytes[..bs.len()] == &**bs) as Int;
+                    }
                     Concat(res, l, r) => {
                         let res = *res;
                         let l = self.get(*l).clone();

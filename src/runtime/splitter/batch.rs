@@ -31,7 +31,7 @@ use crate::common::{ExecutionStrategy, Result};
 use crate::pushdown::FieldSet;
 use crate::runtime::{
     str_impl::{Buf, Str, UniqueBuf},
-    Int, LazyVec, RegexCache,
+    Int, RegexCache,
 };
 
 use super::{
@@ -1536,9 +1536,8 @@ where
         } else if old.used_fields != self.used_fields {
             self.used_fields = old.used_fields.clone()
         }
-        let mut old_fields = old.fields.get_cleared_vec();
-        let changed = self.read_line_inner(&mut old.line, &mut old_fields)?;
-        old.fields = LazyVec::from_vec(old_fields);
+        old.fields.clear();
+        let changed = self.read_line_inner(&mut old.line, &mut old.fields)?;
         Ok(changed)
     }
     fn read_state(&self) -> i64 {
@@ -1797,7 +1796,6 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::LazyVec;
     use std::io;
     use std::iter;
 
@@ -1834,13 +1832,6 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
     #[test]
     fn sse2_smoke_test() {
         smoke_test::<sse2::Impl>();
-    }
-    fn read_to_vec<T: Clone + Default>(lv: &LazyVec<T>) -> Vec<T> {
-        let mut res = Vec::with_capacity(lv.len());
-        for i in 0..lv.len() {
-            res.push(lv.get(i).unwrap_or_else(Default::default))
-        }
-        res
     }
     fn disp_vec(v: &Vec<Str>) -> String {
         format!(
@@ -1952,7 +1943,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
                 break;
             }
             got_lines.push(line.line.clone());
-            got.push(read_to_vec(&line.fields));
+            got.push(line.fields.clone());
         }
         if got != expected || got_lines != expected_lines {
             eprintln!(
@@ -2143,7 +2134,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
                 break;
             }
             got_lines.push(line.line.clone());
-            got.push(read_to_vec(&line.fields));
+            got.push(line.fields.clone());
         }
         if got != expected || got_lines != expected_lines {
             eprintln!(

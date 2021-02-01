@@ -1274,6 +1274,12 @@ this as well"#
     );
 
     test_program!(
+        global_variable_only_printed,
+        r#"function unused() { return xyz; } BEGIN { print "hi", xyz; }"#,
+        "hi \n"
+    );
+
+    test_program!(
         int_conversions,
         r#"BEGIN {
         x="123.456"

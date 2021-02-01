@@ -27,7 +27,7 @@ fn assert_folded(p: &str) {
             .stdout,
     )
     .unwrap();
-    assert!(out.contains("MatchConst"))
+    assert!(out.contains("MatchConst") || out.contains("StartsWithConst"))
 }
 
 // Compare two byte slices, up to reordering the lines of each.

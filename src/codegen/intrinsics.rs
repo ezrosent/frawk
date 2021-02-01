@@ -103,6 +103,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] hex_str_to_int(str_ref_ty) -> int_ty;
         [ReadOnly] str_to_float(str_ref_ty) -> float_ty;
         [ReadOnly] str_len(str_ref_ty) -> int_ty;
+        starts_with_const(str_ref_ty, rt_ty, int_ty) -> int_ty;
         concat(str_ref_ty, str_ref_ty) -> str_ty;
         [ReadOnly] match_pat(rt_ty, str_ref_ty, str_ref_ty) -> int_ty;
         [ReadOnly] match_const_pat(str_ref_ty, rt_ty) -> int_ty;
@@ -276,6 +277,17 @@ macro_rules! try_abort {
     };
     ($rt:expr, $e:expr) => {
         try_abort!($rt, $e, "")
+    };
+}
+
+// we use a "silent" abort for write errors to play nicely with unix tools like "head" which
+// deliberately close pipes prematurely.
+macro_rules! try_silent_abort {
+    ($rt:expr, $e:expr) => {
+        match $e {
+            Ok(res) => res,
+            Err(_) => exit!($rt),
+        }
     };
 }
 
@@ -641,6 +653,18 @@ pub(crate) unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
     res
 }
 
+pub(crate) unsafe extern "C" fn starts_with_const(
+    s1: *mut c_void,
+    base: *const u8,
+    len: Int,
+) -> Int {
+    debug_assert!(len >= 0);
+    let other = slice::from_raw_parts(base, len as usize);
+    let s1 = &*(s1 as *const Str);
+    let s1_bytes = &*s1.get_bytes();
+    ((s1_bytes.len() >= other.len()) && &s1_bytes[..other.len()] == other) as Int
+}
+
 pub(crate) unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128 {
     let s1 = &*(s1 as *mut Str);
     let s2 = &*(s2 as *mut Str);
@@ -786,7 +810,9 @@ unsafe fn ref_map_generic<K, V>(m: *mut c_void) {
 }
 
 unsafe fn drop_map_generic<K, V>(m: *mut c_void) {
-    mem::drop(mem::transmute::<*mut c_void, runtime::SharedMap<K, V>>(m))
+    let map_ref = mem::transmute::<*mut c_void, runtime::SharedMap<K, V>>(m);
+    debug_assert!(std::rc::Rc::strong_count(&map_ref.0) > 0);
+    mem::drop(map_ref)
 }
 
 // XXX: relying on this doing the same thing regardless of type. We probably want a custom Rc to
@@ -977,7 +1003,7 @@ pub(crate) unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usi
     let args_wrapped: &[&Str] =
         slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
     let rt = rt as *mut Runtime;
-    try_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
+    try_silent_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
 }
 
 pub(crate) unsafe extern "C" fn print_all_file(
@@ -995,7 +1021,7 @@ pub(crate) unsafe extern "C" fn print_all_file(
         try_abort!(rt, FileSpec::try_from(append)),
     ));
 
-    try_abort!(
+    try_silent_abort!(
         rt,
         (*rt)
             .core
@@ -1173,7 +1199,7 @@ macro_rules! convert_in_val {
         $e
     };
     (Map, $e:expr) => {
-        mem::transmute::<*mut c_void, runtime::SharedMap<_, _>>($e)
+        mem::transmute::<&*mut c_void, &runtime::SharedMap<_, _>>(&$e).clone()
     };
 }
 

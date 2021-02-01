@@ -1,9 +1,9 @@
 # Compute the statistics computed by XSV on a string column and numeric column
-MAWK=mawk
-GAWK=gawk
+MAWK=../mawk
+GAWK="../gawk -b"
 TSV_UTILS_BIN=../bin
 XSV=xsv
-FRAWK=frawk
+FRAWK=../frawk
 
 CSV1=../all_train.csv
 CSV2=../TREE_GRM_ESTN.csv

@@ -3,7 +3,7 @@ use std::io::Read;
 
 use crate::common::Result;
 use crate::pushdown::FieldSet;
-use crate::runtime::{LazyVec, Str};
+use crate::runtime::Str;
 use regex::bytes::Regex;
 
 use super::{DefaultLine, LineReader, Reader, ReaderState};
@@ -53,7 +53,7 @@ impl<R: Read> LineReader for RegexSplitter<R> {
         self.start = false;
         let line = rc.with_regex(pat, |re| DefaultLine {
             line: self.read_line_regex(re),
-            fields: LazyVec::new(),
+            fields: Default::default(),
             used_fields: self.used_fields.clone(),
             diverged: false,
         })?;

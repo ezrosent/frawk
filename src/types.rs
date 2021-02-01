@@ -277,7 +277,7 @@
 //! [`State`]: [crate::types::State]
 use crate::builtins;
 use crate::cfg::{self, Function, Ident, ProgramContext};
-use crate::common::{self, NodeIx, NumTy, Result};
+use crate::common::{self, FileSpec, NodeIx, NumTy, Result};
 use crate::compile;
 use hashbrown::{HashMap, HashSet};
 
@@ -983,35 +983,44 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 let ret_ix = self.tc.funcs[&cur_func_key];
                 self.nw.add_dep(v_ix, ret_ix, Constraint::Flows(()));
             }
-            Printf(fmt, args, out) => {
-                // Printf's arguments can be any scalar.
-                //
-                // NB: This information isn't really needed for inference, but it means that we can
-                // avoid extra type-checking when lowering to typed bytecode. It's worth revisiting
-                // this form a performance standpoint.
-                let is_scalar: State = Some(TVar::Scalar(None));
-                let scalar_node = self.constant(is_scalar);
-                let fmt_node = self.val_node(fmt);
-                self.nw
-                    .add_dep(scalar_node, fmt_node, Constraint::Flows(()));
-                for a in args.iter() {
-                    let arg_node = self.val_node(a);
-                    self.nw
-                        .add_dep(scalar_node, arg_node, Constraint::Flows(()));
-                }
-                if let Some((out, _append)) = out {
-                    let out_node = self.val_node(out);
-                    self.nw
-                        .add_dep(scalar_node, out_node, Constraint::Flows(()));
-                }
-            }
+            Printf(fmt, args, out) => self.printf_internal(Some(fmt), &args[..], out),
+            PrintAll(args, out) => self.printf_internal(None, &args[..], out),
             // Builtins have fixed types; no constraint generation is necessary.
             // For IterDrop, we do not add extra constraints because IterBegin and IterNext will be
             // sufficient to determine the type of a given iterator.
             IterDrop(_) | SetBuiltin(_, _) => {}
-            // Attempting something different for PrintAll vs Printf; the constraints are similar,
-            // but looking at deferring the type checks to the `compile` phase.
-            PrintAll(..) => {}
+        }
+    }
+
+    /// A short helper for generating type constraints for `Printf` and `PrintAll`.
+    fn printf_internal<'a>(
+        &mut self,
+        fmt: Option<&cfg::PrimVal<'a>>,
+        args: &[cfg::PrimVal<'a>],
+        out: &Option<(cfg::PrimVal<'a>, FileSpec)>,
+    ) {
+        // Printf's arguments can be any scalar.
+        //
+        // NB: This information isn't really needed for inference, but it simplifies some
+        // of the logic when we compile to bytecode to ensure that there is _some_
+        // constraint for every variable that shows up in a program. It also helps to
+        // localize type errors to this module
+        let is_scalar: State = Some(TVar::Scalar(None));
+        let scalar_node = self.constant(is_scalar);
+        if let Some(fmt) = fmt {
+            let fmt_node = self.val_node(fmt);
+            self.nw
+                .add_dep(scalar_node, fmt_node, Constraint::Flows(()));
+        }
+        for a in args.iter() {
+            let arg_node = self.val_node(a);
+            self.nw
+                .add_dep(scalar_node, arg_node, Constraint::Flows(()));
+        }
+        if let Some((out, _)) = out {
+            let out_node = self.val_node(out);
+            self.nw
+                .add_dep(scalar_node, out_node, Constraint::Flows(()));
         }
     }
 

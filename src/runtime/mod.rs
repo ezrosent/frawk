@@ -1,4 +1,4 @@
-use crate::common::{Either, FileSpec, Result};
+use crate::common::{FileSpec, Result};
 use hashbrown::HashMap;
 use regex::bytes::Regex;
 use std::cell::{Cell, RefCell};
@@ -33,143 +33,6 @@ pub use splitter::{
     ChainedReader, Line, LineReader,
 };
 pub use str_impl::{Str, UniqueStr};
-
-// TODO(ezr): this IntMap can probably be unboxed, but wait until we decide whether or not to
-// specialize the IntMap implementation.
-pub(crate) type LazyVec<T> = Either<Vec<T>, IntMap<T>>;
-
-impl<T> LazyVec<T> {
-    pub(crate) fn clear(&mut self) {
-        *self = match self {
-            Either::Left(v) => {
-                v.clear();
-                return;
-            }
-            Either::Right(_) => Either::Left(Default::default()),
-        }
-    }
-    pub fn from_vec(v: Vec<T>) -> Self {
-        Either::Left(v)
-    }
-    pub fn get_cleared_vec(&mut self) -> Vec<T> {
-        match self {
-            Either::Left(v) => {
-                let mut res = std::mem::replace(v, Vec::new());
-                res.clear();
-                res
-            }
-            Either::Right(_) => {
-                *self = Either::Left(Vec::new());
-                Vec::new()
-            }
-        }
-    }
-    pub(crate) fn len(&self) -> usize {
-        for_either!(self, |x| x.len())
-    }
-    pub fn keys(&self) -> impl Iterator<Item = usize> {
-        match self {
-            Either::Left(v) => Either::Left(0..v.len()),
-            Either::Right(m) => Either::Right(m.to_vec().into_iter().map(|x| x as usize)),
-        }
-    }
-}
-
-impl LazyVec<Str<'static>> {
-    pub(crate) fn join_by<F>(
-        &self,
-        sep: &Str<'static>,
-        start: usize,
-        end: usize,
-        mut by: F,
-    ) -> Str<'static>
-    where
-        F: FnMut(Str<'static>) -> Str<'static>,
-    {
-        // assumes zero-indexing, doesn't do len-checks.
-        match self {
-            Either::Left(v) => sep.join(v[start..end].iter().cloned().map(by)),
-            Either::Right(m) => {
-                let r = m.0.borrow();
-                let mut v: Vec<_> = r.keys().cloned().collect();
-                v.sort();
-                sep.join(
-                    v.into_iter()
-                        .filter(|ix| *ix >= start as Int && *ix < end as Int)
-                        .map(|i| by(r[&i].clone())),
-                )
-            }
-        }
-    }
-}
-impl<'a> LazyVec<Str<'a>> {
-    pub(crate) fn join_all(&self, sep: &Str<'a>) -> Str<'a> {
-        match self {
-            Either::Left(v) => sep.join(v.iter().cloned()),
-            Either::Right(m) => {
-                let r = m.0.borrow();
-                let mut v: Vec<_> = r.keys().cloned().collect();
-                v.sort();
-                sep.join(v.into_iter().map(|i| r[&i].clone()))
-            }
-        }
-    }
-}
-
-impl<T: Clone> LazyVec<T> {
-    pub(crate) fn get(&self, ix: usize) -> Option<T> {
-        match self {
-            Either::Left(v) => v.get(ix).cloned(),
-            Either::Right(m) => m.get(&(ix as i64)),
-        }
-    }
-}
-impl<T> LazyVec<T> {
-    pub(crate) fn new() -> LazyVec<T> {
-        Either::Left(Default::default())
-    }
-}
-
-impl<T: Default> LazyVec<T> {
-    pub(crate) fn push(&mut self, t: T) {
-        self.insert(self.len(), t)
-    }
-    pub(crate) fn insert(&mut self, ix: usize, t: T) {
-        *self = loop {
-            match self {
-                Either::Left(v) => {
-                    if ix < v.len() {
-                        v[ix] = t;
-                    } else if ix == v.len() {
-                        v.push(t);
-                    // XXX: this is a heuristic to keep a dense representation, perhaps we should
-                    // remove and just upgrade?
-                    //
-                    // Note that this only works with $, and will stop working if we implement
-                    // something like `join` in the language (it inserts things that the user never
-                    // inserted).
-                    } else if ix < v.len() + 16 {
-                        while ix > v.len() {
-                            v.push(Default::default())
-                        }
-                        v.push(t);
-                    } else {
-                        break Either::Right(
-                            v.drain(..)
-                                .enumerate()
-                                .map(|(ix, t)| (ix as i64, t))
-                                .collect::<IntMap<T>>(),
-                        );
-                    }
-                }
-                Either::Right(m) => {
-                    m.insert(ix as i64, t);
-                }
-            }
-            return;
-        };
-    }
-}
 
 #[derive(Default)]
 pub struct RegexCache(Registry<Regex>);
@@ -281,7 +144,7 @@ impl RegexCache {
         pat: &Str,
         s: &Str<'a>,
         used_fields: &FieldSet,
-        v: &mut LazyVec<Str<'a>>,
+        v: &mut Vec<Str<'a>>,
     ) -> Result<()> {
         self.split_internal(pat, s, used_fields, |s| v.push(s))
     }
@@ -686,7 +549,7 @@ where
 // NB These are repr(transparent) because we pass them around as void* when compiling with LLVM.
 #[repr(transparent)]
 #[derive(Debug)]
-pub(crate) struct SharedMap<K, V>(Rc<RefCell<HashMap<K, V>>>);
+pub(crate) struct SharedMap<K, V>(pub(crate) Rc<RefCell<HashMap<K, V>>>);
 
 impl<K, V> Default for SharedMap<K, V> {
     fn default() -> SharedMap<K, V> {
@@ -700,12 +563,25 @@ impl<K, V> Clone for SharedMap<K, V> {
     }
 }
 
+// For a subset of map operations, we ignore the refcell checks in a release build. This is because
+// the public API for SharedMap does not permit taking capturing a reference to an element of the
+// map (e.g. keys and iterators clone the relevant entries in the map).
+//
+// We keep borrow_mut() in debug builds to catch regressions.
+
 impl<K: Hash + Eq, V> SharedMap<K, V> {
     pub(crate) fn len(&self) -> usize {
         self.0.borrow().len()
     }
     pub(crate) fn insert(&self, k: K, v: V) {
-        self.0.borrow_mut().insert(k, v);
+        #[cfg(debug_assertions)]
+        {
+            self.0.borrow_mut().insert(k, v);
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            unsafe { &mut *self.0.as_ptr() }.insert(k, v);
+        }
     }
     pub(crate) fn delete(&self, k: &K) {
         self.0.borrow_mut().remove(k);
@@ -739,7 +615,14 @@ impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
 
 impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
     pub(crate) fn get(&self, k: &K) -> Option<V> {
-        self.0.borrow().get(k).cloned()
+        #[cfg(debug_assertions)]
+        {
+            self.0.borrow().get(k).cloned()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            unsafe { &mut *self.0.as_ptr() }.get(k).cloned()
+        }
     }
 }
 

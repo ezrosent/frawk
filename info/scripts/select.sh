@@ -1,9 +1,9 @@
 # Select fields 1,8,19 from the all_train dataset
-MAWK=mawk
-GAWK=gawk
+MAWK=../mawk
+GAWK="../gawk -b"
 TSV_UTILS_BIN=../bin
 XSV=xsv
-FRAWK=frawk
+FRAWK=../frawk
 
 CSV1=../all_train.csv
 CSV2=../TREE_GRM_ESTN.csv
@@ -21,14 +21,14 @@ for i in {1..5}; do
 	time $MAWK -F'\t' "$AWK_SCRIPT_TSV" "$TSV1" > /dev/null
 	time $GAWK -F,    "$AWK_SCRIPT_CSV" "$CSV1" > /dev/null
 	time $GAWK -F'\t' "$AWK_SCRIPT_TSV" "$TSV1" > /dev/null
-	time $FRAWK -bllvm -icsv --out-file=/dev/null "$AWK_SCRIPT_CSV" "$CSV1" 
-	time $FRAWK -bllvm -itsv --out-file=/dev/null "$AWK_SCRIPT_TSV" "$TSV1" 
-	time $FRAWK -bllvm -icsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT_CSV" "$CSV1" 
-	time $FRAWK -bllvm -itsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT_TSV" "$TSV1" 
-	time $FRAWK -bcranelift -icsv --out-file=/dev/null "$AWK_SCRIPT_CSV" "$CSV1" 
-	time $FRAWK -bcranelift -itsv --out-file=/dev/null "$AWK_SCRIPT_TSV" "$TSV1" 
-	time $FRAWK -bcranelift -icsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT_CSV" "$CSV1" 
-	time $FRAWK -bcranelift -itsv -pr -j3 --out-file=/dev/null "$AWK_SCRIPT_TSV" "$TSV1" 
+	time $FRAWK -bllvm -icsv "$AWK_SCRIPT_CSV" "$CSV1" > /dev/null
+	time $FRAWK -bllvm -itsv "$AWK_SCRIPT_TSV" "$TSV1" > /dev/null
+	time $FRAWK -bllvm -icsv -pr -j3 "$AWK_SCRIPT_CSV" "$CSV1" > /dev/null
+	time $FRAWK -bllvm -itsv -pr -j3 "$AWK_SCRIPT_TSV" "$TSV1" > /dev/null
+	time $FRAWK -bcranelift -icsv "$AWK_SCRIPT_CSV" "$CSV1" > /dev/null
+	time $FRAWK -bcranelift -itsv "$AWK_SCRIPT_TSV" "$TSV1" > /dev/null
+	time $FRAWK -bcranelift -icsv -pr -j3 "$AWK_SCRIPT_CSV" "$CSV1" > /dev/null
+	time $FRAWK -bcranelift -itsv -pr -j3 "$AWK_SCRIPT_TSV" "$TSV1" > /dev/null
 	time xsv select 1,8,19  "$CSV1" > /dev/null
 	time xsv select -d'\t' 1,8,19  "$TSV1" > /dev/null
 	time $TSV_UTILS_BIN/tsv-select -f 1,8,19 "$TSV1" > /dev/null

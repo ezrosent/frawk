@@ -11,14 +11,23 @@ use crate::{
     runtime::{self, UniqueStr},
 };
 
+use regex::bytes::Regex;
+
 use std::marker::PhantomData;
 use std::mem;
+use std::sync::Arc;
 
 /// Options used to configure a code-generating backend.
 #[derive(Copy, Clone)]
 pub struct Config {
     pub opt_level: usize,
     pub num_workers: usize,
+}
+
+macro_rules! external {
+    ($name:ident) => {
+        crate::codegen::intrinsics::$name as *const u8
+    };
 }
 
 #[macro_use]
@@ -36,12 +45,6 @@ pub(crate) struct Sig<'a, C: Backend + ?Sized> {
     pub attrs: &'a [FunctionAttr],
     pub args: &'a mut [C::Ty],
     pub ret: Option<C::Ty>,
-}
-
-macro_rules! external {
-    ($name:ident) => {
-        crate::codegen::intrinsics::$name as *const u8
-    };
 }
 
 macro_rules! intrinsic {
@@ -237,6 +240,13 @@ where
     }
 }
 
+/// Handles to ensure the liveness of rust objects passed by pointer into generated code.
+#[derive(Default)]
+pub(crate) struct Handles {
+    res: Vec<Arc<Regex>>,
+    slices: Vec<Arc<[u8]>>,
+}
+
 pub(crate) trait Backend {
     type Ty: Clone;
     // mappings from compile::Ty to Self::Ty
@@ -274,7 +284,24 @@ pub(crate) trait CodeGenerator: Backend {
     fn const_int(&mut self, i: i64) -> Self::Val;
     fn const_float(&mut self, f: f64) -> Self::Val;
     fn const_str<'a>(&mut self, s: &UniqueStr<'a>) -> Self::Val;
-    fn const_ptr<'a, T>(&'a mut self, c: &'a T) -> Self::Val;
+
+    // const ptr should not be called directly.
+    fn const_ptr<T>(&mut self, r: *const T) -> Self::Val;
+    fn handles(&mut self) -> &mut Handles;
+
+    // const_{re,slice} take an `Arc` so that it can store a pointer to `c` and ensure references
+    // to `c` will live as long as the generated code.
+
+    fn const_re(&mut self, pat: Arc<Regex>) -> Self::Val {
+        let res = self.const_ptr(&*pat);
+        self.handles().res.push(pat);
+        res
+    }
+    fn const_slice(&mut self, bs: Arc<[u8]>) -> Self::Val {
+        let res = self.const_ptr(bs.as_ptr());
+        self.handles().slices.push(bs);
+        res
+    }
 
     // NB: why &mut [..] everywhere instead of &[..] or impl Iterator<..>? The LLVM C API takes a
     // sequence of arguments by a mutable pointer to the first element along with a length. We
@@ -325,14 +352,6 @@ pub(crate) trait CodeGenerator: Backend {
 
     /// Advances the iterator in `iter` to the next element and stores the current element in `dst`
     fn iter_getnext(&mut self, dst: Ref, iter: Ref) -> Result<()>;
-
-    // The plumbing for builtin variable manipulation is mostly pretty wrote ... anything we can do
-    // here?
-
-    /// Method called after loading a builtin variable into `dst`.
-    ///
-    /// This is included to help clean up ref-counts on string or map builtins, if necessary.
-    fn var_loaded(&mut self, dst: Ref) -> Result<()>;
 
     // derived functions
 
@@ -584,6 +603,13 @@ pub(crate) trait CodeGenerator: Backend {
                 self.bind_val(dst.reflect(), res)
             }
             Concat(dst, l, r) => self.binop(intrinsic!(concat), dst, l, r),
+            StartsWithConst(dst, s, bs) => {
+                let s = self.get_val(s.reflect())?;
+                let ptr = self.const_slice(bs.clone());
+                let len = self.const_int(bs.len() as i64);
+                let res = self.call_intrinsic(intrinsic!(starts_with_const), &mut [s, ptr, len])?;
+                self.bind_val(dst.reflect(), res)
+            }
             Match(dst, l, r) => {
                 let lv = self.get_val(l.reflect())?;
                 let rv = self.get_val(r.reflect())?;
@@ -601,14 +627,14 @@ pub(crate) trait CodeGenerator: Backend {
             MatchConst(res, src, pat) => {
                 let rt = self.runtime_val();
                 let srcv = self.get_val(src.reflect())?;
-                let patv = self.const_ptr(&**pat);
+                let patv = self.const_re(pat.clone());
                 let resv =
                     self.call_intrinsic(intrinsic!(match_const_pat_loc), &mut [rt, srcv, patv])?;
                 self.bind_val(res.reflect(), resv)
             }
             IsMatchConst(res, src, pat) => {
                 let srcv = self.get_val(src.reflect())?;
-                let patv = self.const_ptr(&**pat);
+                let patv = self.const_re(pat.clone());
                 let resv = self.call_intrinsic(intrinsic!(match_const_pat), &mut [srcv, patv])?;
                 self.bind_val(res.reflect(), resv)
             }
@@ -807,8 +833,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let varv = self.const_int(*var as i64);
                 let res = self.call_intrinsic(intrinsic!(load_var_str), &mut [rt, varv])?;
                 let dref = dst.reflect();
-                self.bind_val(dref, res)?;
-                self.var_loaded(dref)
+                self.bind_val(dref, res)
             }
             StoreVarStr(var, src) => {
                 let rt = self.runtime_val();
@@ -822,8 +847,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let varv = self.const_int(*var as i64);
                 let res = self.call_intrinsic(intrinsic!(load_var_int), &mut [rt, varv])?;
                 let dref = dst.reflect();
-                self.bind_val(dref, res)?;
-                self.var_loaded(dref)
+                self.bind_val(dref, res)
             }
             StoreVarInt(var, src) => {
                 let rt = self.runtime_val();
@@ -837,23 +861,20 @@ pub(crate) trait CodeGenerator: Backend {
                 let varv = self.const_int(*var as i64);
                 let res = self.call_intrinsic(intrinsic!(load_var_intmap), &mut [rt, varv])?;
                 let dref = dst.reflect();
-                self.bind_val(dref, res)?;
-                self.var_loaded(dref)
+                self.bind_val(dref, res)
             }
             StoreVarIntMap(var, src) => {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_void(external!(store_var_intmap), &mut [rt, varv, srcv])?;
-                Ok(())
+                self.call_void(external!(store_var_intmap), &mut [rt, varv, srcv])
             }
             LoadVarStrMap(dst, var) => {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let res = self.call_intrinsic(intrinsic!(load_var_strmap), &mut [rt, varv])?;
                 let dref = dst.reflect();
-                self.bind_val(dref, res)?;
-                self.var_loaded(dref)
+                self.bind_val(dref, res)
             }
             StoreVarStrMap(var, src) => {
                 let rt = self.runtime_val();
