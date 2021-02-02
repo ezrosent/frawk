@@ -82,7 +82,7 @@ fn simple_fi() {
     carrots,2
     potato chips,3
     custard,1"#;
-    let expected = "6.0 3\n";
+    let expected = "6 3\n";
 
     let tmpdir = tempdir().unwrap();
     let data_fname = tmpdir.path().join("numbers");
@@ -157,7 +157,7 @@ mod v_args {
 
 #[test]
 fn mixed_map() {
-    let expected = "hi 0.0 5\n1 1.0 3\n";
+    let expected = "hi 0 5\n1 1 3\n";
     let prog: String = r#"BEGIN {
 m[1]=2
 m["1"]++
@@ -181,7 +181,7 @@ for (k in m) {
 #[test]
 fn iter_across_functions() {
     let input = ",,3,,4\n,,3,,6\n,,4,,5";
-    let expected = "3 62.0\n4 30.0\n";
+    let expected = "3 62\n4 30\n";
 
     let tmpdir = tempdir().unwrap();
     let data_fname = tmpdir.path().join("numbers");

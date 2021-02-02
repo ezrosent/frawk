@@ -636,7 +636,7 @@ fn p_test_25() {
 #[test]
 fn p_test_26() {
     let expected = String::from(
-        r#"population of 6 Asian countries in millions is 3530.0
+        r#"population of 6 Asian countries in millions is 3530
 "#,
     );
     let tmpdir = tempdir().unwrap();
@@ -665,7 +665,7 @@ END	{ print "population of", n,\
 #[test]
 fn p_test_26a() {
     let expected = String::from(
-        r#"population of 6 Asian countries in millions is 3530.0
+        r#"population of 6 Asian countries in millions is 3530
 "#,
     );
     let tmpdir = tempdir().unwrap();
@@ -1497,8 +1497,8 @@ END		{ if (NR < 10)
 #[test]
 fn p_test_42() {
     let expected = String::from(
-        r#"Asian population in millions is 3530.0
-African population in millions is 74.0
+        r#"Asian population in millions is 3530
+African population in millions is 74
 "#,
     );
     let tmpdir = tempdir().unwrap();
@@ -1528,11 +1528,11 @@ END		{ print "Asian population in millions is", pop["Asia"]
 #[test]
 fn p_test_43() {
     let expected = String::from(
-        r#"Asia:27222.0
-Australia:5936.0
-Africa:3776.0
-South America:8716.0
-North America:14934.0
+        r#"Asia:27222
+Australia:5936
+Africa:3776
+South America:8716
+North America:14934
 "#,
     );
     let tmpdir = tempdir().unwrap();
@@ -1564,26 +1564,26 @@ END	{ for (name in area)
 #[test]
 fn p_test_44() {
     let expected = String::from(
-        r#"Russia! is 1.0
-Canada! is 1.0
-China! is 1.0
-USA! is 1.0
-Brazil! is 1.0
-Australia! is 1.0
-India! is 1.0
-Argentina! is 1.0
-Sudan! is 1.0
-Algeria! is 1.0
-Russia! is 1.0
-Canada! is 1.0
-China! is 1.0
-USA! is 1.0
-Brazil! is 1.0
-Australia! is 1.0
-India! is 1.0
-Argentina! is 1.0
-Sudan! is 1.0
-Algeria! is 1.0
+        r#"Russia! is 1
+Canada! is 1
+China! is 1
+USA! is 1
+Brazil! is 1
+Australia! is 1
+India! is 1
+Argentina! is 1
+Sudan! is 1
+Algeria! is 1
+Russia! is 1
+Canada! is 1
+China! is 1
+USA! is 1
+Brazil! is 1
+Australia! is 1
+India! is 1
+Argentina! is 1
+Sudan! is 1
+Algeria! is 1
 "#,
     );
     let tmpdir = tempdir().unwrap();
@@ -1789,11 +1789,11 @@ India	1269	637	Asia
 #[test]
 fn p_test_48() {
     let expected = String::from(
-        r#"Africa:74.0
-Asia:3530.0
-Australia:28.0
-North America:486.0
-South America:284.0
+        r#"Africa:74
+Asia:3530
+Australia:28
+North America:486
+South America:284
 "#,
     );
     let tmpdir = tempdir().unwrap();
@@ -1853,8 +1853,8 @@ fn p_test_48a() {
 fn p_test_48b() {
     let expected = String::from(
         r#"Russia	8650	262	Asia
+Canada	3852	24	North America
 USA	3615	219	North America
-India	1269	637	Asia
 "#,
     );
     let tmpdir = tempdir().unwrap();
@@ -1889,8 +1889,8 @@ India	1269	637	Asia
 fn p_test_48b_mod() {
     let expected = String::from(
         r#"Russia	8650	262	Asia
+Canada	3852	24	North America
 USA	3615	219	North America
-India	1269	637	Asia
 "#,
     );
     let tmpdir = tempdir().unwrap();
@@ -1993,16 +1993,16 @@ fn p_test_5() {
 #[test]
 fn p_test_50() {
     let expected = String::from(
-        r#"Africa:Sudan:38.0
-Africa:Algeria:36.0
-Asia:China:1732.0
-Asia:India:1274.0
-Asia:Russia:524.0
-Australia:Australia:28.0
-North America:USA:438.0
-North America:Canada:48.0
-South America:Brazil:232.0
-South America:Argentina:52.0
+        r#"Africa:Sudan:38
+Africa:Algeria:36
+Asia:China:1732
+Asia:India:1274
+Asia:Russia:524
+Australia:Australia:28
+North America:USA:438
+North America:Canada:48
+South America:Brazil:232
+South America:Argentina:52
 "#,
     );
     let tmpdir = tempdir().unwrap();

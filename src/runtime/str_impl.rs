@@ -93,6 +93,18 @@ impl Inline {
             )
         }
     }
+
+    #[inline(always)]
+    fn itoa(i: Int) -> Option<Inline> {
+        if i > 999999999999999 || i < -99999999999999 {
+            return None;
+        }
+        let mut res = 0u128;
+        let buf =
+            unsafe { slice::from_raw_parts_mut((&mut res as *mut _ as *mut u8).offset(1), 15) };
+        let len = itoa::write(buf, i).unwrap();
+        Some(Inline(res | ((len << 3) | StrTag::Inline as usize) as u128))
+    }
 }
 
 #[derive(Clone)]
@@ -879,23 +891,17 @@ impl<'a> From<String> for Str<'a> {
 
 impl<'a> From<Int> for Str<'a> {
     fn from(i: Int) -> Str<'a> {
-        // TODO: use itoa, and optimize further
-        let digit_guess = if i >= 1000000000000000 || i <= -100000000000000 {
-            // Allocate on the heap; this is the maximum length we expect to see.
-            21
-        } else {
-            // We'll allocate this inline.
-            0
-        };
-        let mut b = DynamicBuf::new(digit_guess);
-        write!(&mut b, "{}", i).unwrap();
-        unsafe { b.into_str() }
+        if let Some(i) = Inline::itoa(i) {
+            return Str::from_rep(i.into());
+        }
+        let mut buf = [0u8; 21];
+        let n = itoa::write(&mut buf[..], i).unwrap();
+        Buf::read_from_bytes(&buf[..n]).into_str()
     }
 }
 
 impl<'a> From<Float> for Str<'a> {
     fn from(f: Float) -> Str<'a> {
-        // Per ryu's documentation, we will only ever use 24 bytes when printing an f64.
         let mut ryubuf = ryu::Buffer::new();
         let s = ryubuf.format(f);
         let slen = s.len();
@@ -905,9 +911,7 @@ impl<'a> From<Float> for Str<'a> {
         } else {
             slen
         };
-        let mut b = DynamicBuf::new(slen);
-        b.write(&s.as_bytes()[..slen]).unwrap();
-        unsafe { b.into_str() }
+        Buf::read_from_bytes(&s.as_bytes()[..slen]).into_str()
     }
 }
 
@@ -1375,6 +1379,36 @@ mod bench {
     extern crate test;
     use super::*;
     use test::{black_box, Bencher};
+
+    fn bench_max_min(b: &mut Bencher, min: i64, max: i64) {
+        use rand::{thread_rng, Rng};
+        let mut rng = thread_rng();
+        let mut v = Vec::new();
+        let size = 1 << 12;
+        v.resize_with(size, || rng.gen_range(min..=max));
+        let mut i = 0;
+        b.iter(|| {
+            let n = unsafe { *v.get_unchecked(i) };
+            i += 1;
+            i &= size - 1;
+            black_box(Str::from(n))
+        })
+    }
+
+    #[bench]
+    fn bench_itoa_small(b: &mut Bencher) {
+        bench_max_min(b, -99999, 99999)
+    }
+
+    #[bench]
+    fn bench_itoa_medium(b: &mut Bencher) {
+        bench_max_min(b, -99999999999999, 999999999999999)
+    }
+
+    #[bench]
+    fn bench_itoa_large(b: &mut Bencher) {
+        bench_max_min(b, i64::min_value(), i64::max_value())
+    }
 
     #[bench]
     fn bench_get_bytes_drop_empty(b: &mut Bencher) {
