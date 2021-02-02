@@ -277,4 +277,25 @@ mod bench {
     fn bench_strtoi_short_fast(b: &mut Bencher) {
         bench_strtoi_short(b, super::super::strtoi)
     }
+
+    fn ff_strtod(bs: &[u8]) -> f64 {
+        if let Ok((f, _)) = fast_float::parse_partial(bs) {
+            f
+        } else {
+            0.0f64
+        }
+    }
+
+    #[bench]
+    fn bench_strtod_long_ff(b: &mut Bencher) {
+        bench_strtod_long(b, ff_strtod)
+    }
+    #[bench]
+    fn bench_strtod_medium_ff(b: &mut Bencher) {
+        bench_strtod_medium(b, ff_strtod)
+    }
+    #[bench]
+    fn bench_strtod_short_ff(b: &mut Bencher) {
+        bench_strtod_short(b, ff_strtod)
+    }
 }
