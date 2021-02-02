@@ -898,8 +898,15 @@ impl<'a> From<Float> for Str<'a> {
         // Per ryu's documentation, we will only ever use 24 bytes when printing an f64.
         let mut ryubuf = ryu::Buffer::new();
         let s = ryubuf.format(f);
-        let mut b = DynamicBuf::new(s.len());
-        b.write(s.as_bytes()).unwrap();
+        let slen = s.len();
+        // Print Float as Int if it ends in ".0".
+        let slen = if &s.as_bytes()[slen - 2..] == b".0" {
+            slen - 2
+        } else {
+            slen
+        };
+        let mut b = DynamicBuf::new(slen);
+        b.write(&s.as_bytes()[..slen]).unwrap();
         unsafe { b.into_str() }
     }
 }
