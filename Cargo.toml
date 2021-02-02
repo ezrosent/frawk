@@ -46,6 +46,7 @@ cranelift-codegen = "0.69.0"
 cranelift-frontend = "0.69.0"
 cranelift-module = "0.69.0"
 cranelift-jit = "0.69.0"
+fast-float = "0.2"
 
 [dev-dependencies]
 assert_cmd = "1.0.2"
