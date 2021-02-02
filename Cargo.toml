@@ -22,10 +22,11 @@ stable_deref_trait = "1.1.1"
 lazy_static = "1.4.0"
 regex = "1.3"
 regex-syntax = "0.6.22"
+itoa = "0.4"
 ryu = "1.0"
 libc = "0.2"
 jemallocator = { version = "0.3", optional = true }
-rand = "0.7.3"
+rand = "0.8.3"
 lalrpop-util = "0.17.2"
 unicode-xid = "0.2.0"
 llvm-sys = {version = "100", optional = true }
