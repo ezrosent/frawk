@@ -902,7 +902,6 @@ impl<'a> From<Int> for Str<'a> {
 
 impl<'a> From<Float> for Str<'a> {
     fn from(f: Float) -> Str<'a> {
-        // Per ryu's documentation, we will only ever use 24 bytes when printing an f64.
         let mut ryubuf = ryu::Buffer::new();
         let s = ryubuf.format(f);
         let slen = s.len();
@@ -912,9 +911,7 @@ impl<'a> From<Float> for Str<'a> {
         } else {
             slen
         };
-        let mut b = DynamicBuf::new(slen);
-        b.write(&s.as_bytes()[..slen]).unwrap();
-        unsafe { b.into_str() }
+        Buf::read_from_bytes(&s.as_bytes()[..slen]).into_str()
     }
 }
 

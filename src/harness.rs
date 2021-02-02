@@ -663,7 +663,7 @@ mod tests {
         }"#,
         r#"1,2<<<FILE BREAK>>>3,4<<<FILE BREAK>>>5,6<<<FILE BREAK>>>7,8
 9,10"#,
-        "worker done\n25.0 hello there 5 1 1\n"
+        "worker done\n25 hello there 5 1 1\n"
     );
 
     test_program_parallel!(
@@ -674,7 +674,7 @@ mod tests {
         END { print x; }"#,
         r#"1,2<<<FILE BREAK>>>3,4<<<FILE BREAK>>>5,6<<<FILE BREAK>>>7,8
 9,10"#,
-        "1 2\n24.0\n"
+        "1 2\n24\n"
     );
 
     test_program!(
@@ -788,7 +788,7 @@ it has one more line"#
         r#"function max(x, y) { return x<y?y:x; }
         { m=max($2+0, m); }
         END { print m; }"#,
-          "3.0\n",
+          "3\n",
           @input "help,1\nsomeone,2\nout,3\n"
     );
 
@@ -970,7 +970,7 @@ print w,z;
         print log2("32");
         print exp(1);
         }"#,
-        "2.0\n2.0\n5.0\n2.718281828459045\n"
+        "2\n2\n5\n2.718281828459045\n"
     );
 
     test_program!(
@@ -1099,7 +1099,7 @@ print w,z;
             print X(m, 2);
         }
         "#,
-        "49.0\n"
+        "49\n"
     );
 
     test_program!(
@@ -1270,7 +1270,7 @@ this as well"#
     test_program!(
         arithmetic,
         r#"BEGIN { print 1+1; print 1+2*7; print 1+2*7^3; print 1+2*7^3*4; }"#,
-        "2\n15\n687.0\n2745.0\n"
+        "2\n15\n687\n2745\n"
     );
 
     test_program!(
