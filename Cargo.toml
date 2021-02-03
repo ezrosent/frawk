@@ -64,7 +64,7 @@ llvm_backend = ["llvm-sys"]
 unstable = []
 
 [profile.release]
-lto = "fat"
+lto = "thin"
 # debug = true
 # codegen-units = 1
 
