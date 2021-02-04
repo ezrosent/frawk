@@ -1087,6 +1087,17 @@ print w,z;
     );
 
     test_program!(
+        print_in_function,
+        r#"function print_all(a, b, c) {
+            print a, b, c;
+        }
+        BEGIN {
+            print_all(1, 2);
+        }"#,
+        "1 2 \n"
+    );
+
+    test_program!(
         polymorphic_recursion,
         r#"function X(a, b) {
             if (length(a) > 0) {
