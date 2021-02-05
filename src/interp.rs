@@ -605,7 +605,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     }
 
     pub(crate) fn run_serial(&mut self) -> Result<()> {
-        let offs: crate::smallvec::SmallVec<[usize; 3]> = self.main_func.iter().cloned().collect();
+        let offs: smallvec::SmallVec<[usize; 3]> = self.main_func.iter().cloned().collect();
         for off in offs.into_iter() {
             self.run_at(off)?
         }

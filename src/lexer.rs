@@ -113,7 +113,7 @@ macro_rules! kw_inner {
 
 macro_rules! keyword_map {
     ($name:ident<&'static [u8], ($vty1:ty, $vty2:ty)>, $([$($e:tt)*]),*) => {
-        $crate::lazy_static::lazy_static! {
+        lazy_static::lazy_static! {
             pub(crate) static ref $name: hashbrown::HashMap<&'static [u8],($vty1, $vty2)> = {
                 let mut m = hashbrown::HashMap::new();
                 $(
@@ -146,7 +146,7 @@ keyword_map!(
     [b"for", Tok::For, WS_PAREN.clone()],
     [b"if", Tok::If],
     [b"else", Tok::Else],
-    [b"print",  Tok::Print, WS_SEMI_NL.clone()],
+    [b"print", Tok::Print, WS_SEMI_NL.clone()],
     [b"printf", Tok::Printf, WS_SEMI_NL.clone()],
     [b"print(", Tok::PrintLP],
     [b"printf(", Tok::PrintfLP],

@@ -6,9 +6,9 @@ use super::attr;
 use crate::codegen::FunctionAttr;
 use crate::common::Either;
 use crate::compile::Ty;
-use crate::libc::c_void;
 
 use hashbrown::HashMap;
+use libc::c_void;
 use llvm_sys::{
     self,
     prelude::{LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},

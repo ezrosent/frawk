@@ -9,12 +9,12 @@ use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
 use crate::pushdown::{FieldSet, UsedFieldAnalysis};
 use crate::runtime::{self, Str};
-use crate::smallvec::{self, smallvec};
 use crate::string_constants::{self, StringConstantAnalysis};
 use crate::types;
 
 use hashbrown::{hash_map::Entry, HashMap, HashSet};
 use regex::bytes::Regex;
+use smallvec::smallvec;
 
 use std::collections::VecDeque;
 use std::mem;

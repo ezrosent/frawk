@@ -30,30 +30,30 @@ mod string_constants;
 #[cfg(test)]
 mod test_string_constants;
 pub mod types;
-extern crate cfg_if;
-extern crate clap;
-extern crate crossbeam;
-extern crate crossbeam_channel;
-extern crate elsa;
-extern crate grep_cli;
-extern crate hashbrown;
-#[cfg(feature = "use_jemalloc")]
-extern crate jemallocator;
-extern crate lalrpop_util;
-extern crate lazy_static;
-extern crate libc;
-#[cfg(feature = "llvm_backend")]
-extern crate llvm_sys;
-extern crate memchr;
-extern crate num_cpus;
-extern crate petgraph;
-extern crate rand;
-extern crate regex;
-extern crate ryu;
-extern crate smallvec;
-extern crate stable_deref_trait;
-extern crate termcolor;
-extern crate unicode_xid;
+// extern crate cfg_if;
+// extern crate clap;
+// extern crate crossbeam;
+// extern crate crossbeam_channel;
+// extern crate elsa;
+// extern crate grep_cli;
+// extern crate hashbrown;
+// #[cfg(feature = "use_jemalloc")]
+// extern crate jemallocator;
+// extern crate lalrpop_util;
+// extern crate lazy_static;
+// extern crate libc;
+// #[cfg(feature = "llvm_backend")]
+// extern crate llvm_sys;
+// extern crate memchr;
+// extern crate num_cpus;
+// extern crate petgraph;
+// extern crate rand;
+// extern crate regex;
+// extern crate ryu;
+// extern crate smallvec;
+// extern crate stable_deref_trait;
+// extern crate termcolor;
+// extern crate unicode_xid;
 
 use clap::{App, Arg};
 

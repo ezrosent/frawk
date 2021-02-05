@@ -10,11 +10,10 @@ use crate::codegen::{
 };
 use crate::common::{Either, FileSpec, NodeIx, NumTy, Result, Stage};
 use crate::compile::{self, Ty, Typer};
-use crate::libc::c_char;
 use crate::runtime;
 
-use crate::smallvec::{self, smallvec};
 use hashbrown::{HashMap, HashSet};
+use libc::c_char;
 use llvm_sys::{
     analysis::{LLVMVerifierFailureAction, LLVMVerifyModule},
     core::*,
@@ -23,6 +22,7 @@ use llvm_sys::{
     target::*,
 };
 use petgraph::visit::Dfs;
+use smallvec::smallvec;
 
 use intrinsics::IntrinsicMap;
 

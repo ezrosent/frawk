@@ -129,7 +129,7 @@ pub enum Either<L, R> {
 // borrowed from weld project.
 macro_rules! c_str {
     ($s:expr) => {
-        concat!($s, "\0").as_ptr() as *const crate::libc::c_char
+        concat!($s, "\0").as_ptr() as *const libc::c_char
     };
 }
 
@@ -212,7 +212,7 @@ macro_rules! eprintln_ignore {
 
 macro_rules! static_map {
     ($name:ident<$kty:ty, $vty:ty>, $([$k:expr, $v:expr]),*) => {
-        $crate::lazy_static::lazy_static! {
+        lazy_static::lazy_static! {
             pub(crate) static ref $name: hashbrown::HashMap<$kty,$vty> = {
                 let mut m = hashbrown::HashMap::new();
                 $(

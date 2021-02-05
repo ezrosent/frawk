@@ -1,6 +1,6 @@
 //! Implement a simple arena-allocation mechanism around frozen vectors.
-use crate::elsa::FrozenVec;
-use crate::stable_deref_trait::StableDeref;
+use elsa::FrozenVec;
+use stable_deref_trait::StableDeref;
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::cell::Cell;
