@@ -30,6 +30,7 @@ pub enum Function {
     Length,
     Contains,
     Delete,
+    Clear,
     Match,
     SubstrIndex,
     Sub,
@@ -251,6 +252,9 @@ impl Function {
     // feedback allows for certain functions to propagate type information back to their arguments.
     pub(crate) fn feedback(&self, args: &[NodeIx], ctx: &mut types::TypeContext) {
         use types::{BaseTy, Constraint, TVar::*};
+        if args.len() < self.arity().unwrap_or(0) {
+            return;
+        }
         match self {
             Function::Split => {
                 let arg1 = ctx.constant(
@@ -261,6 +265,13 @@ impl Function {
                     .abs(),
                 );
                 ctx.nw.add_dep(arg1, args[1], Constraint::Flows(()));
+            }
+            Function::Clear => {
+                let is_map = ctx.constant(Some(Map {
+                    key: None,
+                    val: None,
+                }));
+                ctx.nw.add_dep(is_map, args[0], Constraint::Flows(()));
             }
             Function::Contains => {
                 let arr = args[0];
@@ -347,6 +358,16 @@ impl Function {
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
                 _ => return err!("invalid input spec fo Delete: {:?}", &incoming[..]),
             },
+            Clear => {
+                if incoming.len() == 1 && incoming[0].is_array() {
+                    (smallvec![incoming[0]], Int)
+                } else {
+                    return err!(
+                        "invalid input spec for delete (of a map): {:?}",
+                        &incoming[..]
+                    );
+                }
+            }
             Srand => (smallvec![Int], Int),
             System | HexToInt => (smallvec![Str], Int),
             ReseedRng => (smallvec![], Int),
@@ -397,7 +418,7 @@ impl Function {
             IntFunc(bw) => bw.arity(),
             UpdateUsedFields | Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile
             | ReadLineStdinFused => 0,
-            Srand | System | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length
+            Clear | Srand | System | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length
             | ReadErr | ReadErrCmd | Nextline | NextlineCmd | Unop(_) => 1,
             SetFI | SubstrIndex | Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
@@ -432,7 +453,7 @@ impl Function {
             }
             Rand | Binop(Div) | Binop(Pow) => Ok(Scalar(BaseTy::Float).abs()),
             Setcol => Ok(Scalar(BaseTy::Null).abs()),
-            SubstrIndex | Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT)
+            Clear | SubstrIndex | Srand | ReseedRng | Unop(Not) | Binop(IsMatch) | Binop(LT)
             | Binop(GT) | Binop(LTE) | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr
             | ReadErrCmd | ReadErrStdin | Contains | Delete | Match | Sub | GSub | ToInt
             | System | HexToInt => Ok(Scalar(BaseTy::Int).abs()),

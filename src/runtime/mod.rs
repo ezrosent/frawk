@@ -592,6 +592,16 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
     {
         f(self.0.borrow().iter())
     }
+    pub(crate) fn clear(&self) {
+        #[cfg(debug_assertions)]
+        {
+            self.0.borrow_mut().clear();
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            unsafe { &mut *self.0.as_ptr() }.clear();
+        }
+    }
 }
 
 // When sending SharedMaps across threads we have to clone them and clone their contents, as Rc is

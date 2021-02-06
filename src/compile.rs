@@ -1584,6 +1584,16 @@ impl<'a, 'b> View<'a, 'b> {
                 }),
                 _ => return err!("incorrect parameter types for Delete: {:?}", &conv_tys[..]),
             },
+            Clear => {
+                if conv_tys[0].is_array() {
+                    self.pushl(LL::Clear {
+                        map_ty: conv_tys[0],
+                        map: conv_regs[0],
+                    })
+                } else {
+                    return err!("incorrect parameter types for Clear: {:?}", &conv_tys[..]);
+                }
+            }
             Close => {
                 self.pushl(LL::Close(conv_regs[0].into()));
                 assert_eq!(res_ty, Ty::Str);

@@ -236,6 +236,10 @@ pub(crate) enum Instr<'a> {
         map: NumTy,
         key: NumTy,
     },
+    Clear {
+        map_ty: Ty,
+        map: NumTy,
+    },
     Len {
         map_ty: Ty,
         dst: NumTy,
@@ -709,6 +713,7 @@ impl<'a> Instr<'a> {
                 f(*key, k);
                 f(*map, *map_ty);
             }
+            Clear { map_ty, map } => f(*map, *map_ty),
             Len { map_ty, map, dst } => {
                 f(*dst, Ty::Int);
                 f(*map, *map_ty);

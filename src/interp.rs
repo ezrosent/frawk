@@ -1122,6 +1122,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         key,
                     } => self.contains(*map_ty, *dst, *map, *key),
                     Delete { map_ty, map, key } => self.delete(*map_ty, *map, *key),
+                    Clear { map_ty, map } => self.clear(*map_ty, *map),
                     Len { map_ty, map, dst } => self.len(*map_ty, *map, *dst),
                     Store {
                         map_ty,
@@ -1353,6 +1354,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         map_regs!(map_ty, map, key, _v, {
             self.get(map).delete(self.get(key))
         });
+    }
+    fn clear(&mut self, map_ty: Ty, map: NumTy) {
+        map_regs!(map_ty, map, self.get(map).clear());
     }
     fn store_map(&mut self, map_ty: Ty, map: NumTy, key: NumTy, val: NumTy) {
         map_regs!(map_ty, map, key, val, {

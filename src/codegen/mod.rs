@@ -446,6 +446,25 @@ pub(crate) trait CodeGenerator: Backend {
         Ok(())
     }
 
+    /// Deletes the contents of `map`.
+    ///
+    /// Assumes that map and key types match up.
+    fn clear_map(&mut self, map: Ref) -> Result<()> {
+        use compile::Ty::*;
+        let func = match map.1 {
+            MapIntInt => external!(clear_intint),
+            MapIntFloat => external!(clear_intfloat),
+            MapIntStr => external!(clear_intstr),
+            MapStrInt => external!(clear_strint),
+            MapStrFloat => external!(clear_strfloat),
+            MapStrStr => external!(clear_strstr),
+            ty => return err!("non-map type: {:?}", ty),
+        };
+        let mapv = self.get_val(map)?;
+        self.call_void(func, &mut [mapv])?;
+        Ok(())
+    }
+
     /// Determines if `map` contains `key` and stores the result (0 or 1) in `dst`.
     ///
     /// Assumes that map and key types match up.
@@ -817,6 +836,7 @@ pub(crate) trait CodeGenerator: Backend {
                 (*dst, compile::Ty::Int),
             ),
             Delete { map_ty, map, key } => self.delete_map((*map, *map_ty), (*key, map_ty.key()?)),
+            Clear { map_ty, map } => self.clear_map((*map, *map_ty)),
             Len { map_ty, map, dst } => self.len_map((*map, *map_ty), (*dst, compile::Ty::Int)),
             Store {
                 map_ty,

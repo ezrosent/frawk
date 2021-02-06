@@ -184,6 +184,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] contains_intint(map_ty, int_ty) -> int_ty;
         insert_intint(map_ty, int_ty, int_ty);
         delete_intint(map_ty, int_ty);
+        clear_intint(map_ty);
         drop_intint(map_ty);
 
         alloc_intfloat() -> map_ty;
@@ -193,6 +194,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] contains_intfloat(map_ty, int_ty) -> int_ty;
         insert_intfloat(map_ty, int_ty, float_ty);
         delete_intfloat(map_ty, int_ty);
+        clear_intfloat(map_ty);
         drop_intfloat(map_ty);
 
         alloc_intstr() -> map_ty;
@@ -202,6 +204,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] contains_intstr(map_ty, int_ty) -> int_ty;
         insert_intstr(map_ty, int_ty, str_ref_ty);
         delete_intstr(map_ty, int_ty);
+        clear_intstr(map_ty);
         drop_intstr(map_ty);
 
         alloc_strint() -> map_ty;
@@ -211,6 +214,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] contains_strint(map_ty, str_ref_ty) -> int_ty;
         insert_strint(map_ty, str_ref_ty, int_ty);
         delete_strint(map_ty, str_ref_ty);
+        clear_strint(map_ty);
         drop_strint(map_ty);
 
         alloc_strfloat() -> map_ty;
@@ -220,6 +224,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] contains_strfloat(map_ty, str_ref_ty) -> int_ty;
         insert_strfloat(map_ty, str_ref_ty, float_ty);
         delete_strfloat(map_ty, str_ref_ty);
+        clear_strfloat(map_ty);
         drop_strfloat(map_ty);
 
         alloc_strstr() -> map_ty;
@@ -229,6 +234,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] contains_strstr(map_ty, str_ref_ty) -> int_ty;
         insert_strstr(map_ty, str_ref_ty, str_ref_ty);
         delete_strstr(map_ty, str_ref_ty);
+        clear_strstr(map_ty);
         drop_strstr(map_ty);
 
         load_slot_int(rt_ty, int_ty) -> int_ty;
@@ -1276,6 +1282,13 @@ macro_rules! map_impl {
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
                 map.delete(key);
+                mem::forget(map);
+            }
+
+            pub(crate) unsafe extern "C" fn [<clear_ $ty>](map: *mut c_void) {
+                debug_assert!(!map.is_null());
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                map.clear();
                 mem::forget(map);
             }
 

@@ -165,6 +165,7 @@ impl Display for Function {
             Length => write!(f, "length"),
             Contains => write!(f, "contains"),
             Delete => write!(f, "delete"),
+            Clear => write!(f, "clear"),
             Close => write!(f, "close"),
             Match => write!(f, "match"),
             SubstrIndex => write!(f, "index"),

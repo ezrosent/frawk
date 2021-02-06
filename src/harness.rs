@@ -1025,6 +1025,20 @@ print w,z;
     );
 
     test_program!(
+        map_clear,
+        r#"BEGIN {
+          m[1] = 2;
+          for (k in m) print k, m[k]
+          delete m
+          for (k in m) print k, m[k]
+        }"#,
+        "1 2\n"
+    );
+
+    // Just want to make sure this compiles
+    test_program!(map_clear_degenerate, r#"BEGIN { delete m; }"#, "");
+
+    test_program!(
         function_keyword_overlap,
         r#"
         function down(i) { return i-1; } BEGIN { do { print down(3); } while(y--) ; }

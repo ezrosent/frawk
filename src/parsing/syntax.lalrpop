@@ -175,6 +175,8 @@ LeafStmt: &'a Stmt<'a, 'a, &'a str> = {
     <e: Expr> => arena.alloc_v(Stmt::Expr(e)),
     "delete" <i: IndexBase> =>
         arena.alloc_v(Stmt::Expr(arena.alloc_v(Expr::Call(Either::Right(Function::Delete), vec![i.0, i.1])))),
+    "delete" <b: LeafTerm> =>
+        arena.alloc_v(Stmt::Expr(arena.alloc_v(Expr::Call(Either::Right(Function::Clear), vec![b])))),
     "print" <pa:PrintArgs?> <re:Redirect?> =>
         arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "print(" "\n"* <pa:(<Args?>)> ")" <re:Redirect?> =>
@@ -398,12 +400,12 @@ IndexBase: (&'a Expr<'a,'a,&'a str>, &'a Expr<'a,'a,&'a str>) = {
 
 BaseTerm: &'a Expr<'a,'a, &'a str> = {
   LeafTerm,
+  Index,
   "(" <e:Expr> ")" => e,
 }
 
 LeafTerm: &'a Expr<'a,'a, &'a str> = {
   Ident,
-  Index,
   StrLit,
   "INT" => arena.alloc_v(Expr::ILit(strtoi(<>.as_bytes()))),
   "HEX" => arena.alloc_v(Expr::ILit(hextoi(<>.as_bytes()))),
