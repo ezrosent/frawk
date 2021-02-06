@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 use std::alloc::{alloc_zeroed, dealloc, realloc, Layout};
 use std::cell::{Cell, UnsafeCell};
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{self, Write};
 use std::marker::PhantomData;
 
 #[cfg(feature = "unstable")]
@@ -500,7 +500,7 @@ impl<'a> Str<'a> {
                 if let Some(m) = pat.find(s) {
                     let mut buf = DynamicBuf::new(s.len());
                     buf.write(&s[0..m.start()]).unwrap();
-                    buf.write(subst).unwrap();
+                    process_match(&s[m.start()..m.end()], subst, &mut buf).unwrap();
                     buf.write(&s[m.end()..s.len()]).unwrap();
                     (unsafe { buf.into_str() }, true)
                 } else {
@@ -518,7 +518,7 @@ impl<'a> Str<'a> {
                 let mut count = 0;
                 for m in pat.find_iter(s) {
                     buf.write(&s[prev..m.start()]).unwrap();
-                    buf.write(subst).unwrap();
+                    process_match(&s[m.start()..m.end()], subst, &mut buf).unwrap();
                     prev = m.end();
                     count += 1;
                 }
@@ -1233,6 +1233,42 @@ impl Buf {
     }
 }
 
+/// Helper function for `subst_first` and `subst_all`: handles '&' syntax.
+fn process_match(matched: &[u8], subst: &[u8], w: &mut impl Write) -> io::Result<()> {
+    if memchr::memchr(b'&', subst).is_none() {
+        w.write(subst).unwrap();
+        return Ok(());
+    }
+    let mut start = 0;
+    let mut escaped = false;
+    for (i, b) in subst.iter().cloned().enumerate() {
+        match b {
+            b'&' => {
+                if escaped {
+                    w.write(&subst[start..i - 1])?;
+                    w.write(&[b'&'])?;
+                } else {
+                    w.write(&subst[start..i])?;
+                    w.write(matched)?;
+                }
+                start = i + 1;
+            }
+            b'\\' => {
+                if !escaped {
+                    escaped = true;
+                    continue;
+                }
+                w.write(&subst[start..i])?;
+                start = i + 1;
+            }
+            _ => {}
+        }
+        escaped = false;
+    }
+    w.write(&subst[start..])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1370,6 +1406,23 @@ And this is the second part"#
         let s6: Str = "xxyz substituted into another xxyz".into();
         let (s7, subbed) = s6.subst_first(&re2, &s1);
         s7.with_bytes(|bs| assert_eq!(bs, b"String number one substituted into another xxyz"));
+        assert!(subbed);
+    }
+
+    #[test]
+    fn subst_ampersand() {
+        let s1: Str = "hahbhc".into();
+        let s2: Str = "ha&".into();
+        let re1 = Regex::new("h.").unwrap();
+        let (s3, subbed) = s1.subst_first(&re1, &s2);
+        assert!(subbed);
+        s3.with_bytes(|bs| assert_eq!(bs, b"hahahbhc"));
+        let (s4, count) = s1.subst_all(&re1, &s2);
+        s4.with_bytes(|bs| assert_eq!(bs, b"hahahahbhahc"));
+        assert_eq!(count, 3);
+        let s5: Str = "hz\\&".into();
+        let (s6, subbed) = s1.subst_first(&re1, &s5);
+        s6.with_bytes(|bs| assert_eq!(bs, b"hz&hbhc"));
         assert!(subbed);
     }
 }
