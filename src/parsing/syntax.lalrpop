@@ -9,7 +9,6 @@ use crate::{
   runtime::{strtoi,strtod,hextoi},
   lexer::{self, Tok},
 };
-use lalrpop_util::ParseError;
 
 grammar<'a, 'outer>(
   arena: &'a Arena<'outer>,
@@ -18,33 +17,9 @@ grammar<'a, 'outer>(
 );
 
 ToplevelBase: () = {
-   <Begin> =>? {
-     if prog.begin.is_some() {
-       Err(ParseError::User{ error: "Only one BEGIN block allowed".into() })
-     } else {
-       prog.begin = Some(<>);
-       Ok(())
-     }
-   },
-
-   <End> =>? {
-     if prog.end.is_some() {
-       Err(ParseError::User{ error: "Only one END block allowed".into() })
-     } else {
-       prog.end = Some(<>);
-       Ok(())
-     }
-   },
-
-   <Prepare> =>? {
-     if prog.prepare.is_some() {
-       Err(ParseError::User{ error: "Only one PREPARE block allowed".into() })
-     } else {
-       prog.prepare = Some(<>);
-       Ok(())
-     }
-   },
-
+   <Begin> => { prog.begin.push(<>); },
+   <End> => { prog.end.push(<>); },
+   <Prepare> => { prog.prepare.push(<>); },
    <Function> => prog.decs.push(<>),
 }
 

@@ -104,6 +104,56 @@ fn simple_fi() {
     }
 }
 
+#[test]
+fn multiple_files() {
+    let input = r#"Item,Count
+carrots,2
+potato chips,3
+custard,1"#;
+    let expected = r#"Item,Count
+carrots,2
+potato chips,3
+custard,1
+file 1
+file 2 3
+"#;
+
+    let tmpdir = tempdir().unwrap();
+    let data_fname = tmpdir.path().join("numbers");
+    let prog1 = tmpdir.path().join("p1");
+    let prog2 = tmpdir.path().join("p2");
+    for (fname, data) in &[
+        (&data_fname, input),
+        (
+            &prog1,
+            r#"function max(x, y) { return x<y?y:x; } BEGIN { FS = ","; } { print; } END { print "file 1"; } "#,
+        ),
+        (
+            &prog2,
+            r#"{ x = max(int($2), x); } END { print "file 2", x; }"#,
+        ),
+    ] {
+        let mut file = File::create(fname.clone()).unwrap();
+        file.write(data.as_bytes()).unwrap();
+    }
+    for backend_arg in BACKEND_ARGS {
+        Command::cargo_bin("frawk")
+            .unwrap()
+            .arg(String::from(*backend_arg))
+            .arg(format!(
+                "-f{}",
+                prog1.clone().into_os_string().into_string().unwrap()
+            ))
+            .arg(format!(
+                "-f{}",
+                prog2.clone().into_os_string().into_string().unwrap()
+            ))
+            .arg(data_fname.clone().into_os_string().into_string().unwrap())
+            .assert()
+            .stdout(expected.clone());
+    }
+}
+
 mod v_args {
     //! Tests for v args.
     use super::*;

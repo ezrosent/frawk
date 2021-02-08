@@ -60,9 +60,9 @@ pub struct Prog<'a, 'b, I> {
     // ORS
     pub output_record_sep: Option<&'b [u8]>,
     pub decs: Vec<FunDec<'a, 'b, I>>,
-    pub begin: Option<&'a Stmt<'a, 'b, I>>,
-    pub prepare: Option<&'a Stmt<'a, 'b, I>>,
-    pub end: Option<&'a Stmt<'a, 'b, I>>,
+    pub begin: Vec<&'a Stmt<'a, 'b, I>>,
+    pub prepare: Vec<&'a Stmt<'a, 'b, I>>,
+    pub end: Vec<&'a Stmt<'a, 'b, I>>,
     pub pats: Vec<(Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
     pub stage: Stage<()>,
     pub argv: Vec<&'b str>,
@@ -127,9 +127,9 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             output_sep: None,
             output_record_sep: None,
             decs: Default::default(),
-            begin: None,
-            prepare: None,
-            end: None,
+            begin: vec![],
+            prepare: vec![],
+            end: vec![],
             pats: Default::default(),
             argv: Default::default(),
             parse_header: false,
@@ -143,7 +143,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         use {self::Binop::*, self::Expr::*, Stmt::*};
         let mut conds = 0;
 
-        let mut begin = vec![];
+        let mut begin = Vec::with_capacity(self.begin.len());
         let mut main_loop = None;
         let mut end = None;
 
@@ -201,9 +201,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             }
         }
 
-        if let Some(begin_block) = self.begin {
-            begin.push(begin_block);
-        }
+        begin.extend(self.begin.iter().cloned());
 
         // Desugar patterns into if statements, with the usual desugaring for an empty action.
         let mut inner = vec![
@@ -292,21 +290,24 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             }
         }
 
-        if self.end.is_some() || self.prepare.is_some() || inner.len() > init_len {
+        if self.end.len() > 0 || self.prepare.len() > 0 || inner.len() > init_len {
             // Wrap the whole thing in a while((getline) > 0) { } statement.
             let main_portion = arena.alloc_v(While(
                 /*is_toplevel=*/ true,
                 arena.alloc(|| Binop(GT, arena.alloc(|| ReadStdin), arena.alloc(|| ILit(0)))),
                 arena.alloc(move || Block(inner)),
             ));
-            main_loop = Some(if let Some(prepare_block) = self.prepare {
-                arena.alloc_v(Stmt::Block(vec![main_portion, prepare_block]))
+            main_loop = Some(if self.prepare.len() > 0 {
+                let mut block = Vec::with_capacity(self.prepare.len() + 1);
+                block.push(main_portion);
+                block.extend(self.prepare.iter().cloned());
+                arena.alloc_v(Stmt::Block(block))
             } else {
                 main_portion
             });
         }
-        if let Some(end_block) = self.end {
-            end = Some(end_block);
+        if self.end.len() > 0 {
+            end = Some(arena.alloc_v(Stmt::Block(self.end.clone())));
         }
         match self.stage {
             Stage::Main(_) => {

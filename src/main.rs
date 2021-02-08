@@ -299,7 +299,11 @@ fn main() {
         .version("0.4")
         .author("Eli R.")
         .about("frawk is a pattern scanning and (semi-structured) text processing language")
-        .arg("-f, --program-file=[FILE] 'a file containing frawk program'")
+        .arg(Arg::new("program-file")
+             .long("program-file")
+             .short('f')
+             .multiple(true)
+             .number_of_values(1))
         .arg(Arg::new("opt-level")
              .long("opt-level")
              .short('O')
@@ -403,18 +407,23 @@ fn main() {
         .map(|x| x.map(String::from).collect())
         .unwrap_or_else(Vec::new);
     let program_string = {
-        if let Some(pfile) = matches.value_of("program-file") {
-            match std::fs::read_to_string(pfile) {
-                Ok(p) => {
-                    // We specified a file on the command line, so the "program" will be
-                    // interpreted as another input file.
-                    if let Some(p) = matches.value_of("program") {
-                        input_files.push(p.into());
-                    }
-                    p
-                }
-                Err(e) => fail!("failed to read program from {}: {}", pfile, e),
+        if let Some(pfiles) = matches.values_of("program-file") {
+            // We specified a file on the command line, so the "program" will be
+            // interpreted as another input file.
+            if let Some(p) = matches.value_of("program") {
+                input_files.push(p.into());
             }
+            let mut prog = String::new();
+            for pfile in pfiles {
+                match std::fs::read_to_string(pfile) {
+                    Ok(p) => {
+                        prog.push_str(p.as_str());
+                        prog.push_str("\n");
+                    }
+                    Err(e) => fail!("failed to read program from {}: {}", pfile, e),
+                }
+            }
+            prog
         } else if let Some(p) = matches.value_of("program") {
             String::from(p)
         } else {
