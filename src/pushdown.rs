@@ -178,6 +178,90 @@ impl fmt::Debug for FieldSet {
     }
 }
 
+#[derive(Debug, Clone)]
+enum ColumnSet {
+    // No information
+    Unknown,
+    // Some integer value, n
+    Num(FieldSet),
+    // Some column, $n
+    Col(FieldSet),
+    // Out of scope for the analysis
+    Invalid,
+}
+
+// TODO: create dataflow analysis, tracking both fields and columns
+// TODO: track writes to particular columns, and report the "written" columns along with the
+//       "float" columns and "int" columns (with appropriate handling of assigning to $0)
+
+#[derive(Copy, Clone)]
+enum ColFunc {
+    // abstract assignment
+    Flows,
+    // abstract '$'
+    ColOf,
+}
+
+impl Default for ColFunc {
+    fn default() -> Self {
+        Self::Flows
+    }
+}
+
+impl JoinSemiLattice for ColumnSet {
+    type Func = ColFunc;
+    fn bottom() -> Self {
+        ColumnSet::Unknown
+    }
+    fn invoke(&mut self, other: &ColumnSet, func: &ColFunc) -> bool {
+        use {ColFunc::*, ColumnSet::*};
+        match func {
+            // self = other
+            Flows => match (self, other) {
+                (Invalid, _) | (_, Unknown) => false,
+                (x @ Unknown, o) => {
+                    *x = o.clone();
+                    true
+                }
+                (Num(f1), Num(f2)) => f1.invoke(f2, &()),
+                (Col(f1), Col(f2)) => f1.invoke(f2, &()),
+                (x, Invalid) | (x @ Num(_), Col(_)) | (x @ Col(_), Num(_)) => {
+                    *x = Invalid;
+                    true
+                }
+            },
+            // self = $other
+            ColOf => match (self, other) {
+                (x @ Unknown, Num(f1)) => {
+                    *x = Col(f1.clone());
+                    true
+                }
+                (Col(f1), Num(f2)) => f1.invoke(f2, &()),
+                // Other being a Col, is like asking about $$n for some n.
+                // All we can say is that the current value continues to be a column value, but we
+                // can't say anything about what those columns are.
+                (x @ Unknown, Col(_)) => {
+                    *x = Col(FieldSet::all());
+                    true
+                }
+                (Col(x), Col(_)) => {
+                    let all = FieldSet::all();
+                    let changed = x != &all;
+                    *x = all;
+                    changed
+                }
+                // We're going to avoid touching anything to do with mixtures of numbers and
+                // columns.
+                (x @ Num(_), _) | (x, Invalid) => {
+                    *x = Invalid;
+                    true
+                }
+                (Invalid, _) | (Col(_), Unknown) | (Unknown, Unknown) => false,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
