@@ -714,6 +714,12 @@ pub(crate) trait CodeGenerator: Backend {
                 let dstv = self.call_intrinsic(intrinsic!(get_col), &mut [rt, srcv])?;
                 self.bind_val(dst.reflect(), dstv)
             }
+            GetFloatColumn(dst, src) => {
+                let rt = self.runtime_val();
+                let srcv = self.get_val(src.reflect())?;
+                let dstv = self.call_intrinsic(intrinsic!(get_col_float), &mut [rt, srcv])?;
+                self.bind_val(dst.reflect(), dstv)
+            }
             JoinCSV(dst, start, end) => {
                 let rt = self.runtime_val();
                 let startv = self.get_val(start.reflect())?;

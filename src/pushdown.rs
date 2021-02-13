@@ -53,11 +53,13 @@
 use std::fmt;
 
 use crate::builtins::Variable;
-use crate::bytecode::{Instr, Reg};
+use crate::bytecode::{Accum, Instr, Reg};
 use crate::common::NumTy;
-use crate::compile::HighLevel;
+use crate::compile::{HighLevel, Ty};
 use crate::dataflow::{self, JoinSemiLattice, Key};
 use crate::runtime::{Int, Str};
+
+use hashbrown::{HashMap, HashSet};
 
 /// Most AWK scripts do not use more than 63 fields, so we represent our sets of used fields
 /// "lossy bitsets" that can precisely represent subsets of [0, 63] but otherwise just say "yes" to
@@ -179,18 +181,6 @@ impl fmt::Debug for FieldSet {
     }
 }
 
-#[derive(Debug, Clone)]
-enum ColumnSet {
-    // No information
-    Unknown,
-    // Some integer value, n
-    Num(FieldSet),
-    // Some column, $n
-    Col(FieldSet),
-    // Out of scope for the analysis
-    Invalid,
-}
-
 // TODO: create dataflow analysis, tracking both fields and columns
 // TODO: track writes to particular columns, and report the "written" columns along with the
 //       "float" columns and "int" columns (with appropriate handling of assigning to $0)
@@ -204,72 +194,61 @@ enum ColumnSet {
 //      * Then we won't need an extra analysis in this module... we can build a set of "float" and
 //      "int" parses directly.
 //      * but don't forget to adjust writes...
-//
+// In more detail
+// [x] Add GetFloatCol function, just doing GetCol then float conversion to start with
+//     [x] Take it into account in UsedFieldAnalysis, like a normal load.
+// [ ] Rewrite GetFloatCol and wire in ColumnParseAnalysis (don't forget DFS over CFG), get tests
+//     passing
+// [ ] Move FieldSet to an opaque struct outside of this module
+// [ ] Implement special "float only fields" handling in LineReader, but don't populate sets
+//     anywhere
+// [ ] Track float fields independently, test, benchmark
 
-#[derive(Copy, Clone)]
-enum ColFunc {
-    // abstract assignment
-    Flows,
-    // abstract '$'
-    ColOf,
+pub struct ColumnParseAnalysis<'a> {
+    get_cols: HashMap<Reg<Str<'a>>, Reg<Int>>,
+    other_uses: HashSet<Reg<Str<'a>>>,
 }
 
-impl Default for ColFunc {
-    fn default() -> Self {
-        Self::Flows
+impl<'a> Default for ColumnParseAnalysis<'a> {
+    fn default() -> ColumnParseAnalysis<'a> {
+        ColumnParseAnalysis {
+            get_cols: Default::default(),
+            other_uses: Default::default(),
+        }
     }
 }
 
-impl JoinSemiLattice for ColumnSet {
-    type Func = ColFunc;
-    fn bottom() -> Self {
-        ColumnSet::Unknown
+impl<'a> ColumnParseAnalysis<'a> {
+    fn record_key(&mut self, k: Option<dataflow::Key>) {
+        if let Some(dataflow::Key::Reg(src, Ty::Str)) = k {
+            let reg = Reg::from(src);
+            if self.get_cols.get(&reg).is_some() {
+                self.other_uses.insert(reg);
+            }
+        }
     }
-    fn invoke(&mut self, other: &ColumnSet, func: &ColFunc) -> bool {
-        use {ColFunc::*, ColumnSet::*};
-        match func {
-            // self = other
-            Flows => match (self, other) {
-                (Invalid, _) | (_, Unknown) => false,
-                (x @ Unknown, o) => {
-                    *x = o.clone();
-                    true
+
+    fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
+        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |_, src| self.record_key(src))
+    }
+
+    fn visit_ll(&mut self, mut is_local: impl FnMut((NumTy, Ty)) -> bool, inst: &mut Instr<'a>) {
+        use Instr::*;
+        match inst {
+            // NB: We could do a slightly-more-complex translation that handles a global `src`
+            // register by inserting an instruction right after this one that does the
+            // GetFloatColumn call.
+            //
+            // Most common scripts do not have src as global, so for now we focus on locals.
+            GetColumn(dst, src) if is_local(dst.reflect()) && is_local(src.reflect()) => {
+                self.get_cols.insert(*dst, *src);
+            }
+            StrToFloat(dst, src) => {
+                if let Some(col) = self.get_cols.get(src) {
+                    *inst = GetFloatColumn(*dst, *col);
                 }
-                (Num(f1), Num(f2)) => f1.invoke(f2, &()),
-                (Col(f1), Col(f2)) => f1.invoke(f2, &()),
-                (x, Invalid) | (x @ Num(_), Col(_)) | (x @ Col(_), Num(_)) => {
-                    *x = Invalid;
-                    true
-                }
-            },
-            // self = $other
-            ColOf => match (self, other) {
-                (x @ Unknown, Num(f1)) => {
-                    *x = Col(f1.clone());
-                    true
-                }
-                (Col(f1), Num(f2)) => f1.invoke(f2, &()),
-                // Other being a Col, is like asking about $$n for some n.
-                // All we can say is that the current value continues to be a column value, but we
-                // can't say anything about what those columns are.
-                (x @ Unknown, Col(_)) => {
-                    *x = Col(FieldSet::all());
-                    true
-                }
-                (Col(x), Col(_)) => {
-                    let all = FieldSet::all();
-                    let changed = x != &all;
-                    *x = all;
-                    changed
-                }
-                // We're going to avoid touching anything to do with mixtures of numbers and
-                // columns.
-                (x @ Num(_), _) | (x, Invalid) => {
-                    *x = Invalid;
-                    true
-                }
-                (Invalid, _) | (Col(_), Unknown) | (Unknown, Unknown) => false,
-            },
+            }
+            inst => dataflow::boilerplate::visit_ll(inst, |_, src| self.record_key(src)),
         }
     }
 }
@@ -310,83 +289,6 @@ mod tests {
         let mut fs8 = FieldSet::singleton(3);
         fs8.fill(&fs7);
         assert_eq!(fs8, FieldSet::all());
-    }
-}
-
-pub struct ColumnUseAnalysis<'a> {
-    dfa: dataflow::Analysis<ColumnSet>,
-    // TODO don't think this quite works; we need to think about the API more.
-    parse_col: Vec<Reg<Str<'a>>>,
-    col_writes: Vec<Reg<Int>>,
-}
-
-impl<'a> Default for ColumnUseAnalysis<'a> {
-    fn default() -> ColumnUseAnalysis<'a> {
-        let mut res = ColumnUseAnalysis {
-            dfa: Default::default(),
-            parse_col: Default::default(),
-            col_writes: Default::default(),
-        };
-        res.dfa.add_src(Key::Rng, ColumnSet::Num(FieldSet::all()));
-        res.dfa
-            .add_src(Key::VarVal(Variable::FI), ColumnSet::Num(FieldSet::fi()));
-        // What we put here probably doesn't matter a great deal.
-        res.dfa
-            .add_src(Key::VarKey(Variable::FI), ColumnSet::Invalid);
-        res
-    }
-}
-
-impl<'a> ColumnUseAnalysis<'a> {
-    pub(crate) fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
-        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |dst, src| {
-            self.dfa.add_dep(dst, src.unwrap(), ColFunc::Flows)
-        })
-    }
-    pub(crate) fn visit_ll(&mut self, inst: &Instr<'a>) {
-        use Instr::*;
-        match inst {
-            StoreConstInt(dst, i) if *i >= 0 => self
-                .dfa
-                .add_src(dst, ColumnSet::Num(FieldSet::singleton(*i as usize))),
-
-            LoadVarStrMap(_, Variable::FI)
-            | StoreVarStrMap(Variable::FI, _)
-            | Lookup { .. }
-            | Store { .. }
-            | IterBegin { .. }
-            | IterGetNext { .. }
-            | Mov(..) => dataflow::boilerplate::visit_ll(inst, |dst, src| {
-                if let Some(src) = src {
-                    self.dfa.add_dep(dst, src, ColFunc::Flows)
-                } else {
-                    self.dfa
-                        .add_src(dst, ColumnSet::Num(FieldSet::singleton(0)))
-                }
-            }),
-            GetColumn(dst, col_reg) => {
-                self.dfa.add_dep(dst, col_reg, ColFunc::ColOf);
-            }
-            SetColumn(dst, _) => {
-                self.dfa.add_query(dst);
-                self.col_writes.push(*dst);
-            }
-            StrToInt(dst, src) => {
-                // Keep track of cases where we might be parsing the results
-                self.dfa.add_query(src);
-                self.dfa.add_src(dst, ColumnSet::Invalid);
-                self.parse_col.push(*src)
-            }
-            StrToFloat(dst, src) => {
-                self.dfa.add_query(src);
-                self.dfa.add_src(dst, ColumnSet::Invalid);
-                self.parse_col.push(*src)
-            }
-            // Leaving HexStrToInt alone for now
-            _ => dataflow::boilerplate::visit_ll(inst, |dst, _| {
-                self.dfa.add_src(dst, ColumnSet::Invalid)
-            }),
-        }
     }
 }
 
@@ -440,6 +342,11 @@ impl UsedFieldAnalysis {
                 }
             }),
             GetColumn(dst, col_reg) => {
+                self.dfa.add_query(col_reg);
+                self.dfa.add_src(dst, FieldSet::all());
+            }
+            GetFloatColumn(dst, col_reg) => {
+                // TODO: make this more precise
                 self.dfa.add_query(col_reg);
                 self.dfa.add_src(dst, FieldSet::all());
             }

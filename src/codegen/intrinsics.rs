@@ -116,6 +116,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         escape_tsv(str_ref_ty) -> str_ty;
         substr(str_ref_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] get_col(rt_ty, int_ty) -> str_ty;
+        [ReadOnly] get_col_float(rt_ty, int_ty) -> float_ty;
         [ReadOnly] join_csv(rt_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] join_tsv(rt_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] join_cols(rt_ty, int_ty, int_ty, str_ref_ty) -> str_ty;
@@ -579,6 +580,11 @@ pub(crate) unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 
         Err(e) => fail!(runtime, "get_col: {}", e),
     };
     mem::transmute::<Str, U128>(res)
+}
+
+pub(crate) unsafe extern "C" fn get_col_float(runtime: *mut c_void, col: Int) -> f64 {
+    let col = mem::transmute::<U128, Str>(get_col(runtime, col));
+    runtime::convert::<Str, Float>(col)
 }
 
 pub(crate) unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U128 {

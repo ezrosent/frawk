@@ -989,6 +989,18 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         )?;
                         *self.get_mut(dst) = res;
                     }
+                    GetFloatColumn(dst, src) => {
+                        // TODO: replace
+                        let col = *self.get(*src);
+                        let dst = *dst;
+                        let res = self.line.get_col(
+                            col,
+                            &self.core.vars.fs,
+                            &self.core.vars.ofs,
+                            &mut self.core.regexes,
+                        )?;
+                        *self.get_mut(dst) = runtime::convert::<Str, Float>(res);
+                    }
                     JoinCSV(dst, start, end) => {
                         let nf = self.line.nf(&self.core.vars.fs, &mut self.core.regexes)?;
                         *index_mut(&mut self.strs, dst) = {

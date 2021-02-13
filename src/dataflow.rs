@@ -281,6 +281,7 @@ pub(crate) mod boilerplate {
                 f(dst.into(), Some(y.into()));
             }
             GetColumn(dst, _) => f(dst.into(), None),
+            GetFloatColumn(dst, _) => f(dst.into(), None),
             JoinTSV(dst, start, end) | JoinCSV(dst, start, end) => {
                 f(dst.into(), Some(start.into()));
                 f(dst.into(), Some(end.into()));
