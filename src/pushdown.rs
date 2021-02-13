@@ -53,10 +53,11 @@
 use std::fmt;
 
 use crate::builtins::Variable;
-use crate::bytecode::Instr;
+use crate::bytecode::{Instr, Reg};
 use crate::common::NumTy;
 use crate::compile::HighLevel;
 use crate::dataflow::{self, JoinSemiLattice, Key};
+use crate::runtime::{Int, Str};
 
 /// Most AWK scripts do not use more than 63 fields, so we represent our sets of used fields
 /// "lossy bitsets" that can precisely represent subsets of [0, 63] but otherwise just say "yes" to
@@ -193,6 +194,17 @@ enum ColumnSet {
 // TODO: create dataflow analysis, tracking both fields and columns
 // TODO: track writes to particular columns, and report the "written" columns along with the
 //       "float" columns and "int" columns (with appropriate handling of assigning to $0)
+// TODO: or can't we just... For every GetCol(dst1, src1), StrToInt(dst2, src2)
+//      * keep a map of local dst1 => src1 (SSA should help here; maybe watch SSA vid)
+//        (nb; the locals _should be_ in SSA, so a map should suffice. We'll ignore globals)
+//      * replace StrToInt(dst2, src2) with GetIntCol(dst2, src1), if src2 is in the map
+//      * definition dominates use, so (with a DFS) we should also be able to track if dst1 is used
+//        elsewhere. If not, we can remove the GetCol call. (We'll still get some benefit from the
+//        GetIntCol even if we can't do this).
+//      * Then we won't need an extra analysis in this module... we can build a set of "float" and
+//      "int" parses directly.
+//      * but don't forget to adjust writes...
+//
 
 #[derive(Copy, Clone)]
 enum ColFunc {
@@ -298,6 +310,83 @@ mod tests {
         let mut fs8 = FieldSet::singleton(3);
         fs8.fill(&fs7);
         assert_eq!(fs8, FieldSet::all());
+    }
+}
+
+pub struct ColumnUseAnalysis<'a> {
+    dfa: dataflow::Analysis<ColumnSet>,
+    // TODO don't think this quite works; we need to think about the API more.
+    parse_col: Vec<Reg<Str<'a>>>,
+    col_writes: Vec<Reg<Int>>,
+}
+
+impl<'a> Default for ColumnUseAnalysis<'a> {
+    fn default() -> ColumnUseAnalysis<'a> {
+        let mut res = ColumnUseAnalysis {
+            dfa: Default::default(),
+            parse_col: Default::default(),
+            col_writes: Default::default(),
+        };
+        res.dfa.add_src(Key::Rng, ColumnSet::Num(FieldSet::all()));
+        res.dfa
+            .add_src(Key::VarVal(Variable::FI), ColumnSet::Num(FieldSet::fi()));
+        // What we put here probably doesn't matter a great deal.
+        res.dfa
+            .add_src(Key::VarKey(Variable::FI), ColumnSet::Invalid);
+        res
+    }
+}
+
+impl<'a> ColumnUseAnalysis<'a> {
+    pub(crate) fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
+        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |dst, src| {
+            self.dfa.add_dep(dst, src.unwrap(), ColFunc::Flows)
+        })
+    }
+    pub(crate) fn visit_ll(&mut self, inst: &Instr<'a>) {
+        use Instr::*;
+        match inst {
+            StoreConstInt(dst, i) if *i >= 0 => self
+                .dfa
+                .add_src(dst, ColumnSet::Num(FieldSet::singleton(*i as usize))),
+
+            LoadVarStrMap(_, Variable::FI)
+            | StoreVarStrMap(Variable::FI, _)
+            | Lookup { .. }
+            | Store { .. }
+            | IterBegin { .. }
+            | IterGetNext { .. }
+            | Mov(..) => dataflow::boilerplate::visit_ll(inst, |dst, src| {
+                if let Some(src) = src {
+                    self.dfa.add_dep(dst, src, ColFunc::Flows)
+                } else {
+                    self.dfa
+                        .add_src(dst, ColumnSet::Num(FieldSet::singleton(0)))
+                }
+            }),
+            GetColumn(dst, col_reg) => {
+                self.dfa.add_dep(dst, col_reg, ColFunc::ColOf);
+            }
+            SetColumn(dst, _) => {
+                self.dfa.add_query(dst);
+                self.col_writes.push(*dst);
+            }
+            StrToInt(dst, src) => {
+                // Keep track of cases where we might be parsing the results
+                self.dfa.add_query(src);
+                self.dfa.add_src(dst, ColumnSet::Invalid);
+                self.parse_col.push(*src)
+            }
+            StrToFloat(dst, src) => {
+                self.dfa.add_query(src);
+                self.dfa.add_src(dst, ColumnSet::Invalid);
+                self.parse_col.push(*src)
+            }
+            // Leaving HexStrToInt alone for now
+            _ => dataflow::boilerplate::visit_ll(inst, |dst, _| {
+                self.dfa.add_src(dst, ColumnSet::Invalid)
+            }),
+        }
     }
 }
 
