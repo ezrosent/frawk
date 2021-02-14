@@ -197,14 +197,14 @@ impl fmt::Debug for FieldSet {
 // In more detail
 // [x] Add GetFloatCol function, just doing GetCol then float conversion to start with
 //     [x] Take it into account in UsedFieldAnalysis, like a normal load.
-// [ ] Rewrite GetFloatCol and wire in ColumnParseAnalysis (don't forget DFS over CFG), get tests
+// [x] Rewrite GetFloatCol and wire in ColumnParseAnalysis (don't forget DFS over CFG), get tests
 //     passing
 // [ ] Move FieldSet to an opaque struct outside of this module
 // [ ] Implement special "float only fields" handling in LineReader, but don't populate sets
 //     anywhere
 // [ ] Track float fields independently, test, benchmark
 
-pub struct ColumnParseAnalysis<'a> {
+pub(crate) struct ColumnParseAnalysis<'a> {
     get_cols: HashMap<Reg<Str<'a>>, Reg<Int>>,
     other_uses: HashSet<Reg<Str<'a>>>,
 }
@@ -228,11 +228,20 @@ impl<'a> ColumnParseAnalysis<'a> {
         }
     }
 
-    fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
+    pub(crate) fn clear(&mut self) {
+        self.get_cols.clear();
+        self.other_uses.clear();
+    }
+
+    pub(crate) fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
         dataflow::boilerplate::visit_hl(inst, cur_fn_id, |_, src| self.record_key(src))
     }
 
-    fn visit_ll(&mut self, mut is_local: impl FnMut((NumTy, Ty)) -> bool, inst: &mut Instr<'a>) {
+    pub(crate) fn visit_ll(
+        &mut self,
+        mut is_local: impl FnMut((NumTy, Ty)) -> bool,
+        inst: &mut Instr<'a>,
+    ) {
         use Instr::*;
         match inst {
             // NB: We could do a slightly-more-complex translation that handles a global `src`

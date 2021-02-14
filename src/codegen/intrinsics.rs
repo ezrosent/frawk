@@ -263,13 +263,13 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
 
 macro_rules! fail {
     ($rt:expr, $($es:expr),+) => {{
+        eprintln_ignore!("failure in runtime {}. Halting execution", format!($($es),*));
         #[cfg(test)]
         {
-            panic!("failure in runtime {}. Halting execution", format!($($es),*))
+            panic!("failure in runtime")
         }
         #[cfg(not(test))]
         {
-            eprintln_ignore!("failure in runtime {}. Halting execution", format!($($es),*));
             exit!($rt, 1, format!($($es),*))
         }
     }}
@@ -307,7 +307,7 @@ macro_rules! exit {
         let concurrent = (*rt).concurrent;
         if concurrent {
             // Use panic to allow 'graceful' shutdown of other worker threads.
-            panic!($msg)
+            panic!("");
         } else {
             std::ptr::drop_in_place(rt);
             std::process::exit($code)

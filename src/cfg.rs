@@ -296,6 +296,8 @@ pub(crate) struct ProgramContext<'a, I> {
     pub fold_regex_constants: bool,
     // Thread through information regarding header columns used.
     pub parse_header: bool,
+    // Specialize parsing functions applied to columns
+    pub specialize_column_parse: bool,
 }
 
 impl<'a, I> ProgramContext<'a, I> {
@@ -563,6 +565,7 @@ where
             main_offset,
             allow_arbitrary_commands: false,
             fold_regex_constants: false,
+            specialize_column_parse: false,
             parse_header: p.parse_header,
         })
     }

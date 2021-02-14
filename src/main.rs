@@ -64,6 +64,7 @@ struct PreludeScalars {
     arbitrary_shell: bool,
     fold_regexes: bool,
     parse_header: bool,
+    specialize_column_parse: bool,
     escaper: Escaper,
     stage: Stage<()>,
 }
@@ -203,6 +204,7 @@ fn get_context<'a>(
         Ok(mut ctx) => {
             ctx.allow_arbitrary_commands = prelude.scalars.arbitrary_shell;
             ctx.fold_regex_constants = prelude.scalars.fold_regexes;
+            ctx.specialize_column_parse = prelude.scalars.specialize_column_parse;
             ctx
         }
         Err(e) => fail!("failed to create program context: {}", e),
@@ -463,6 +465,7 @@ fn main() {
             arbitrary_shell,
             fold_regexes: opt_level >= 3,
             stage: exec_strategy.stage(),
+            specialize_column_parse: opt_level >= 3,
             parse_header,
         },
         output_record_sep,

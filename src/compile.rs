@@ -7,7 +7,7 @@ use crate::codegen::llvm;
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
-use crate::pushdown::{FieldSet, UsedFieldAnalysis};
+use crate::pushdown::{ColumnParseAnalysis, FieldSet, UsedFieldAnalysis};
 use crate::runtime::{self, Str};
 use crate::string_constants::{self, StringConstantAnalysis};
 use crate::types;
@@ -345,6 +345,7 @@ pub(crate) struct Typer<'a> {
     // For analysis passes that introspect into the set of constant string values that will
     // dynamically be assigned to a register
     string_constants: Option<StringConstantAnalysis<'a>>,
+    column_parse: bool,
     // Not used for bytecode generation.
     callgraph: Graph<HashSet<(NumTy, Ty)>, ()>,
 
@@ -713,6 +714,7 @@ impl<'a> Typer<'a> {
                 },
             ));
         }
+        gen.column_parse = pc.specialize_column_parse;
         let types::TypeInfo { var_tys, func_tys } = types::get_types(pc)?;
         let local_globals = pc.local_globals();
         macro_rules! init_entry {
@@ -795,7 +797,32 @@ impl<'a> Typer<'a> {
         Ok(gen)
     }
 
+    fn run_column_parse(&mut self) {
+        if !self.column_parse {
+            return;
+        };
+        let mut cpa = ColumnParseAnalysis::default();
+        let mut locals = HashSet::<(NumTy, Ty)>::new();
+        for frame in &mut self.frames {
+            use petgraph::visit::Dfs;
+            let mut dfs = Dfs::new(&frame.cfg, NodeIx::new(0));
+            locals.extend(frame.locals.values());
+            while let Some(ix) = dfs.next(&frame.cfg) {
+                let bb = &mut frame.cfg.node_weight_mut(ix).unwrap().insts;
+                for inst in bb {
+                    match inst {
+                        Either::Left(ll) => cpa.visit_ll(|x| locals.contains(&x), ll),
+                        Either::Right(hl) => cpa.visit_hl(frame.cur_ident, hl),
+                    }
+                }
+            }
+            cpa.clear();
+            locals.clear();
+        }
+    }
+
     fn run_analyses(&mut self) -> Result<()> {
+        self.run_column_parse();
         let mut ufa = UsedFieldAnalysis::default();
         let mut refs = SmallVec::new();
         for (fix, frame) in self.frames.iter().enumerate() {
