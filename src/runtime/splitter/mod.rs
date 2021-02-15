@@ -11,7 +11,7 @@ pub mod regex;
 
 use super::str_impl::{Buf, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
-use super::{Int, RegexCache};
+use super::{convert, Float, Int, RegexCache};
 use crate::common::Result;
 use crate::pushdown::FieldUsage;
 
@@ -42,6 +42,16 @@ pub trait Line<'a>: Default {
     fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>> {
         let res = self.get_col_ref(col, pat, ofs, rc)?;
         Ok(res.clone())
+    }
+    fn get_float_col(
+        &mut self,
+        col: Int,
+        pat: &Str,
+        ofs: &Str,
+        rc: &mut RegexCache,
+    ) -> Result<Float> {
+        let res = self.get_col_ref(col, pat, ofs, rc)?;
+        Ok(convert::<&Str, Float>(res))
     }
     fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()>;
 }
@@ -96,6 +106,7 @@ pub struct DefaultLine {
     line: Str<'static>,
     used_fields: FieldUsage,
     fields: Vec<Str<'static>>,
+    float_fields: Vec<Float>,
     empty: Str<'static>,
     // Has someone assigned into `fields` without us regenerating `line`?
     // AWK lets you do
@@ -114,6 +125,7 @@ impl Default for DefaultLine {
             line: Str::default(),
             used_fields: Default::default(),
             fields: Vec::new(),
+            float_fields: Vec::new(),
             empty: Str::default(),
             diverged: false,
         }
@@ -154,6 +166,21 @@ impl<'a> Line<'a> for DefaultLine {
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize> {
         self.split_if_needed(pat, rc)?;
         Ok(self.fields.len())
+    }
+    fn get_float_col(
+        &mut self,
+        col: Int,
+        pat: &Str,
+        ofs: &Str,
+        rc: &mut RegexCache,
+    ) -> Result<Float> {
+        if self.used_fields.floats.get(col as usize) {
+            eprintln!("float_fields={:?}", self.float_fields);
+            Ok(self.float_fields.get(col as usize).cloned().unwrap_or(0.0))
+        } else {
+            let res = self.get_col_ref(col, pat, ofs, rc)?;
+            Ok(convert::<&Str, Float>(res))
+        }
     }
     fn get_col_ref(
         &mut self,

@@ -54,6 +54,7 @@ impl<R: Read> LineReader for RegexSplitter<R> {
         let line = rc.with_regex(pat, |re| DefaultLine {
             line: self.read_line_regex(re),
             fields: Default::default(),
+            float_fields: Default::default(),
             used_fields: self.used_fields.clone(),
             diverged: false,
             empty: Str::default(),

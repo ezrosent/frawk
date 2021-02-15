@@ -61,9 +61,13 @@ use crate::runtime::{Int, Str};
 
 use hashbrown::{HashMap, HashSet};
 
-#[derive(Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FieldUsage {
     pub strs: FieldSet,
+    pub floats: FieldSet,
+    // TODO: track writes to certain fields and make sure we don't grab floats for those.
+    // (that or, handle things in `setcol`)
+    //
     // TODO: when adding floats in, make it default to empty.
     // We will allow the float sets to under-approximate (why?
     // should we not?
@@ -78,21 +82,38 @@ pub struct FieldUsage {
     //                        imp/imp keeps us at parity with what we had before..
 }
 
+impl Default for FieldUsage {
+    fn default() -> FieldUsage {
+        FieldUsage {
+            strs: FieldSet::all(),
+            floats: FieldSet::empty(),
+        }
+    }
+}
+
 impl FieldUsage {
     pub fn from_strs(strs: FieldSet) -> FieldUsage {
-        FieldUsage { strs }
+        FieldUsage {
+            strs,
+            floats: FieldSet::empty(),
+        }
     }
     pub fn merged(&self) -> FieldSet {
-        self.strs.clone()
+        let mut res = self.strs.clone();
+        res.union(&self.floats);
+        res
     }
     // Does any field set have fi set?
     pub fn has_fi(&self) -> bool {
-        self.strs.has_fi()
+        self.strs.has_fi() || self.floats.has_fi()
     }
 
     pub fn set_if_fi(&mut self, field: usize) {
         if self.strs.has_fi() {
             self.strs.set(field);
+        }
+        if self.floats.has_fi() {
+            self.floats.set(field);
         }
     }
 
@@ -435,11 +456,12 @@ impl UsedFieldAnalysis {
     /// Return the set of all fields mentioned by column nodes.
     pub fn solve(mut self) -> FieldUsage {
         let mut strs = FieldSet::empty();
+        let mut floats = FieldSet::empty();
         for k in self.string_cols.iter().cloned() {
             strs.union(self.dfa.query(k));
         }
         for k in self.float_cols.iter().cloned() {
-            strs.union(self.dfa.query(k));
+            floats.union(self.dfa.query(k));
         }
         for (l, r) in self.joins.iter().cloned() {
             let mut l_flds = self.dfa.query(l).clone();
@@ -447,6 +469,13 @@ impl UsedFieldAnalysis {
             l_flds.fill(r_flds);
             strs.union(&l_flds);
         }
-        FieldUsage { strs }
+        if floats == FieldSet::all() {
+            FieldUsage {
+                strs: FieldSet::all(),
+                floats: FieldSet::empty(),
+            }
+        } else {
+            FieldUsage { strs, floats }
+        }
     }
 }

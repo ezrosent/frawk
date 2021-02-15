@@ -30,8 +30,9 @@ use regex::{bytes, bytes::Regex};
 use crate::common::{ExecutionStrategy, Result};
 use crate::pushdown::FieldUsage;
 use crate::runtime::{
+    float_parse,
     str_impl::{Buf, Str, UniqueBuf},
-    Int, RegexCache,
+    Float, Int, RegexCache,
 };
 
 use super::{
@@ -242,6 +243,9 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
         if st != State::Done {
             line.promote();
         }
+        if changed {
+            line.used_fields = self.field_set.clone();
+        }
         Ok(changed)
     }
 }
@@ -278,7 +282,7 @@ impl Offsets {
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Default)]
 pub struct Line {
     raw: Str<'static>,
     // Why is len a separate value from raw? We don't always populate raw, but we need to report
@@ -287,6 +291,7 @@ pub struct Line {
     fields: Vec<Str<'static>>,
     partial: Str<'static>,
     empty: Str<'static>,
+    used_fields: FieldUsage,
 }
 
 impl Line {
@@ -445,12 +450,13 @@ impl<'a> Stepper<'a> {
                 }
             };
         }
+        let merged = self.field_set.merged();
         'outer: loop {
             match self.st {
                 State::Init => 'init: loop {
                     // First, skip over any unused fields.
                     let cur_field = self.line.fields.len() + 1;
-                    if !self.field_set.strs.get(cur_field) {
+                    if !merged.get(cur_field) {
                         loop {
                             if cur == self.off.fields.len() {
                                 self.prev_ix = bs.len() + 1;
@@ -1537,7 +1543,9 @@ where
             self.used_fields = old.used_fields.clone()
         }
         old.fields.clear();
-        let changed = self.read_line_inner(&mut old.line, &mut old.fields)?;
+        old.float_fields.clear();
+        let changed =
+            self.read_line_inner(&mut old.line, &mut old.fields, &mut old.float_fields)?;
         Ok(changed)
     }
     fn read_state(&self) -> i64 {
@@ -1570,6 +1578,7 @@ pub trait ByteReaderBase {
         &'b mut self,
         line: &'a mut Str<'static>,
         fields: &'a mut Vec<Str<'static>>,
+        float_fields: &'a mut Vec<Float>,
     ) -> Result</*file changed*/ bool>;
 
     fn maybe_done(&self) -> bool;
@@ -1577,6 +1586,7 @@ pub trait ByteReaderBase {
     unsafe fn consume_line<'a, 'b: 'a>(
         &'b mut self,
         fields: &'a mut Vec<Str<'static>>,
+        float_fields: &'a mut Vec<Float>,
     ) -> (Str<'static>, /*bytes consumed*/ usize);
     fn cur_chunk_version(&self) -> u32;
 }
@@ -1603,6 +1613,7 @@ fn read_line_inner_impl<'a, 'b: 'a, T, P: ChunkProducer<Chunk = OffsetChunk<T>>>
     br: &'b mut ByteReader<P>,
     line: &'a mut Str<'static>,
     fields: &'a mut Vec<Str<'static>>,
+    float_fields: &'a mut Vec<Float>,
 ) -> Result<bool>
 where
     OffsetChunk<T>: Chunk,
@@ -1625,7 +1636,7 @@ where
             return Ok(false);
         }
     }
-    let (next_line, consumed) = unsafe { br.consume_line(fields) };
+    let (next_line, consumed) = unsafe { br.consume_line(fields, float_fields) };
     *line = next_line;
     br.last_len = consumed;
     Ok(changed)
@@ -1645,29 +1656,42 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
         &'b mut self,
         line: &'a mut Str<'static>,
         fields: &'a mut Vec<Str<'static>>,
+        float_fields: &'a mut Vec<Float>,
     ) -> Result<bool> {
-        read_line_inner_impl(self, line, fields)
+        read_line_inner_impl(self, line, fields, float_fields)
     }
     unsafe fn consume_line<'a, 'b: 'a>(
         &'b mut self,
         fields: &'a mut Vec<Str<'static>>,
+        float_fields: &'a mut Vec<Float>,
     ) -> (Str<'static>, usize) {
         let buf = &self.cur_buf;
+        let bytes = &buf.as_bytes()[0..self.buf_len];
+        // float_fields stores $0 inline.
+        float_fields.push(0.0);
         macro_rules! get_field {
-            ($fld:expr, $start:expr, $end:expr) => {
-                if self.used_fields.strs.get($fld) {
-                    buf.slice_to_str($start, $end)
+            ($fld:expr, $start:expr, $end:expr) => {{
+                let field = $fld;
+                let start = $start;
+                let end = $end;
+                let s = if self.used_fields.strs.get(field) {
+                    buf.slice_to_str(start, end)
                 } else {
                     Str::default()
-                }
-            };
+                };
+                let f = if self.used_fields.floats.get(field) {
+                    float_parse::strtod(&bytes[start..end])
+                } else {
+                    0.0
+                };
+                (s, f)
+            }};
             ($index:expr) => {
                 get_field!(fields.len() + 1, self.progress, $index)
             };
         }
 
         let line_start = self.progress;
-        let bytes = &buf.as_bytes()[0..self.buf_len];
         let offs = &mut self.cur_chunk.off;
         for index in &offs.fields[offs.start..] {
             let index = *index as usize;
@@ -1685,17 +1709,23 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
                 // If we have a field of length 0, NF should be zero. This check fires when
                 // record_sep is the first offset we see for this line, and it occurs as the first
                 // character in the line.
-                fields.push(get_field!(index));
+                let (s, f) = get_field!(index);
+                fields.push(s);
+                float_fields.push(f);
             }
             self.progress = index + 1;
             if is_record_sep {
-                let line = get_field!(0, line_start, index);
+                let (line, f) = get_field!(0, line_start, index);
+                float_fields[0] = f;
                 return (line, self.progress - line_start);
             }
         }
-        fields.push(get_field!(self.buf_len));
+        let (last_s, last_f) = get_field!(self.buf_len);
+        fields.push(last_s);
+        float_fields.push(last_f);
         self.progress = self.buf_len;
-        let line = get_field!(0, line_start, self.buf_len);
+        let (line, f) = get_field!(0, line_start, self.buf_len);
+        float_fields[0] = f;
         (line, self.buf_len - line_start)
     }
 }
@@ -1717,26 +1747,38 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
         &'b mut self,
         line: &'a mut Str<'static>,
         fields: &'a mut Vec<Str<'static>>,
+        float_fields: &'a mut Vec<Float>,
     ) -> Result<bool> {
-        read_line_inner_impl(self, line, fields)
+        read_line_inner_impl(self, line, fields, float_fields)
     }
     unsafe fn consume_line<'a, 'b: 'a>(
         &'b mut self,
         fields: &'a mut Vec<Str<'static>>,
+        float_fields: &'a mut Vec<Float>,
     ) -> (Str<'static>, usize) {
         let buf = &self.cur_buf;
         macro_rules! get_field {
-            ($fld:expr, $start:expr, $end:expr) => {
-                if self.used_fields.strs.get($fld) {
-                    buf.slice_to_str($start, $end)
+            ($fld:expr, $start:expr, $end:expr) => {{
+                let field = $fld;
+                let start = $start;
+                let end = $end;
+                let s = if self.used_fields.strs.get(field) {
+                    buf.slice_to_str(start, end)
                 } else {
                     Str::default()
-                }
-            };
+                };
+                let f = if self.used_fields.floats.get(field) {
+                    float_parse::strtod(&buf.as_bytes()[start..end])
+                } else {
+                    0.0
+                };
+                (s, f)
+            }};
             ($index:expr) => {
                 get_field!(fields.len() + 1, self.progress, $index)
             };
         }
+        float_fields.push(0.0);
         let line_start = self.progress;
         let offs_nl = &mut self.cur_chunk.off.nl;
         let record_end = if offs_nl.start == offs_nl.fields.len() {
@@ -1776,17 +1818,23 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             self.progress = field_start;
             self.cur_chunk.off.ws.start += 1;
             if let Some(field_end) = iter.next() {
-                fields.push(get_field!(field_end));
+                let (s, f) = get_field!(field_end);
+                fields.push(s);
+                float_fields.push(f);
                 self.progress = field_end + 1;
                 self.cur_chunk.off.ws.start += 1;
             } else if self.progress != record_end {
-                fields.push(get_field!(record_end));
+                let (s, f) = get_field!(record_end);
+                fields.push(s);
+                float_fields.push(f);
             }
         }
         self.progress = record_end + 1;
         let consumed = self.progress - line_start;
         if line_start < record_end {
-            (get_field!(0, line_start, record_end), consumed)
+            let (s, f) = get_field!(0, line_start, record_end);
+            float_fields[0] = f;
+            (s, consumed)
         } else {
             (Str::default(), consumed)
         }

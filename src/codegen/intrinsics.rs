@@ -583,8 +583,19 @@ pub(crate) unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 
 }
 
 pub(crate) unsafe extern "C" fn get_col_float(runtime: *mut c_void, col: Int) -> f64 {
-    let col = mem::transmute::<U128, Str>(get_col(runtime, col));
-    runtime::convert::<Str, Float>(col)
+    let runtime = &mut *(runtime as *mut Runtime);
+    let col_float = with_input!(&mut runtime.input_data, |(line, _)| {
+        line.get_float_col(
+            col,
+            &runtime.core.vars.fs,
+            &runtime.core.vars.ofs,
+            &mut runtime.core.regexes,
+        )
+    });
+    match col_float {
+        Ok(s) => s,
+        Err(e) => fail!(runtime, "get_float: {}", e),
+    }
 }
 
 pub(crate) unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
