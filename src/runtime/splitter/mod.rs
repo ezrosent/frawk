@@ -32,7 +32,17 @@ pub trait Line<'a>: Default {
     where
         F: FnMut(Str<'static>) -> Str<'static>;
     fn nf(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<usize>;
-    fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>>;
+    fn get_col_ref(
+        &mut self,
+        col: Int,
+        pat: &Str,
+        ofs: &Str,
+        rc: &mut RegexCache,
+    ) -> Result<&Str<'a>>;
+    fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>> {
+        let res = self.get_col_ref(col, pat, ofs, rc)?;
+        Ok(res.clone())
+    }
     fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()>;
 }
 
@@ -86,6 +96,7 @@ pub struct DefaultLine {
     line: Str<'static>,
     used_fields: FieldUsage,
     fields: Vec<Str<'static>>,
+    empty: Str<'static>,
     // Has someone assigned into `fields` without us regenerating `line`?
     // AWK lets you do
     //  $1 = "turnip"
@@ -103,6 +114,7 @@ impl Default for DefaultLine {
             line: Str::default(),
             used_fields: Default::default(),
             fields: Vec::new(),
+            empty: Str::default(),
             diverged: false,
         }
     }
@@ -143,12 +155,18 @@ impl<'a> Line<'a> for DefaultLine {
         self.split_if_needed(pat, rc)?;
         Ok(self.fields.len())
     }
-    fn get_col(&mut self, col: Int, pat: &Str, ofs: &Str, rc: &mut RegexCache) -> Result<Str<'a>> {
+    fn get_col_ref(
+        &mut self,
+        col: Int,
+        pat: &Str,
+        ofs: &Str,
+        rc: &mut RegexCache,
+    ) -> Result<&Str<'a>> {
         if col < 0 {
             return err!("attempt to access field {}; field must be nonnegative", col);
         }
         let res = if col == 0 && !self.diverged {
-            self.line.clone()
+            &self.line
         } else if col == 0 && self.diverged {
             if !self.used_fields.parse_all() {
                 // We projected out fields, but now we have set one of the interior fields and need
@@ -172,18 +190,14 @@ impl<'a> Line<'a> for DefaultLine {
                 }
                 self.fields = new_vec;
             }
-            let res = ofs.join_slice(&self.fields[..]);
-            self.line = res.clone();
+            self.line = ofs.join_slice(&self.fields[..]);
             self.diverged = false;
-            res
+            &self.line
         } else {
             self.split_if_needed(pat, rc)?;
-            self.fields
-                .get((col - 1) as usize)
-                .cloned()
-                .unwrap_or_else(Str::default)
+            self.fields.get((col - 1) as usize).unwrap_or(&self.empty)
         };
-        Ok(res.upcast())
+        Ok(res.upcast_ref())
     }
     fn set_col(&mut self, col: Int, s: &Str<'a>, pat: &Str, rc: &mut RegexCache) -> Result<()> {
         if col == 0 {

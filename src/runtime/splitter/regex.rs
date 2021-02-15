@@ -56,6 +56,7 @@ impl<R: Read> LineReader for RegexSplitter<R> {
             fields: Default::default(),
             used_fields: self.used_fields.clone(),
             diverged: false,
+            empty: Str::default(),
         })?;
         Ok((/* file changed */ start, line))
     }

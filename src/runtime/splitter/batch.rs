@@ -286,6 +286,7 @@ pub struct Line {
     len: usize,
     fields: Vec<Str<'static>>,
     partial: Str<'static>,
+    empty: Str<'static>,
 }
 
 impl Line {
@@ -317,15 +318,15 @@ impl<'a> super::Line<'a> for Line {
         Ok(self.fields.len())
     }
 
-    fn get_col(
+    fn get_col_ref(
         &mut self,
         col: super::Int,
         _pat: &Str,
         _ofs: &Str,
         _rc: &mut super::RegexCache,
-    ) -> Result<Str<'a>> {
+    ) -> Result<&Str<'a>> {
         if col == 0 {
-            return Ok(self.raw.clone().upcast());
+            return Ok(self.raw.upcast_ref());
         }
         if col < 0 {
             return err!("attempt to access negative index {}", col);
@@ -333,9 +334,8 @@ impl<'a> super::Line<'a> for Line {
         Ok(self
             .fields
             .get(col as usize - 1)
-            .cloned()
-            .unwrap_or_else(Str::default)
-            .upcast())
+            .unwrap_or(&self.empty)
+            .upcast_ref())
     }
 
     // Setting columns for CSV doesn't work. We refuse it outright.
