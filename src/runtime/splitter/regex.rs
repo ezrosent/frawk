@@ -2,7 +2,7 @@
 use std::io::Read;
 
 use crate::common::Result;
-use crate::pushdown::FieldSet;
+use crate::pushdown::FieldUsage;
 use crate::runtime::Str;
 use regex::bytes::Regex;
 
@@ -12,7 +12,7 @@ use super::{DefaultLine, LineReader, Reader, ReaderState};
 pub struct RegexSplitter<R> {
     reader: Reader<R>,
     name: Str<'static>,
-    used_fields: FieldSet,
+    used_fields: FieldUsage,
     // Used to trigger updating FILENAME on the first read.
     start: bool,
 }
@@ -27,7 +27,7 @@ impl<R: Read> LineReader for RegexSplitter<R> {
     }
 
     // The _reuse variant not only allows us to reuse the memory in the `fields` vec, it also
-    // allows us to reuse the old FieldSet, which may have been overwritten with all() if the more
+    // allows us to reuse the old FieldUsage, which may have been overwritten with all() if the more
     // expensive join path was taken.
     fn read_line_reuse<'a, 'b: 'a>(
         &'b mut self,
@@ -67,7 +67,7 @@ impl<R: Read> LineReader for RegexSplitter<R> {
         self.reader.force_eof();
         Ok(false)
     }
-    fn set_used_fields(&mut self, used_fields: &FieldSet) {
+    fn set_used_fields(&mut self, used_fields: &FieldUsage) {
         self.used_fields = used_fields.clone();
     }
 }
@@ -77,7 +77,7 @@ impl<R: Read> RegexSplitter<R> {
         RegexSplitter {
             reader: Reader::new(r, chunk_size, /*padding=*/ 0, check_utf8),
             name: name.into(),
-            used_fields: FieldSet::all(),
+            used_fields: Default::default(),
             start: true,
         }
     }

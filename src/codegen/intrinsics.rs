@@ -18,7 +18,7 @@ use crate::{
     builtins::Variable,
     common::{FileSpec, Result},
     compile::Ty,
-    pushdown::FieldSet,
+    pushdown::FieldUsage,
 };
 
 use libc::c_void;
@@ -338,7 +338,7 @@ pub(crate) trait IntoRuntime {
     fn into_runtime<'a>(
         self,
         ff: impl runtime::writers::FileFactory,
-        used_fields: &FieldSet,
+        used_fields: &FieldUsage,
         named_columns: Option<Vec<&[u8]>>,
     ) -> Runtime<'a>;
 }
@@ -349,7 +349,7 @@ macro_rules! impl_into_runtime {
             fn into_runtime<'a>(
                 self,
                 ff: impl runtime::writers::FileFactory,
-                used_fields: &FieldSet,
+                used_fields: &FieldUsage,
                 named_columns: Option<Vec<&[u8]>>,
             ) -> Runtime<'a> {
                 Runtime {

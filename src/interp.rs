@@ -2,7 +2,7 @@ use crate::builtins::Variable;
 use crate::bytecode::{Get, Instr, Label, Reg};
 use crate::common::{NumTy, Result, Stage};
 use crate::compile::{self, Ty};
-use crate::pushdown::FieldSet;
+use crate::pushdown::FieldUsage;
 use crate::runtime::{self, Float, Int, Line, LineReader, Str, UniqueStr};
 
 use crossbeam::scope;
@@ -451,7 +451,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         regs: impl Fn(compile::Ty) -> usize,
         stdin: LR,
         ff: impl runtime::writers::FileFactory,
-        used_fields: &FieldSet,
+        used_fields: &FieldUsage,
         named_columns: Option<Vec<&[u8]>>,
     ) -> Self {
         use compile::Ty::*;
@@ -1293,6 +1293,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             break 'outer Ok(());
                         }
                     }
+                    Nop => {}
                 };
                 break cur + 1;
             };

@@ -13,7 +13,7 @@ use super::str_impl::{Buf, Str, UniqueBuf};
 use super::utf8::{is_utf8, validate_utf8_clipped};
 use super::{Int, RegexCache};
 use crate::common::Result;
-use crate::pushdown::FieldSet;
+use crate::pushdown::FieldUsage;
 
 use std::io::{ErrorKind, Read};
 
@@ -60,7 +60,7 @@ pub trait LineReader: Sized {
     }
     fn read_state(&self) -> i64;
     fn next_file(&mut self) -> Result<bool>;
-    fn set_used_fields(&mut self, used_fields: &FieldSet);
+    fn set_used_fields(&mut self, used_fields: &FieldUsage);
     // Whether or not this LineReader is configured to check for valid UTF-8. This is used to
     // propagate consistent options across multiple LineReader instances.
     fn check_utf8(&self) -> bool;
@@ -84,7 +84,7 @@ fn normalize_join_indexes(start: Int, end: Int, nf: usize) -> Result<(usize, usi
 // Default implementation of Line; it supports assignment into fields as well as lazy splitting.
 pub struct DefaultLine {
     line: Str<'static>,
-    used_fields: FieldSet,
+    used_fields: FieldUsage,
     fields: Vec<Str<'static>>,
     // Has someone assigned into `fields` without us regenerating `line`?
     // AWK lets you do
@@ -101,7 +101,7 @@ impl Default for DefaultLine {
     fn default() -> DefaultLine {
         DefaultLine {
             line: Str::default(),
-            used_fields: FieldSet::all(),
+            used_fields: Default::default(),
             fields: Vec::new(),
             diverged: false,
         }
@@ -111,7 +111,7 @@ impl Default for DefaultLine {
 impl DefaultLine {
     fn split_if_needed(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<()> {
         if self.fields.len() == 0 {
-            rc.split_regex(pat, &self.line, &self.used_fields, &mut self.fields)?;
+            rc.split_regex(pat, &self.line, &self.used_fields.strs, &mut self.fields)?;
         }
         Ok(())
     }
@@ -150,7 +150,7 @@ impl<'a> Line<'a> for DefaultLine {
         let res = if col == 0 && !self.diverged {
             self.line.clone()
         } else if col == 0 && self.diverged {
-            if self.used_fields != FieldSet::all() {
+            if !self.used_fields.parse_all() {
                 // We projected out fields, but now we have set one of the interior fields and need
                 // to print out $0. That means we have to split $0 in its entirety and then copy
                 // over the fields that were already set.
@@ -158,15 +158,15 @@ impl<'a> Line<'a> for DefaultLine {
                 // This is strictly more work than just reading all of the fields in the first
                 // place; so once we hit this condition we overwrite the used fields with all() so
                 // this doesn't happen again for a while.
-                let old_set = std::mem::replace(&mut self.used_fields, FieldSet::all());
+                let old_set = std::mem::replace(&mut self.used_fields, Default::default());
                 let mut new_vec = Vec::with_capacity(self.fields.len());
-                rc.split_regex(pat, &self.line, &self.used_fields, &mut new_vec)?;
+                rc.split_regex(pat, &self.line, &self.used_fields.strs, &mut new_vec)?;
 
                 for (i, field) in self.fields.iter().enumerate().rev() {
                     if i >= new_vec.len() {
                         new_vec.resize_with(i + 1, Str::default);
                     }
-                    if old_set.get(i + 1) {
+                    if old_set.strs.get(i + 1) {
                         new_vec[i] = field.clone()
                     }
                 }
@@ -277,7 +277,7 @@ where
             None => false,
         })
     }
-    fn set_used_fields(&mut self, used_fields: &FieldSet) {
+    fn set_used_fields(&mut self, used_fields: &FieldUsage) {
         for i in self.0.iter_mut() {
             i.set_used_fields(used_fields);
         }

@@ -20,7 +20,7 @@ pub mod string_search;
 pub mod utf8;
 pub mod writers;
 
-use crate::pushdown::FieldSet;
+use crate::pushdown::{FieldSet, FieldUsage};
 use splitter::regex::RegexSplitter;
 
 // TODO: remove the pub use for Variables here.
@@ -286,8 +286,8 @@ pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
     pub(crate) inputs: Inputs,
     stdin: LR,
     named_columns: Option<Vec<Str<'static>>>,
-    used_fields: FieldSet,
-    backup_used_fields: FieldSet,
+    used_fields: FieldUsage,
+    backup_used_fields: FieldUsage,
 }
 
 impl<LR: LineReader> FileRead<LR> {
@@ -314,7 +314,7 @@ impl<LR: LineReader> FileRead<LR> {
 
     pub(crate) fn new(
         stdin: LR,
-        used_fields: FieldSet,
+        used_fields: FieldUsage,
         named_columns: Option<Vec<&[u8]>>,
     ) -> FileRead<LR> {
         let backup_used_fields = used_fields;
@@ -322,7 +322,7 @@ impl<LR: LineReader> FileRead<LR> {
             // In header-parsing mode we parse all columns until `update_named_columns` is called
             // to ensure that we parse the entire header. Otherwise we just use the same field set
             // as before.
-            FieldSet::all()
+            FieldUsage::default()
         } else {
             backup_used_fields.clone()
         };
@@ -365,7 +365,8 @@ impl<LR: LineReader> FileRead<LR> {
         // Merge in the named column indexes into our used-field list.
         for c in cols.iter() {
             let c_borrow: &Str<'a> = c.upcast_ref();
-            self.used_fields.set(fi.get(c_borrow).unwrap_or(0) as usize)
+            self.used_fields
+                .set_if_fi(fi.get(c_borrow).unwrap_or(0) as usize)
         }
         self.stdin.set_used_fields(&self.used_fields)
     }

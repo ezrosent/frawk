@@ -55,11 +55,52 @@ use std::fmt;
 use crate::builtins::Variable;
 use crate::bytecode::{Accum, Instr, Reg};
 use crate::common::NumTy;
-use crate::compile::{HighLevel, Ty};
+use crate::compile::{accum_hl, HighLevel, Ty};
 use crate::dataflow::{self, JoinSemiLattice, Key};
 use crate::runtime::{Int, Str};
 
 use hashbrown::{HashMap, HashSet};
+
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct FieldUsage {
+    pub strs: FieldSet,
+    // TODO: when adding floats in, make it default to empty.
+    // We will allow the float sets to under-approximate (why?
+    // should we not?
+    // what should we do instead?
+    // think about how this gets implemented for RegexSplitter...)
+    // We can have precise or imprecise signals for floats and strings:
+    //   float/string
+    // precise/imprecise   => Go ahead and split all strings, and prefetch the floats
+    // precise/precise     => same! Split in accordance with the two sets
+    // imprecise/imprecise => Just parse strings (handle floats "as they come")
+    // imprcise/precise    => A bit of a sticking point here... I suppse treating the same as
+    //                        imp/imp keeps us at parity with what we had before..
+}
+
+impl FieldUsage {
+    pub fn from_strs(strs: FieldSet) -> FieldUsage {
+        FieldUsage { strs }
+    }
+    pub fn merged(&self) -> FieldSet {
+        self.strs.clone()
+    }
+    // Does any field set have fi set?
+    pub fn has_fi(&self) -> bool {
+        self.strs.has_fi()
+    }
+
+    pub fn set_if_fi(&mut self, field: usize) {
+        if self.strs.has_fi() {
+            self.strs.set(field);
+        }
+    }
+
+    pub fn parse_all(&self) -> bool {
+        // NB: keep this strs-only for now
+        self.strs == FieldSet::all()
+    }
+}
 
 /// Most AWK scripts do not use more than 63 fields, so we represent our sets of used fields
 /// "lossy bitsets" that can precisely represent subsets of [0, 63] but otherwise just say "yes" to
@@ -199,11 +240,13 @@ impl fmt::Debug for FieldSet {
 //     [x] Take it into account in UsedFieldAnalysis, like a normal load.
 // [x] Rewrite GetFloatCol and wire in ColumnParseAnalysis (don't forget DFS over CFG), get tests
 //     passing
-// [ ] Move FieldSet to an opaque struct outside of this module
-// [ ] Implement special "float only fields" handling in LineReader, but don't populate sets
-//     anywhere
+// [x] Move FieldSet to an opaque struct
+// [ ] Add a 'get_float_col' method to LineReader
 // [ ] Track float fields independently, test, benchmark
 
+/// A function-level (rather than the dataflow analyses, which for frawk cover the whole program)
+/// static analysis used to replace GetColumn instructions with type-specific "column parsing"
+/// instrinctions.
 pub(crate) struct ColumnParseAnalysis<'a> {
     get_cols: HashMap<Reg<Str<'a>>, Reg<Int>>,
     other_uses: HashSet<Reg<Str<'a>>>,
@@ -219,9 +262,9 @@ impl<'a> Default for ColumnParseAnalysis<'a> {
 }
 
 impl<'a> ColumnParseAnalysis<'a> {
-    fn record_key(&mut self, k: Option<dataflow::Key>) {
-        if let Some(dataflow::Key::Reg(src, Ty::Str)) = k {
-            let reg = Reg::from(src);
+    fn record_key(&mut self, reg: NumTy, ty: Ty) {
+        if let Ty::Str = ty {
+            let reg = Reg::from(reg);
             if self.get_cols.get(&reg).is_some() {
                 self.other_uses.insert(reg);
             }
@@ -233,15 +276,21 @@ impl<'a> ColumnParseAnalysis<'a> {
         self.other_uses.clear();
     }
 
-    pub(crate) fn visit_hl(&mut self, cur_fn_id: NumTy, inst: &HighLevel) {
-        dataflow::boilerplate::visit_hl(inst, cur_fn_id, |_, src| self.record_key(src))
+    pub(crate) fn visit_hl(&mut self, inst: &HighLevel) {
+        accum_hl(inst, |reg, ty| self.record_key(reg, ty))
+    }
+
+    // Is this a register that we (a) noticed was a relevant `dst` for for a GetColumn (b) didn't
+    // see used in any other context later on?
+    pub(crate) fn avoid_parse(&self, r: Reg<Str<'a>>) -> bool {
+        !self.other_uses.contains(&r)
     }
 
     pub(crate) fn visit_ll(
         &mut self,
         mut is_local: impl FnMut((NumTy, Ty)) -> bool,
         inst: &mut Instr<'a>,
-    ) {
+    ) -> Option<Reg<Str<'a>>> {
         use Instr::*;
         match inst {
             // NB: We could do a slightly-more-complex translation that handles a global `src`
@@ -251,13 +300,18 @@ impl<'a> ColumnParseAnalysis<'a> {
             // Most common scripts do not have src as global, so for now we focus on locals.
             GetColumn(dst, src) if is_local(dst.reflect()) && is_local(src.reflect()) => {
                 self.get_cols.insert(*dst, *src);
+                Some(*dst)
             }
             StrToFloat(dst, src) => {
                 if let Some(col) = self.get_cols.get(src) {
                     *inst = GetFloatColumn(*dst, *col);
                 }
+                None
             }
-            inst => dataflow::boilerplate::visit_ll(inst, |_, src| self.record_key(src)),
+            inst => {
+                inst.accum(|reg, ty| self.record_key(reg, ty));
+                None
+            }
         }
     }
 }
@@ -309,6 +363,8 @@ pub struct UsedFieldAnalysis {
     // the variables in question.  We can always add it in the future, but since join nodes are
     // always "leaves" we will just add the missing columns as a postprocessing step.
     joins: Vec<(Key /*lhs*/, Key /*rhs*/)>,
+    string_cols: Vec<Key>,
+    float_cols: Vec<Key>,
 }
 
 impl Default for UsedFieldAnalysis {
@@ -316,6 +372,8 @@ impl Default for UsedFieldAnalysis {
         let mut res = UsedFieldAnalysis {
             dfa: Default::default(),
             joins: Default::default(),
+            string_cols: Default::default(),
+            float_cols: Default::default(),
         };
         res.dfa.add_src(Key::Rng, FieldSet::all());
         res.dfa.add_src(Key::VarVal(Variable::FI), FieldSet::fi());
@@ -352,11 +410,12 @@ impl UsedFieldAnalysis {
             }),
             GetColumn(dst, col_reg) => {
                 self.dfa.add_query(col_reg);
+                self.string_cols.push(col_reg.into());
                 self.dfa.add_src(dst, FieldSet::all());
             }
             GetFloatColumn(dst, col_reg) => {
-                // TODO: make this more precise
                 self.dfa.add_query(col_reg);
+                self.float_cols.push(col_reg.into());
                 self.dfa.add_src(dst, FieldSet::all());
             }
             JoinCSV(dst, start, end)
@@ -374,14 +433,20 @@ impl UsedFieldAnalysis {
     }
 
     /// Return the set of all fields mentioned by column nodes.
-    pub fn solve(mut self) -> FieldSet {
-        let mut res = self.dfa.root().clone();
+    pub fn solve(mut self) -> FieldUsage {
+        let mut strs = FieldSet::empty();
+        for k in self.string_cols.iter().cloned() {
+            strs.union(self.dfa.query(k));
+        }
+        for k in self.float_cols.iter().cloned() {
+            strs.union(self.dfa.query(k));
+        }
         for (l, r) in self.joins.iter().cloned() {
             let mut l_flds = self.dfa.query(l).clone();
             let r_flds = self.dfa.query(r);
             l_flds.fill(r_flds);
-            res.union(&l_flds);
+            strs.union(&l_flds);
         }
-        res
+        FieldUsage { strs }
     }
 }

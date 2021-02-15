@@ -363,7 +363,8 @@ pub(crate) mod boilerplate {
                 f(Key::Reg(*dst, *ty), Some(Key::Slot(u32::try_from(*slot).expect("slot too large"), *ty))),
             StoreSlot{ty,slot,src} =>
                 f(Key::Slot(u32::try_from(*slot).expect("slot too large"), *ty), Some(Key::Reg(*src, *ty))),
-            Delete{..}
+            Nop
+            | Delete{..}
             | Clear {..}
             | UpdateUsedFields()
             | SetFI(..)

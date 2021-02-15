@@ -7,7 +7,7 @@ use crate::{
     bytecode::{self, Accum},
     common::{FileSpec, NumTy, Result, Stage},
     compile,
-    pushdown::FieldSet,
+    pushdown::FieldUsage,
     runtime::{self, UniqueStr},
 };
 
@@ -141,7 +141,7 @@ pub(crate) unsafe fn run_main<R, FF, J>(
     mut jit: J,
     stdin: R,
     ff: FF,
-    used_fields: &FieldSet,
+    used_fields: &FieldUsage,
     named_columns: Option<Vec<&[u8]>>,
     num_workers: usize,
 ) -> Result<()>
@@ -921,6 +921,7 @@ pub(crate) trait CodeGenerator: Backend {
             IterGetNext { iter_ty, dst, iter } => {
                 self.iter_getnext((*dst, iter_ty.iter()?), (*iter, *iter_ty))
             }
+            Nop => Ok(()),
             Push(_, _) | Pop(_, _) => err!("unexpected explicit push/pop in llvm"),
             AllocMap(_, _) => {
                 err!("unexpected AllocMap (allocs are handled differently in LLVM)")

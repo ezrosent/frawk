@@ -7,7 +7,7 @@ use crate::codegen::llvm;
 use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
 use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
-use crate::pushdown::{ColumnParseAnalysis, FieldSet, UsedFieldAnalysis};
+use crate::pushdown::{ColumnParseAnalysis, FieldUsage, UsedFieldAnalysis};
 use crate::runtime::{self, Str};
 use crate::string_constants::{self, StringConstantAnalysis};
 use crate::types;
@@ -174,8 +174,10 @@ pub(crate) fn context_compiles<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -
 }
 
 #[cfg(test)]
-pub(crate) fn used_fields<'a>(ctx: &mut cfg::ProgramContext<'a, &'a str>) -> Result<FieldSet> {
-    Ok(Typer::init_from_ctx(ctx)?.used_fields)
+pub(crate) fn used_fields<'a>(
+    ctx: &mut cfg::ProgramContext<'a, &'a str>,
+) -> Result<crate::pushdown::FieldSet> {
+    Ok(Typer::init_from_ctx(ctx)?.used_fields.merged())
 }
 
 #[cfg(feature = "llvm_backend")]
@@ -337,7 +339,7 @@ pub(crate) struct Typer<'a> {
     pub main_offset: Stage<usize>,
 
     // For projection pushdown
-    used_fields: FieldSet,
+    used_fields: FieldUsage,
     // The fields referenced by name via the FI builtin variable
     named_columns: Option<Vec<&'a [u8]>>,
     // For rejecting suspcicious programs with commands.
@@ -487,22 +489,34 @@ fn mov<'a>(dst_reg: u32, src_reg: u32, ty: Ty) -> Result<Option<LL<'a>>> {
     Ok(Some(res))
 }
 
-fn accum<'a>(inst: &Instr<'a>, mut f: impl FnMut(NumTy, Ty)) {
-    use {Either::*, HighLevel::*};
-    match inst {
-        Left(ll) => ll.accum(f),
-        Right(Call {
+pub(crate) fn accum_hl(hl: &HighLevel, mut f: impl FnMut(NumTy, Ty)) {
+    use HighLevel::*;
+    match hl {
+        Call {
             dst_reg,
             dst_ty,
             args,
             ..
-        }) => {
+        } => {
             f(*dst_reg, *dst_ty);
             for (reg, ty) in args.iter().cloned() {
                 f(reg, ty)
             }
         }
-        Right(Ret(reg, ty)) | Right(Phi(reg, ty, _)) | Right(DropIter(reg, ty)) => f(*reg, *ty),
+        Phi(reg, ty, preds) => {
+            f(*reg, *ty);
+            for (_, reg) in preds {
+                f(*reg, *ty);
+            }
+        }
+        Ret(reg, ty) | DropIter(reg, ty) => f(*reg, *ty),
+    }
+}
+
+fn accum<'a>(inst: &Instr<'a>, f: impl FnMut(NumTy, Ty)) {
+    match inst {
+        Either::Left(ll) => ll.accum(f),
+        Either::Right(hl) => accum_hl(hl, f),
     }
 }
 
@@ -802,22 +816,34 @@ impl<'a> Typer<'a> {
             return;
         };
         let mut cpa = ColumnParseAnalysis::default();
-        let mut locals = HashSet::<(NumTy, Ty)>::new();
-        for frame in &mut self.frames {
+        let mut revisit = SmallVec::new();
+        self.init_global_refs();
+        let globals = self.global_refs.as_ref().unwrap();
+        for (i, frame) in self.frames.iter_mut().enumerate() {
             use petgraph::visit::Dfs;
             let mut dfs = Dfs::new(&frame.cfg, NodeIx::new(0));
-            locals.extend(frame.locals.values());
+            let globals = &globals[i];
             while let Some(ix) = dfs.next(&frame.cfg) {
                 let bb = &mut frame.cfg.node_weight_mut(ix).unwrap().insts;
-                for inst in bb {
+                for (i, inst) in bb.iter_mut().enumerate() {
                     match inst {
-                        Either::Left(ll) => cpa.visit_ll(|x| locals.contains(&x), ll),
-                        Either::Right(hl) => cpa.visit_hl(frame.cur_ident, hl),
+                        Either::Left(ll) => {
+                            if let Some(query) = cpa.visit_ll(|x| !globals.contains(&x), ll) {
+                                revisit.push((ix, i, query));
+                            }
+                        }
+                        Either::Right(hl) => cpa.visit_hl(hl),
                     }
                 }
             }
+            // Now that we have rewritten relevant parses, go back and see if we can remove
+            // the original GetColumn instruction entirely.
+            for (bb, inst, query) in revisit.drain(..) {
+                if cpa.avoid_parse(query) {
+                    frame.cfg.node_weight_mut(bb).unwrap().insts[inst] = Either::Left(LL::Nop)
+                }
+            }
             cpa.clear();
-            locals.clear();
         }
     }
 
@@ -951,9 +977,9 @@ impl<'a> Typer<'a> {
         Ok(())
     }
 
-    pub(crate) fn get_global_refs(&mut self) -> Vec<HashSet<(NumTy, Ty)>> {
-        if let Some(globals) = &self.global_refs {
-            return globals.clone();
+    pub(crate) fn init_global_refs(&mut self) {
+        if self.global_refs.is_some() {
+            return;
         }
         let mut globals = vec![HashSet::new(); self.frames.len()];
         // First, accumulate all the local and global registers referenced in all the functions.
@@ -1024,7 +1050,11 @@ impl<'a> Typer<'a> {
             mem::swap(set, self.callgraph.node_weight_mut(NodeIx::new(i)).unwrap());
         }
         self.global_refs = Some(globals.clone());
-        globals
+    }
+
+    pub(crate) fn get_global_refs(&mut self) -> Vec<HashSet<(NumTy, Ty)>> {
+        self.init_global_refs();
+        self.global_refs.as_ref().unwrap().clone()
     }
 }
 

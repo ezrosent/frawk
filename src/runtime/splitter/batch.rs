@@ -28,7 +28,7 @@ use lazy_static::lazy_static;
 use regex::{bytes, bytes::Regex};
 
 use crate::common::{ExecutionStrategy, Result};
-use crate::pushdown::FieldSet;
+use crate::pushdown::FieldUsage;
 use crate::runtime::{
     str_impl::{Buf, Str, UniqueBuf},
     Int, RegexCache,
@@ -48,7 +48,7 @@ pub struct CSVReader<P> {
     last_len: usize,
     // Used to trigger updating FILENAME on the first read.
     ifmt: InputFormat,
-    field_set: FieldSet,
+    field_set: FieldUsage,
 
     empty_buf: Buf,
     check_utf8: bool,
@@ -115,7 +115,7 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         self.prev_ix = 0;
         self.prod.next_file()
     }
-    fn set_used_fields(&mut self, field_set: &FieldSet) {
+    fn set_used_fields(&mut self, field_set: &FieldUsage) {
         self.field_set = field_set.clone();
     }
 }
@@ -171,7 +171,7 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             cur_chunk: OffsetChunk::default(),
             prev_ix: 0,
             last_len: 0,
-            field_set: FieldSet::all(),
+            field_set: Default::default(),
             ifmt,
             empty_buf,
             check_utf8,
@@ -387,7 +387,7 @@ pub struct Stepper<'a> {
     pub prev_ix: usize,
     pub st: State,
     pub line: &'a mut Line,
-    pub field_set: FieldSet,
+    pub field_set: FieldUsage,
 }
 
 impl<'a> Stepper<'a> {
@@ -414,7 +414,7 @@ impl<'a> Stepper<'a> {
 
     fn get(&mut self, line_start: usize, j: usize, cur: usize) -> usize {
         self.off.start = cur;
-        if self.field_set.get(0) {
+        if self.field_set.strs.get(0) {
             self.line.raw = self.buf.slice_to_str(line_start, j);
         }
         self.line.len += j - line_start;
@@ -450,7 +450,7 @@ impl<'a> Stepper<'a> {
                 State::Init => 'init: loop {
                     // First, skip over any unused fields.
                     let cur_field = self.line.fields.len() + 1;
-                    if !self.field_set.get(cur_field) {
+                    if !self.field_set.strs.get(cur_field) {
                         loop {
                             if cur == self.off.fields.len() {
                                 self.prev_ix = bs.len() + 1;
@@ -1361,7 +1361,7 @@ pub struct ByteReader<P: ChunkProducer> {
     cur_chunk: P::Chunk,
     cur_buf: Buf,
     buf_len: usize,
-    used_fields: FieldSet,
+    used_fields: FieldUsage,
     // Progress in the current buffer.
     progress: usize,
     record_sep: u8,
@@ -1421,7 +1421,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             buf_len: 0,
             progress: 0,
             record_sep,
-            used_fields: FieldSet::all(),
+            used_fields: Default::default(),
             last_len: usize::max_value(),
             check_utf8,
         }
@@ -1478,7 +1478,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
             buf_len: 0,
             progress: 0,
             record_sep: 0, // unused
-            used_fields: FieldSet::all(),
+            used_fields: Default::default(),
             last_len: usize::max_value(),
             check_utf8,
         }
@@ -1530,7 +1530,7 @@ where
     ) -> Result<bool> {
         let start = self.cur_chunk_version() == 0;
         old.diverged = false;
-        // We use the same protocol as DefaultSplitter, RegexSplitter. See comments for more info.
+        // We use the same protocol as RegexSplitter. See comments for more info.
         if start {
             old.used_fields = self.used_fields.clone();
         } else if old.used_fields != self.used_fields {
@@ -1556,7 +1556,7 @@ where
         self.prod.next_file()
     }
 
-    fn set_used_fields(&mut self, field_set: &FieldSet) {
+    fn set_used_fields(&mut self, field_set: &FieldUsage) {
         self.used_fields = field_set.clone();
     }
 }
@@ -1655,7 +1655,7 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
         let buf = &self.cur_buf;
         macro_rules! get_field {
             ($fld:expr, $start:expr, $end:expr) => {
-                if self.used_fields.get($fld) {
+                if self.used_fields.strs.get($fld) {
                     buf.slice_to_str($start, $end)
                 } else {
                     Str::default()
@@ -1727,7 +1727,7 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
         let buf = &self.cur_buf;
         macro_rules! get_field {
             ($fld:expr, $start:expr, $end:expr) => {
-                if self.used_fields.get($fld) {
+                if self.used_fields.strs.get($fld) {
                     buf.slice_to_str($start, $end)
                 } else {
                     Str::default()

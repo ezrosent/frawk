@@ -64,6 +64,9 @@ unsafe impl<T> Send for Reg<T> {}
 
 #[derive(Debug, Clone)]
 pub(crate) enum Instr<'a> {
+    // Do nothing; This shows up when an optimization removes an instruction in-place
+    Nop,
+
     // By default, instructions have destination first, and src(s) second.
     StoreConstStr(Reg<Str<'a>>, UniqueStr<'a>),
     StoreConstInt(Reg<Int>, Int),
@@ -779,7 +782,8 @@ impl<'a> Instr<'a> {
                 key.accum(&mut f);
                 val.accum(&mut f);
             }
-            UpdateUsedFields() | NextFile() | NextLineStdinFused() | Call(_) | Jmp(_) | Ret => {}
+            Nop | UpdateUsedFields() | NextFile() | NextLineStdinFused() | Call(_) | Jmp(_)
+            | Ret => {}
         }
     }
 }
