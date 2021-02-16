@@ -264,7 +264,8 @@ macro_rules! fail {
     ($rt:expr, $($es:expr),+) => {{
         #[cfg(test)]
         {
-            panic!("failure in runtime {}. Halting execution", format!($($es),*))
+            eprintln_ignore!("failure in runtime {}. Halting execution", format!($($es),*));
+            panic!("failure in runtime")
         }
         #[cfg(not(test))]
         {
@@ -306,7 +307,7 @@ macro_rules! exit {
         let concurrent = (*rt).concurrent;
         if concurrent {
             // Use panic to allow 'graceful' shutdown of other worker threads.
-            panic!($msg)
+            panic!("")
         } else {
             std::ptr::drop_in_place(rt);
             std::process::exit($code)
