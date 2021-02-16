@@ -175,7 +175,6 @@ impl<'a> Line<'a> for DefaultLine {
         rc: &mut RegexCache,
     ) -> Result<Float> {
         if self.used_fields.floats.get(col as usize) {
-            eprintln!("float_fields={:?}", self.float_fields);
             Ok(self.float_fields.get(col as usize).cloned().unwrap_or(0.0))
         } else {
             let res = self.get_col_ref(col, pat, ofs, rc)?;
