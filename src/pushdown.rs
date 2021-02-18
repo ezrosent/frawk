@@ -106,6 +106,13 @@ impl FieldSet {
     pub fn union(&mut self, other: &FieldSet) {
         self.0 = self.0 | other.0;
     }
+    pub fn max_value(&self) -> u32 {
+        if self == &FieldSet::all() {
+            u32::max_value()
+        } else {
+            self.max_bit()
+        }
+    }
     fn min_bit(&self) -> u32 {
         (FI_MASK & self.0).trailing_zeros()
     }

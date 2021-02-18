@@ -1772,6 +1772,7 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             .cloned()
             .map(|x| x as usize)
             .take_while(|x| x <= &record_end);
+        let max = self.used_fields.max_value() as usize;
         while let Some(field_start) = iter.next() {
             self.progress = field_start;
             self.cur_chunk.off.ws.start += 1;
@@ -1781,6 +1782,12 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
                 self.cur_chunk.off.ws.start += 1;
             } else if self.progress != record_end {
                 fields.push(get_field!(record_end));
+            }
+            if fields.len() == max {
+                while let Some(_) = iter.next() {
+                    self.cur_chunk.off.ws.start += 1;
+                }
+                break;
             }
         }
         self.progress = record_end + 1;
