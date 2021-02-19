@@ -979,6 +979,15 @@ mod generic {
     // sequence, write the indexes of matching indexes into Offsets." The first is very close to
     // the simd-csv variant; simpler formats do a bit less.
 
+    // (Clean up ascii_whitespace last)
+    // TODO: refactor the find_indexes_* functions to just take a single function parameterized by
+    // a "state" value (to capture prev_iter_inside_quote, etc.). Get tests passing.
+    // TODO: add newlines to OffsetChunk, write newline offsets into the find_indexes_* functions.
+    // TODO: make use of newlines in ByteReader
+    //     * make sure there's sufficient test coverage to ensure that we are setting NF correctly
+    //       here.
+    // TODO: make use of newlines in CSVReader
+
     pub unsafe fn find_indexes_csv<V: Vector>(
         buf: &[u8],
         offsets: &mut Offsets,
@@ -1772,7 +1781,6 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             .cloned()
             .map(|x| x as usize)
             .take_while(|x| x <= &record_end);
-        let max = self.used_fields.max_value() as usize;
         while let Some(field_start) = iter.next() {
             self.progress = field_start;
             self.cur_chunk.off.ws.start += 1;
@@ -1782,17 +1790,6 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
                 self.cur_chunk.off.ws.start += 1;
             } else if self.progress != record_end {
                 fields.push(get_field!(record_end));
-            }
-            // TODO revert this change... probably doesn't let us set NF precisely.
-            if fields.len() == max {
-                self.cur_chunk.off.ws.start += gallop(
-                    &self.cur_chunk.off.ws.fields[self.cur_chunk.off.ws.start..],
-                    |x| x <= record_end as u64,
-                );
-                // while let Some(_) = iter.next() {
-                //     self.cur_chunk.off.ws.start += 1;
-                // }
-                break;
             }
         }
         self.progress = record_end + 1;
@@ -1805,7 +1802,7 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
     }
 }
 
-// adepted from Frank McSherry:
+// adapted from Frank McSherry:
 // https://github.com/frankmcsherry/blog/blob/master/posts/2018-05-19.md
 
 fn gallop(slice: &[u64], mut cmp: impl FnMut(u64) -> bool) -> usize {
@@ -1827,6 +1824,9 @@ fn gallop(slice: &[u64], mut cmp: impl FnMut(u64) -> bool) -> usize {
         }
         res += 1; // advance one, as we always stayed < value
     }
+
+    // TODO: experiment with doing just one round of the doubling/halving, and then doing a linear
+    // search thereafter. Most rows where this matters will have a pretty small number of columns
 
     return res;
 }
