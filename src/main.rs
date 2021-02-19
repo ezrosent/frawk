@@ -351,6 +351,10 @@ fn main() {
              .about("Attempt to execute the script in parallel. Strategy r[ecord] parallelizes within and accross files. Strategy f[ile] parallelizes between input files.")
              .short('p')
              .possible_values(&["r", "record", "f", "file"]))
+        .arg(Arg::new("chunk-size")
+             .long("chunk-size")
+             .about("Buffer size when reading input")
+             .takes_value(true))
         .arg(Arg::new("arbitrary-shell")
              .about("")
              .short('A')
@@ -384,7 +388,14 @@ fn main() {
     };
 
     // NB: do we want this to be a command-line param?
-    let chunk_size = CHUNK_SIZE;
+    let chunk_size = if let Some(cs) = matches.value_of("chunk-size") {
+        match cs.parse::<usize>() {
+            Ok(u) => u,
+            Err(e) => fail!("value of 'chunk-size' flag must be numeric: {}", e),
+        }
+    } else {
+        CHUNK_SIZE
+    };
     let num_workers = match matches.value_of("jobs") {
         Some(s) => match s.parse::<usize>() {
             Ok(u) => u,

@@ -1783,10 +1783,15 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             } else if self.progress != record_end {
                 fields.push(get_field!(record_end));
             }
+            // TODO revert this change... probably doesn't let us set NF precisely.
             if fields.len() == max {
-                while let Some(_) = iter.next() {
-                    self.cur_chunk.off.ws.start += 1;
-                }
+                self.cur_chunk.off.ws.start += gallop(
+                    &self.cur_chunk.off.ws.fields[self.cur_chunk.off.ws.start..],
+                    |x| x <= record_end as u64,
+                );
+                // while let Some(_) = iter.next() {
+                //     self.cur_chunk.off.ws.start += 1;
+                // }
                 break;
             }
         }
@@ -1798,6 +1803,32 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             (Str::default(), consumed)
         }
     }
+}
+
+// adepted from Frank McSherry:
+// https://github.com/frankmcsherry/blog/blob/master/posts/2018-05-19.md
+
+fn gallop(slice: &[u64], mut cmp: impl FnMut(u64) -> bool) -> usize {
+    let mut res = 0;
+    // if empty slice, or already >= element, return
+    if slice.len() > res && cmp(slice[res]) {
+        let mut step = 1;
+        while res + step < slice.len() && cmp(slice[res + step]) {
+            res += step;
+            step = step << 1;
+        }
+
+        step = step >> 1;
+        while step > 0 {
+            if step + res < slice.len() && cmp(slice[res + step]) {
+                res += step;
+            }
+            step = step >> 1;
+        }
+        res += 1; // advance one, as we always stayed < value
+    }
+
+    return res;
 }
 
 #[cfg(test)]
