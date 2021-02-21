@@ -59,6 +59,9 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     fn filename(&self) -> Str<'static> {
         Str::from(self.cur_chunk.get_name()).unmoor()
     }
+    fn wait(&self) -> bool {
+        self.prod.wait()
+    }
     fn check_utf8(&self) -> bool {
         self.check_utf8
     }
@@ -1511,6 +1514,9 @@ where
     fn check_utf8(&self) -> bool {
         self.check_utf8
     }
+    fn wait(&self) -> bool {
+        ByteReaderBase::wait(self)
+    }
     fn request_handles(&self, size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
         let producers = self.prod.try_dyn_resize(size);
         let mut res = Vec::with_capacity(producers.len());
@@ -1594,6 +1600,7 @@ pub trait ByteReaderBase {
         fields: &'a mut Vec<Str<'static>>,
     ) -> (Str<'static>, /*bytes consumed*/ usize);
     fn cur_chunk_version(&self) -> u32;
+    fn wait(&self) -> bool;
 }
 
 fn refresh_buf_impl<T, P: ChunkProducer<Chunk = OffsetChunk<T>>>(
@@ -1655,6 +1662,9 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
     }
     fn maybe_done(&self) -> bool {
         self.cur_chunk.off.rel.start == self.cur_chunk.off.rel.fields.len()
+    }
+    fn wait(&self) -> bool {
+        self.prod.wait()
     }
     fn read_line_inner<'a, 'b: 'a>(
         &'b mut self,
@@ -1734,6 +1744,9 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
 impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> {
     fn cur_chunk_version(&self) -> u32 {
         self.cur_chunk.version
+    }
+    fn wait(&self) -> bool {
+        self.prod.wait()
     }
     fn refresh_buf(&mut self) -> Result<(bool, bool)> {
         refresh_buf_impl(self)

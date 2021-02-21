@@ -3,7 +3,7 @@ use std::io::Read;
 use std::mem;
 use std::sync::Arc;
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
 use crate::common::Result;
 use crate::runtime::{
@@ -37,6 +37,9 @@ pub trait ChunkProducer {
         _requested_size: usize,
     ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
         vec![]
+    }
+    fn wait(&self) -> bool {
+        true
     }
     fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool /*done*/>;
     fn next_file(&mut self) -> Result<bool /*new file available*/>;
@@ -216,6 +219,9 @@ impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
         requested_size: usize,
     ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = C>> + Send>> {
         (&**self).try_dyn_resize(requested_size)
+    }
+    fn wait(&self) -> bool {
+        (&**self).wait()
     }
     fn next_file(&mut self) -> Result<bool> {
         (&mut **self).next_file()
@@ -438,6 +444,15 @@ impl<P> ChainedChunkProducer<P> {
 impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
     type Chunk = P::Chunk;
 
+    fn wait(&self) -> bool {
+        let res = if let Some(cur) = self.0.last() {
+            cur.wait()
+        } else {
+            true
+        };
+        res
+    }
+
     fn next_file(&mut self) -> Result<bool> {
         if let Some(cur) = self.0.last_mut() {
             if !cur.next_file()? {
@@ -465,6 +480,7 @@ impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
 /// ParallelChunkProducer allows for consumption of individual chunks from a ChunkProducer in
 /// parallel.
 pub struct ParallelChunkProducer<P: ChunkProducer> {
+    start: Receiver<()>,
     incoming: Receiver<P::Chunk>,
     spent: Sender<P::Chunk>,
 }
@@ -472,6 +488,7 @@ pub struct ParallelChunkProducer<P: ChunkProducer> {
 impl<P: ChunkProducer> Clone for ParallelChunkProducer<P> {
     fn clone(&self) -> ParallelChunkProducer<P> {
         ParallelChunkProducer {
+            start: self.start.clone(),
             incoming: self.incoming.clone(),
             spent: self.spent.clone(),
         }
@@ -483,10 +500,13 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
         p_factory: impl FnOnce() -> P + Send + 'static,
         chan_size: usize,
     ) -> ParallelChunkProducer<P> {
+        let (start_sender, start_receiver) = bounded(chan_size);
         let (in_sender, in_receiver) = bounded(chan_size);
         let (spent_sender, spent_receiver) = bounded(chan_size);
         std::thread::spawn(move || {
+            let mut n_workers = 0;
             let mut p = p_factory();
+            let mut n_failures = 0;
             loop {
                 let mut chunk = spent_receiver
                     .try_recv()
@@ -496,12 +516,40 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
                 if chunk_res.is_err() || matches!(chunk_res, Ok(true)) {
                     return;
                 }
+                if n_workers < chan_size / 2 {
+                    match in_sender.try_send(chunk) {
+                        Ok(()) => {
+                            n_failures = 0;
+                            continue;
+                        }
+                        Err(TrySendError::Full(c)) => {
+                            n_failures += 1;
+                            chunk = c;
+                        }
+                        Err(TrySendError::Disconnected(_)) => {
+                            return;
+                        }
+                    }
+                    if n_failures == (2 << n_workers) {
+                        if start_sender.try_send(()).is_ok() {
+                            eprintln!(
+                                "[chan_size={}] workers {} => {}",
+                                chan_size,
+                                n_workers,
+                                n_workers + 1
+                            );
+                            n_workers += 1;
+                        }
+                        n_failures = 0;
+                    }
+                }
                 if in_sender.send(chunk).is_err() {
                     return;
                 }
             }
         });
         ParallelChunkProducer {
+            start: start_receiver,
             incoming: in_receiver,
             spent: spent_sender,
         }
@@ -523,6 +571,11 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
     }
     fn next_file(&mut self) -> Result<bool> {
         err!("nextfile is not supported in record-oriented parallel mode")
+    }
+    fn wait(&self) -> bool {
+        self.start
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_ok()
     }
     fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
         if let Ok(mut new_chunk) = self.incoming.recv() {

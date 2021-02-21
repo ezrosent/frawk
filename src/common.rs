@@ -30,7 +30,6 @@ impl ExecutionStrategy {
     pub fn num_workers(&self) -> usize {
         use ExecutionStrategy::*;
         match self {
-            // Experimentally, adding more than 6 workers with a single input file
             ShardPerRecord => std::cmp::min(num_cpus::get(), 6),
             ShardPerFile => num_cpus::get(),
             Serial => 1,

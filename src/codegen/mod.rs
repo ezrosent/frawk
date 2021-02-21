@@ -206,13 +206,15 @@ where
                     let scope_res = crossbeam::scope(|s| {
                         for (reader, sender, shuttle) in launch_data.into_iter() {
                             s.spawn(move |_| {
-                                let mut runtime = Runtime {
-                                    concurrent: true,
-                                    core: shuttle(),
-                                    input_data: reader().into(),
-                                };
-                                main_loop_fn.invoke(&mut runtime);
-                                sender.send(runtime.core.extract_result()).unwrap();
+                                if let Some(reader) = reader() {
+                                    let mut runtime = Runtime {
+                                        concurrent: true,
+                                        core: shuttle(),
+                                        input_data: reader.into(),
+                                    };
+                                    main_loop_fn.invoke(&mut runtime);
+                                    sender.send(runtime.core.extract_result()).unwrap();
+                                }
                             });
                         }
                         rt.core.vars.pid = 1;

@@ -557,7 +557,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 let core_shuttle = self.core.shuttle(i as Int + 2);
                 let instrs = self.instrs.clone();
                 s.spawn(move |_| {
-                    let inner = || {
+                    if let Some(read_files) = handle() {
                         let mut interp = Interp {
                             main_func: Stage::Main(main_loop),
                             num_workers: 1,
@@ -565,7 +565,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             stack: Default::default(),
                             core: core_shuttle(),
                             line: Default::default(),
-                            read_files: handle(),
+                            read_files,
 
                             floats: default_of(float_size),
                             ints: default_of(ints_size),
@@ -579,12 +579,16 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             iters_int: default_of(iters_int_size),
                             iters_str: default_of(iters_str_size),
                         };
-                        interp.run_at(main_loop)?;
-                        Ok(interp.core.extract_result())
-                    };
-                    // Ignore errors, as it means another thread executed with an error and we are
-                    // exiting anyway.
-                    let _ = sender.send(inner());
+                        let res = interp.run_at(main_loop);
+
+                        // Ignore errors, as it means another thread executed with an error and we are
+                        // exiting anyway.
+                        let _ = if let Err(e) = res {
+                            sender.send(Err(e))
+                        } else {
+                            sender.send(Ok(interp.core.extract_result()))
+                        };
+                    }
                 });
             }
             mem::drop(sender);
