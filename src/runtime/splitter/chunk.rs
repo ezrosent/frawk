@@ -46,9 +46,6 @@ pub trait Chunk: Send + Default {
     fn get_name(&self) -> &str;
 }
 
-// TODO: rephrase CSVReader + BytesReader + DefaultReader in terms of a ChnunkProducer
-//      (in that order: DefaultReader will need its own ChunkProducer, I think?)
-
 #[derive(Copy, Clone)]
 enum ChunkState {
     Init,

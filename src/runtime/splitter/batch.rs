@@ -278,6 +278,8 @@ impl OffsetInner {
     }
 }
 
+// Structurally identical to WhitespaceOffsets, but newline metadata here is "optional"; it will
+// contain a subset of the data contained in the "relevant" offsetse in "rel".
 #[derive(Default, Debug)]
 pub struct Offsets {
     pub rel: OffsetInner,
