@@ -292,10 +292,6 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                         }
                         if bs[offset] == self.record_sep {
                             target = Some(offset + 1);
-                            debug_assert_eq!(
-                                Some(offset as u64),
-                                chunk.off.nl.fields.last().cloned()
-                            );
                             break;
                         }
                         new_len -= 1;

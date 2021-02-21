@@ -1112,9 +1112,11 @@ mod generic {
             // Allow for either \r\n or \n.
             let end = (lf & cr_adjusted) | lf;
             prev_iter_cr_end = cr.wrapping_shr(63);
-            let nl = end & !quote_mask;
-            let mask = nl | ((sep | cr) & !quote_mask) | (esc & quote_mask) | quote_locs;
-            ((prev_iter_inside_quote, prev_iter_cr_end), mask, nl)
+            // NB: for now, NL is going to be unused for csv
+            // Don't use NL here for now
+            // let nl = end & !quote_mask;
+            let mask = ((sep | cr | end) & !quote_mask) | (esc & quote_mask) | quote_locs;
+            ((prev_iter_inside_quote, prev_iter_cr_end), mask, 0)
         };
         find_indexes::<V, _, _>(buf, offsets, (prev_iter_inside_quote, prev_iter_cr_end), f)
     }
