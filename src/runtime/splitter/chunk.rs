@@ -278,9 +278,9 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                     let bs = buf.as_bytes();
                     (self.find_indexes)(bs, &mut chunk.off);
                     let mut target = None;
-                    let mut new_len = chunk.off.fields.len();
+                    let mut new_len = chunk.off.rel.fields.len();
                     let mut always_truncate = new_len;
-                    for offset in chunk.off.fields.iter().rev() {
+                    for offset in chunk.off.rel.fields.iter().rev() {
                         let offset = *offset as usize;
                         if offset >= self.inner.end {
                             always_truncate -= 1;
@@ -289,6 +289,10 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                         }
                         if bs[offset] == self.record_sep {
                             target = Some(offset + 1);
+                            debug_assert_eq!(
+                                Some(offset as u64),
+                                chunk.off.nl.fields.last().cloned()
+                            );
                             break;
                         }
                         new_len -= 1;
@@ -323,7 +327,7 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                         (false, false) => {
                             // Yield buffer, stay in main.
                             chunk.buf = Some(buf.try_unique().unwrap());
-                            chunk.off.fields.truncate(new_len);
+                            chunk.off.rel.fields.truncate(new_len);
                             chunk.len = target.unwrap();
                             Ok(false)
                         }
@@ -331,7 +335,7 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                             // Yield the entire buffer, this was the last piece of data.
                             self.inner.clear_buf();
                             chunk.buf = Some(buf.try_unique().unwrap());
-                            chunk.off.fields.truncate(always_truncate);
+                            chunk.off.rel.fields.truncate(always_truncate);
                             self.state = ChunkState::Done;
                             Ok(false)
                         }
