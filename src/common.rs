@@ -30,8 +30,7 @@ impl ExecutionStrategy {
     pub fn num_workers(&self) -> usize {
         use ExecutionStrategy::*;
         match self {
-            ShardPerRecord => std::cmp::min(num_cpus::get(), 6),
-            ShardPerFile => num_cpus::get(),
+            ShardPerFile | ShardPerRecord => num_cpus::get(),
             Serial => 1,
         }
     }

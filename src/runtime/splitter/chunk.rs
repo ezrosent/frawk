@@ -516,32 +516,41 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
                 if chunk_res.is_err() || matches!(chunk_res, Ok(true)) {
                     return;
                 }
-                if n_workers < chan_size / 2 {
-                    match in_sender.try_send(chunk) {
-                        Ok(()) => {
-                            n_failures = 0;
-                            continue;
-                        }
-                        Err(TrySendError::Full(c)) => {
-                            n_failures += 1;
-                            chunk = c;
-                        }
-                        Err(TrySendError::Disconnected(_)) => {
-                            return;
-                        }
-                    }
-                    if n_failures == (2 << n_workers) {
-                        if start_sender.try_send(()).is_ok() {
-                            eprintln!(
-                                "[chan_size={}] workers {} => {}",
-                                chan_size,
-                                n_workers,
-                                n_workers + 1
-                            );
-                            n_workers += 1;
-                        }
+                match in_sender.try_send(chunk) {
+                    Ok(()) => {
                         n_failures = 0;
+                        continue;
                     }
+                    Err(TrySendError::Full(c)) => {
+                        n_failures += 1;
+                        chunk = c;
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        return;
+                    }
+                }
+
+                // TODO: This heuristic works fairly well when the target is a relatively small
+                // number of workers. The idea here is that we require progressively stronger
+                // signals that we are producing chunks too fast before starting a new worker.
+                //
+                // However, for extremely expensive worker functions, this heuristic will not
+                // learn the optimal number of workers before the 2s timeout in wait()
+                //
+                // One alternative is to keep a running average of the amount of time it takes
+                // to read a chunk, and a running average of the amount of time spent blocking
+                // to send a chunk (perhaps a rolling window, or one that downweights previous
+                // runs).
+                //
+                // The amount of time we spend blocking will give us an idea of the total parallel
+                // throughput of the workers. If the throughput is lower than the speed at which we
+                // read the chunks, that's a signal to up the number of workers (potentially not
+                // just incrementing them, but adding them 'all at once').
+                if n_failures == (2 << n_workers) {
+                    if start_sender.try_send(()).is_ok() {
+                        n_workers += 1;
+                    }
+                    n_failures = 0;
                 }
                 if in_sender.send(chunk).is_err() {
                     return;
