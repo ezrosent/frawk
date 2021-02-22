@@ -379,12 +379,12 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                     self.1 = (self.0.find_indexes)(bs, &mut chunk.off, self.1);
                     // Find the last newline in the buffer, if there is one.
                     let (is_partial, truncate_to, len_if_not_last) =
-                        if let Some(nl_off) = chunk.off.nl.fields.last().cloned() {
+                        if let Some(nl_off) = chunk.off.0.nl.fields.last().cloned() {
                             let buf_end = nl_off as usize + 1;
                             self.0.inner.start = buf_end;
-                            let mut start = chunk.off.ws.fields.len() as isize - 1;
+                            let mut start = chunk.off.0.rel.fields.len() as isize - 1;
                             while start > 0 {
-                                if chunk.off.ws.fields[start as usize] > nl_off as u64 {
+                                if chunk.off.0.rel.fields[start as usize] > nl_off as u64 {
                                     // We are removing trailing fields from the input, but we know
                                     // that newlines are whitespace, so we reset the start_ws
                                     // variable to 1.
@@ -405,7 +405,7 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                         (false, false) => {
                             // Yield buffer, stay in main.
                             chunk.buf = Some(buf.try_unique().unwrap());
-                            chunk.off.ws.fields.truncate(truncate_to);
+                            chunk.off.0.rel.fields.truncate(truncate_to);
                             chunk.len = len_if_not_last;
                             Ok(false)
                         }

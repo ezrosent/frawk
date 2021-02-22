@@ -249,22 +249,6 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
     }
 }
 
-// Offsets for the "split by ASCII whitespace" mode. Because newlines do not always coincide with
-// the end of a field (think of the string "f1 f2 f3   \n"), we have a separate stream of offsets
-// for field boundaries and for newlines.
-#[derive(Default, Debug)]
-pub struct WhitespaceOffsets {
-    pub ws: OffsetInner,
-    pub nl: OffsetInner,
-}
-
-impl WhitespaceOffsets {
-    fn clear(&mut self) {
-        self.ws.clear();
-        self.nl.clear();
-    }
-}
-
 #[derive(Default, Debug)]
 pub struct OffsetInner {
     pub start: usize,
@@ -288,6 +272,10 @@ pub struct Offsets {
     pub rel: OffsetInner,
     pub nl: OffsetInner,
 }
+
+// Newtype wrapper, because chunks are processed slightly differently in the whitespace case.
+#[derive(Default, Debug)]
+pub struct WhitespaceOffsets(pub Offsets);
 
 impl Offsets {
     fn clear(&mut self) {
@@ -1121,6 +1109,23 @@ mod generic {
         find_indexes::<V, _, _>(buf, offsets, (prev_iter_inside_quote, prev_iter_cr_end), f)
     }
 
+    pub unsafe fn find_indexes_tsv<V: Vector>(
+        buf: &[u8],
+        offsets: &mut Offsets,
+        // These two are ignored for TSV
+        _prev_iter_inside_quote: u64,
+        _prev_iter_cr_end: u64,
+    ) -> (u64, u64) {
+        find_indexes_unquoted::<V, _>(buf, offsets, |ptr| {
+            let inp = V::fill_input(ptr);
+            let sep = inp.cmp_against_input(b'\t');
+            let esc = inp.cmp_against_input(b'\\');
+            let lf = inp.cmp_against_input(b'\n');
+            (sep.or(esc).or(lf).mask(), 0)
+        });
+        (0, 0)
+    }
+
     pub unsafe fn find_indexes_unquoted<V: Vector, F: Fn(*const u8) -> (u64, u64)>(
         buf: &[u8],
         offsets: &mut Offsets,
@@ -1139,105 +1144,15 @@ mod generic {
     pub unsafe fn find_indexes_ascii_whitespace<V: Vector>(
         buf: &[u8],
         offsets: &mut WhitespaceOffsets,
-        mut start_ws: u64, /*start at 1*/
+        start_ws: u64, /*start at 1*/
     ) -> u64 /*next start ws*/ {
-        offsets.clear();
-        let field_offsets = &mut offsets.ws;
-        let newline_offsets = &mut offsets.nl;
-        field_offsets.fields.reserve(buf.len());
-        newline_offsets.fields.reserve(buf.len());
-
-        // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
-        // reuse this across different chunks.
-        let buf_ptr = buf.as_ptr();
-        let len = buf.len();
-        let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
-        let mut ix = 0;
-        let field_base_ptr: *mut u64 = field_offsets.fields.get_unchecked_mut(0);
-        let newline_base_ptr: *mut u64 = newline_offsets.fields.get_unchecked_mut(0);
-        let mut field_base = 0;
-        let mut newline_base = 0;
-
-        const BUFFER_SIZE: usize = 4;
-        macro_rules! iterate {
-            ($buf:expr) => {{
-                #[cfg(feature = "unstable")]
-                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
-                let inp = V::fill_input($buf);
-                let (ws, nl, next_start) = inp.whitespace_masks(start_ws);
-                start_ws = next_start;
-                (ws, nl)
-            }};
-        }
-        if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
-            let mut fields = [0u64; BUFFER_SIZE];
-            let mut nls = [0u64; BUFFER_SIZE];
-            while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
-                for b in 0..BUFFER_SIZE {
-                    let (ws, nl) = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
-                    fields[b] = ws;
-                    nls[b] = nl;
-                }
-                for b in 0..BUFFER_SIZE {
-                    let internal_ix = V::INPUT_SIZE * b + ix;
-                    flatten_bits(
-                        field_base_ptr,
-                        &mut field_base,
-                        internal_ix as u64,
-                        fields[b],
-                    );
-                    flatten_bits(
-                        newline_base_ptr,
-                        &mut newline_base,
-                        internal_ix as u64,
-                        nls[b],
-                    );
-                }
-                ix += V::INPUT_SIZE * BUFFER_SIZE;
-            }
-        }
-        // Do an unbuffered version for the remaining data
-        while ix < len_minus_64 {
-            let (fields, nl) = iterate!(buf_ptr.offset(ix as isize));
-            flatten_bits(field_base_ptr, &mut field_base, ix as u64, fields);
-            flatten_bits(newline_base_ptr, &mut newline_base, ix as u64, nl);
-            ix += V::INPUT_SIZE;
-        }
-        // For any text that remains, just copy the results to the stack with some padding and do
-        // one more iteration.
-        let remaining = len - ix;
-        if remaining > 0 {
-            let mut rest = [0u8; MAX_INPUT_SIZE];
-            std::ptr::copy_nonoverlapping(
-                buf_ptr.offset(ix as isize),
-                rest.as_mut_ptr(),
-                remaining,
-            );
-            let (fields, nl) = iterate!(rest.as_mut_ptr());
-            flatten_bits(field_base_ptr, &mut field_base, ix as u64, fields);
-            flatten_bits(newline_base_ptr, &mut newline_base, ix as u64, nl);
-        }
-        field_offsets.fields.set_len(field_base as usize);
-        newline_offsets.fields.set_len(newline_base as usize);
-        start_ws
+        find_indexes::<V, _, _>(buf, &mut offsets.0, start_ws, |start_ws, buf| {
+            let inp = V::fill_input(buf);
+            let (ws, nl, next_start) = inp.whitespace_masks(start_ws);
+            (next_start, ws, nl)
+        })
     }
 
-    pub unsafe fn find_indexes_tsv<V: Vector>(
-        buf: &[u8],
-        offsets: &mut Offsets,
-        // These two are ignored for TSV
-        _prev_iter_inside_quote: u64,
-        _prev_iter_cr_end: u64,
-    ) -> (u64, u64) {
-        find_indexes_unquoted::<V, _>(buf, offsets, |ptr| {
-            let inp = V::fill_input(ptr);
-            let sep = inp.cmp_against_input(b'\t');
-            let esc = inp.cmp_against_input(b'\\');
-            let lf = inp.cmp_against_input(b'\n').mask();
-            (sep.or(esc).mask() | lf, lf)
-        });
-        (0, 0)
-    }
 
     pub unsafe fn find_indexes_byte<V: Vector>(
         buf: &[u8],
@@ -1755,8 +1670,8 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
     }
     fn maybe_done(&self) -> bool {
         // TODO: This is a pretty gross check; we should see if we can streamline the ws.fields check.
-        self.cur_chunk.off.nl.start == self.cur_chunk.off.nl.fields.len()
-            && (self.cur_chunk.off.ws.start == self.cur_chunk.off.ws.fields.len()
+        self.cur_chunk.off.0.nl.start == self.cur_chunk.off.0.nl.fields.len()
+            && (self.cur_chunk.off.0.rel.start == self.cur_chunk.off.0.rel.fields.len()
                 || self.progress == self.buf_len)
     }
     fn read_line_inner<'a, 'b: 'a>(
@@ -1784,7 +1699,7 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             };
         }
         let line_start = self.progress;
-        let offs_nl = &mut self.cur_chunk.off.nl;
+        let offs_nl = &mut self.cur_chunk.off.0.nl;
         let record_end = if offs_nl.start == offs_nl.fields.len() {
             self.buf_len
         } else {
@@ -1813,18 +1728,18 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
         //    `fields` vector if they're present in used_fields.
         // 2. We are at the end of the input, in which case we take from the start offset to the
         //    end of the buffer.
-        let mut iter = self.cur_chunk.off.ws.fields[self.cur_chunk.off.ws.start..]
+        let mut iter = self.cur_chunk.off.0.rel.fields[self.cur_chunk.off.0.rel.start..]
             .iter()
             .cloned()
             .map(|x| x as usize)
             .take_while(|x| x <= &record_end);
         while let Some(field_start) = iter.next() {
             self.progress = field_start;
-            self.cur_chunk.off.ws.start += 1;
+            self.cur_chunk.off.0.rel.start += 1;
             if let Some(field_end) = iter.next() {
                 fields.push(get_field!(field_end));
                 self.progress = field_end + 1;
-                self.cur_chunk.off.ws.start += 1;
+                self.cur_chunk.off.0.rel.start += 1;
             } else if self.progress != record_end {
                 fields.push(get_field!(record_end));
             }
