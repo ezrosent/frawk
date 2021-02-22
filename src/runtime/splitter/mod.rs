@@ -42,6 +42,9 @@ pub trait LineReader: Sized {
     fn request_handles(&self, _size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
         vec![]
     }
+    fn wait(&self) -> bool {
+        true
+    }
     // TODO we should probably have the default impl the other way around.
     fn read_line(
         &mut self,

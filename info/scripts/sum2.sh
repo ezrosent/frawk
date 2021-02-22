@@ -30,25 +30,23 @@ for i in {1..5}; do
 
 	time $FRAWK -bllvm -icsv '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${CSV1}
 	time $FRAWK -bllvm -icsv '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${CSV2}
-	time $FRAWK -bllvm -itsv '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
-	time $FRAWK -bllvm -itsv '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
+	time $FRAWK -bllvm -F'\t' '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
+	time $FRAWK -bllvm -F'\t' '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
 
-	time $FRAWK -bllvm -icsv -pr -j3 '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${CSV1}
-	time $FRAWK -bllvm -icsv -pr -j3 '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${CSV2}
-	time $FRAWK -bllvm -itsv -pr -j3 '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
-	time $FRAWK -bllvm -itsv -pr -j3 '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
+	time $FRAWK -bllvm -icsv -pr  '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${CSV1}
+	time $FRAWK -bllvm -icsv -pr  '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${CSV2}
+	time $FRAWK -bllvm -F'\t' -pr  '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
+	time $FRAWK -bllvm -F'\t' -pr  '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
 
 	time $FRAWK -bcranelift -icsv '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${CSV1}
 	time $FRAWK -bcranelift -icsv '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${CSV2}
-	time $FRAWK -bcranelift -itsv '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
-	time $FRAWK -bcranelift -itsv '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
+	time $FRAWK -bcranelift -F'\t' '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
+	time $FRAWK -bcranelift -F'\t' '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
 
-	time $FRAWK -bcranelift -icsv -pr -j3 '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${CSV1}
-	time $FRAWK -bcranelift -icsv -pr -j3 '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${CSV2}
-	time $FRAWK -bcranelift -itsv -pr -j3 '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
-	time $FRAWK -bcranelift -itsv -pr -j3 '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
-
-
+	time $FRAWK -bcranelift -icsv -pr  '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${CSV1}
+	time $FRAWK -bcranelift -icsv -pr  '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${CSV2}
+	time $FRAWK -bcranelift -F'\t' -pr  '{sum1 += $6; sum2 += $18;} END { print sum1,sum2}' ${TSV1}
+	time $FRAWK -bcranelift -F'\t' -pr  '{sum1 += $4; sum2 += $5;} END { print sum1,sum2}' ${TSV2}
 	set +x
 done
 

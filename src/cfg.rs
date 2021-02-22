@@ -1026,7 +1026,7 @@ where
     fn convert_expr_inner<'c>(
         &mut self,
         expr: &'c Expr<'c, 'b, I>,
-        current_open: NodeIx,
+        mut current_open: NodeIx,
         in_cond: bool,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
         use Expr::*;
@@ -1188,6 +1188,10 @@ where
             }
             ReadStdin => {
                 use builtins::Function::{ReadErrStdin, ReadLineStdinFused};
+                // break up getline calls to help the FS analysis out
+                let next = self.f.cfg.add_node(Default::default());
+                self.f.cfg.add_edge(current_open, next, Transition::null());
+                current_open = next;
                 self.add_stmt(
                     current_open,
                     PrimStmt::AsgnVar(
@@ -1205,6 +1209,10 @@ where
                 into,
                 is_file,
             } => {
+                // break up getline calls to help the FS analysis out
+                let next = self.f.cfg.add_node(Default::default());
+                self.f.cfg.add_edge(current_open, next, Transition::null());
+                current_open = next;
                 // If we had a `getline` call before assigning to `FS` or `RS` in the BEGIN block,
                 // we want to disable any optimizations around field splitting.
                 self.f

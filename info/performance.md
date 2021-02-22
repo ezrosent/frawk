@@ -32,15 +32,36 @@ are computed as wall time divided by input file size.
 
 This doc includes measurements for both parallel and serial invocations of
 frawk, and it also provides numbers for frawk using its LLVM and its Cranelift
-backend, with all optimizations enabled. The parallel invocations launch 3
-workers (note this is not optimal for some benchmarks, but I don't want to tune
-the frawk configuration aggressively just to improve benchmark numbers). XSV
-supports parallelism but I noticed no performance benefit from this feature
-without first building an index of the underlying CSV file (a process which can
-take longer than the benchmark task itself without amortizing the cost over
-multiple runs). Similarly, I do not believe it is  possible to parallelize the
-other programs using generic tools like `gnu parallel` without first
-partitioning the data-set into multiple sub-files.
+backend, with all optimizations enabled. Note that frawk adaptively chooses the
+number of workers to launch for parallel invocations, so the ratio of CPU to
+wall time can vary across invocations. XSV supports parallelism but I noticed
+no performance benefit from this feature without first building an index of the
+underlying CSV file (a process which can take longer than the benchmark task
+itself without amortizing the cost over multiple runs).  Similarly, I do not
+believe it is  possible to parallelize the other programs using generic tools
+like `gnu parallel` without first partitioning the data-set into multiple
+sub-files.
+
+### `-itsv` vs `-F'\t'`
+
+frawk allows you to specify the input format as TSV using the `itsv` option, but
+it also provides support for traditional Awk field separators using `-F` or by
+setting the `FS` variable.  These two are not the same; they end up invoking two
+completely separate parsers under the hood. `-itsv` looks for escape sequences
+(like `\t`) and converts them to their corresponding characters. `-F'\t'`, on
+the other hand, does a more naive "split by tabs" algorithm. `-F'\t'` tends to
+perform faster than `-itsv` because parsing is less complex, and field size
+computations are easier to perform. The latter fact makes it easier to optimize
+scripts that do not parse a large suffix of columns in the input (e.g. only
+using columns 3 and 5 of a 30-column file). This is a feature of most of the
+benchmarks in this document, and, as I understand it, it's a big part of why
+tsv-utils is a consistent leader in performance here.
+
+Because tsv-utils, mawk and gawk are all invoked without the extra escaping
+behavior, the frawk invocations all use `-F'\t'` on TSV inputs. If you are
+curious about how frawk performs using `itsv` but don't want to run these
+benchmarks yourself,  it's my experience that `frawk -itsv` achieves similar
+(albeit slightly higher) throughput to using `icsv` on an equivalent CSV file.
 
 ### Test Data
 These benchmarks run on CSV and TSV versions of two data-sets:
@@ -65,8 +86,8 @@ section makes clear, the versions of the tools I used are all slightly
 different. Comparisons within the same configuration should be safe while
 comparisons across configurations are less so.
 
-**MacOS (Newer Hardware)** This is a 16-inch Macbook Pro running MacOS Catalina
-10.15.4 with an 8-core i9 clocked at 2.3GHz, boosting up to 4.8GHz. One thing to
+**MacOS (Newer Hardware)** This is a 16-inch Macbook Pro running MacOS Big Sur
+11.2.1 with an 8-core i9 clocked at 2.3GHz, boosting up to 4.8GHz. One thing to
 keep in mind about newer Apple hardware is that the SSDs are very fast: read
 throughput can top 2.5GB/s. None of these benchmarks are IO-bound on this machine,
 although various portions of the input files might be cached by the OS.
@@ -238,24 +259,26 @@ that frawk's and python's runtimes include the time it takes to compile a
 program.
 
 **MacOS**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| Python | CSV | 2m49.4s (2m47.9s + 1.4s) | 52.82 MB/s |
-| Rust | CSV | 28.4s (27.3s + 1.1s) | 314.80 MB/s |
-| frawk (cranelift) | CSV | 21.2s (20.1s + 1.1s) | 421.70 MB/s |
-| frawk (cranelift, parallel) | CSV | 6.1s (23.2s + 1.2s) | 1464.06 MB/s |
-| frawk (llvm) | CSV | 20.9s (19.7s + 1.1s) | 428.48 MB/s |
-| frawk (llvm, parallel) | CSV | 6.0s (22.7s + 1.2s) | 1490.41 MB/s |
+| Python | CSV | 2m48.7s (2m47.4s + 1.3s) | 53.02 MB/s |
+| Rust | CSV | 25.9s (24.8s + 1.1s) | 345.57 MB/s |
+| frawk (cranelift) | CSV | 19.9s (18.8s + 1.1s) | 450.13 MB/s |
+| frawk (cranelift, parallel) | CSV | 4.9s (23.2s + 1.2s) | 1827.84 MB/s |
+| frawk (llvm) | CSV | 19.6s (18.5s + 1.1s) | 457.12 MB/s |
+| frawk (llvm, parallel) | CSV | 4.9s (22.9s + 1.2s) | 1842.90 MB/s |
 
 **Linux**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| Python | CSV | 2m16.2s (2m14.2s + 2.0s) | 65.67 MB/s |
-| Rust | CSV | 30.1s (28.4s + 1.6s) | 297.66 MB/s |
-| frawk (cranelift) | CSV | 27.9s (26.2s + 1.7s) | 320.12 MB/s |
-| frawk (cranelift, parallel) | CSV | 9.4s (34.5s + 3.0s) | 951.03 MB/s |
-| frawk (llvm) | CSV | 27.9s (25.8s + 2.0s) | 321.20 MB/s |
-| frawk (llvm, parallel) | CSV | 9.5s (33.9s + 3.5s) | 943.21 MB/s |
+| Python | CSV | 2m17.1s (2m15.3s + 1.8s) | 65.23 MB/s |
+| Rust | CSV | 29.9s (28.4s + 1.6s) | 299.05 MB/s |
+| frawk (cranelift) | CSV | 29.4s (27.3s + 2.2s) | 304.02 MB/s |
+| frawk (cranelift, parallel) | CSV | 9.8s (35.5s + 3.5s) | 908.81 MB/s |
+| frawk (llvm) | CSV | 28.4s (26.6s + 1.8s) | 315.46 MB/s |
+| frawk (llvm, parallel) | CSV | 9.9s (35.2s + 3.8s) | 905.22 MB/s |
 
 frawk is a good deal faster than the other options, particularly on the newer
 hardware, or when run in parallel. Now, the Rust script could of course be
@@ -286,38 +309,40 @@ per-core basis frawk was faster than mawk and gawk but slower than tsv-utils on
 both configurations.
 
 **MacOS**
+
 | Program | Format | Running Time (TREE_GRM_ESTN) | Throughput (TREE_GRM_ESTN) | Running Time (all_train) | Throughput (all_train) |
 | -- | -- | -- | -- | -- | -- |
-| mawk | CSV | NA | NA | 11.1s (10.1s + 1.1s) | 465.31 MB/s |
-| mawk | TSV | 42.7s (41.2s + 1.5s) | 184.80 MB/s | 11.1s (10.0s + 1.1s) | 468.59 MB/s |
-| gawk | CSV | NA | NA | 10.3s (9.3s + 0.9s) | 504.67 MB/s |
-| gawk | TSV | 14.1s (12.8s + 1.3s) | 557.75 MB/s | 10.3s (9.4s + 0.9s) | 504.82 MB/s |
-| tsv-utils | TSV | 5.7s (5.0s + 0.7s) | 1394.03 MB/s | 2.6s (2.2s + 0.4s) | 1954.13 MB/s |
-| frawk (llvm) | CSV | 19.3s (18.2s + 1.1s) | 462.34 MB/s | 7.9s (7.2s + 0.7s) | 658.92 MB/s |
-| frawk (llvm) | TSV | 15.7s (14.7s + 1.0s) | 503.84 MB/s | 7.7s (7.0s + 0.7s) | 671.22 MB/s |
-| frawk (llvm, parallel) | CSV | 5.4s (20.5s + 1.2s) | 1642.57 MB/s | 2.3s (8.6s + 0.7s) | 2210.17 MB/s |
-| frawk (llvm, parallel) | TSV | 4.8s (18.1s + 1.1s) | 1635.91 MB/s | 2.4s (8.9s + 0.7s) | 2142.51 MB/s |
-| frawk (cranelift) | CSV | 19.5s (18.3s + 1.1s) | 459.38 MB/s | 8.0s (7.3s + 0.7s) | 647.47 MB/s |
-| frawk (cranelift) | TSV | 15.9s (14.9s + 1.0s) | 497.42 MB/s | 7.8s (7.1s + 0.7s) | 667.75 MB/s |
-| frawk (cranelift, parallel) | CSV | 5.5s (20.7s + 1.2s) | 1633.87 MB/s | 2.4s (8.9s + 0.7s) | 2158.58 MB/s |
-| frawk (cranelift, parallel) | TSV | 4.9s (18.3s + 1.1s) | 1626.13 MB/s | 2.4s (8.9s + 0.7s) | 2157.68 MB/s |
+| mawk | CSV | NA | NA | 10.8s (9.8s + 1.1s) | 477.98 MB/s |
+| mawk | TSV | 42.0s (40.5s + 1.5s) | 187.81 MB/s | 10.8s (9.8s + 1.0s) | 478.38 MB/s |
+| gawk | CSV | NA | NA | 10.4s (9.5s + 0.9s) | 500.19 MB/s |
+| gawk | TSV | 14.0s (12.7s + 1.3s) | 562.60 MB/s | 10.4s (9.6s + 0.9s) | 496.07 MB/s |
+| tsv-utils | TSV | 5.6s (5.0s + 0.6s) | 1397.24 MB/s | 2.7s (2.2s + 0.4s) | 1953.39 MB/s |
+| frawk (llvm) | CSV | 18.0s (16.9s + 1.1s) | 496.91 MB/s | 3.6s (3.0s + 0.6s) | 1436.06 MB/s |
+| frawk (llvm) | TSV | 10.0s (9.0s + 1.0s) | 790.27 MB/s | 3.1s (2.5s + 0.6s) | 1650.23 MB/s |
+| frawk (llvm, parallel) | CSV | 4.9s (23.1s + 1.3s) | 1822.99 MB/s | 1.8s (4.7s + 0.7s) | 2846.86 MB/s |
+| frawk (llvm, parallel) | TSV | 3.4s (12.4s + 1.0s) | 2332.73 MB/s | 1.7s (4.3s + 0.7s) | 3065.98 MB/s |
+| frawk (cranelift) | CSV | 18.2s (17.0s + 1.1s) | 492.75 MB/s | 3.7s (3.0s + 0.6s) | 1405.66 MB/s |
+| frawk (cranelift) | TSV | 10.3s (9.3s + 1.0s) | 763.36 MB/s | 3.1s (2.5s + 0.6s) | 1652.34 MB/s |
+| frawk (cranelift, parallel) | CSV | 4.9s (23.3s + 1.3s) | 1807.89 MB/s | 1.8s (4.7s + 0.6s) | 2896.22 MB/s |
+| frawk (cranelift, parallel) | TSV | 3.4s (12.4s + 1.0s) | 2350.80 MB/s | 1.7s (4.4s + 0.7s) | 3071.43 MB/s |
 
 **Linux**
+
 | Program | Format | Running Time (TREE_GRM_ESTN) | Throughput (TREE_GRM_ESTN) | Running Time (all_train) | Throughput (all_train) |
 | -- | -- | -- | -- | -- | -- |
-| mawk | CSV | NA | NA | 10.3s (9.1s + 1.1s) | 505.02 MB/s |
-| mawk | TSV | 54.8s (53.0s + 1.7s) | 144.12 MB/s | 10.7s (9.3s + 1.4s) | 482.75 MB/s |
-| gawk | CSV | NA | NA | 11.4s (10.2s + 1.2s) | 452.46 MB/s |
-| gawk | TSV | 22.9s (21.3s + 1.7s) | 344.19 MB/s | 11.5s (10.2s + 1.3s) | 450.10 MB/s |
-| tsv-utils | TSV | 7.5s (6.5s + 1.1s) | 1048.03 MB/s | 3.9s (2.9s + 1.0s) | 1329.17 MB/s |
-| frawk (llvm) | CSV | 25.1s (23.6s + 1.5s) | 355.78 MB/s | 8.2s (7.0s + 1.1s) | 632.75 MB/s |
-| frawk (llvm) | TSV | 19.6s (18.1s + 1.4s) | 403.21 MB/s | 8.1s (6.8s + 1.3s) | 638.37 MB/s |
-| frawk (llvm, parallel) | CSV | 9.8s (32.7s + 4.9s) | 914.76 MB/s | 4.6s (13.9s + 3.2s) | 1135.12 MB/s |
-| frawk (llvm, parallel) | TSV | 6.8s (24.6s + 2.5s) | 1154.25 MB/s | 4.1s (12.7s + 2.8s) | 1261.19 MB/s |
-| frawk (cranelift) | CSV | 25.5s (23.9s + 1.7s) | 350.21 MB/s | 8.1s (7.1s + 1.0s) | 637.19 MB/s |
-| frawk (cranelift) | TSV | 20.0s (18.2s + 1.8s) | 393.75 MB/s | 7.9s (7.1s + 0.9s) | 651.70 MB/s |
-| frawk (cranelift, parallel) | CSV | 9.7s (33.2s + 4.6s) | 921.83 MB/s | 4.5s (13.7s + 3.2s) | 1139.12 MB/s |
-| frawk (cranelift, parallel) | TSV | 6.9s (24.9s + 2.4s) | 1150.05 MB/s | 4.0s (12.8s + 2.6s) | 1301.44 MB/s |
+| mawk | CSV | NA | NA | 10.4s (9.3s + 1.1s) | 498.07 MB/s |
+| mawk | TSV | 54.9s (53.0s + 1.9s) | 143.74 MB/s | 10.5s (9.1s + 1.4s) | 491.41 MB/s |
+| gawk | CSV | NA | NA | 11.5s (10.2s + 1.3s) | 451.24 MB/s |
+| gawk | TSV | 23.1s (21.7s + 1.4s) | 341.23 MB/s | 11.4s (10.4s + 0.9s) | 456.21 MB/s |
+| tsv-utils | TSV | 7.5s (6.3s + 1.2s) | 1047.75 MB/s | 3.6s (2.9s + 0.7s) | 1430.11 MB/s |
+| frawk (llvm) | CSV | 26.0s (24.3s + 1.8s) | 343.79 MB/s | 5.4s (4.3s + 1.0s) | 960.04 MB/s |
+| frawk (llvm) | TSV | 14.7s (13.2s + 1.5s) | 536.59 MB/s | 4.6s (3.8s + 0.9s) | 1119.42 MB/s |
+| frawk (llvm, parallel) | CSV | 9.9s (34.1s + 4.6s) | 899.67 MB/s | 4.0s (9.0s + 2.5s) | 1307.69 MB/s |
+| frawk (llvm, parallel) | TSV | 8.1s (21.0s + 3.0s) | 978.75 MB/s | 3.5s (8.3s + 2.0s) | 1462.83 MB/s |
+| frawk (cranelift) | CSV | 26.0s (24.4s + 1.6s) | 344.47 MB/s | 5.3s (4.4s + 0.9s) | 973.02 MB/s |
+| frawk (cranelift) | TSV | 15.3s (13.8s + 1.4s) | 516.87 MB/s | 4.8s (3.9s + 0.9s) | 1085.85 MB/s |
+| frawk (cranelift, parallel) | CSV | 9.8s (33.7s + 4.4s) | 913.45 MB/s | 4.2s (8.7s + 2.2s) | 1233.25 MB/s |
+| frawk (cranelift, parallel) | TSV | 8.4s (25.1s + 5.3s) | 943.75 MB/s | 3.8s (8.6s + 2.6s) | 1355.61 MB/s |
 
 ## Statistics
 _Collect the sum, mean, minimum, maximum, minimum length, maximum length and
@@ -424,24 +449,23 @@ PREPARE {
     }
 }
 END {
-    n_pids = length(records)
-    for (i=1; i<=n_pids; i++) {
-        min1 = min(min1, min1M[i])
-        min2 = min(min2, min2M[i])
-        min1L = min(min1L, min1lM[i]);
-        min2L = min(min2L, min2lM[i]);
+      for (pid in records) {
+        min1 = min(min1, min1M[pid])
+        min2 = min(min2, min2M[pid])
+        min1L = min(min1L, min1lM[pid]);
+        min2L = min(min2L, min2lM[pid]);
 
-        max1 = max(max1, max1M[i])
-        max2 = max(max2, max2M[i])
-        max1L = max(max1L, max1lM[i]);
-        max2L = max(max2L, max2lM[i]);
+        max1 = max(max1, max1M[pid])
+        max2 = max(max2, max2M[pid])
+        max1L = max(max1L, max1lM[pid]);
+        max2L = max(max2L, max2lM[pid]);
     }
 
-    for (i=1; i<=n_pids; i++) {
-        nb = records[i]
-        sb = sums[i]
+    for (pid in records) {
+        nb = records[pid]
+        sb = sums[pid]
         mb = sb / nb
-        m2b = m2s[i]
+        m2b = m2s[pid]
         if (i == 1) {
             na = nb; ma = mb; sa = sb; m2a = m2b;
         } else {
@@ -474,38 +498,38 @@ using Cranelift when compared with LLVM in this benchmark; the other benchmark
 programs show performance of the two backends much closer together.
 
 **MacOS**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| gawk | TSV | 1m12.8s (1m11.4s + 1.4s) | 108.39 MB/s |
-| mawk | TSV | 1m14.2s (1m12.6s + 1.6s) | 106.33 MB/s |
-| frawk (cranelift) | CSV | 27.4s (26.2s + 1.2s) | 326.99 MB/s |
-| frawk (cranelift) | TSV | 23.9s (22.9s + 1.0s) | 330.57 MB/s |
-| frawk (cranelift, parallel) | CSV | 7.2s (27.5s + 1.3s) | 1241.04 MB/s |
-| frawk (cranelift, parallel) | TSV | 6.4s (24.0s + 1.3s) | 1238.10 MB/s |
-| frawk (llvm) | CSV | 21.7s (20.5s + 1.2s) | 412.57 MB/s |
-| frawk (llvm) | TSV | 17.8s (16.8s + 1.0s) | 442.63 MB/s |
-| frawk (llvm, parallel) | CSV | 6.2s (23.3s + 1.2s) | 1431.96 MB/s |
-| frawk (llvm, parallel) | TSV | 5.5s (20.4s + 1.1s) | 1441.13 MB/s |
-| tsv-utils | TSV | 10.0s (9.3s + 0.6s) | 792.49 MB/s |
-| xsv | CSV | 34.9s (33.8s + 1.1s) | 256.24 MB/s |
-| xsv | TSV | 33.4s (32.5s + 1.0s) | 236.01 MB/s |
+| gawk | TSV | 1m13.3s (1m11.9s + 1.4s) | 107.69 MB/s |
+| mawk | TSV | 1m12.6s (1m11.1s + 1.5s) | 108.73 MB/s |
+| frawk (cranelift) | CSV | 26.4s (25.3s + 1.1s) | 338.97 MB/s |
+| frawk (cranelift) | TSV | 18.8s (17.8s + 1.0s) | 420.73 MB/s |
+| frawk (cranelift, parallel) | CSV | 5.3s (29.0s + 1.3s) | 1686.23 MB/s |
+| frawk (cranelift, parallel) | TSV | 3.5s (16.6s + 1.0s) | 2223.62 MB/s |
+| frawk (llvm) | CSV | 20.0s (18.9s + 1.1s) | 447.41 MB/s |
+| frawk (llvm) | TSV | 12.5s (11.5s + 1.0s) | 631.23 MB/s |
+| frawk (llvm, parallel) | CSV | 5.1s (23.6s + 1.2s) | 1762.30 MB/s |
+| frawk (llvm, parallel) | TSV | 3.6s (16.4s + 1.1s) | 2178.20 MB/s |
+| xsv | CSV | 34.7s (33.6s + 1.1s) | 258.14 MB/s |
+| xsv | TSV | 32.8s (31.8s + 0.9s) | 240.78 MB/s |
 
 **Linux**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| gawk | TSV | 1m14.3s (1m12.7s + 1.6s) | 106.23 MB/s |
-| mawk | TSV | 1m25.2s (1m23.4s + 1.8s) | 92.58 MB/s |
-| frawk (cranelift) | CSV | 38.0s (36.3s + 1.7s) | 235.42 MB/s |
-| frawk (cranelift) | TSV | 32.4s (30.8s + 1.5s) | 243.73 MB/s |
-| frawk (cranelift, parallel) | CSV | 9.6s (35.9s + 2.3s) | 934.54 MB/s |
-| frawk (cranelift, parallel) | TSV | 8.0s (29.7s + 2.3s) | 981.06 MB/s |
-| frawk (llvm) | CSV | 28.8s (27.1s + 1.8s) | 310.43 MB/s |
-| frawk (llvm) | TSV | 23.3s (21.8s + 1.5s) | 339.08 MB/s |
-| frawk (llvm, parallel) | CSV | 9.6s (34.8s + 2.8s) | 936.50 MB/s |
-| frawk (llvm, parallel) | TSV | 7.0s (25.6s + 2.0s) | 1127.54 MB/s |
-| tsv-utils | TSV | 15.2s (14.0s + 1.1s) | 520.90 MB/s |
-| xsv | CSV | 34.1s (32.5s + 1.6s) | 262.28 MB/s |
-| xsv | TSV | 31.8s (30.6s + 1.2s) | 248.09 MB/s |
+| gawk | TSV | 1m14.4s (1m12.8s + 1.6s) | 106.05 MB/s |
+| mawk | TSV | 1m23.3s (1m21.4s + 1.9s) | 94.75 MB/s |
+| frawk (cranelift) | CSV | 39.0s (37.1s + 2.0s) | 229.09 MB/s |
+| frawk (cranelift) | TSV | 28.3s (26.7s + 1.6s) | 278.42 MB/s |
+| frawk (cranelift, parallel) | CSV | 9.9s (42.2s + 4.8s) | 900.58 MB/s |
+| frawk (cranelift, parallel) | TSV | 8.1s (32.3s + 5.1s) | 979.96 MB/s |
+| frawk (llvm) | CSV | 29.1s (27.4s + 1.7s) | 307.05 MB/s |
+| frawk (llvm) | TSV | 18.7s (17.0s + 1.7s) | 422.67 MB/s |
+| frawk (llvm, parallel) | CSV | 10.0s (35.9s + 3.4s) | 891.33 MB/s |
+| frawk (llvm, parallel) | TSV | 7.8s (26.3s + 3.7s) | 1010.97 MB/s |
+| xsv | CSV | 34.2s (32.5s + 1.7s) | 261.54 MB/s |
+| xsv | TSV | 31.7s (30.3s + 1.4s) | 248.89 MB/s |
 
 ## Select
 _Select 3 fields from the all_train dataset._
@@ -531,42 +555,44 @@ configuration), tsv-utils unquestionably performs better per core than frawk,
 while preserving the input's row ordering.
 
 **MacOS**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| gawk | CSV | 8.8s (7.8s + 1.0s) | 589.33 MB/s |
-| gawk | TSV | 9.0s (8.0s + 1.0s) | 572.96 MB/s |
-| mawk | CSV | 9.7s (8.5s + 1.2s) | 535.35 MB/s |
-| mawk | TSV | 9.4s (8.3s + 1.1s) | 548.56 MB/s |
-| frawk (cranelift) | CSV | 3.9s (3.3s + 0.7s) | 1337.75 MB/s |
-| frawk (cranelift) | TSV | 3.7s (3.2s + 0.7s) | 1384.24 MB/s |
-| frawk (cranelift, parallel) | CSV | 2.2s (7.9s + 0.9s) | 2361.35 MB/s |
-| frawk (cranelift, parallel) | TSV | 2.0s (7.0s + 0.9s) | 2629.98 MB/s |
-| frawk (llvm) | CSV | 4.1s (3.4s + 0.8s) | 1254.47 MB/s |
-| frawk (llvm) | TSV | 4.1s (3.5s + 0.8s) | 1260.27 MB/s |
-| frawk (llvm, parallel) | CSV | 2.2s (7.8s + 0.9s) | 2390.78 MB/s |
-| frawk (llvm, parallel) | TSV | 2.1s (7.3s + 1.0s) | 2513.80 MB/s |
-| tsv-utils | TSV | 2.0s (1.6s + 0.5s) | 2526.07 MB/s |
-| xsv | CSV | 6.2s (5.5s + 0.7s) | 828.55 MB/s |
-| xsv | TSV | 6.2s (5.4s + 0.7s) | 838.34 MB/s |
+| gawk | CSV | 7.9s (7.0s + 0.9s) | 657.00 MB/s |
+| gawk | TSV | 7.9s (7.1s + 0.9s) | 654.26 MB/s |
+| mawk | CSV | 8.4s (7.4s + 1.0s) | 612.83 MB/s |
+| mawk | TSV | 8.4s (7.4s + 1.0s) | 616.85 MB/s |
+| frawk (cranelift) | CSV | 3.8s (3.3s + 0.7s) | 1358.81 MB/s |
+| frawk (cranelift) | TSV | 3.3s (2.8s + 0.7s) | 1569.70 MB/s |
+| frawk (cranelift, parallel) | CSV | 1.9s (5.1s + 0.7s) | 2745.72 MB/s |
+| frawk (cranelift, parallel) | TSV | 1.7s (4.6s + 0.7s) | 2972.70 MB/s |
+| frawk (llvm) | CSV | 3.8s (3.2s + 0.7s) | 1373.59 MB/s |
+| frawk (llvm) | TSV | 3.2s (2.7s + 0.7s) | 1598.78 MB/s |
+| frawk (llvm, parallel) | CSV | 1.9s (5.1s + 0.7s) | 2678.96 MB/s |
+| frawk (llvm, parallel) | TSV | 1.8s (4.6s + 0.7s) | 2930.64 MB/s |
+| tsv-utils | TSV | 2.0s (1.6s + 0.4s) | 2589.22 MB/s |
+| xsv | CSV | 5.4s (4.8s + 0.6s) | 961.28 MB/s |
+| xsv | TSV | 5.3s (4.7s + 0.6s) | 970.65 MB/s |
 
 **Linux**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| gawk | CSV | 9.3s (8.4s + 1.0s) | 555.03 MB/s |
-| gawk | TSV | 9.5s (8.4s + 1.1s) | 544.24 MB/s |
-| mawk | CSV | 8.3s (6.8s + 1.4s) | 627.54 MB/s |
-| mawk | TSV | 8.2s (6.8s + 1.4s) | 629.14 MB/s |
-| frawk (cranelift) | CSV | 5.2s (4.4s + 1.1s) | 987.87 MB/s |
-| frawk (cranelift) | TSV | 5.1s (4.3s + 1.1s) | 1008.66 MB/s |
-| frawk (cranelift, parallel) | CSV | 5.4s (12.9s + 4.7s) | 958.08 MB/s |
-| frawk (cranelift, parallel) | TSV | 5.0s (12.4s + 4.4s) | 1033.62 MB/s |
-| frawk (llvm) | CSV | 5.1s (4.3s + 1.1s) | 1016.97 MB/s |
-| frawk (llvm) | TSV | 5.1s (4.3s + 1.0s) | 1022.40 MB/s |
-| frawk (llvm, parallel) | CSV | 5.4s (12.6s + 4.8s) | 957.37 MB/s |
-| frawk (llvm, parallel) | TSV | 4.9s (12.2s + 4.4s) | 1049.97 MB/s |
-| tsv-utils | TSV | 2.9s (2.0s + 0.9s) | 1815.72 MB/s |
-| xsv | CSV | 8.2s (7.1s + 1.1s) | 629.14 MB/s |
-| xsv | TSV | 8.1s (7.1s + 1.0s) | 638.52 MB/s |
+| gawk | CSV | 9.4s (8.3s + 1.1s) | 550.72 MB/s |
+| gawk | TSV | 9.4s (8.4s + 1.0s) | 551.01 MB/s |
+| mawk | CSV | 8.3s (7.0s + 1.3s) | 621.14 MB/s |
+| mawk | TSV | 8.1s (7.0s + 1.1s) | 638.68 MB/s |
+| frawk (cranelift) | CSV | 5.5s (4.8s + 1.0s) | 942.39 MB/s |
+| frawk (cranelift) | TSV | 4.7s (4.0s + 1.0s) | 1100.39 MB/s |
+| frawk (cranelift, parallel) | CSV | 4.0s (9.5s + 2.3s) | 1294.29 MB/s |
+| frawk (cranelift, parallel) | TSV | 3.5s (8.5s + 2.0s) | 1476.18 MB/s |
+| frawk (llvm) | CSV | 5.3s (4.6s + 1.0s) | 978.36 MB/s |
+| frawk (llvm) | TSV | 4.6s (4.0s + 0.9s) | 1115.08 MB/s |
+| frawk (llvm, parallel) | CSV | 4.1s (9.4s + 2.5s) | 1259.35 MB/s |
+| frawk (llvm, parallel) | TSV | 3.7s (8.8s + 2.2s) | 1406.04 MB/s |
+| tsv-utils | TSV | 2.9s (2.0s + 0.9s) | 1756.00 MB/s |
+| xsv | CSV | 8.1s (7.2s + 0.9s) | 642.73 MB/s |
+| xsv | TSV | 8.0s (7.2s + 0.8s) | 646.66 MB/s |
 
 ## Filter
 _Print out all records from the `all_train` dataset matching a simple numeric
@@ -589,38 +615,41 @@ running serially. In parallel, frawk is slightly faster than tsv-utils in terms
 of wall time on MacOS, and a still good deal slower in the Linux configuration.
 
 **MacOS**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| gawk | CSV | 9.1s (8.1s + 1.0s) | 568.37 MB/s |
-| gawk | TSV | 9.0s (8.0s + 1.0s) | 575.06 MB/s |
-| mawk | CSV | 11.4s (10.2s + 1.2s) | 454.09 MB/s |
-| mawk | TSV | 11.5s (10.3s + 1.2s) | 451.24 MB/s |
-| frawk (cranelift) | CSV | 7.3s (6.8s + 0.8s) | 707.44 MB/s |
-| frawk (cranelift) | TSV | 7.1s (6.5s + 0.8s) | 732.76 MB/s |
-| frawk (cranelift, parallel) | CSV | 2.2s (8.3s + 0.8s) | 2328.43 MB/s |
-| frawk (cranelift, parallel) | TSV | 2.2s (8.3s + 0.8s) | 2303.57 MB/s |
-| frawk (llvm) | CSV | 7.3s (6.8s + 0.8s) | 708.02 MB/s |
-| frawk (llvm) | TSV | 7.1s (6.5s + 0.8s) | 732.35 MB/s |
-| frawk (llvm, parallel) | CSV | 2.2s (7.9s + 0.8s) | 2351.70 MB/s |
-| frawk (llvm, parallel) | TSV | 2.2s (8.1s + 0.8s) | 2351.70 MB/s |
-| tsv-utils | TSV | 2.5s (2.0s + 0.5s) | 2062.30 MB/s |
+| gawk | CSV | 8.2s (7.3s + 0.9s) | 634.61 MB/s |
+| gawk | TSV | 8.2s (7.4s + 0.9s) | 630.52 MB/s |
+| mawk | CSV | 10.1s (9.1s + 1.0s) | 511.25 MB/s |
+| mawk | TSV | 10.0s (9.0s + 1.0s) | 517.69 MB/s |
+| frawk (cranelift) | CSV | 3.7s (3.2s + 0.7s) | 1390.93 MB/s |
+| frawk (cranelift) | TSV | 3.1s (2.6s + 0.7s) | 1670.46 MB/s |
+| frawk (cranelift, parallel) | CSV | 1.9s (5.2s + 0.8s) | 2684.52 MB/s |
+| frawk (cranelift, parallel) | TSV | 1.7s (4.7s + 0.7s) | 2969.29 MB/s |
+| frawk (llvm) | CSV | 3.6s (3.1s + 0.7s) | 1422.65 MB/s |
+| frawk (llvm) | TSV | 3.1s (2.6s + 0.7s) | 1684.04 MB/s |
+| frawk (llvm, parallel) | CSV | 1.9s (5.2s + 0.8s) | 2670.67 MB/s |
+| frawk (llvm, parallel) | TSV | 1.8s (4.8s + 0.8s) | 2873.72 MB/s |
+| tsv-utils | TSV | 2.3s (1.9s + 0.4s) | 2213.95 MB/s |
+
 
 **Linux**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| gawk | CSV | 9.4s (8.2s + 1.3s) | 549.55 MB/s |
-| gawk | TSV | 9.5s (8.2s + 1.3s) | 544.75 MB/s |
-| mawk | CSV | 10.2s (9.0s + 1.2s) | 507.59 MB/s |
-| mawk | TSV | 10.4s (9.0s + 1.4s) | 499.66 MB/s |
-| frawk (cranelift) | CSV | 7.7s (6.6s + 1.4s) | 676.65 MB/s |
-| frawk (cranelift) | TSV | 7.5s (6.5s + 1.4s) | 692.58 MB/s |
-| frawk (cranelift, parallel) | CSV | 4.6s (13.6s + 3.6s) | 1117.49 MB/s |
-| frawk (cranelift, parallel) | TSV | 4.1s (13.0s + 3.1s) | 1253.25 MB/s |
-| frawk (llvm) | CSV | 7.6s (6.7s + 1.4s) | 679.50 MB/s |
-| frawk (llvm) | TSV | 7.4s (6.4s + 1.4s) | 695.93 MB/s |
-| frawk (llvm, parallel) | CSV | 4.8s (14.2s + 3.6s) | 1080.64 MB/s |
-| frawk (llvm, parallel) | TSV | 4.4s (13.7s + 3.1s) | 1184.73 MB/s |
-| tsv-utils | TSV | 3.5s (2.6s + 0.9s) | 1487.20 MB/s |
+| gawk | CSV | 9.4s (8.4s + 1.0s) | 551.01 MB/s |
+| gawk | TSV | 9.4s (8.4s + 0.9s) | 553.78 MB/s |
+| mawk | CSV | 10.1s (8.9s + 1.2s) | 512.67 MB/s |
+| mawk | TSV | 10.2s (9.1s + 1.1s) | 507.39 MB/s |
+| frawk (cranelift) | CSV | 5.3s (4.7s + 1.0s) | 980.39 MB/s |
+| frawk (cranelift) | TSV | 4.8s (3.8s + 1.3s) | 1083.13 MB/s |
+| frawk (cranelift, parallel) | CSV | 4.3s (9.5s + 2.8s) | 1204.29 MB/s |
+| frawk (cranelift, parallel) | TSV | 3.6s (8.5s + 2.3s) | 1432.09 MB/s |
+| frawk (llvm) | CSV | 5.2s (4.5s + 1.0s) | 1002.21 MB/s |
+| frawk (llvm) | TSV | 4.5s (4.0s + 0.9s) | 1146.69 MB/s |
+| frawk (llvm, parallel) | CSV | 4.4s (9.6s + 2.6s) | 1180.40 MB/s |
+| frawk (llvm, parallel) | TSV | 3.9s (8.8s + 2.3s) | 1337.75 MB/s |
+| tsv-utils | TSV | 3.4s (2.7s + 0.7s) | 1532.53 MB/s |
 
 ## Group By Key
 _Print the mean of field 2 grouped by the value in field 6 for TREE_GRM_ESTN_
@@ -639,38 +668,41 @@ END {
 }
 ```
 
-This benchmark is notable because `gawk` (narrowly, on Linux, and substantially
-on MacOS) outperforms `frawk` in a single-threaded configuration, while `frawk`
-manages to achieve higher throughput in parallel mode. This points to some
-likely optimization opportunities for frawk, particularly since neither program
-is as fast as tsv-utils, even when single-threaded.
+This is a workload where gawk and frawk are very close in terms of
+single-threaded performance. Neither program is nearly as fast as TSV-utils
+though. Even if parallel frawk is able to catch up on MacOS, my guess is that
+there are serious opportunitities for optimization of arrays here, though part
+of the slowdown may be due to tsv-utils's superious handling of 'wide rows'
+where we only read a small number of columns.
 
 **MacOS**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| gawk | TSV | 15.0s (13.7s + 1.3s) | 525.37 MB/s |
-| mawk | TSV | 43.2s (41.6s + 1.5s) | 182.69 MB/s |
-| frawk (cranelift) | CSV | 23.9s (22.7s + 1.2s) | 374.40 MB/s |
-| frawk (cranelift) | TSV | 20.8s (19.8s + 1.0s) | 378.86 MB/s |
-| frawk (cranelift, parallel) | CSV | 7.1s (27.1s + 1.2s) | 1260.63 MB/s |
-| frawk (cranelift, parallel) | TSV | 6.6s (24.7s + 1.3s) | 1202.08 MB/s |
-| frawk (llvm) | CSV | 23.6s (22.5s + 1.2s) | 378.26 MB/s |
-| frawk (llvm) | TSV | 20.5s (19.5s + 1.0s) | 384.73 MB/s |
-| frawk (llvm, parallel) | CSV | 7.0s (26.7s + 1.2s) | 1274.28 MB/s |
-| frawk (llvm, parallel) | TSV | 6.5s (24.5s + 1.3s) | 1210.19 MB/s |
-| tsv-utils | TSV | 4.9s (4.3s + 0.7s) | 1596.20 MB/s |
+| gawk | TSV | 14.8s (13.5s + 1.3s) | 534.48 MB/s |
+| mawk | TSV | 42.1s (40.6s + 1.5s) | 187.61 MB/s |
+| frawk (cranelift) | CSV | 22.1s (21.0s + 1.1s) | 405.69 MB/s |
+| frawk (cranelift) | TSV | 15.1s (14.1s + 1.0s) | 523.84 MB/s |
+| frawk (cranelift, parallel) | CSV | 5.3s (29.5s + 1.3s) | 1701.62 MB/s |
+| frawk (cranelift, parallel) | TSV | 3.5s (16.6s + 1.0s) | 2225.50 MB/s |
+| frawk (llvm) | CSV | 21.8s (20.7s + 1.1s) | 410.47 MB/s |
+| frawk (llvm) | TSV | 14.8s (13.8s + 1.0s) | 534.66 MB/s |
+| frawk (llvm, parallel) | CSV | 5.2s (29.0s + 1.3s) | 1720.27 MB/s |
+| frawk (llvm, parallel) | TSV | 3.6s (16.5s + 1.0s) | 2221.74 MB/s |
+| tsv-utils | TSV | 4.9s (4.3s + 0.6s) | 1614.16 MB/s |
 
 **Linux**
+
 | Program | Format | Running Time | Throughput |
 | -- | -- | -- | -- |
-| gawk | TSV | 23.4s (21.7s + 1.7s) | 337.47 MB/s |
-| mawk | TSV | 50.1s (48.4s + 1.7s) | 157.47 MB/s |
-| frawk (cranelift) | CSV | 30.1s (28.2s + 1.8s) | 297.33 MB/s |
-| frawk (cranelift) | TSV | 24.8s (23.3s + 1.5s) | 317.75 MB/s |
-| frawk (cranelift, parallel) | CSV | 9.3s (34.5s + 2.7s) | 960.32 MB/s |
-| frawk (cranelift, parallel) | TSV | 7.3s (26.9s + 2.2s) | 1082.68 MB/s |
-| frawk (llvm) | CSV | 29.9s (28.2s + 1.7s) | 299.54 MB/s |
-| frawk (llvm) | TSV | 24.2s (22.5s + 1.7s) | 326.07 MB/s |
-| frawk (llvm, parallel) | CSV | 9.5s (34.9s + 2.7s) | 945.91 MB/s |
-| frawk (llvm, parallel) | TSV | 7.1s (26.4s + 1.9s) | 1106.98 MB/s |
-| tsv-utils | TSV | 5.7s (4.4s + 1.3s) | 1381.10 MB/s |
+| gawk | TSV | 23.5s (21.9s + 1.6s) | 335.70 MB/s |
+| mawk | TSV | 50.6s (48.5s + 2.1s) | 155.86 MB/s |
+| frawk (cranelift) | CSV | 32.4s (30.5s + 1.9s) | 276.18 MB/s |
+| frawk (cranelift) | TSV | 22.9s (21.1s + 1.8s) | 343.91 MB/s |
+| frawk (cranelift, parallel) | CSV | 10.2s (41.5s + 5.5s) | 881.24 MB/s |
+| frawk (cranelift, parallel) | TSV | 7.9s (32.0s + 5.0s) | 1001.35 MB/s |
+| frawk (llvm) | CSV | 31.8s (30.1s + 1.7s) | 281.08 MB/s |
+| frawk (llvm) | TSV | 22.1s (20.5s + 1.6s) | 356.80 MB/s |
+| frawk (llvm, parallel) | CSV | 10.4s (42.5s + 6.0s) | 859.72 MB/s |
+| frawk (llvm, parallel) | TSV | 7.5s (27.3s + 2.4s) | 1054.19 MB/s |
+| tsv-utils | TSV | 5.9s (4.6s + 1.3s) | 1333.27 MB/s |

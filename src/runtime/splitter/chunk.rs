@@ -3,7 +3,7 @@ use std::io::Read;
 use std::mem;
 use std::sync::Arc;
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
 use crate::common::Result;
 use crate::runtime::{
@@ -38,6 +38,9 @@ pub trait ChunkProducer {
     ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
         vec![]
     }
+    fn wait(&self) -> bool {
+        true
+    }
     fn get_chunk(&mut self, chunk: &mut Self::Chunk) -> Result<bool /*done*/>;
     fn next_file(&mut self) -> Result<bool /*new file available*/>;
 }
@@ -45,9 +48,6 @@ pub trait ChunkProducer {
 pub trait Chunk: Send + Default {
     fn get_name(&self) -> &str;
 }
-
-// TODO: rephrase CSVReader + BytesReader + DefaultReader in terms of a ChnunkProducer
-//      (in that order: DefaultReader will need its own ChunkProducer, I think?)
 
 #[derive(Copy, Clone)]
 enum ChunkState {
@@ -220,6 +220,9 @@ impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
     ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = C>> + Send>> {
         (&**self).try_dyn_resize(requested_size)
     }
+    fn wait(&self) -> bool {
+        (&**self).wait()
+    }
     fn next_file(&mut self) -> Result<bool> {
         (&mut **self).next_file()
     }
@@ -278,9 +281,9 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                     let bs = buf.as_bytes();
                     (self.find_indexes)(bs, &mut chunk.off);
                     let mut target = None;
-                    let mut new_len = chunk.off.fields.len();
+                    let mut new_len = chunk.off.rel.fields.len();
                     let mut always_truncate = new_len;
-                    for offset in chunk.off.fields.iter().rev() {
+                    for offset in chunk.off.rel.fields.iter().rev() {
                         let offset = *offset as usize;
                         if offset >= self.inner.end {
                             always_truncate -= 1;
@@ -323,7 +326,7 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                         (false, false) => {
                             // Yield buffer, stay in main.
                             chunk.buf = Some(buf.try_unique().unwrap());
-                            chunk.off.fields.truncate(new_len);
+                            chunk.off.rel.fields.truncate(new_len);
                             chunk.len = target.unwrap();
                             Ok(false)
                         }
@@ -331,7 +334,7 @@ impl<R: Read, F: FnMut(&[u8], &mut Offsets)> ChunkProducer for OffsetChunkProduc
                             // Yield the entire buffer, this was the last piece of data.
                             self.inner.clear_buf();
                             chunk.buf = Some(buf.try_unique().unwrap());
-                            chunk.off.fields.truncate(always_truncate);
+                            chunk.off.rel.fields.truncate(always_truncate);
                             self.state = ChunkState::Done;
                             Ok(false)
                         }
@@ -376,12 +379,12 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                     self.1 = (self.0.find_indexes)(bs, &mut chunk.off, self.1);
                     // Find the last newline in the buffer, if there is one.
                     let (is_partial, truncate_to, len_if_not_last) =
-                        if let Some(nl_off) = chunk.off.nl.fields.last().cloned() {
+                        if let Some(nl_off) = chunk.off.0.nl.fields.last().cloned() {
                             let buf_end = nl_off as usize + 1;
                             self.0.inner.start = buf_end;
-                            let mut start = chunk.off.ws.fields.len() as isize - 1;
+                            let mut start = chunk.off.0.rel.fields.len() as isize - 1;
                             while start > 0 {
-                                if chunk.off.ws.fields[start as usize] > nl_off as u64 {
+                                if chunk.off.0.rel.fields[start as usize] > nl_off as u64 {
                                     // We are removing trailing fields from the input, but we know
                                     // that newlines are whitespace, so we reset the start_ws
                                     // variable to 1.
@@ -402,7 +405,7 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                         (false, false) => {
                             // Yield buffer, stay in main.
                             chunk.buf = Some(buf.try_unique().unwrap());
-                            chunk.off.ws.fields.truncate(truncate_to);
+                            chunk.off.0.rel.fields.truncate(truncate_to);
                             chunk.len = len_if_not_last;
                             Ok(false)
                         }
@@ -437,6 +440,15 @@ impl<P> ChainedChunkProducer<P> {
 impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
     type Chunk = P::Chunk;
 
+    fn wait(&self) -> bool {
+        let res = if let Some(cur) = self.0.last() {
+            cur.wait()
+        } else {
+            true
+        };
+        res
+    }
+
     fn next_file(&mut self) -> Result<bool> {
         if let Some(cur) = self.0.last_mut() {
             if !cur.next_file()? {
@@ -464,6 +476,7 @@ impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
 /// ParallelChunkProducer allows for consumption of individual chunks from a ChunkProducer in
 /// parallel.
 pub struct ParallelChunkProducer<P: ChunkProducer> {
+    start: Receiver<()>,
     incoming: Receiver<P::Chunk>,
     spent: Sender<P::Chunk>,
 }
@@ -471,6 +484,7 @@ pub struct ParallelChunkProducer<P: ChunkProducer> {
 impl<P: ChunkProducer> Clone for ParallelChunkProducer<P> {
     fn clone(&self) -> ParallelChunkProducer<P> {
         ParallelChunkProducer {
+            start: self.start.clone(),
             incoming: self.incoming.clone(),
             spent: self.spent.clone(),
         }
@@ -482,10 +496,13 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
         p_factory: impl FnOnce() -> P + Send + 'static,
         chan_size: usize,
     ) -> ParallelChunkProducer<P> {
+        let (start_sender, start_receiver) = bounded(chan_size);
         let (in_sender, in_receiver) = bounded(chan_size);
         let (spent_sender, spent_receiver) = bounded(chan_size);
         std::thread::spawn(move || {
+            let mut n_workers = 0;
             let mut p = p_factory();
+            let mut n_failures = 0;
             loop {
                 let mut chunk = spent_receiver
                     .try_recv()
@@ -495,12 +512,49 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
                 if chunk_res.is_err() || matches!(chunk_res, Ok(true)) {
                     return;
                 }
+                match in_sender.try_send(chunk) {
+                    Ok(()) => {
+                        n_failures = 0;
+                        continue;
+                    }
+                    Err(TrySendError::Full(c)) => {
+                        n_failures += 1;
+                        chunk = c;
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        return;
+                    }
+                }
+
+                // TODO: This heuristic works fairly well when the target is a relatively small
+                // number of workers. The idea here is that we require progressively stronger
+                // signals that we are producing chunks too fast before starting a new worker.
+                //
+                // However, for extremely expensive worker functions, this heuristic will not
+                // learn the optimal number of workers before the 2s timeout in wait()
+                //
+                // One alternative is to keep a running average of the amount of time it takes
+                // to read a chunk, and a running average of the amount of time spent blocking
+                // to send a chunk (perhaps a rolling window, or one that downweights previous
+                // runs).
+                //
+                // The amount of time we spend blocking will give us an idea of the total parallel
+                // throughput of the workers. If the throughput is lower than the speed at which we
+                // read the chunks, that's a signal to up the number of workers (potentially not
+                // just incrementing them, but adding them 'all at once').
+                if n_failures == (2 << n_workers) {
+                    if start_sender.try_send(()).is_ok() {
+                        n_workers += 1;
+                    }
+                    n_failures = 0;
+                }
                 if in_sender.send(chunk).is_err() {
                     return;
                 }
             }
         });
         ParallelChunkProducer {
+            start: start_receiver,
             incoming: in_receiver,
             spent: spent_sender,
         }
@@ -522,6 +576,11 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
     }
     fn next_file(&mut self) -> Result<bool> {
         err!("nextfile is not supported in record-oriented parallel mode")
+    }
+    fn wait(&self) -> bool {
+        self.start
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_ok()
     }
     fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
         if let Ok(mut new_chunk) = self.incoming.recv() {

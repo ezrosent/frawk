@@ -11,8 +11,8 @@ for i in {1..5}; do
 	time $RUST "$CSV"
 	time $PYTHON "$CSV"
 	time $FRAWK -bcranelift -icsv  "$FRAWK_SCRIPT" "$CSV"
-	time $FRAWK -bcranelift -icsv -pr -j3 "$FRAWK_SCRIPT" "$CSV"
+	time $FRAWK -bcranelift -icsv -pr "$FRAWK_SCRIPT" "$CSV"
 	time $FRAWK -bllvm -icsv  "$FRAWK_SCRIPT" "$CSV"
-	time $FRAWK -bllvm -icsv -pr -j3 "$FRAWK_SCRIPT" "$CSV"
+	time $FRAWK -bllvm -icsv -pr "$FRAWK_SCRIPT" "$CSV"
 	set +x
 done

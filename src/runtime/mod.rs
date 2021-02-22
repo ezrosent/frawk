@@ -277,11 +277,6 @@ pub(crate) struct Inputs {
     commands: Registry<RegexSplitter<ChildStdout>>,
 }
 
-// TODO: save used_fields
-// TODO: save columns
-// TODO: supply an "update used fields" that takes FI
-//
-
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
     pub(crate) inputs: Inputs,
     stdin: LR,
@@ -291,18 +286,25 @@ pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
 }
 
 impl<LR: LineReader> FileRead<LR> {
-    pub(crate) fn try_resize(&self, size: usize) -> Vec<impl FnOnce() -> Self + Send> {
+    pub(crate) fn try_resize(&self, size: usize) -> Vec<impl FnOnce() -> Option<Self> + Send> {
         self.stdin
             .request_handles(size)
             .into_iter()
             .map(|x| {
                 let fields = self.used_fields.clone();
-                move || FileRead {
-                    inputs: Default::default(),
-                    stdin: x(),
-                    named_columns: None,
-                    used_fields: fields.clone(),
-                    backup_used_fields: fields.clone(),
+                move || {
+                    let stdin = x();
+                    if stdin.wait() {
+                        Some(FileRead {
+                            inputs: Default::default(),
+                            named_columns: None,
+                            used_fields: fields.clone(),
+                            backup_used_fields: fields.clone(),
+                            stdin,
+                        })
+                    } else {
+                        None
+                    }
                 }
             })
             .collect()

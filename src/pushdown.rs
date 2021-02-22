@@ -106,6 +106,17 @@ impl FieldSet {
     pub fn union(&mut self, other: &FieldSet) {
         self.0 = self.0 | other.0;
     }
+
+    /// Return a safe upper bound on the maximum integer value column represented by this set.
+    ///
+    /// The `fi` value is ignored. for full sets we return u32::max_value()
+    pub fn max_value(&self) -> u32 {
+        if self == &FieldSet::all() {
+            u32::max_value()
+        } else {
+            self.max_bit()
+        }
+    }
     fn min_bit(&self) -> u32 {
         (FI_MASK & self.0).trailing_zeros()
     }
@@ -214,6 +225,13 @@ mod tests {
         let mut fs8 = FieldSet::singleton(3);
         fs8.fill(&fs7);
         assert_eq!(fs8, FieldSet::all());
+    }
+
+    #[test]
+    fn max_value() {
+        assert_eq!(FieldSet::singleton(23).max_value(), 24);
+        assert_eq!(FieldSet::singleton(1024).max_value(), u32::max_value());
+        assert_eq!(FieldSet::singleton(0).max_value(), 1);
     }
 }
 

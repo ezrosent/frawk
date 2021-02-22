@@ -59,6 +59,9 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     fn filename(&self) -> Str<'static> {
         Str::from(self.cur_chunk.get_name()).unmoor()
     }
+    fn wait(&self) -> bool {
+        self.prod.wait()
+    }
     fn check_utf8(&self) -> bool {
         self.check_utf8
     }
@@ -219,7 +222,7 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
     ) -> Result</*file changed*/ bool> {
         line.clear();
         let mut changed = false;
-        if self.cur_chunk.off.start == self.cur_chunk.off.fields.len() {
+        if self.cur_chunk.off.rel.start == self.cur_chunk.off.rel.fields.len() {
             // NB: see comment on corresponding condition in ByteReader.
             let (is_eof, has_changed) = self.refresh_buf()?;
             changed = has_changed;
@@ -246,24 +249,8 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
     }
 }
 
-// Offsets for the "split by ASCII whitespace" mode. Because newlines do not always coincide with
-// the end of a field (think of the string "f1 f2 f3   \n"), we have a separate stream of offsets
-// for field boundaries and for newlines.
 #[derive(Default, Debug)]
-pub struct WhitespaceOffsets {
-    pub ws: Offsets,
-    pub nl: Offsets,
-}
-
-impl WhitespaceOffsets {
-    fn clear(&mut self) {
-        self.ws.clear();
-        self.nl.clear();
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct Offsets {
+pub struct OffsetInner {
     pub start: usize,
     // NB We're using u64s to potentially handle huge input streams.
     // An alternative option would be to save lines and fields in separate vectors, but this is
@@ -271,10 +258,29 @@ pub struct Offsets {
     pub fields: Vec<u64>,
 }
 
-impl Offsets {
+impl OffsetInner {
     fn clear(&mut self) {
         self.start = 0;
         self.fields.clear();
+    }
+}
+
+// Structurally identical to WhitespaceOffsets, but newline metadata here is "optional"; it will
+// contain a subset of the data contained in the "relevant" offsetse in "rel".
+#[derive(Default, Debug)]
+pub struct Offsets {
+    pub rel: OffsetInner,
+    pub nl: OffsetInner,
+}
+
+// Newtype wrapper, because chunks are processed slightly differently in the whitespace case.
+#[derive(Default, Debug)]
+pub struct WhitespaceOffsets(pub Offsets);
+
+impl Offsets {
+    fn clear(&mut self) {
+        self.rel.clear();
+        self.nl.clear();
     }
 }
 
@@ -413,7 +419,7 @@ impl<'a> Stepper<'a> {
     }
 
     fn get(&mut self, line_start: usize, j: usize, cur: usize) -> usize {
-        self.off.start = cur;
+        self.off.rel.start = cur;
         if self.field_set.get(0) {
             self.line.raw = self.buf.slice_to_str(line_start, j);
         }
@@ -425,7 +431,7 @@ impl<'a> Stepper<'a> {
         let sep = self.ifmt.sep();
         let line_start = self.prev_ix;
         let bs = &self.buf.as_bytes()[0..self.buf_len];
-        let mut cur = self.off.start;
+        let mut cur = self.off.rel.start;
         let bs_transition = match self.ifmt {
             // Escape sequences only occur within quotes for CSV-formatted data.
             InputFormat::CSV => State::Quote,
@@ -435,11 +441,11 @@ impl<'a> Stepper<'a> {
         };
         macro_rules! get_next {
             () => {
-                if cur == self.off.fields.len() {
+                if cur == self.off.rel.fields.len() {
                     self.push_past(bs.len());
                     return self.get(line_start, bs.len(), cur);
                 } else {
-                    let res = *self.off.fields.get_unchecked(cur) as usize;
+                    let res = *self.off.rel.fields.get_unchecked(cur) as usize;
                     cur += 1;
                     res
                 }
@@ -452,11 +458,11 @@ impl<'a> Stepper<'a> {
                     let cur_field = self.line.fields.len() + 1;
                     if !self.field_set.get(cur_field) {
                         loop {
-                            if cur == self.off.fields.len() {
+                            if cur == self.off.rel.fields.len() {
                                 self.prev_ix = bs.len() + 1;
                                 return self.get(line_start, bs.len(), cur);
                             }
-                            let ix = *self.off.fields.get_unchecked(cur) as usize;
+                            let ix = *self.off.rel.fields.get_unchecked(cur) as usize;
                             cur += 1;
                             match *bs.get_unchecked(ix) {
                                 b'\r' | b'"' | b'\\' => {}
@@ -537,7 +543,7 @@ impl<'a> Stepper<'a> {
                     if bs.len() == self.prev_ix {
                         // We are past the end! Let's pick this up later.
                         // We had better not have any more offsets in the stream!
-                        debug_assert_eq!(self.off.fields.len(), cur);
+                        debug_assert_eq!(self.off.rel.fields.len(), cur);
                         return self.get(line_start, bs.len(), cur);
                     }
                     if *bs.get_unchecked(self.prev_ix) == b'"' {
@@ -557,7 +563,7 @@ impl<'a> Stepper<'a> {
                 }
                 State::BS => {
                     if bs.len() == self.prev_ix {
-                        debug_assert_eq!(self.off.fields.len(), cur);
+                        debug_assert_eq!(self.off.rel.fields.len(), cur);
                         return self.get(line_start, bs.len(), cur);
                     }
                     match *bs.get_unchecked(self.prev_ix) {
@@ -979,150 +985,25 @@ mod generic {
     // sequence, write the indexes of matching indexes into Offsets." The first is very close to
     // the simd-csv variant; simpler formats do a bit less.
 
-    pub unsafe fn find_indexes_csv<V: Vector>(
+    // TODO: CSV/TSV currently do not make use of the whitespace offsets, but collecting them
+    // doesn't appear to add much overhead, and they are used to get substantial speedups in the
+    // ByteSplitter case.
+    //
+    // We should see about rearchitecting the TSV algorithm to make better use of sparse rows,
+    // where lots of columns are present in the inputs, but only a few are used.
+
+    pub unsafe fn find_indexes<V, F, S>(
         buf: &[u8],
         offsets: &mut Offsets,
-        mut prev_iter_inside_quote: u64, /*start at 0*/
-        mut prev_iter_cr_end: u64,       /*start at 0*/
-    ) -> (u64, u64) {
+        mut state: S,
+        mut f: F,
+    ) -> S
+    where
+        V: Vector,
+        F: FnMut(S, *const u8) -> (S, /* rel */ u64, /* newlines */ u64),
+    {
         offsets.clear();
-        // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
-        // reuse this across different chunks.
-        offsets.fields.reserve(buf.len());
-        let buf_ptr = buf.as_ptr();
-        let len = buf.len();
-        let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
-        let mut ix = 0;
-        let base_ptr: *mut u64 = offsets.fields.get_unchecked_mut(0);
-        let mut base = 0;
-
-        // For ... reasons (better pipelining? better cache behavior?) we decode in blocks.
-        const BUFFER_SIZE: usize = 4;
-        macro_rules! iterate {
-            ($buf:expr) => {{
-                #[cfg(feature = "unstable")]
-                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
-                // find commas not inside quotes
-                let inp = V::fill_input($buf);
-                let (quote_mask, quote_locs) = inp.find_quote_mask(&mut prev_iter_inside_quote);
-                let sep = inp.cmp_mask_against_input(b',');
-                let esc = inp.cmp_mask_against_input(b'\\');
-
-                let cr = inp.cmp_mask_against_input(0x0d);
-                let cr_adjusted = cr.wrapping_shl(1) | prev_iter_cr_end;
-                let lf = inp.cmp_mask_against_input(0x0a);
-                // Allow for either \r\n or \n.
-                let end = (lf & cr_adjusted) | lf;
-                prev_iter_cr_end = cr.wrapping_shr(63);
-                (((end | sep | cr) & !quote_mask) | (esc & quote_mask) | quote_locs)
-            }};
-        }
-        if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
-            let mut fields = [0u64; BUFFER_SIZE];
-            while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
-                for b in 0..BUFFER_SIZE {
-                    fields[b] = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
-                }
-                for b in 0..BUFFER_SIZE {
-                    let internal_ix = V::INPUT_SIZE * b + ix;
-                    flatten_bits(base_ptr, &mut base, internal_ix as u64, fields[b]);
-                }
-                ix += V::INPUT_SIZE * BUFFER_SIZE;
-            }
-        }
-        // Do an unbuffered version for the remaining data
-        while ix < len_minus_64 {
-            let field_sep = iterate!(buf_ptr.offset(ix as isize));
-            flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
-            ix += V::INPUT_SIZE;
-        }
-        // For any text that remains, just copy the results to the stack with some padding and do
-        // one more iteration.
-        let remaining = len - ix;
-        if remaining > 0 {
-            let mut rest = [0u8; MAX_INPUT_SIZE];
-            std::ptr::copy_nonoverlapping(
-                buf_ptr.offset(ix as isize),
-                rest.as_mut_ptr(),
-                remaining,
-            );
-            let field_sep = iterate!(rest.as_mut_ptr());
-            flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
-        }
-        offsets.fields.set_len(base as usize);
-        (prev_iter_inside_quote, prev_iter_cr_end)
-    }
-
-    pub unsafe fn find_indexes_unquoted<V: Vector, F: Fn(*const u8) -> u64>(
-        buf: &[u8],
-        offsets: &mut Offsets,
-        f: F,
-    ) -> (u64, u64) {
-        offsets.clear();
-        // This may cause us to overuse memory, but it's a safe upper bound and the plan is to
-        // reuse this across different chunks.
-        offsets.fields.reserve(buf.len());
-        let buf_ptr = buf.as_ptr();
-        let len = buf.len();
-        let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
-        let mut ix = 0;
-        let base_ptr: *mut u64 = offsets.fields.get_unchecked_mut(0);
-        let mut base = 0;
-
-        const BUFFER_SIZE: usize = 4;
-        macro_rules! iterate {
-            ($buf:expr) => {{
-                #[cfg(feature = "unstable")]
-                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
-                f($buf)
-            }};
-        }
-        if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
-            let mut fields = [0u64; BUFFER_SIZE];
-            while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
-                for b in 0..BUFFER_SIZE {
-                    fields[b] = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
-                }
-                for b in 0..BUFFER_SIZE {
-                    let internal_ix = V::INPUT_SIZE * b + ix;
-                    flatten_bits(base_ptr, &mut base, internal_ix as u64, fields[b]);
-                }
-                ix += V::INPUT_SIZE * BUFFER_SIZE;
-            }
-        }
-        // Do an unbuffered version for the remaining data
-        while ix < len_minus_64 {
-            let field_sep = iterate!(buf_ptr.offset(ix as isize));
-            flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
-            ix += V::INPUT_SIZE;
-        }
-        // For any text that remains, just copy the results to the stack with some padding and do
-        // one more iteration.
-        let remaining = len - ix;
-        if remaining > 0 {
-            let mut rest = [0u8; MAX_INPUT_SIZE];
-            std::ptr::copy_nonoverlapping(
-                buf_ptr.offset(ix as isize),
-                rest.as_mut_ptr(),
-                remaining,
-            );
-            let field_sep = iterate!(rest.as_mut_ptr());
-            flatten_bits(base_ptr, &mut base, ix as u64, field_sep);
-        }
-        offsets.fields.set_len(base as usize);
-        (0, 0)
-    }
-
-    // Unlike the other find_indexes methods, splitting by ASCII whitespace involves emitting two
-    // streams of offsets: once for newlines and one for field boundaries (encapsulated in
-    // WhitespaceOffsets). Other than that, the basic structure is the same.
-    pub unsafe fn find_indexes_ascii_whitespace<V: Vector>(
-        buf: &[u8],
-        offsets: &mut WhitespaceOffsets,
-        mut start_ws: u64, /*start at 1*/
-    ) -> u64 /*next start ws*/ {
-        offsets.clear();
-        let field_offsets = &mut offsets.ws;
+        let field_offsets = &mut offsets.rel;
         let newline_offsets = &mut offsets.nl;
         field_offsets.fields.reserve(buf.len());
         newline_offsets.fields.reserve(buf.len());
@@ -1143,10 +1024,9 @@ mod generic {
             ($buf:expr) => {{
                 #[cfg(feature = "unstable")]
                 std::intrinsics::prefetch_read_data($buf.offset(128), 3);
-                let inp = V::fill_input($buf);
-                let (ws, nl, next_start) = inp.whitespace_masks(start_ws);
-                start_ws = next_start;
-                (ws, nl)
+                let (s, mask, nl) = f(state, $buf);
+                state = s;
+                (mask, nl)
             }};
         }
         if len_minus_64 > V::INPUT_SIZE * BUFFER_SIZE {
@@ -1154,8 +1034,8 @@ mod generic {
             let mut nls = [0u64; BUFFER_SIZE];
             while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
                 for b in 0..BUFFER_SIZE {
-                    let (ws, nl) = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
-                    fields[b] = ws;
+                    let (rel, nl) = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
+                    fields[b] = rel;
                     nls[b] = nl;
                 }
                 for b in 0..BUFFER_SIZE {
@@ -1199,7 +1079,34 @@ mod generic {
         }
         field_offsets.fields.set_len(field_base as usize);
         newline_offsets.fields.set_len(newline_base as usize);
-        start_ws
+        state
+    }
+
+    pub unsafe fn find_indexes_csv<V: Vector>(
+        buf: &[u8],
+        offsets: &mut Offsets,
+        prev_iter_inside_quote: u64, /*start at 0*/
+        prev_iter_cr_end: u64,       /*start at 0*/
+    ) -> (u64, u64) {
+        let f = |(mut prev_iter_inside_quote, mut prev_iter_cr_end), buf| {
+            let inp = V::fill_input(buf);
+            let (quote_mask, quote_locs) = inp.find_quote_mask(&mut prev_iter_inside_quote);
+            let sep = inp.cmp_mask_against_input(b',');
+            let esc = inp.cmp_mask_against_input(b'\\');
+
+            let cr = inp.cmp_mask_against_input(0x0d);
+            let cr_adjusted = cr.wrapping_shl(1) | prev_iter_cr_end;
+            let lf = inp.cmp_mask_against_input(0x0a);
+            // Allow for either \r\n or \n.
+            let end = (lf & cr_adjusted) | lf;
+            prev_iter_cr_end = cr.wrapping_shr(63);
+            // NB: for now, NL is going to be unused for csv
+            // Don't use NL here for now
+            // let nl = end & !quote_mask;
+            let mask = ((sep | cr | end) & !quote_mask) | (esc & quote_mask) | quote_locs;
+            ((prev_iter_inside_quote, prev_iter_cr_end), mask, 0)
+        };
+        find_indexes::<V, _, _>(buf, offsets, (prev_iter_inside_quote, prev_iter_cr_end), f)
     }
 
     pub unsafe fn find_indexes_tsv<V: Vector>(
@@ -1214,9 +1121,36 @@ mod generic {
             let sep = inp.cmp_against_input(b'\t');
             let esc = inp.cmp_against_input(b'\\');
             let lf = inp.cmp_against_input(b'\n');
-            sep.or(esc).or(lf).mask()
+            (sep.or(esc).or(lf).mask(), 0)
         });
         (0, 0)
+    }
+
+    pub unsafe fn find_indexes_unquoted<V: Vector, F: Fn(*const u8) -> (u64, u64)>(
+        buf: &[u8],
+        offsets: &mut Offsets,
+        f: F,
+    ) -> (u64, u64) {
+        find_indexes::<V, _, _>(buf, offsets, (), |(), buf| {
+            let (rel, nl) = f(buf);
+            ((), rel, nl)
+        });
+        (0, 0)
+    }
+
+    // Unlike the other find_indexes methods, splitting by ASCII whitespace involves emitting two
+    // streams of offsets: once for newlines and one for field boundaries (encapsulated in
+    // WhitespaceOffsets). Other than that, the basic structure is the same.
+    pub unsafe fn find_indexes_ascii_whitespace<V: Vector>(
+        buf: &[u8],
+        offsets: &mut WhitespaceOffsets,
+        start_ws: u64, /*start at 1*/
+    ) -> u64 /*next start ws*/ {
+        find_indexes::<V, _, _>(buf, &mut offsets.0, start_ws, |start_ws, buf| {
+            let inp = V::fill_input(buf);
+            let (ws, nl, next_start) = inp.whitespace_masks(start_ws);
+            (next_start, ws, nl)
+        })
     }
 
     pub unsafe fn find_indexes_byte<V: Vector>(
@@ -1229,7 +1163,7 @@ mod generic {
             let inp = V::fill_input(ptr);
             let fs = inp.cmp_against_input(field_sep);
             let rs = inp.cmp_against_input(record_sep);
-            fs.or(rs).mask()
+            (fs.or(rs).mask(), rs.mask())
         });
     }
 }
@@ -1496,6 +1430,9 @@ where
     fn check_utf8(&self) -> bool {
         self.check_utf8
     }
+    fn wait(&self) -> bool {
+        ByteReaderBase::wait(self)
+    }
     fn request_handles(&self, size: usize) -> Vec<Box<dyn FnOnce() -> Self + Send>> {
         let producers = self.prod.try_dyn_resize(size);
         let mut res = Vec::with_capacity(producers.len());
@@ -1579,6 +1516,7 @@ pub trait ByteReaderBase {
         fields: &'a mut Vec<Str<'static>>,
     ) -> (Str<'static>, /*bytes consumed*/ usize);
     fn cur_chunk_version(&self) -> u32;
+    fn wait(&self) -> bool;
 }
 
 fn refresh_buf_impl<T, P: ChunkProducer<Chunk = OffsetChunk<T>>>(
@@ -1639,7 +1577,10 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
         refresh_buf_impl(self)
     }
     fn maybe_done(&self) -> bool {
-        self.cur_chunk.off.start == self.cur_chunk.off.fields.len()
+        self.cur_chunk.off.rel.start == self.cur_chunk.off.rel.fields.len()
+    }
+    fn wait(&self) -> bool {
+        self.prod.wait()
     }
     fn read_line_inner<'a, 'b: 'a>(
         &'b mut self,
@@ -1667,32 +1608,48 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
         }
 
         let line_start = self.progress;
-        let bytes = &buf.as_bytes()[0..self.buf_len];
+        let max = self.used_fields.max_value() as usize;
         let offs = &mut self.cur_chunk.off;
-        for index in &offs.fields[offs.start..] {
-            let index = *index as usize;
+        let end = offs
+            .nl
+            .fields
+            .get(offs.nl.start)
+            .map(|x| *x as usize)
+            .unwrap_or(self.buf_len);
+        for index in &offs.rel.fields[offs.rel.start..] {
+            let mut index = *index as usize;
             debug_assert!(
                 index < self.buf_len,
                 "buf_len={} index={}, off.fields={:?}",
                 self.buf_len,
                 index,
-                &offs.fields[offs.start..]
+                &offs.rel.fields[offs.rel.start..]
             );
 
-            offs.start += 1;
-            let is_record_sep = *bytes.get_unchecked(index) == self.record_sep;
+            offs.rel.start += 1;
+            let mut is_record_sep = index == end;
             if !(is_record_sep && fields.len() == 0 && self.progress == index) {
                 // If we have a field of length 0, NF should be zero. This check fires when
                 // record_sep is the first offset we see for this line, and it occurs as the first
                 // character in the line.
                 fields.push(get_field!(index));
             }
+            if fields.len() == max {
+                let start_inc = gallop(&offs.rel.fields[offs.rel.start..], |ix| ix as usize <= end);
+                let len_inc = fields.len() + start_inc;
+                fields.resize_with(len_inc, Str::default);
+                offs.rel.start += start_inc;
+                index = end;
+                is_record_sep = true;
+            }
             self.progress = index + 1;
             if is_record_sep {
+                offs.nl.start += 1;
                 let line = get_field!(0, line_start, index);
                 return (line, self.progress - line_start);
             }
         }
+        offs.nl.start += 1;
         fields.push(get_field!(self.buf_len));
         self.progress = self.buf_len;
         let line = get_field!(0, line_start, self.buf_len);
@@ -1704,13 +1661,16 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
     fn cur_chunk_version(&self) -> u32 {
         self.cur_chunk.version
     }
+    fn wait(&self) -> bool {
+        self.prod.wait()
+    }
     fn refresh_buf(&mut self) -> Result<(bool, bool)> {
         refresh_buf_impl(self)
     }
     fn maybe_done(&self) -> bool {
         // TODO: This is a pretty gross check; we should see if we can streamline the ws.fields check.
-        self.cur_chunk.off.nl.start == self.cur_chunk.off.nl.fields.len()
-            && (self.cur_chunk.off.ws.start == self.cur_chunk.off.ws.fields.len()
+        self.cur_chunk.off.0.nl.start == self.cur_chunk.off.0.nl.fields.len()
+            && (self.cur_chunk.off.0.rel.start == self.cur_chunk.off.0.rel.fields.len()
                 || self.progress == self.buf_len)
     }
     fn read_line_inner<'a, 'b: 'a>(
@@ -1738,7 +1698,7 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             };
         }
         let line_start = self.progress;
-        let offs_nl = &mut self.cur_chunk.off.nl;
+        let offs_nl = &mut self.cur_chunk.off.0.nl;
         let record_end = if offs_nl.start == offs_nl.fields.len() {
             self.buf_len
         } else {
@@ -1767,18 +1727,18 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
         //    `fields` vector if they're present in used_fields.
         // 2. We are at the end of the input, in which case we take from the start offset to the
         //    end of the buffer.
-        let mut iter = self.cur_chunk.off.ws.fields[self.cur_chunk.off.ws.start..]
+        let mut iter = self.cur_chunk.off.0.rel.fields[self.cur_chunk.off.0.rel.start..]
             .iter()
             .cloned()
             .map(|x| x as usize)
             .take_while(|x| x <= &record_end);
         while let Some(field_start) = iter.next() {
             self.progress = field_start;
-            self.cur_chunk.off.ws.start += 1;
+            self.cur_chunk.off.0.rel.start += 1;
             if let Some(field_end) = iter.next() {
                 fields.push(get_field!(field_end));
                 self.progress = field_end + 1;
-                self.cur_chunk.off.ws.start += 1;
+                self.cur_chunk.off.0.rel.start += 1;
             } else if self.progress != record_end {
                 fields.push(get_field!(record_end));
             }
@@ -1791,6 +1751,35 @@ impl ByteReaderBase for ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<Whi
             (Str::default(), consumed)
         }
     }
+}
+
+// adapted from Frank McSherry:
+// https://github.com/frankmcsherry/blog/blob/master/posts/2018-05-19.md
+
+fn gallop(slice: &[u64], mut cmp: impl FnMut(u64) -> bool) -> usize {
+    let mut res = 0;
+    // if empty slice, or already >= element, return
+    if slice.len() > res && cmp(slice[res]) {
+        let mut step = 1;
+        while res + step < slice.len() && cmp(slice[res + step]) {
+            res += step;
+            step = step << 1;
+        }
+
+        step = step >> 1;
+        while step > 0 {
+            if step + res < slice.len() && cmp(slice[res + step]) {
+                res += step;
+            }
+            step = step >> 1;
+        }
+        res += 1; // advance one, as we always stayed < value
+    }
+
+    // TODO: experiment with doing just one round of the doubling/halving, and then doing a linear
+    // search thereafter. Most rows where this matters will have a pretty small number of columns
+
+    return res;
 }
 
 #[cfg(test)]
@@ -1810,10 +1799,11 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         assert_eq!(in_quote, 0);
         assert_eq!(in_cr, 0);
         assert_eq!(
-            &offsets.fields[..],
+            &offsets.rel.fields[..],
             &[4, 7, 8, 36, 37, 41, 50, 57, 58, 92, 93],
             "offset_fields={:?}",
             offsets
+                .rel
                 .fields
                 .iter()
                 .cloned()
