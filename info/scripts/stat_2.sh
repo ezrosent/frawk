@@ -48,7 +48,7 @@ PARALLEL_FRAWK_SCRIPT='function min(x,y) { return x<y?x:y; }
 function max(x,y) { return x<y?y:x; }
 function step_stddev(x, k,  xa2) { xa2 = (x - A) * (x - A); A = A + (x-A)/k; Q=Q+((k-1)/k)*xa2; }
 BEGIN {
-    getline;
+    getline; 
     h2 = $5; h1 = $6;
 }
 {
@@ -95,24 +95,23 @@ PREPARE {
     }
 }
 END {
-    n_pids = length(records)
-    for (i=1; i<=n_pids; i++) {
-        min1 = min(min1, min1M[i])
-        min2 = min(min2, min2M[i])
-        min1L = min(min1L, min1lM[i]);
-        min2L = min(min2L, min2lM[i]);
+      for (pid in records) {
+        min1 = min(min1, min1M[pid])
+        min2 = min(min2, min2M[pid])
+        min1L = min(min1L, min1lM[pid]);
+        min2L = min(min2L, min2lM[pid]);
 
-        max1 = max(max1, max1M[i])
-        max2 = max(max2, max2M[i])
-        max1L = max(max1L, max1lM[i]);
-        max2L = max(max2L, max2lM[i]);
+        max1 = max(max1, max1M[pid])
+        max2 = max(max2, max2M[pid])
+        max1L = max(max1L, max1lM[pid]);
+        max2L = max(max2L, max2lM[pid]);
     }
 
-    for (i=1; i<=n_pids; i++) {
-        nb = records[i]
-        sb = sums[i]
+    for (pid in records) {
+        nb = records[pid]
+        sb = sums[pid]
         mb = sb / nb
-        m2b = m2s[i]
+        m2b = m2s[pid]
         if (i == 1) {
             na = nb; ma = mb; sa = sb; m2a = m2b;
         } else {
@@ -143,14 +142,14 @@ for i in {1..5}; do
     set -x
     time $MAWK -F'\t' -f "$SCRIPT_FILE" "${TSV2}"
     time $GAWK -F'\t' -f "$SCRIPT_FILE" "${TSV2}"
-    time $FRAWK -bllvm -itsv -f "$SCRIPT_FILE" "${TSV2}"
+    time $FRAWK -bllvm -F'\t' -f "$SCRIPT_FILE" "${TSV2}"
     time $FRAWK -bllvm -icsv -f "$SCRIPT_FILE" "${CSV2}"
-    time $FRAWK -bllvm -pr -j3 -itsv -f "$PARALLEL_SCRIPT_FILE" "${TSV2}"
-    time $FRAWK -bllvm -pr -j3 -icsv -f "$PARALLEL_SCRIPT_FILE" "${CSV2}"
-    time $FRAWK -bcranelift -itsv -f "$SCRIPT_FILE" "${TSV2}"
+    time $FRAWK -bllvm -pr  -F'\t' -f "$PARALLEL_SCRIPT_FILE" "${TSV2}"
+    time $FRAWK -bllvm -pr  -icsv -f "$PARALLEL_SCRIPT_FILE" "${CSV2}"
+    time $FRAWK -bcranelift -F'\t' -f "$SCRIPT_FILE" "${TSV2}"
     time $FRAWK -bcranelift -icsv -f "$SCRIPT_FILE" "${CSV2}"
-    time $FRAWK -bcranelift -pr -j3 -itsv -f "$PARALLEL_SCRIPT_FILE" "${TSV2}"
-    time $FRAWK -bcranelift -pr -j3 -icsv -f "$PARALLEL_SCRIPT_FILE" "${CSV2}"
+    time $FRAWK -bcranelift -pr  -F'\t' -f "$PARALLEL_SCRIPT_FILE" "${TSV2}"
+    time $FRAWK -bcranelift -pr  -icsv -f "$PARALLEL_SCRIPT_FILE" "${CSV2}"
     time $XSV stats -s5,6 "${CSV2}"
     time $XSV stats -s5,6 -d'\t' "${TSV2}"
     # caveate: doing a lot less work here.

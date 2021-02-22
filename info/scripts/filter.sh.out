@@ -1,330 +1,330 @@
 + ../mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m10.412s
-user	0m8.960s
-sys	0m1.452s
+real	0m10.685s
+user	0m9.173s
+sys	0m1.438s
 + ../mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m10.768s
-user	0m9.440s
-sys	0m1.328s
+real	0m10.476s
+user	0m8.992s
+sys	0m1.484s
 + ../gawk -b -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m9.542s
-user	0m8.171s
-sys	0m1.372s
+real	0m9.555s
+user	0m8.379s
+sys	0m1.176s
 + ../gawk -b '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m9.659s
-user	0m8.343s
-sys	0m1.316s
+real	0m9.700s
+user	0m8.408s
+sys	0m1.292s
 + ../frawk -bllvm -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m7.756s
-user	0m6.767s
-sys	0m1.369s
-+ ../frawk -bllvm -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+real	0m5.167s
+user	0m4.453s
+sys	0m1.047s
++ ../frawk -bllvm '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m7.441s
-user	0m6.425s
-sys	0m1.421s
-+ ../frawk -bllvm -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+real	0m4.845s
+user	0m3.783s
+sys	0m1.389s
++ ../frawk -bllvm -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m4.937s
-user	0m14.629s
-sys	0m3.740s
-+ ../frawk -bllvm -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+real	0m4.656s
+user	0m8.121s
+sys	0m1.592s
++ ../frawk -bllvm '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m4.448s
-user	0m13.665s
-sys	0m3.185s
+real	0m4.087s
+user	0m7.138s
+sys	0m1.354s
 + ../frawk -bcranelift -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m8.130s
-user	0m7.286s
+real	0m5.435s
+user	0m4.468s
+sys	0m1.293s
++ ../frawk -bcranelift '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.930s
+user	0m3.851s
+sys	0m1.405s
++ ../frawk -bcranelift -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m4.300s
+user	0m9.538s
+sys	0m2.832s
++ ../frawk -bcranelift '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.652s
+user	0m10.715s
+sys	0m3.028s
++ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
+
+real	0m3.379s
+user	0m2.651s
+sys	0m0.728s
++ set +x
++ ../mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m10.354s
+user	0m8.929s
+sys	0m1.424s
++ ../mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m10.206s
+user	0m9.057s
+sys	0m1.148s
++ ../gawk -b -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m9.621s
+user	0m8.332s
+sys	0m1.288s
++ ../gawk -b '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m9.351s
+user	0m8.403s
+sys	0m0.948s
++ ../frawk -bllvm -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m5.538s
+user	0m4.434s
+sys	0m1.429s
++ ../frawk -bllvm '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.525s
+user	0m3.806s
+sys	0m1.073s
++ ../frawk -bllvm -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m4.508s
+user	0m7.978s
+sys	0m1.409s
++ ../frawk -bllvm '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.989s
+user	0m10.610s
+sys	0m3.441s
++ ../frawk -bcranelift -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m5.530s
+user	0m4.623s
+sys	0m1.231s
++ ../frawk -bcranelift '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.781s
+user	0m3.781s
+sys	0m1.341s
++ ../frawk -bcranelift -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m4.553s
+user	0m8.258s
 sys	0m1.283s
-+ ../frawk -bcranelift -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
++ ../frawk -bcranelift '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m7.477s
-user	0m6.483s
-sys	0m1.370s
-+ ../frawk -bcranelift -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m5.067s
-user	0m14.286s
-sys	0m3.832s
-+ ../frawk -bcranelift -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.825s
-user	0m13.952s
-sys	0m3.840s
+real	0m4.567s
+user	0m10.617s
+sys	0m2.892s
 + ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
 
-real	0m3.885s
-user	0m2.885s
-sys	0m1.001s
+real	0m3.402s
+user	0m2.677s
+sys	0m0.725s
 + set +x
 + ../mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m10.245s
-user	0m8.865s
-sys	0m1.380s
+real	0m10.498s
+user	0m9.057s
+sys	0m1.440s
 + ../mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m10.939s
-user	0m9.463s
-sys	0m1.476s
+real	0m10.289s
+user	0m9.100s
+sys	0m1.188s
 + ../gawk -b -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m9.552s
-user	0m8.124s
-sys	0m1.428s
+real	0m9.640s
+user	0m8.324s
+sys	0m1.316s
 + ../gawk -b '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m9.568s
-user	0m8.340s
-sys	0m1.228s
+real	0m9.405s
+user	0m8.408s
+sys	0m0.996s
 + ../frawk -bllvm -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m7.743s
-user	0m6.764s
-sys	0m1.386s
-+ ../frawk -bllvm -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+real	0m5.590s
+user	0m4.664s
+sys	0m1.270s
++ ../frawk -bllvm '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m7.473s
-user	0m6.529s
-sys	0m1.327s
-+ ../frawk -bllvm -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+real	0m4.548s
+user	0m3.813s
+sys	0m1.089s
++ ../frawk -bllvm -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m5.097s
-user	0m14.185s
-sys	0m4.086s
-+ ../frawk -bllvm -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+real	0m4.482s
+user	0m7.727s
+sys	0m1.402s
++ ../frawk -bllvm '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m4.371s
-user	0m13.666s
-sys	0m3.115s
+real	0m5.042s
+user	0m11.361s
+sys	0m4.278s
 + ../frawk -bcranelift -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m7.673s
-user	0m6.642s
-sys	0m1.379s
-+ ../frawk -bcranelift -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m7.568s
-user	0m6.600s
-sys	0m1.347s
-+ ../frawk -bcranelift -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.875s
-user	0m13.735s
-sys	0m3.954s
-+ ../frawk -bcranelift -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.368s
-user	0m13.455s
-sys	0m3.187s
-+ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
-
-real	0m3.494s
-user	0m2.693s
-sys	0m0.800s
-+ set +x
-+ ../mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m10.202s
-user	0m8.978s
-sys	0m1.224s
-+ ../mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m10.910s
-user	0m9.406s
-sys	0m1.504s
-+ ../gawk -b -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m9.509s
-user	0m8.133s
-sys	0m1.376s
-+ ../gawk -b '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m9.506s
-user	0m8.170s
-sys	0m1.336s
-+ ../frawk -bllvm -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m7.695s
-user	0m6.693s
-sys	0m1.372s
-+ ../frawk -bllvm -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m7.676s
-user	0m6.791s
-sys	0m1.268s
-+ ../frawk -bllvm -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+real	0m5.574s
+user	0m4.522s
+sys	0m1.366s
++ ../frawk -bcranelift '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
 real	0m4.792s
-user	0m14.150s
-sys	0m3.602s
-+ ../frawk -bllvm -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+user	0m3.919s
+sys	0m1.220s
++ ../frawk -bcranelift -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
 
-real	0m4.403s
-user	0m13.394s
-sys	0m3.368s
-+ ../frawk -bcranelift -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m8.794s
-user	0m7.776s
-sys	0m1.452s
-+ ../frawk -bcranelift -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m7.677s
-user	0m6.637s
-sys	0m1.426s
-+ ../frawk -bcranelift -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.634s
-user	0m13.617s
-sys	0m3.595s
-+ ../frawk -bcranelift -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.762s
-user	0m13.689s
-sys	0m3.721s
-+ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
-
-real	0m3.898s
-user	0m2.845s
-sys	0m1.053s
-+ set +x
-+ ../mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m10.324s
-user	0m9.076s
-sys	0m1.248s
-+ ../mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m10.567s
-user	0m9.167s
-sys	0m1.400s
-+ ../gawk -b -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m9.430s
-user	0m8.109s
-sys	0m1.320s
-+ ../gawk -b '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m9.572s
-user	0m8.356s
-sys	0m1.216s
-+ ../frawk -bllvm -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m7.632s
-user	0m6.675s
-sys	0m1.348s
-+ ../frawk -bllvm -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m7.772s
-user	0m6.717s
-sys	0m1.417s
-+ ../frawk -bllvm -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m5.493s
-user	0m14.500s
-sys	0m4.397s
-+ ../frawk -bllvm -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.739s
-user	0m13.593s
-sys	0m3.748s
-+ ../frawk -bcranelift -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m7.737s
-user	0m6.715s
-sys	0m1.419s
-+ ../frawk -bcranelift -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m7.703s
-user	0m6.760s
-sys	0m1.330s
-+ ../frawk -bcranelift -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m5.215s
-user	0m14.675s
-sys	0m3.832s
-+ ../frawk -bcranelift -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.314s
-user	0m13.255s
-sys	0m3.168s
-+ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
-
-real	0m3.731s
-user	0m2.677s
-sys	0m1.053s
-+ set +x
-+ ../mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m10.211s
-user	0m8.807s
-sys	0m1.404s
-+ ../mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m10.364s
-user	0m8.955s
+real	0m4.461s
+user	0m7.906s
 sys	0m1.409s
-+ ../gawk -b -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
++ ../frawk -bcranelift '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
 
-real	0m9.423s
-user	0m8.158s
-sys	0m1.265s
-+ ../gawk -b '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m11.008s
-user	0m9.656s
-sys	0m1.352s
-+ ../frawk -bllvm -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m7.621s
-user	0m6.653s
-sys	0m1.360s
-+ ../frawk -bllvm -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m7.473s
-user	0m6.515s
-sys	0m1.335s
-+ ../frawk -bllvm -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m4.960s
-user	0m14.270s
-sys	0m3.671s
-+ ../frawk -bllvm -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.841s
-user	0m13.964s
-sys	0m3.767s
-+ ../frawk -bcranelift -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m7.653s
-user	0m6.640s
-sys	0m1.416s
-+ ../frawk -bcranelift -itsv '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m7.714s
-user	0m6.706s
-sys	0m1.397s
-+ ../frawk -bcranelift -icsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
-
-real	0m5.086s
-user	0m14.498s
-sys	0m3.873s
-+ ../frawk -bcranelift -itsv -pr -j3 '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
-
-real	0m4.132s
-user	0m13.046s
-sys	0m3.051s
+real	0m3.616s
+user	0m8.541s
+sys	0m2.284s
 + ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
 
-real	0m3.482s
-user	0m2.601s
-sys	0m0.881s
+real	0m3.795s
+user	0m2.815s
+sys	0m0.980s
++ set +x
++ ../mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m10.101s
+user	0m8.936s
+sys	0m1.164s
++ ../mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m10.627s
+user	0m9.126s
+sys	0m1.500s
++ ../gawk -b -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m9.398s
+user	0m8.385s
+sys	0m1.012s
++ ../gawk -b '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m9.660s
+user	0m8.296s
+sys	0m1.364s
++ ../frawk -bllvm -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m5.169s
+user	0m4.455s
+sys	0m1.050s
++ ../frawk -bllvm '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.883s
+user	0m3.946s
+sys	0m1.276s
++ ../frawk -bllvm -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m4.671s
+user	0m7.904s
+sys	0m1.715s
++ ../frawk -bllvm '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m3.925s
+user	0m8.828s
+sys	0m2.894s
++ ../frawk -bcranelift -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m5.528s
+user	0m4.592s
+sys	0m1.249s
++ ../frawk -bcranelift '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.851s
+user	0m3.875s
+sys	0m1.311s
++ ../frawk -bcranelift -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m4.367s
+user	0m9.699s
+sys	0m2.523s
++ ../frawk -bcranelift '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.283s
+user	0m10.207s
+sys	0m2.675s
++ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
+
+real	0m3.443s
+user	0m2.638s
+sys	0m0.805s
++ set +x
++ ../mawk -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m10.572s
+user	0m9.044s
+sys	0m1.528s
++ ../mawk '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m10.321s
+user	0m9.245s
+sys	0m1.076s
++ ../gawk -b -F, '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m9.599s
+user	0m8.260s
+sys	0m1.329s
++ ../gawk -b '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m9.392s
+user	0m8.300s
+sys	0m1.092s
++ ../frawk -bllvm -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m5.436s
+user	0m4.398s
+sys	0m1.363s
++ ../frawk -bllvm '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.516s
+user	0m4.015s
+sys	0m0.853s
++ ../frawk -bllvm -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m4.387s
+user	0m9.587s
+sys	0m2.629s
++ ../frawk -bllvm '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m3.871s
+user	0m8.828s
+sys	0m2.318s
++ ../frawk -bcranelift -icsv '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m5.282s
+user	0m4.650s
+sys	0m0.959s
++ ../frawk -bcranelift '-F\t' '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m4.930s
+user	0m3.970s
+sys	0m1.294s
++ ../frawk -bcranelift -icsv -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.csv
+
+real	0m5.253s
+user	0m10.951s
+sys	0m3.412s
++ ../frawk -bcranelift '-F\t' -pr '$4 > 0.000024 && $16 > 0.3' ../all_train.tsv
+
+real	0m3.648s
+user	0m8.496s
+sys	0m2.444s
++ ../bin/tsv-filter -H --gt 4:0.000025 --gt 16:0.3 ../all_train.tsv
+
+real	0m3.395s
+user	0m2.627s
+sys	0m0.768s
 + set +x

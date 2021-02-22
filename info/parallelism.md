@@ -165,10 +165,10 @@ END {
 This script is no longer correct if it is run in parallel. In parallel, the
 aggregation rules dictate that it will simply return _a_ maximum value observed
 by one of the worker threads. To aggregate explicitly, worker threads are
-provided with a `PID` variable which takes on a positive integer value
-consecutively counting up from 1, with each thread receiving a unique `PID`.
-This, combined with the implicit aggregation for maps, lets us write an
-_explicit_ max aggregation.
+provided with a `PID` variable which takes on a positive integer value counting
+up from 1, with each thread receiving a unique `PID`. Note that `PID` values
+aren't always consecutive.  This, combined with the implicit aggregation for
+maps, lets us write an _explicit_ max aggregation.
 
 ```awk
 {

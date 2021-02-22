@@ -1,380 +1,380 @@
 + ../mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m9.673s
-user	0m8.505s
-sys	0m1.163s
+real	0m8.462s
+user	0m7.430s
+sys	0m1.030s
 + ../mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m9.816s
-user	0m8.354s
-sys	0m1.443s
+real	0m8.600s
+user	0m7.561s
+sys	0m1.037s
 + ../gawk -b -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m9.255s
-user	0m8.244s
-sys	0m1.007s
+real	0m7.911s
+user	0m7.040s
+sys	0m0.868s
 + ../gawk -b '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m9.208s
-user	0m8.216s
-sys	0m0.990s
+real	0m8.103s
+user	0m7.225s
+sys	0m0.877s
 + ../frawk -bllvm -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m4.128s
-user	0m3.426s
-sys	0m0.755s
-+ ../frawk -bllvm -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m3.790s
+user	0m3.252s
+sys	0m0.716s
++ ../frawk -bllvm '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m4.543s
-user	0m3.530s
-sys	0m0.796s
-+ ../frawk -bllvm -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+real	0m3.278s
+user	0m2.738s
+sys	0m0.689s
++ ../frawk -bllvm -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m2.731s
-user	0m7.972s
-sys	0m0.947s
-+ ../frawk -bllvm -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m2.112s
+user	0m7.608s
+sys	0m0.868s
++ ../frawk -bllvm '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m2.536s
-user	0m7.123s
-sys	0m0.963s
+real	0m1.794s
+user	0m4.709s
+sys	0m0.742s
 + ../frawk -bcranelift -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m4.238s
-user	0m3.615s
-sys	0m0.764s
-+ ../frawk -bcranelift -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m3.929s
+user	0m3.414s
+sys	0m0.701s
++ ../frawk -bcranelift '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m4.455s
-user	0m3.540s
-sys	0m0.777s
-+ ../frawk -bcranelift -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+real	0m3.309s
+user	0m2.762s
+sys	0m0.677s
++ ../frawk -bcranelift -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m2.984s
-user	0m7.926s
-sys	0m0.941s
-+ ../frawk -bcranelift -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m2.117s
+user	0m7.690s
+sys	0m0.883s
++ ../frawk -bcranelift '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m2.660s
-user	0m7.179s
-sys	0m0.983s
+real	0m1.921s
+user	0m6.913s
+sys	0m0.873s
 + xsv select 1,8,19 ../all_train.csv
 
-real	0m6.574s
-user	0m5.818s
-sys	0m0.741s
+real	0m5.423s
+user	0m4.776s
+sys	0m0.633s
 + xsv select '-d\t' 1,8,19 ../all_train.tsv
 
-real	0m6.503s
-user	0m5.761s
-sys	0m0.738s
+real	0m5.339s
+user	0m4.717s
+sys	0m0.621s
 + ../bin/tsv-select -f 1,8,19 ../all_train.tsv
 
-real	0m2.050s
-user	0m1.584s
-sys	0m0.457s
+real	0m2.049s
+user	0m1.595s
+sys	0m0.444s
 + set +x
 + ../mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m9.674s
-user	0m8.508s
-sys	0m1.163s
+real	0m8.615s
+user	0m7.569s
+sys	0m1.044s
 + ../mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m10.224s
-user	0m9.006s
-sys	0m1.213s
+real	0m8.463s
+user	0m7.451s
+sys	0m1.011s
 + ../gawk -b -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m9.492s
-user	0m8.462s
-sys	0m1.022s
+real	0m8.102s
+user	0m7.232s
+sys	0m0.865s
 + ../gawk -b '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m9.038s
-user	0m8.049s
-sys	0m0.985s
+real	0m8.032s
+user	0m7.150s
+sys	0m0.880s
 + ../frawk -bllvm -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m4.587s
-user	0m3.639s
-sys	0m0.785s
-+ ../frawk -bllvm -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m3.789s
+user	0m3.252s
+sys	0m0.711s
++ ../frawk -bllvm '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m4.391s
-user	0m3.493s
-sys	0m0.796s
-+ ../frawk -bllvm -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+real	0m3.239s
+user	0m2.699s
+sys	0m0.681s
++ ../frawk -bllvm -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m2.494s
-user	0m8.288s
-sys	0m0.994s
-+ ../frawk -bllvm -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m1.933s
+user	0m5.139s
+sys	0m0.728s
++ ../frawk -bllvm '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m2.215s
-user	0m7.384s
-sys	0m1.003s
+real	0m1.973s
+user	0m7.034s
+sys	0m0.888s
 + ../frawk -bcranelift -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m4.759s
-user	0m3.781s
-sys	0m0.781s
-+ ../frawk -bcranelift -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m3.870s
+user	0m3.342s
+sys	0m0.706s
++ ../frawk -bcranelift '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m4.317s
-user	0m3.550s
-sys	0m0.785s
-+ ../frawk -bcranelift -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+real	0m3.299s
+user	0m2.756s
+sys	0m0.675s
++ ../frawk -bcranelift -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m2.597s
-user	0m8.163s
-sys	0m0.990s
-+ ../frawk -bcranelift -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m1.886s
+user	0m5.059s
+sys	0m0.714s
++ ../frawk -bcranelift '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m2.266s
-user	0m7.357s
-sys	0m1.010s
+real	0m1.742s
+user	0m4.624s
+sys	0m0.718s
 + xsv select 1,8,19 ../all_train.csv
 
-real	0m6.455s
-user	0m5.715s
-sys	0m0.735s
+real	0m5.387s
+user	0m4.757s
+sys	0m0.629s
 + xsv select '-d\t' 1,8,19 ../all_train.tsv
 
-real	0m6.177s
-user	0m5.449s
+real	0m5.439s
+user	0m4.805s
+sys	0m0.632s
++ ../bin/tsv-select -f 1,8,19 ../all_train.tsv
+
+real	0m2.024s
+user	0m1.583s
+sys	0m0.439s
++ set +x
++ ../mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m8.653s
+user	0m7.598s
+sys	0m1.053s
++ ../mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m8.461s
+user	0m7.437s
+sys	0m1.023s
++ ../gawk -b -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m7.931s
+user	0m7.064s
+sys	0m0.863s
++ ../gawk -b '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m7.926s
+user	0m7.068s
+sys	0m0.857s
++ ../frawk -bllvm -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m3.770s
+user	0m3.226s
+sys	0m0.706s
++ ../frawk -bllvm '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m3.274s
+user	0m2.721s
+sys	0m0.694s
++ ../frawk -bllvm -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m1.951s
+user	0m5.187s
+sys	0m0.739s
++ ../frawk -bllvm '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m1.767s
+user	0m4.641s
 sys	0m0.725s
-+ ../bin/tsv-select -f 1,8,19 ../all_train.tsv
-
-real	0m2.098s
-user	0m1.623s
-sys	0m0.473s
-+ set +x
-+ ../mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m9.858s
-user	0m8.678s
-sys	0m1.178s
-+ ../mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m9.440s
-user	0m8.304s
-sys	0m1.134s
-+ ../gawk -b -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m8.787s
-user	0m7.830s
-sys	0m0.952s
-+ ../gawk -b '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m9.525s
-user	0m8.503s
-sys	0m1.019s
-+ ../frawk -bllvm -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m4.555s
-user	0m3.724s
-sys	0m0.793s
-+ ../frawk -bllvm -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m4.109s
-user	0m3.470s
-sys	0m0.769s
-+ ../frawk -bllvm -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m2.465s
-user	0m8.380s
-sys	0m1.005s
-+ ../frawk -bllvm -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m2.068s
-user	0m7.329s
-sys	0m0.978s
 + ../frawk -bcranelift -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m3.871s
-user	0m3.322s
-sys	0m0.698s
-+ ../frawk -bcranelift -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m3.811s
+user	0m3.291s
+sys	0m0.691s
++ ../frawk -bcranelift '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m3.741s
-user	0m3.178s
-sys	0m0.713s
-+ ../frawk -bcranelift -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+real	0m3.308s
+user	0m2.758s
+sys	0m0.682s
++ ../frawk -bcranelift -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m2.230s
-user	0m8.087s
-sys	0m0.946s
-+ ../frawk -bcranelift -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m2.109s
+user	0m7.625s
+sys	0m0.879s
++ ../frawk -bcranelift '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m1.969s
-user	0m7.049s
-sys	0m0.936s
+real	0m1.939s
+user	0m6.969s
+sys	0m0.888s
 + xsv select 1,8,19 ../all_train.csv
 
-real	0m6.496s
-user	0m5.679s
-sys	0m0.793s
+real	0m5.466s
+user	0m4.832s
+sys	0m0.632s
 + xsv select '-d\t' 1,8,19 ../all_train.tsv
 
-real	0m6.337s
-user	0m5.586s
-sys	0m0.749s
+real	0m5.335s
+user	0m4.716s
+sys	0m0.618s
 + ../bin/tsv-select -f 1,8,19 ../all_train.tsv
 
-real	0m2.172s
-user	0m1.680s
-sys	0m0.488s
+real	0m2.015s
+user	0m1.576s
+sys	0m0.438s
 + set +x
 + ../mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m10.100s
-user	0m8.870s
-sys	0m1.224s
+real	0m8.450s
+user	0m7.421s
+sys	0m1.028s
 + ../mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m10.631s
-user	0m9.279s
-sys	0m1.335s
+real	0m8.435s
+user	0m7.413s
+sys	0m1.021s
 + ../gawk -b -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m10.367s
-user	0m9.111s
-sys	0m1.225s
+real	0m7.926s
+user	0m7.042s
+sys	0m0.883s
 + ../gawk -b '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m9.898s
-user	0m8.725s
-sys	0m1.149s
+real	0m7.963s
+user	0m7.089s
+sys	0m0.872s
 + ../frawk -bllvm -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m4.322s
-user	0m3.665s
-sys	0m0.813s
-+ ../frawk -bllvm -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m3.787s
+user	0m3.243s
+sys	0m0.704s
++ ../frawk -bllvm '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m4.109s
-user	0m3.484s
-sys	0m0.796s
-+ ../frawk -bllvm -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+real	0m3.264s
+user	0m2.713s
+sys	0m0.684s
++ ../frawk -bllvm -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m2.166s
-user	0m7.785s
-sys	0m0.890s
-+ ../frawk -bllvm -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m1.947s
+user	0m5.178s
+sys	0m0.740s
++ ../frawk -bllvm '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m2.060s
-user	0m7.300s
-sys	0m0.957s
-+ ../frawk -bcranelift -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m4.443s
-user	0m3.829s
-sys	0m0.798s
-+ ../frawk -bcranelift -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m4.377s
-user	0m3.732s
-sys	0m0.832s
-+ ../frawk -bcranelift -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m2.193s
-user	0m7.943s
-sys	0m0.917s
-+ ../frawk -bcranelift -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m2.001s
-user	0m7.145s
-sys	0m0.952s
-+ xsv select 1,8,19 ../all_train.csv
-
-real	0m6.652s
-user	0m5.890s
-sys	0m0.758s
-+ xsv select '-d\t' 1,8,19 ../all_train.tsv
-
-real	0m6.665s
-user	0m5.888s
-sys	0m0.774s
-+ ../bin/tsv-select -f 1,8,19 ../all_train.tsv
-
-real	0m2.353s
-user	0m1.840s
-sys	0m0.512s
-+ set +x
-+ ../mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m11.042s
-user	0m9.715s
-sys	0m1.324s
-+ ../mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m11.158s
-user	0m9.750s
-sys	0m1.397s
-+ ../gawk -b -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m10.366s
-user	0m9.159s
-sys	0m1.186s
-+ ../gawk -b '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m10.183s
-user	0m8.999s
-sys	0m1.164s
-+ ../frawk -bllvm -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m4.501s
-user	0m3.848s
-sys	0m0.829s
-+ ../frawk -bllvm -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m4.191s
-user	0m3.549s
-sys	0m0.808s
-+ ../frawk -bllvm -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m2.324s
-user	0m8.273s
-sys	0m1.002s
-+ ../frawk -bllvm -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
-
-real	0m2.169s
-user	0m7.593s
-sys	0m1.057s
-+ ../frawk -bcranelift -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
-
-real	0m4.803s
-user	0m4.098s
+real	0m1.944s
+user	0m6.937s
 sys	0m0.871s
-+ ../frawk -bcranelift -itsv 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
++ ../frawk -bcranelift -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m4.209s
-user	0m3.574s
-sys	0m0.792s
-+ ../frawk -bcranelift -icsv -pr -j3 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+real	0m3.940s
+user	0m3.383s
+sys	0m0.722s
++ ../frawk -bcranelift '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
 
-real	0m2.385s
-user	0m8.479s
-sys	0m1.047s
-+ ../frawk -bcranelift -itsv -pr -j3 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+real	0m3.428s
+user	0m2.875s
+sys	0m0.685s
++ ../frawk -bcranelift -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
 
-real	0m2.089s
-user	0m7.425s
-sys	0m1.015s
+real	0m1.907s
+user	0m5.123s
+sys	0m0.724s
++ ../frawk -bcranelift '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m1.961s
+user	0m7.067s
+sys	0m0.904s
 + xsv select 1,8,19 ../all_train.csv
 
-real	0m6.250s
-user	0m5.507s
-sys	0m0.721s
+real	0m5.453s
+user	0m4.820s
+sys	0m0.632s
 + xsv select '-d\t' 1,8,19 ../all_train.tsv
 
-real	0m6.243s
-user	0m5.521s
-sys	0m0.719s
+real	0m5.376s
+user	0m4.746s
+sys	0m0.629s
 + ../bin/tsv-select -f 1,8,19 ../all_train.tsv
 
-real	0m2.250s
-user	0m1.749s
-sys	0m0.487s
+real	0m2.000s
+user	0m1.564s
+sys	0m0.434s
++ set +x
++ ../mawk -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m8.488s
+user	0m7.453s
+sys	0m1.033s
++ ../mawk '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m8.395s
+user	0m7.397s
+sys	0m0.997s
++ ../gawk -b -F, 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m7.882s
+user	0m7.020s
+sys	0m0.860s
++ ../gawk -b '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m7.915s
+user	0m7.059s
+sys	0m0.855s
++ ../frawk -bllvm -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m3.785s
+user	0m3.241s
+sys	0m0.698s
++ ../frawk -bllvm '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m3.304s
+user	0m2.745s
+sys	0m0.702s
++ ../frawk -bllvm -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m2.122s
+user	0m7.642s
+sys	0m0.883s
++ ../frawk -bllvm '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m1.781s
+user	0m4.675s
+sys	0m0.730s
++ ../frawk -bcranelift -icsv 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m3.954s
+user	0m3.399s
+sys	0m0.721s
++ ../frawk -bcranelift '-F\t' 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m3.299s
+user	0m2.756s
+sys	0m0.676s
++ ../frawk -bcranelift -icsv -pr 'BEGIN { OFS="," } { print $1,$8,$19 }' ../all_train.csv
+
+real	0m2.116s
+user	0m7.707s
+sys	0m0.887s
++ ../frawk -bcranelift '-F\t' -pr 'BEGIN { OFS="\t" } { print $1,$8,$19 }' ../all_train.tsv
+
+real	0m1.776s
+user	0m4.706s
+sys	0m0.746s
++ xsv select 1,8,19 ../all_train.csv
+
+real	0m5.404s
+user	0m4.776s
+sys	0m0.626s
++ xsv select '-d\t' 1,8,19 ../all_train.tsv
+
+real	0m5.343s
+user	0m4.718s
+sys	0m0.624s
++ ../bin/tsv-select -f 1,8,19 ../all_train.tsv
+
+real	0m2.017s
+user	0m1.579s
+sys	0m0.437s
 + set +x

@@ -1153,7 +1153,6 @@ mod generic {
         })
     }
 
-
     pub unsafe fn find_indexes_byte<V: Vector>(
         buf: &[u8],
         offsets: &mut Offsets,
