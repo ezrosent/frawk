@@ -318,6 +318,6 @@ if you find that the following are a serious hindrance:
   analysis](https://github.com/ezrosent/frawk/blob/master/src/input_taint.rs)
   that substantially limits the set of strings that can be passed to the shell.
   frawk also provides an escape hatch for cases where the input is trusted or
-  the analysis is to conservative: the `-A` flag opts users out of the taint
+  the analysis is too conservative: the `-A` flag opts users out of the taint
   analysis. I am open to feedback on extensions or modifications to this
   feature.
