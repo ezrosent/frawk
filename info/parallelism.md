@@ -1,12 +1,12 @@
 # Parallelism in frawk
 
-frawk provides a simple model allowing for many simple scripts to be run in
-parallel. One relatively unque aspect of frawk's implementation is that it can achieve
+frawk provides a rudamentary model of parallelism that can speed up many simple 
+scripts with little or no modifications. One relatively unique aspect of frawk's implementation is that it can achieve
 nontrivial speedups even when the input is only a single input file or stream.
 The first part of this doc explains the architecture that frawk uses to read
-formats like CSV in a parallel-friendly manner. Only a small amount of syntax
-was added to frawk to support parallel programming, but running a script in
-parallel can change the meaning of a script. The second portion provides an
+formats like CSV in a parallel-friendly manner. While simple aggregations do not need to be modified
+to successfully run in parallel, running a script in
+this mode _can_ change the meaning of a script. The second portion provides an
 overview of the semantics of a frawk script when it is run in parallel.
 
 > Note: frawk only supports parallel execution for CSV, TSV, scripts that only
@@ -104,9 +104,11 @@ of an input source:
 { print $2; }
 ```
 
-Suppose we knew we did not have to preserve the relative ordering of the input
-document's rows: rerunning this script with the `-pr` option will run this
-script in parallel. A similar benchmark in the [performance
+Running this script with the `-pr` option will run this
+script in parallel, with a dynamic number of worker threads each getting a roughly equal portion of the input.
+The output of the parallel script will be the same
+as an invocation without the `-pr` option up to a reordering of of the output rows.
+A similar workload in the [performance
 doc](https://github.com/ezrosent/frawk/blob/master/info/performance.md) gets
 close to a 2x speedup in record-oriented parallel mode, despite the fact that
 writes to output files are all serialized, and all input records come from a
@@ -134,14 +136,14 @@ END { print SUM }
 ```
 Or group-by's:
 ```awk
-{ HIST[$1}++ }
+{ HIST[$1]++ }
 END {
     for (k in HIST) {
         print k, HIST[k];
     }
 }
 ```
-Produce the same output when run in serial and parallel modes, with the usual
+Produce equivalent output when run in serial and parallel modes, with the usual
 caveats about map iteration ordering (undefined) and floating point addition
 (it is not associative).
 
@@ -190,7 +192,7 @@ END {
 }
 ```
 
-Because the continuous map references are both annoying to write and inefficient
+Because the repeated map references are both annoying to write and inefficient
 to execute, frawk has a `PREPARE` block which executes in the worker threads at
 the end of its input:
 
