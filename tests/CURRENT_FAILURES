@@ -1,0 +1,78 @@
+Slowly going through the cases where frawk and mawk produce different output.
+Most seem benign/WAI but there are probably some genuine failures here as well.
+
+    t_3_x
+string comparisons with numbers, in particular the number '1' is lexicographically greater than '1root...' ? 
+That, and float printing differences.
+
+    t_6
+seems to be float printing
+
+    t_6a
+    t_6b
+    t_8_x
+    t_8_y
+    t_NF
+    t_a
+    t_array
+    t_array1
+    t_avg
+    t_beginexit
+    t_beginnext
+    t_break1
+    t_break2
+    t_builtins
+    t_cat2
+    t_coerce2
+    t_cond
+    t_contin
+    t_e
+    t_else
+    t_exit
+    t_exit1
+    t_f1
+    t_f3
+    t_f_x
+    t_for3
+    t_format4
+    t_fun2
+    t_fun3
+    t_gsub
+    t_gsub1
+    t_gsub3
+    t_gsub4
+    t_i_x
+    t_if
+    t_in1
+    t_in2
+    t_in3
+    t_index
+    t_intest2
+    t_j_x
+    t_max
+    t_nameval
+    t_next
+    t_not
+    t_null0
+    t_pp
+    t_printf
+    t_randk
+    t_re5
+    t_rec
+    t_set0b
+    t_set2
+    t_split1
+    t_split2
+    t_split3
+    t_split4
+    t_split8
+    t_strcmp1
+    t_strnum
+    t_sub0
+    t_sub1
+    t_sub2
+    t_sub3
+    t_substr1
+    t_time
+    t_vf2
+    t_vf3
