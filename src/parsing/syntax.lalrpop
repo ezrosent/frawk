@@ -9,6 +9,7 @@ use crate::{
   runtime::{strtoi,strtod,hextoi},
   lexer::{self, Tok},
 };
+use bumpalo::{collections::Vec as BumpVec, Bump};
 
 grammar<'a, 'outer>(
   arena: &'a Arena<'outer>,
