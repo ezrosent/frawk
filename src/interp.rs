@@ -1142,6 +1142,20 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         key,
                         val,
                     } => self.store_map(*map_ty, *map, *key, *val),
+                    IncInt {
+                        map_ty,
+                        map,
+                        key,
+                        by,
+                        dst,
+                    } => self.inc_map_int(*map_ty, *map, *key, *by, *dst),
+                    IncFloat {
+                        map_ty,
+                        map,
+                        key,
+                        by,
+                        dst,
+                    } => self.inc_map_float(*map_ty, *map, *key, *by, *dst),
                     LoadVarStr(dst, var) => {
                         let s = self.core.vars.load_str(*var)?;
                         let dst = *dst;
@@ -1376,6 +1390,24 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             let v = self.get(val).clone();
             self.get(map).insert(k, v);
         });
+    }
+    fn inc_map_int(&mut self, map_ty: Ty, map: NumTy, key: NumTy, by: Reg<Int>, dst: NumTy) {
+        map_regs!(map_ty, map, key, dst, {
+            let k = self.get(key);
+            let m = self.get(map);
+            let by = self.get(by).clone();
+            let res = m.inc_int(k, by);
+            *self.get_mut(dst) = res;
+        })
+    }
+    fn inc_map_float(&mut self, map_ty: Ty, map: NumTy, key: NumTy, by: Reg<Float>, dst: NumTy) {
+        map_regs!(map_ty, map, key, dst, {
+            let k = self.get(key);
+            let m = self.get(map);
+            let by = self.get(by).clone();
+            let res = m.inc_float(k, by);
+            *self.get_mut(dst) = res;
+        })
     }
     fn len(&mut self, map_ty: Ty, map: NumTy, dst: NumTy) {
         let len = map_regs!(map_ty, map, self.get(map).len() as Int);

@@ -253,6 +253,20 @@ pub(crate) enum Instr<'a> {
         key: NumTy,
         val: NumTy,
     },
+    IncInt {
+        map_ty: Ty,
+        map: NumTy,
+        key: NumTy,
+        dst: NumTy,
+        by: Reg<Int>,
+    },
+    IncFloat {
+        map_ty: Ty,
+        map: NumTy,
+        key: NumTy,
+        dst: NumTy,
+        by: Reg<Float>,
+    },
     IterBegin {
         map_ty: Ty,
         dst: NumTy,
@@ -737,6 +751,30 @@ impl<'a> Instr<'a> {
                 f(*map, *map_ty);
                 f(*key, map_ty.key().unwrap());
                 f(*val, map_ty.val().unwrap());
+            }
+            IncInt {
+                map_ty,
+                map,
+                key,
+                dst,
+                by,
+            } => {
+                f(*map, *map_ty);
+                f(*key, map_ty.key().unwrap());
+                f(*dst, map_ty.val().unwrap());
+                by.accum(&mut f);
+            }
+            IncFloat {
+                map_ty,
+                map,
+                key,
+                dst,
+                by,
+            } => {
+                f(*map, *map_ty);
+                f(*key, map_ty.key().unwrap());
+                f(*dst, map_ty.val().unwrap());
+                by.accum(&mut f);
             }
             LoadVarStr(dst, _var) => dst.accum(&mut f),
             StoreVarStr(_var, src) => src.accum(&mut f),

@@ -187,6 +187,7 @@ impl Display for Function {
             SetFI => write!(f, "set-FI"),
             ToLower => write!(f, "tolower"),
             ToUpper => write!(f, "toupper"),
+            IncMap => write!(f, "inc_map"),
         }
     }
 }

@@ -1122,6 +1122,14 @@ where
             }
 
             AssignOp(Index(arr, ix), op, to) => {
+                if let ast::Binop::Plus = op {
+                    // We don't need in_cond here, it would seem, because there aren't
+                    // subexpressions which should be considered patterns.
+                    return self.convert_expr(
+                        &Expr::Call(Either::Right(builtins::Function::IncMap), vec![arr, ix, to]),
+                        current_open,
+                    );
+                }
                 return self.do_assign_index(
                     arr,
                     ix,
@@ -1137,7 +1145,7 @@ where
                         ))
                     },
                     current_open,
-                )
+                );
             }
             Assign(x, to) => {
                 let lit = match to {
@@ -1175,16 +1183,22 @@ where
                 let (next, post) = self.convert_expr(
                     &ast::Expr::AssignOp(
                         x,
+                        ast::Binop::Plus,
                         if *is_inc {
-                            ast::Binop::Plus
+                            &ast::Expr::ILit(1)
                         } else {
-                            ast::Binop::Minus
+                            &ast::Expr::ILit(-1)
                         },
-                        &ast::Expr::ILit(1),
                     ),
                     next,
                 )?;
-                return Ok((next, if *is_post { pre.unwrap() } else { post }));
+                if *is_post {
+                    // Anchor any computation we have to the AST
+                    self.add_stmt(next, PrimStmt::AsgnVar(Ident::unused(), post))?;
+                    return Ok((next, pre.unwrap()));
+                } else {
+                    return Ok((next, post));
+                }
             }
             ReadStdin => {
                 use builtins::Function::{ReadErrStdin, ReadLineStdinFused};

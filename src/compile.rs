@@ -1594,6 +1594,43 @@ impl<'a, 'b> View<'a, 'b> {
                 }),
                 _ => return err!("incorrect parameter types for Delete: {:?}", &conv_tys[..]),
             },
+            IncMap => {
+                if res_reg == UNUSED {
+                    res_reg = self.regs.stats.reg_of_ty(res_ty);
+                }
+                if !conv_tys[0].is_array()
+                    || conv_tys[0].val()? != res_ty
+                    || conv_tys[0].key()? != conv_tys[1]
+                {
+                    return err!(
+                        "IncMap called with malformed types: {:?} => {:?}",
+                        &conv_tys[..],
+                        dst_ty
+                    );
+                }
+                self.pushl(match conv_tys[2] {
+                    Ty::Int => LL::IncInt {
+                        map_ty: conv_tys[0],
+                        map: conv_regs[0],
+                        key: conv_regs[1],
+                        by: conv_regs[2].into(),
+                        dst: res_reg,
+                    },
+                    Ty::Float => LL::IncFloat {
+                        map_ty: conv_tys[0],
+                        map: conv_regs[0],
+                        key: conv_regs[1],
+                        by: conv_regs[2].into(),
+                        dst: res_reg,
+                    },
+                    _ => {
+                        return err!(
+                            "Incrementing map with non-numeric type: {:?}",
+                            &conv_tys[..]
+                        )
+                    }
+                })
+            }
             Clear => {
                 if conv_tys[0].is_array() {
                     self.pushl(LL::Clear {

@@ -335,6 +335,18 @@ pub(crate) mod boilerplate {
                 f(Key::MapKey(*map, *map_ty), Some(Key::Reg(*key, map_ty.key().unwrap())));
                 f(Key::MapVal(*map, *map_ty), Some(Key::Reg(*val, map_ty.val().unwrap())));
             }
+            IncInt { map_ty, map, key, dst, by } => {
+                let (reg, ty) = by.reflect();
+                f(Key::MapKey(*map, *map_ty), Some(Key::Reg(*key, map_ty.key().unwrap())));
+                f(Key::MapVal(*map, *map_ty), Some(Key::Reg(reg, ty)));
+                f(Key::Reg(*dst, map_ty.val().unwrap()), Some(Key::MapVal(*map, *map_ty)));
+            }
+            IncFloat { map_ty, map, key, dst, by } => {
+                let (reg, ty) = by.reflect();
+                f(Key::MapKey(*map, *map_ty), Some(Key::Reg(*key, map_ty.key().unwrap())));
+                f(Key::MapVal(*map, *map_ty), Some(Key::Reg(reg, ty)));
+                f(Key::Reg(*dst, map_ty.val().unwrap()), Some(Key::MapVal(*map, *map_ty)));
+            }
             IterBegin { map_ty, dst, map } => {
                 f(Key::Reg(*dst, map_ty.key_iter().unwrap()), Some(Key::MapKey(*map, *map_ty)))
             }
@@ -361,6 +373,7 @@ pub(crate) mod boilerplate {
             },
             StoreVarStr(v, src) => f(Key::Var(*v), Some(src.into())),
             StoreVarInt(v, src) => f(Key::Var(*v), Some(src.into())),
+            
             LoadSlot{ty,slot,dst} =>
                 f(Key::Reg(*dst, *ty), Some(Key::Slot(u32::try_from(*slot).expect("slot too large"), *ty))),
             StoreSlot{ty,slot,src} =>

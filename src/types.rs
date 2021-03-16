@@ -321,6 +321,15 @@ impl<T: Clone> TVar<T> {
     }
 }
 
+pub(crate) fn val_of(s: &State) -> Result<State> {
+    match s {
+        Some(TVar::Map { val, .. }) => Ok(Some(TVar::Scalar(val.clone()))),
+        None => Ok(None),
+        Some(TVar::Iter(_)) => err!("attempting to get value out of iterator state"),
+        Some(TVar::Scalar(_)) => err!("attempting to get value out of iterator scalar"),
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) enum Constraint<T> {
     // TODO(ezr): Better names for Key/KeyIn etc.
@@ -930,7 +939,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
 
 impl<'b, 'c, 'd> View<'b, 'c, 'd> {
     fn add_builtin_call(&mut self, f: builtins::Function, args: SmallVec<NodeIx>, to: NodeIx) {
-        f.feedback(&args[..], self);
+        f.feedback(&args[..], to, self);
         for arg in args.iter() {
             self.nw
                 .call_deps
