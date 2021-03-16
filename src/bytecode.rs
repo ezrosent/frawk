@@ -173,6 +173,8 @@ pub(crate) enum Instr<'a> {
         Reg<Int>,     /* end col */
         Reg<Str<'a>>, /* sep */
     ),
+    ToUpperAscii(Reg<Str<'a>>, Reg<Str<'a>>),
+    ToLowerAscii(Reg<Str<'a>>, Reg<Str<'a>>),
 
     // File reading.
     ReadErr(Reg<Int>, Reg<Str<'a>>, /*is_file=*/ bool),
@@ -644,6 +646,10 @@ impl<'a> Instr<'a> {
                 start.accum(&mut f);
                 end.accum(&mut f);
                 sep.accum(&mut f);
+            }
+            ToUpperAscii(dst, src) | ToLowerAscii(dst, src) => {
+                dst.accum(&mut f);
+                src.accum(&mut f);
             }
             SplitInt(flds, to_split, arr, pat) => {
                 flds.accum(&mut f);

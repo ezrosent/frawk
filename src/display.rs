@@ -185,6 +185,8 @@ impl Display for Function {
             System => write!(f, "system"),
             UpdateUsedFields => write!(f, "update_used_fields"),
             SetFI => write!(f, "set-FI"),
+            ToLower => write!(f, "tolower"),
+            ToUpper => write!(f, "toupper"),
         }
     }
 }

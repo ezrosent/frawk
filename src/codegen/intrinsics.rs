@@ -119,6 +119,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] join_csv(rt_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] join_tsv(rt_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] join_cols(rt_ty, int_ty, int_ty, str_ref_ty) -> str_ty;
+        [ReadOnly] to_upper_ascii(str_ref_ty) -> str_ty;
+        [ReadOnly] to_lower_ascii(str_ref_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
         split_str(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
@@ -637,6 +639,16 @@ pub(crate) unsafe extern "C" fn join_cols(
         }),
         "join_cols:"
     );
+    mem::transmute::<Str, U128>(res)
+}
+
+pub(crate) unsafe extern "C" fn to_upper_ascii(s: *mut U128) -> U128 {
+    let res = (&*(s as *mut Str as *const Str)).to_upper_ascii();
+    mem::transmute::<Str, U128>(res)
+}
+
+pub(crate) unsafe extern "C" fn to_lower_ascii(s: *mut U128) -> U128 {
+    let res = (&*(s as *mut Str as *const Str)).to_lower_ascii();
     mem::transmute::<Str, U128>(res)
 }
 

@@ -1496,6 +1496,16 @@ impl<'a, 'b> View<'a, 'b> {
                     self.pushl(LL::EscapeTSV(res_reg.into(), conv_regs[0].into()))
                 }
             }
+            ToUpper => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::ToUpperAscii(res_reg.into(), conv_regs[0].into()))
+                }
+            }
+            ToLower => {
+                if res_reg != UNUSED {
+                    self.pushl(LL::ToLowerAscii(res_reg.into(), conv_regs[0].into()))
+                }
+            }
             Substr => {
                 if res_reg != UNUSED {
                     self.pushl(LL::Substr(

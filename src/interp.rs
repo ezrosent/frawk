@@ -1022,6 +1022,14 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             self.line.join_cols(start, end, sep, nf, |s| s)?
                         };
                     }
+                    ToUpperAscii(dst, src) => {
+                        let res = index(&self.strs, src).to_upper_ascii();
+                        *index_mut(&mut self.strs, dst) = res;
+                    }
+                    ToLowerAscii(dst, src) => {
+                        let res = index(&self.strs, src).to_lower_ascii();
+                        *index_mut(&mut self.strs, dst) = res;
+                    }
                     SplitInt(flds, to_split, arr, pat) => {
                         // Index manually here to defeat the borrow checker.
                         let to_split = index(&self.strs, to_split);

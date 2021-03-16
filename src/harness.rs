@@ -836,6 +836,11 @@ it has one more line"#
 
     test_program!(single_stmt, r#"BEGIN {print "hello"}"#, "hello\n");
     test_program!(
+        to_lower_upper,
+        r#"BEGIN { print tolower("Hi1 there"), toupper("hI there"), tolower(tolower("hi there")); }"#,
+        "hi1 there HI THERE hi there\n"
+    );
+    test_program!(
         factorial,
         r#"BEGIN {
     fact=1

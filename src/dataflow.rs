@@ -290,6 +290,9 @@ pub(crate) mod boilerplate {
                 f(dst.into(), Some(y.into()));
                 f(dst.into(), Some(z.into()));
             }
+            ToUpperAscii(dst, src) | ToLowerAscii(dst, src) => {
+                f(dst.into(), Some(src.into()));
+            }
             ReadErr(dst, _cmd, _) => f(dst.into(), None),
             NextLine(dst, _cmd, _) => f(dst.into(), None),
             ReadErrStdin(dst) => f(dst.into(), None),
