@@ -89,6 +89,10 @@ _Unary Operators:_
 * `int(s)`: Convert `s` to an integer. Floating-point numbers are also converted
   (rounded down), potentially without a round-trip through a string
   representation.
+* `tolower(s)`: Returns a copy of `s` where all uppercase ASCII characters are
+  replaced with their lowercase counterparts; other characters are unchanged.
+* `toupper(s)`: Returns a copy of `s` where all lowercase ASCII characters are
+  replaced with their uppercase counterparts; other characters are unchanged.
 
 # Other Functions
 

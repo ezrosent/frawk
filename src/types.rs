@@ -397,12 +397,10 @@ impl Constraint<State> {
                 key: None,
                 val: None,
             })),
-            Constraint::ValIn(Some(TVar::Scalar(v))) => {
-                Ok(Some(TVar::Map {
-                    key: None,
-                    val: v.clone(),
-                }))
-            }
+            Constraint::ValIn(Some(TVar::Scalar(v))) => Ok(Some(TVar::Map {
+                key: None,
+                val: v.clone(),
+            })),
             Constraint::ValIn(op) => err!("Non-scalar ValIn constraint: {:?}", op),
 
             Constraint::Val(None) => Ok(None),
