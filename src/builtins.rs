@@ -294,6 +294,7 @@ impl Function {
                 let v = res;
                 ctx.nw.add_dep(k, arr, Constraint::KeyIn(()));
                 ctx.nw.add_dep(v, arr, Constraint::ValIn(()));
+                ctx.nw.add_dep(arr, v, Constraint::Val(()));
             }
             Function::Sub | Function::GSub => {
                 let out_str = args[2];
