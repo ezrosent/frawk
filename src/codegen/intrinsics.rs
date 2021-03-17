@@ -119,6 +119,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] join_csv(rt_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] join_tsv(rt_ty, int_ty, int_ty) -> str_ty;
         [ReadOnly] join_cols(rt_ty, int_ty, int_ty, str_ref_ty) -> str_ty;
+        [ReadOnly] to_upper_ascii(str_ref_ty) -> str_ty;
+        [ReadOnly] to_lower_ascii(str_ref_ty) -> str_ty;
         set_col(rt_ty, int_ty, str_ref_ty);
         split_int(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
         split_str(rt_ty, str_ref_ty, map_ty, str_ref_ty) -> int_ty;
@@ -186,6 +188,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         delete_intint(map_ty, int_ty);
         clear_intint(map_ty);
         drop_intint(map_ty);
+        inc_int_intint(map_ty, int_ty, int_ty) -> int_ty;
+        inc_float_intint(map_ty, int_ty, float_ty) -> int_ty;
 
         alloc_intfloat() -> map_ty;
         iter_intfloat(map_ty) -> iter_int_ty;
@@ -196,6 +200,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         delete_intfloat(map_ty, int_ty);
         clear_intfloat(map_ty);
         drop_intfloat(map_ty);
+        inc_int_intfloat(map_ty, int_ty, int_ty) -> float_ty;
+        inc_float_intfloat(map_ty, int_ty, float_ty) -> float_ty;
 
         alloc_intstr() -> map_ty;
         iter_intstr(map_ty) -> iter_int_ty;
@@ -206,6 +212,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         delete_intstr(map_ty, int_ty);
         clear_intstr(map_ty);
         drop_intstr(map_ty);
+        inc_int_intstr(map_ty, int_ty, int_ty) -> str_ty;
+        inc_float_intstr(map_ty, int_ty, float_ty) -> str_ty;
 
         alloc_strint() -> map_ty;
         iter_strint(map_ty) -> iter_str_ty;
@@ -216,6 +224,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         delete_strint(map_ty, str_ref_ty);
         clear_strint(map_ty);
         drop_strint(map_ty);
+        inc_int_strint(map_ty, str_ref_ty, int_ty) -> int_ty;
+        inc_float_strint(map_ty, str_ref_ty, float_ty) -> int_ty;
 
         alloc_strfloat() -> map_ty;
         iter_strfloat(map_ty) -> iter_str_ty;
@@ -226,6 +236,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         delete_strfloat(map_ty, str_ref_ty);
         clear_strfloat(map_ty);
         drop_strfloat(map_ty);
+        inc_int_strfloat(map_ty, str_ref_ty, int_ty) -> float_ty;
+        inc_float_strfloat(map_ty, str_ref_ty, float_ty) -> float_ty;
 
         alloc_strstr() -> map_ty;
         iter_strstr(map_ty) -> iter_str_ty;
@@ -236,6 +248,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         delete_strstr(map_ty, str_ref_ty);
         clear_strstr(map_ty);
         drop_strstr(map_ty);
+        inc_int_strstr(map_ty, str_ref_ty, int_ty) -> str_ty;
+        inc_float_strstr(map_ty, str_ref_ty, float_ty) -> str_ty;
 
         load_slot_int(rt_ty, int_ty) -> int_ty;
         load_slot_float(rt_ty, int_ty) -> float_ty;
@@ -637,6 +651,16 @@ pub(crate) unsafe extern "C" fn join_cols(
         }),
         "join_cols:"
     );
+    mem::transmute::<Str, U128>(res)
+}
+
+pub(crate) unsafe extern "C" fn to_upper_ascii(s: *mut U128) -> U128 {
+    let res = (&*(s as *mut Str as *const Str)).to_upper_ascii();
+    mem::transmute::<Str, U128>(res)
+}
+
+pub(crate) unsafe extern "C" fn to_lower_ascii(s: *mut U128) -> U128 {
+    let res = (&*(s as *mut Str as *const Str)).to_lower_ascii();
     mem::transmute::<Str, U128>(res)
 }
 
@@ -1252,6 +1276,7 @@ macro_rules! map_impl {
             }
 
             pub(crate) unsafe extern "C" fn [<lookup_ $ty>](map: *mut c_void, k: in_ty!($k)) -> out_ty!($v) {
+                // TODO: this should probably insert the value as well!
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
@@ -1296,6 +1321,24 @@ macro_rules! map_impl {
             pub(crate) unsafe extern "C" fn [<drop_ $ty>](map: *mut c_void) {
                 debug_assert!(!map.is_null());
                 drop_map_generic::<$k, $v>(map)
+            }
+
+            pub(crate) unsafe extern "C" fn [<inc_int_ $ty>](map: *mut c_void, k: in_ty!($k), by: Int) -> out_ty!($v) {
+                debug_assert!(!map.is_null());
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                let key = convert_in!($k, &k);
+                let res = map.inc_int(key, by);
+                mem::forget(map);
+                convert_out!($v, res)
+            }
+
+            pub(crate) unsafe extern "C" fn [<inc_float_ $ty>](map: *mut c_void, k: in_ty!($k), by: Float) -> out_ty!($v) {
+                debug_assert!(!map.is_null());
+                let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
+                let key = convert_in!($k, &k);
+                let res = map.inc_float(key, by);
+                mem::forget(map);
+                convert_out!($v, res)
             }
         }
     };

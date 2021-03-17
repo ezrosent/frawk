@@ -491,11 +491,11 @@ impl<T> Registry<T> {
     }
 }
 
+pub(crate) struct _Carrier;
+
 pub(crate) trait Convert<S, T> {
     fn convert(s: S) -> T;
 }
-
-pub(crate) struct _Carrier;
 
 impl Convert<Float, Int> for _Carrier {
     fn convert(f: Float) -> Int {
@@ -537,6 +537,38 @@ impl<'b, 'a> Convert<&'b Str<'a>, Float> for _Carrier {
 impl<'b, 'a> Convert<&'b Str<'a>, Int> for _Carrier {
     fn convert(s: &'b Str<'a>) -> Int {
         s.with_bytes(strtoi)
+    }
+}
+
+pub(crate) trait Inc {
+    fn inc_int(&mut self, by: Int);
+    fn inc_float(&mut self, by: Float);
+}
+
+impl Inc for Int {
+    fn inc_int(&mut self, by: Int) {
+        *self += by;
+    }
+    fn inc_float(&mut self, by: Float) {
+        *self += by as Int;
+    }
+}
+
+impl Inc for Float {
+    fn inc_int(&mut self, by: Int) {
+        *self += by as Float;
+    }
+    fn inc_float(&mut self, by: Float) {
+        *self += by;
+    }
+}
+
+impl<'a> Inc for Str<'a> {
+    fn inc_int(&mut self, by: Int) {
+        *self = convert::<_, Self>(convert::<_, Int>(self as &_) + by);
+    }
+    fn inc_float(&mut self, by: Float) {
+        *self = convert::<_, Self>(convert::<_, Float>(self as &_) + by);
     }
 }
 
@@ -602,6 +634,31 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
         #[cfg(not(debug_assertions))]
         {
             unsafe { &mut *self.0.as_ptr() }.clear();
+        }
+    }
+}
+
+impl<K: Hash + Eq + Clone, V: Inc + Default + Clone> SharedMap<K, V> {
+    pub(crate) fn inc_int(&self, k: &K, by: Int) -> V {
+        self.with_inserted(k, |kref| {
+            kref.inc_int(by);
+            kref.clone()
+        })
+    }
+
+    pub(crate) fn inc_float(&self, k: &K, by: Float) -> V {
+        self.with_inserted(k, |kref| {
+            kref.inc_float(by);
+            kref.clone()
+        })
+    }
+
+    fn with_inserted<R>(&self, k: &K, f: impl FnOnce(&mut V) -> R) -> R {
+        let mut slf = self.0.borrow_mut();
+        if let Some(k) = slf.get_mut(k) {
+            f(k)
+        } else {
+            f(slf.entry(k.clone()).or_insert(Default::default()))
         }
     }
 }

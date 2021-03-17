@@ -494,6 +494,41 @@ impl<'a> Str<'a> {
         res
     }
 
+    // TODO: SIMD implementations of to_upper and to_lower aren't too difficult to write;
+    // it's probably worth specializing these implementations with those if possible.
+
+    pub fn to_lower_ascii<'b>(&self) -> Str<'b> {
+        self.map_bytes(|b| match b {
+            b'A'..=b'Z' => b - b'A' + b'a',
+            _ => b,
+        })
+    }
+
+    pub fn to_upper_ascii<'b>(&self) -> Str<'b> {
+        self.map_bytes(|b| match b {
+            b'a'..=b'z' => b - b'a' + b'A',
+            _ => b,
+        })
+    }
+
+    fn map_bytes<'b>(&self, mut f: impl FnMut(u8) -> u8) -> Str<'b> {
+        self.with_bytes(|bs| {
+            if bs.len() <= MAX_INLINE_SIZE {
+                let mut buf = SmallVec::<[u8; MAX_INLINE_SIZE]>::with_capacity(bs.len());
+                for b in bs {
+                    buf.push(f(*b))
+                }
+                unsafe { Str::from_rep(Inline::from_unchecked(buf.as_slice()).into()) }
+            } else {
+                let mut buf = DynamicBufHeap::new(bs.len());
+                for b in bs {
+                    buf.push_byte(f(*b))
+                }
+                unsafe { buf.into_str() }
+            }
+        })
+    }
+
     pub fn subst_first(&self, pat: &Regex, subst: &Str<'a>) -> (Str<'a>, bool) {
         self.with_bytes(|s| {
             subst.with_bytes(|subst| {
@@ -980,6 +1015,25 @@ impl DynamicBufHeap {
         ) as *mut BufHeader;
         (*new_buf).size = new_cap;
         self.data.0 = new_buf;
+    }
+
+    fn push_byte(&mut self, b: u8) {
+        let cap = self.size();
+        debug_assert!(
+            cap >= self.write_head,
+            "cap={}, write_head={}",
+            cap,
+            self.write_head
+        );
+        let remaining = cap - self.write_head;
+        unsafe {
+            if remaining == 0 {
+                let new_cap = std::cmp::max(cap + 1, cap * 2);
+                self.realloc(new_cap);
+            }
+            *self.data.as_mut_ptr().offset(self.write_head as isize) = b;
+        };
+        self.write_head += 1;
     }
 }
 

@@ -321,6 +321,15 @@ impl<T: Clone> TVar<T> {
     }
 }
 
+pub(crate) fn val_of(s: &State) -> Result<State> {
+    match s {
+        Some(TVar::Map { val, .. }) => Ok(Some(TVar::Scalar(val.clone()))),
+        None => Ok(None),
+        Some(TVar::Iter(_)) => err!("attempting to get value out of iterator state"),
+        Some(TVar::Scalar(_)) => err!("attempting to get value out of iterator scalar"),
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) enum Constraint<T> {
     // TODO(ezr): Better names for Key/KeyIn etc.
@@ -930,7 +939,12 @@ impl<'b, 'c> TypeContext<'b, 'c> {
 
 impl<'b, 'c, 'd> View<'b, 'c, 'd> {
     fn add_builtin_call(&mut self, f: builtins::Function, args: SmallVec<NodeIx>, to: NodeIx) {
-        f.feedback(&args[..], self);
+        // We want to give feedback the opportunity to influence function arguments based on the
+        // return value of the function (this is used in IncMap specifically), but since `to` may
+        // be used in other places, we set up an additional node to soak up "return-specific
+        // information" for the builtin call.
+        let tmp_res = self.nw.add_rule(Rule::Var);
+        f.feedback(&args[..], tmp_res, self);
         for arg in args.iter() {
             self.nw
                 .call_deps
@@ -939,7 +953,10 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 .push(to);
         }
         let from = self.nw.base_node;
-        self.nw.add_dep(from, to, Constraint::CallBuiltin(args, f));
+        self.nw
+            .add_dep(from, tmp_res, Constraint::CallBuiltin(args, f));
+        self.nw.add_dep(tmp_res, to, Constraint::Flows(()));
+        self.nw.wl.insert(tmp_res);
         self.nw.wl.insert(to);
     }
     fn add_udf_call(&mut self, f: NumTy, args: SmallVec<NodeIx>, to: NodeIx) {
@@ -963,7 +980,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 let arr_ix = self.ident_node(arr);
                 let ix_ix = self.val_node(ix);
                 self.constrain_as_map(arr_ix);
-                // TODO(ezr): set up caching for keys, values of maps and iterators?
+                // TODO: set up caching for keys, values of maps and iterators?
                 self.nw.add_dep(ix_ix, arr_ix, Constraint::KeyIn(()));
                 let val_ix = self.nw.add_rule(Rule::Var);
                 self.nw.add_dep(val_ix, arr_ix, Constraint::ValIn(()));

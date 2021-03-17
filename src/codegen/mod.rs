@@ -529,6 +529,33 @@ pub(crate) trait CodeGenerator: Backend {
         Ok(())
     }
 
+    /// Increments the value in `map` at `key` (inserting a default value if necessary) by `by`
+    /// (either a float or int register), storing a copy of the value in `dst`.
+    fn inc_map(&mut self, map: Ref, key: Ref, by: Ref, dst: Ref) -> Result<()> {
+        use compile::Ty::*;
+        map_valid(map.1, key.1, dst.1)?;
+        let func = match (map.1, by.1) {
+            (MapIntInt, Int) => intrinsic!(inc_int_intint),
+            (MapIntFloat, Int) => intrinsic!(inc_int_intfloat),
+            (MapIntStr, Int) => intrinsic!(inc_int_intstr),
+            (MapStrInt, Int) => intrinsic!(inc_int_strint),
+            (MapStrFloat, Int) => intrinsic!(inc_int_strfloat),
+            (MapStrStr, Int) => intrinsic!(inc_int_strstr),
+            (MapIntInt, Float) => intrinsic!(inc_float_intint),
+            (MapIntFloat, Float) => intrinsic!(inc_float_intfloat),
+            (MapIntStr, Float) => intrinsic!(inc_float_intstr),
+            (MapStrInt, Float) => intrinsic!(inc_float_strint),
+            (MapStrFloat, Float) => intrinsic!(inc_float_strfloat),
+            (MapStrStr, Float) => intrinsic!(inc_float_strstr),
+            (_, x) => return err!("invalid increment type passed to inc_map: {:?}", x),
+        };
+        let mapv = self.get_val(map)?;
+        let keyv = self.get_val(key)?;
+        let byv = self.get_val(by)?;
+        let resv = self.call_intrinsic(func, &mut [mapv, keyv, byv])?;
+        self.bind_val(dst, resv)
+    }
+
     /// Wraps `call_intrinsic` for [`Op`]s that have two arguments and return a value.
     fn binop(&mut self, op: Op, dst: &impl Accum, l: &impl Accum, r: &impl Accum) -> Result<()> {
         let lv = self.get_val(l.reflect())?;
@@ -566,6 +593,8 @@ pub(crate) trait CodeGenerator: Backend {
             StrToFloat(fr, sr) => self.unop(intrinsic!(str_to_float), fr, sr),
             FloatToInt(ir, fr) => self.unop(Op::FloatToInt, ir, fr),
             IntToFloat(fr, ir) => self.unop(Op::IntToFloat, fr, ir),
+            ToLowerAscii(dst, src) => self.unop(intrinsic!(to_lower_ascii), dst, src),
+            ToUpperAscii(dst, src) => self.unop(intrinsic!(to_upper_ascii), dst, src),
             AddInt(res, l, r) => self.binop(op(Arith::Add, false), res, l, r),
             AddFloat(res, l, r) => self.binop(op(Arith::Add, true), res, l, r),
             MinusInt(res, l, r) => self.binop(op(Arith::Minus, false), res, l, r),
@@ -849,6 +878,30 @@ pub(crate) trait CodeGenerator: Backend {
                 (*map, *map_ty),
                 (*key, map_ty.key()?),
                 (*val, map_ty.val()?),
+            ),
+            IncInt {
+                map_ty,
+                map,
+                key,
+                dst,
+                by,
+            } => self.inc_map(
+                (*map, *map_ty),
+                (*key, map_ty.key()?),
+                by.reflect(),
+                (*dst, map_ty.val()?),
+            ),
+            IncFloat {
+                map_ty,
+                map,
+                key,
+                dst,
+                by,
+            } => self.inc_map(
+                (*map, *map_ty),
+                (*key, map_ty.key()?),
+                by.reflect(),
+                (*dst, map_ty.val()?),
             ),
             LoadVarStr(dst, var) => {
                 let rt = self.runtime_val();

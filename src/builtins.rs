@@ -50,6 +50,9 @@ pub enum Function {
     // For header-parsing logic
     UpdateUsedFields,
     SetFI,
+    ToUpper,
+    ToLower,
+    IncMap,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -226,6 +229,8 @@ static_map!(
     ["rand", Function::Rand],
     ["srand", Function::Srand],
     ["index", Function::SubstrIndex],
+    ["toupper", Function::ToUpper],
+    ["tolower", Function::ToLower],
     ["system", Function::System]
 );
 
@@ -250,7 +255,7 @@ impl<'a> IsSprintf for &'a str {
 
 impl Function {
     // feedback allows for certain functions to propagate type information back to their arguments.
-    pub(crate) fn feedback(&self, args: &[NodeIx], ctx: &mut types::TypeContext) {
+    pub(crate) fn feedback(&self, args: &[NodeIx], res: NodeIx, ctx: &mut types::TypeContext) {
         use types::{BaseTy, Constraint, TVar::*};
         if args.len() < self.arity().unwrap_or(0) {
             return;
@@ -283,6 +288,14 @@ impl Function {
                 let query = args[1];
                 ctx.nw.add_dep(query, arr, Constraint::KeyIn(()));
             }
+            Function::IncMap => {
+                let arr = args[0];
+                let k = args[1];
+                let v = res;
+                ctx.nw.add_dep(k, arr, Constraint::KeyIn(()));
+                ctx.nw.add_dep(v, arr, Constraint::ValIn(()));
+                ctx.nw.add_dep(arr, v, Constraint::Val(()));
+            }
             Function::Sub | Function::GSub => {
                 let out_str = args[2];
                 let str_const = ctx.constant(Scalar(BaseTy::Str).abs());
@@ -309,6 +322,13 @@ impl Function {
                     a,
                     incoming.len()
                 );
+            }
+        }
+        fn arith_sig(x: compile::Ty, y: compile::Ty) -> (SmallVec<compile::Ty>, compile::Ty) {
+            use compile::Ty::*;
+            match (x, y) {
+                (Str, _) | (_, Str) | (Float, _) | (_, Float) => (smallvec![Float; 2], Float),
+                (_, _) => (smallvec![Int; 2], Int),
             }
         }
         Ok(match self {
@@ -342,10 +362,7 @@ impl Function {
                 Int,
             ),
             Binop(Plus) | Binop(Minus) | Binop(Mod) | Binop(Mult) => {
-                match (incoming[0], incoming[1]) {
-                    (Str, _) | (_, Str) | (Float, _) | (_, Float) => (smallvec![Float; 2], Float),
-                    (_, _) => (smallvec![Int; 2], Int),
-                }
+                arith_sig(incoming[0], incoming[1])
             }
             Binop(Pow) | Binop(Div) => (smallvec![Float;2], Float),
             Contains => match incoming[0] {
@@ -358,6 +375,21 @@ impl Function {
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
                 _ => return err!("invalid input spec fo Delete: {:?}", &incoming[..]),
             },
+            IncMap => {
+                let map = incoming[0];
+                if !map.is_array() {
+                    return err!(
+                        "first argument to inc_map must be an array type, got: {:?}",
+                        map
+                    );
+                }
+                let val = map.val().unwrap();
+                let (args, res) = arith_sig(incoming[2], val);
+                (
+                    smallvec![incoming[0], incoming[0].key().unwrap(), args[0]],
+                    res,
+                )
+            }
             Clear => {
                 if incoming.len() == 1 && incoming[0].is_array() {
                     (smallvec![incoming[0]], Int)
@@ -394,7 +426,7 @@ impl Function {
             Length => (smallvec![incoming[0]], Int),
             Close => (smallvec![Str], Str),
             Sub | GSub => (smallvec![Str, Str, Str], Int),
-            EscapeCSV | EscapeTSV => (smallvec![Str], Str),
+            ToUpper | ToLower | EscapeCSV | EscapeTSV => (smallvec![Str], Str),
             Substr => (smallvec![Str, Int, Int], Str),
             Match => (smallvec![Str, Str], Int),
             // Split's second input can be a map of either type
@@ -418,11 +450,12 @@ impl Function {
             IntFunc(bw) => bw.arity(),
             UpdateUsedFields | Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile
             | ReadLineStdinFused => 0,
-            Clear | Srand | System | HexToInt | ToInt | EscapeCSV | EscapeTSV | Close | Length
-            | ReadErr | ReadErrCmd | Nextline | NextlineCmd | Unop(_) => 1,
+            ToUpper | ToLower | Clear | Srand | System | HexToInt | ToInt | EscapeCSV
+            | EscapeTSV | Close | Length | ReadErr | ReadErrCmd | Nextline | NextlineCmd
+            | Unop(_) => 1,
             SetFI | SubstrIndex | Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
-            JoinCols | Substr | Sub | GSub | Split => 3,
+            IncMap | JoinCols | Substr | Sub | GSub | Split => 3,
         })
     }
 
@@ -432,6 +465,16 @@ impl Function {
             types::{BaseTy, TVar::*},
             Function::*,
         };
+        fn step_arith(x: &types::State, y: &types::State) -> types::State {
+            use BaseTy::*;
+            match (x, y) {
+                (Some(Scalar(Some(Str))), _)
+                | (_, Some(Scalar(Some(Str))))
+                | (Some(Scalar(Some(Float))), _)
+                | (_, Some(Scalar(Some(Float)))) => Scalar(Float).abs(),
+                (_, _) => Scalar(Int).abs(),
+            }
+        }
         match self {
             IntFunc(bw) => Ok(bw.ret_state()),
             FloatFunc(ff) => Ok(ff.ret_state()),
@@ -442,14 +485,7 @@ impl Function {
                 x => Ok(*x),
             },
             Binop(Plus) | Binop(Minus) | Binop(Mod) | Binop(Mult) => {
-                use BaseTy::*;
-                match (&args[0], &args[1]) {
-                    (Some(Scalar(Some(Str))), _)
-                    | (_, Some(Scalar(Some(Str))))
-                    | (Some(Scalar(Some(Float))), _)
-                    | (_, Some(Scalar(Some(Float)))) => Ok(Scalar(Float).abs()),
-                    (_, _) => Ok(Scalar(Int).abs()),
-                }
+                Ok(step_arith(&args[0], &args[1]))
             }
             Rand | Binop(Div) | Binop(Pow) => Ok(Scalar(BaseTy::Float).abs()),
             Setcol => Ok(Scalar(BaseTy::Null).abs()),
@@ -457,10 +493,11 @@ impl Function {
             | Binop(GT) | Binop(LTE) | Binop(GTE) | Binop(EQ) | Length | Split | ReadErr
             | ReadErrCmd | ReadErrStdin | Contains | Delete | Match | Sub | GSub | ToInt
             | System | HexToInt => Ok(Scalar(BaseTy::Int).abs()),
-            JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr | Unop(Column)
-            | Binop(Concat) | Nextline | NextlineCmd | NextlineStdin => {
+            ToUpper | ToLower | JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr
+            | Unop(Column) | Binop(Concat) | Nextline | NextlineCmd | NextlineStdin => {
                 Ok(Scalar(BaseTy::Str).abs())
             }
+            IncMap => Ok(step_arith(&types::val_of(&args[0])?, &args[2])),
             SetFI | UpdateUsedFields | NextFile | ReadLineStdinFused | Close => Ok(None),
         }
     }

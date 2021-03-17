@@ -173,6 +173,8 @@ pub(crate) enum Instr<'a> {
         Reg<Int>,     /* end col */
         Reg<Str<'a>>, /* sep */
     ),
+    ToUpperAscii(Reg<Str<'a>>, Reg<Str<'a>>),
+    ToLowerAscii(Reg<Str<'a>>, Reg<Str<'a>>),
 
     // File reading.
     ReadErr(Reg<Int>, Reg<Str<'a>>, /*is_file=*/ bool),
@@ -250,6 +252,20 @@ pub(crate) enum Instr<'a> {
         map: NumTy,
         key: NumTy,
         val: NumTy,
+    },
+    IncInt {
+        map_ty: Ty,
+        map: NumTy,
+        key: NumTy,
+        dst: NumTy,
+        by: Reg<Int>,
+    },
+    IncFloat {
+        map_ty: Ty,
+        map: NumTy,
+        key: NumTy,
+        dst: NumTy,
+        by: Reg<Float>,
     },
     IterBegin {
         map_ty: Ty,
@@ -645,6 +661,10 @@ impl<'a> Instr<'a> {
                 end.accum(&mut f);
                 sep.accum(&mut f);
             }
+            ToUpperAscii(dst, src) | ToLowerAscii(dst, src) => {
+                dst.accum(&mut f);
+                src.accum(&mut f);
+            }
             SplitInt(flds, to_split, arr, pat) => {
                 flds.accum(&mut f);
                 to_split.accum(&mut f);
@@ -731,6 +751,30 @@ impl<'a> Instr<'a> {
                 f(*map, *map_ty);
                 f(*key, map_ty.key().unwrap());
                 f(*val, map_ty.val().unwrap());
+            }
+            IncInt {
+                map_ty,
+                map,
+                key,
+                dst,
+                by,
+            } => {
+                f(*map, *map_ty);
+                f(*key, map_ty.key().unwrap());
+                f(*dst, map_ty.val().unwrap());
+                by.accum(&mut f);
+            }
+            IncFloat {
+                map_ty,
+                map,
+                key,
+                dst,
+                by,
+            } => {
+                f(*map, *map_ty);
+                f(*key, map_ty.key().unwrap());
+                f(*dst, map_ty.val().unwrap());
+                by.accum(&mut f);
             }
             LoadVarStr(dst, _var) => dst.accum(&mut f),
             StoreVarStr(_var, src) => src.accum(&mut f),
