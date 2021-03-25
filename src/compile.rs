@@ -1237,14 +1237,15 @@ impl<'a, 'b> View<'a, 'b> {
     // Generate bytecode for map lookups.
     fn load_map(
         &mut self,
-        dst_reg: u32,
+        mut dst_reg: u32,
         dst_ty: Ty,
         arr_reg: u32,
         arr_ty: Ty,
         key: &PrimVal<'a>,
     ) -> Result<()> {
         if dst_reg == UNUSED {
-            return Ok(());
+            // Lookups for a map have side-effects!
+            dst_reg = self.regs.stats.reg_of_ty(dst_ty);
         }
         // Convert `key` if necessary.
         let target_ty = arr_ty.key()?;

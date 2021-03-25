@@ -367,7 +367,7 @@ impl<LR: LineReader> FileRead<LR> {
         // Merge in the named column indexes into our used-field list.
         for c in cols.iter() {
             let c_borrow: &Str<'a> = c.upcast_ref();
-            self.used_fields.set(fi.get(c_borrow).unwrap_or(0) as usize)
+            self.used_fields.set(fi.get(c_borrow) as usize)
         }
         self.stdin.set_used_fields(&self.used_fields)
     }
@@ -597,28 +597,15 @@ impl<K, V> Clone for SharedMap<K, V> {
     }
 }
 
-// For a subset of map operations, we ignore the refcell checks in a release build. This is because
-// the public API for SharedMap does not permit taking capturing a reference to an element of the
-// map (e.g. keys and iterators clone the relevant entries in the map).
-//
-// We keep borrow_mut() in debug builds to catch regressions.
-
 impl<K: Hash + Eq, V> SharedMap<K, V> {
     pub(crate) fn len(&self) -> usize {
         self.0.borrow().len()
     }
     pub(crate) fn insert(&self, k: K, v: V) {
-        #[cfg(debug_assertions)]
-        {
-            self.0.borrow_mut().insert(k, v);
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            unsafe { &mut *self.0.as_ptr() }.insert(k, v);
-        }
+        self.borrow_mut().insert(k, v);
     }
     pub(crate) fn delete(&self, k: &K) {
-        self.0.borrow_mut().remove(k);
+        self.borrow_mut().remove(k);
     }
     pub(crate) fn iter<'a, F, R>(&'a self, f: F) -> R
     where
@@ -627,14 +614,7 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
         f(self.0.borrow().iter())
     }
     pub(crate) fn clear(&self) {
-        #[cfg(debug_assertions)]
-        {
-            self.0.borrow_mut().clear();
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            unsafe { &mut *self.0.as_ptr() }.clear();
-        }
+        self.borrow_mut().clear();
     }
 }
 
@@ -682,16 +662,47 @@ impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
     }
 }
 
-impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
-    pub(crate) fn get(&self, k: &K) -> Option<V> {
+impl<K, V> SharedMap<K, V> {
+    fn borrow_mut(&self) -> impl std::ops::DerefMut<Target = HashMap<K, V>> + '_ {
+        // Unlike the full std::collections APIs, we are careful not to hand out any references
+        // internal to a SharedMap from a public function. That means that functions which mutate
+        // the map are "Cell"-like, in that they swap out values or drop them in, but never hold
+        // onto a mutable reference that could be aliased down the line.
+        //
+        // Still, we do the checked mutable borrow in debug builds to catch future violations of
+        // this invariant.
         #[cfg(debug_assertions)]
         {
-            self.0.borrow().get(k).cloned()
+            self.0.borrow_mut()
         }
         #[cfg(not(debug_assertions))]
         {
-            unsafe { &mut *self.0.as_ptr() }.get(k).cloned()
+            unsafe { &mut *self.0.as_ptr() }
         }
+    }
+}
+
+impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
+    pub(crate) fn contains(&self, k: &K) -> bool {
+        #[cfg(debug_assertions)]
+        {
+            self.0.borrow().get(k).is_some()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            unsafe { &mut *self.0.as_ptr() }.get(k).is_some()
+        }
+    }
+}
+
+impl<K: Hash + Eq + Clone, V: Clone + Default> SharedMap<K, V> {
+    pub(crate) fn get(&self, k: &K) -> V {
+        self.borrow_mut()
+            .raw_entry_mut()
+            .from_key(k)
+            .or_insert_with(|| (k.clone(), V::default()))
+            .1
+            .clone()
     }
 }
 

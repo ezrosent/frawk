@@ -1257,6 +1257,12 @@ this as well"#
     );
 
     test_program!(
+        map_lookup_adds_key,
+        r#"BEGIN { m[1]; h["hi"]; print (1 in m), (2 in m), ("hi" in h), ("hello" in h); }"#,
+        "1 0 1 0\n"
+    );
+
+    test_program!(
         bitwise_operators,
         r#"BEGIN {
         print xor(1,3);

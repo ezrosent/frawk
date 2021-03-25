@@ -1360,10 +1360,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     }
     fn lookup(&mut self, map_ty: Ty, dst: NumTy, map: NumTy, key: NumTy) {
         map_regs!(map_ty, map, key, dst, {
-            let res = self
-                .get(map)
-                .get(self.get(key))
-                .unwrap_or_else(Default::default);
+            let res = self.get(map).get(self.get(key));
             *self.get_mut(dst) = res;
         });
     }
@@ -1371,7 +1368,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         let _v = 0u32;
         let dst: Reg<Int> = dst.into();
         map_regs!(map_ty, map, key, _v, {
-            let res = self.get(map).get(self.get(key)).is_some() as Int;
+            let res = self.get(map).contains(self.get(key)) as Int;
             *self.get_mut(dst) = res;
         });
     }

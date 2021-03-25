@@ -1280,7 +1280,7 @@ macro_rules! map_impl {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
-                let res = map.get(key).unwrap_or_else(Default::default);
+                let res = map.get(key);
                 mem::forget(map);
                 convert_out!($v, res)
             }
@@ -1289,7 +1289,7 @@ macro_rules! map_impl {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
                 let key = convert_in!($k, &k);
-                let res = map.get(key).is_some() as Int;
+                let res = map.contains(key) as Int;
                 mem::forget(map);
                 res
             }
