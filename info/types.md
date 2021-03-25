@@ -274,15 +274,14 @@ gives a feel for what else is going on to get this working.
 and map type of their value. User-defined functions have rules that encode the
 ordering of their arguments (giving the graph hyperedges).
 
-**Dependent Return Types** frawk also has to encode "business logic" in its
-rules for some builtin functions. For example the type of `a + b` depends on the
-type of `a` and the type of `b`: adding an integer to an integer produces an
-integer, but adding a string to an integer produces a floating point value (as
-strings may contain non-integer numbers), and adding a float to an integer
-produces an integer (by convention). Luckily, these rules can be implemented in
-such a way that their values do not "oscillate" in unexpected ways, allowing the
-analysis to converge. This "domain-specific" logic is present in the
-[builtins](https://github.com/ezrosent/frawk/blob/master/src/builtins.rs)
+**Flexible Return Types** frawk return types can depend on argument types. For 
+example, the type of `a + b` depends on the type of `a` and the type of `b`: 
+adding an integer to an integer produces an integer, but adding a string to an
+integer produces a floating point value (as strings may contain non-integer 
+numbers), and adding a float to an integer produces a float (by convention).
+Luckily, these rules can be implemented in such a way that their values do not
+"oscillate" in unexpected ways, allowing the analysis to converge. This 
+domain-specific logic is present in the [builtins](https://github.com/ezrosent/frawk/blob/master/src/builtins.rs)
 module.
 
 Furthermore, all of these subtleties are in play when handling user-defined
