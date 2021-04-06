@@ -1062,6 +1062,11 @@ print w,z;
     );
 
     test_program!(
+        division_parse, r#"BEGIN { a[0] = 4; t = 2; print "test/test\t" (a[0] / t)}"#,
+        "test/test\t2\n"
+    );
+
+    test_program!(
         identity_function,
         r#"function id(x) { return x; }
         BEGIN { print 1, id(1) }"#,
