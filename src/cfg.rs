@@ -438,8 +438,8 @@ where
             .collect()
     }
 
-    pub(crate) fn from_prog<'b, 'outer>(
-        arena: &'a arena::Arena<'outer>,
+    pub(crate) fn from_prog<'b>(
+        arena: &'a arena::Arena,
         p: &ast::Prog<'a, 'b, I>,
         esc: Escaper,
     ) -> Result<Self> {
@@ -538,7 +538,9 @@ where
                 begin: None,
                 main_loop: None,
                 end: None,
-            } => Stage::Main(fill!(Some(&Stmt::Block(vec![])), FunctionName::Begin).unwrap()),
+            } => Stage::Main(
+                fill!(Some(&Stmt::Block(arena.new_vec())), FunctionName::Begin).unwrap(),
+            ),
             Stage::Par {
                 begin,
                 main_loop,
@@ -801,7 +803,7 @@ where
             Printf(fmt, args, out) => {
                 let (mut current_open, fmt_v) = self.convert_val(fmt, current_open)?;
                 let mut arg_vs = SmallVec::with_capacity(args.len());
-                for a in args {
+                for a in args.iter() {
                     let (next, arg_v) = self.convert_val(a, current_open)?;
                     arg_vs.push(arg_v);
                     current_open = next;
@@ -1126,7 +1128,7 @@ where
                     // We don't need in_cond here, it would seem, because there aren't
                     // subexpressions which should be considered patterns.
                     return self.convert_expr(
-                        &Expr::Call(Either::Right(builtins::Function::IncMap), vec![arr, ix, to]),
+                        &Expr::Call(Either::Right(builtins::Function::IncMap), &[arr, ix, to]),
                         current_open,
                     );
                 }
@@ -1214,7 +1216,7 @@ where
                     ),
                 )?;
                 return self.convert_expr(
-                    &ast::Expr::Call(Either::Right(ReadErrStdin), vec![]),
+                    &ast::Expr::Call(Either::Right(ReadErrStdin), &[]),
                     current_open,
                 );
             }
@@ -1272,12 +1274,12 @@ where
                         let (next, _) = self.convert_expr(
                             &ast::Expr::Assign(
                                 into,
-                                &ast::Expr::Call(Either::Right(next_line), vec![from]),
+                                &ast::Expr::Call(Either::Right(next_line), &[from]),
                             ),
                             current_open,
                         )?;
                         return self.convert_expr(
-                            &ast::Expr::Call(Either::Right(read_err), vec![from]),
+                            &ast::Expr::Call(Either::Right(read_err), &[from]),
                             next,
                         );
                     }
@@ -1285,12 +1287,12 @@ where
                         let (next, _) = self.convert_expr(
                             &ast::Expr::Assign(
                                 into,
-                                &ast::Expr::Call(Either::Right(NextlineStdin), vec![]),
+                                &ast::Expr::Call(Either::Right(NextlineStdin), &[]),
                             ),
                             current_open,
                         )?;
                         return self.convert_expr(
-                            &ast::Expr::Call(Either::Right(ReadErrStdin), vec![]),
+                            &ast::Expr::Call(Either::Right(ReadErrStdin), &[]),
                             next,
                         );
                     }
@@ -1309,7 +1311,7 @@ where
 
     fn do_sprintf<'c>(
         &mut self,
-        args: &Vec<&'c Expr<'c, 'b, I>>,
+        args: &'c [&'c Expr<'c, 'b, I>],
         mut current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
         if args.len() == 0 {
@@ -1591,7 +1593,7 @@ where
         &mut self,
         current_open: NodeIx,
         fname: &Either<I, builtins::Function>,
-        args: &Vec<&'c Expr<'c, 'b, I>>,
+        args: &'c [&'c Expr<'c, 'b, I>],
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
         // Handle call expressions. This is pretty complicated because AWK has several rules that
         // "fill in missing arguments".

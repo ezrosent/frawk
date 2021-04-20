@@ -299,16 +299,16 @@ pub(crate) fn used_fields(prog: &str) -> Result<FieldSet> {
     compile::used_fields(&mut ctx)
 }
 
-pub(crate) fn parse_program<'a, 'inp, 'outer>(
+pub(crate) fn parse_program<'a, 'inp>(
     prog: &'inp str,
-    a: &'a Arena<'outer>,
+    a: &'a Arena,
     esc: Escaper,
     strat: ExecutionStrategy,
 ) -> Result<Prog<'a>> {
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
-    let mut program = ast::Prog::from_stage(strat.stage());
+    let mut program = ast::Prog::from_stage(a, strat.stage());
     let parser = syntax::ProgParser::new();
     match parser.parse(a, &mut buf, &mut program, lexer) {
         Ok(()) => {
@@ -317,7 +317,7 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
                 Escaper::TSV => program.output_sep = Some(b"\t"),
                 Escaper::Identity => {}
             };
-            Ok(a.alloc_v(program))
+            Ok(a.alloc(program))
         }
         Err(e) => {
             let mut ix = 0;
@@ -332,8 +332,8 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
 }
 
 #[cfg(feature = "unstable")]
-fn compile_program<'a, 'inp, 'outer>(
-    a: &'a Arena<'outer>,
+fn compile_program<'a, 'inp>(
+    a: &'a Arena,
     prog: Prog<'a>,
     stdin: impl Into<String>,
     esc: Escaper,
@@ -1062,7 +1062,8 @@ print w,z;
     );
 
     test_program!(
-        division_parse, r#"BEGIN { a[0] = 4; t = 2; print "test/test\t" (a[0] / t)}"#,
+        division_parse,
+        r#"BEGIN { a[0] = 4; t = 2; print "test/test\t" (a[0] / t)}"#,
         "test/test\t2\n"
     );
 

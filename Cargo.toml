@@ -14,11 +14,9 @@ build = "build.rs"
 
 
 [dependencies]
-elsa = "1.3.2"
 petgraph = "0.4.13"
 smallvec = "1.6"
 hashbrown = "0.9"
-stable_deref_trait = "1.1.1"
 lazy_static = "1.4.0"
 regex = "1.3"
 regex-syntax = "0.6.22"
@@ -47,6 +45,7 @@ cranelift-frontend = "0.69.0"
 cranelift-module = "0.69.0"
 cranelift-jit = "0.69.0"
 fast-float = "0.2"
+bumpalo = { version = "3.6", features = ["collections"] }
 
 [dev-dependencies]
 assert_cmd = "1.0.2"
@@ -57,8 +56,8 @@ tempfile = "3.1.0"
 default = ["use_jemalloc", "allow_avx2", "llvm_backend", "unstable"]
 use_jemalloc = ["jemallocator"]
 # Certain features leverage the AVX2 instruction set, but AVX2 can often make
-# the entire application slightly slower, even on chips that support it. As a
-# result, we default to SSE2 implementations unless this feature is enabled.
+# the entire application slightly slower, even on chips that support it. For
+# those cases, consider disabling allow_avx2.
 allow_avx2 = []
 llvm_backend = ["llvm-sys"]
 unstable = []
