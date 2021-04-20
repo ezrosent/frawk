@@ -13,11 +13,28 @@ use std::ptr;
 
 #[derive(Default)]
 pub struct Arena(bumpalo::Bump);
+pub type Vec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
 impl Arena {
+    pub fn vec_with_capacity<'a, T>(&'a self, capacity: usize) -> Vec<'a, T> {
+        Vec::with_capacity_in(capacity, &self.0)
+    }
+    pub fn new_vec<'a, T>(&'a self) -> Vec<'a, T> {
+        Vec::new_in(&self.0)
+    }
+    pub fn new_vec_from_slice<'a, T: Clone>(&'a self, elts: &[T]) -> Vec<'a, T> {
+        let mut res = Vec::with_capacity_in(elts.len(), &self.0);
+        res.extend(elts.iter().cloned());
+        res
+    }
     pub fn alloc_str<'a>(&'a self, s: &str) -> &'a str {
         let bs = self.alloc_bytes(s.as_bytes());
         unsafe { std::str::from_utf8_unchecked(bs) }
+    }
+
+    // NB: do not use this to allocate a byte slice (will get assertion failures), use alloc_bytes instead
+    pub fn alloc_slice<'a, T: Clone>(&'a self, t: &[T]) -> &'a [T] {
+        self.0.alloc_slice_clone(t)
     }
 
     pub fn alloc_bytes<'a>(&'a self, bs: &[u8]) -> &'a [u8] {

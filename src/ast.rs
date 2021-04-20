@@ -19,7 +19,7 @@
 ///    to take advantage of that, but it would probably involve building out def-use chains (which
 ///    we currently don't do), and we'd want to verify that performance didn't degrade when the
 ///    patterns are _not sparse_ in the input.
-use crate::arena::Arena;
+use crate::arena::{self, Arena};
 use crate::builtins::Function;
 use crate::common::{Either, FileSpec, Stage};
 
@@ -52,6 +52,9 @@ pub enum Pattern<'a, 'b, I> {
 }
 
 pub struct Prog<'a, 'b, I> {
+    // We allocate as much from the arena as we can, except for things that will be allocated as
+    // vectors anyway.
+
     // FS
     pub field_sep: Option<&'b [u8]>,
     pub prelude_vardecs: Vec<(I, &'a Expr<'a, 'b, I>)>,
@@ -59,11 +62,11 @@ pub struct Prog<'a, 'b, I> {
     pub output_sep: Option<&'b [u8]>,
     // ORS
     pub output_record_sep: Option<&'b [u8]>,
-    pub decs: Vec<FunDec<'a, 'b, I>>,
-    pub begin: Vec<&'a Stmt<'a, 'b, I>>,
-    pub prepare: Vec<&'a Stmt<'a, 'b, I>>,
-    pub end: Vec<&'a Stmt<'a, 'b, I>>,
-    pub pats: Vec<(Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
+    pub decs: arena::Vec<'a, FunDec<'a, 'b, I>>,
+    pub begin: arena::Vec<'a, &'a Stmt<'a, 'b, I>>,
+    pub prepare: arena::Vec<'a, &'a Stmt<'a, 'b, I>>,
+    pub end: arena::Vec<'a, &'a Stmt<'a, 'b, I>>,
+    pub pats: arena::Vec<'a, (Pattern<'a, 'b, I>, Option<&'a Stmt<'a, 'b, I>>)>,
     pub stage: Stage<()>,
     pub argv: Vec<&'b str>,
     pub parse_header: bool,
@@ -71,7 +74,7 @@ pub struct Prog<'a, 'b, I> {
 
 fn parse_header<'a, 'b, I: From<&'b str> + Clone>(
     arena: &'a Arena,
-    begin: &mut Vec<&'a Stmt<'a, 'b, I>>,
+    begin: &mut arena::Vec<'a, &'a Stmt<'a, 'b, I>>,
 ) {
     use {self::Expr::*, Stmt::*};
     // Pick an illegal frawk identifier.
@@ -97,15 +100,15 @@ fn parse_header<'a, 'b, I: From<&'b str> + Clone>(
     })));
     let body = arena.alloc(Expr(arena.alloc(Call(
         Either::Right(Function::SetFI),
-        vec![loop_var, loop_var],
+        arena.alloc_slice(&[loop_var, loop_var]),
     ))));
 
-    let block = vec![
+    let block = arena.new_vec_from_slice(&[
         arena.alloc(For(Some(init), Some(cond), Some(update), body)),
         arena.alloc(Expr(
-            arena.alloc(Call(Either::Right(Function::UpdateUsedFields), vec![])),
+            arena.alloc(Call(Either::Right(Function::UpdateUsedFields), &[])),
         )),
-    ];
+    ]);
     begin.push(arena.alloc(If(
         arena.alloc(Binop(
             self::Binop::GT,
@@ -118,18 +121,18 @@ fn parse_header<'a, 'b, I: From<&'b str> + Clone>(
 }
 
 impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
-    pub(crate) fn from_stage(stage: Stage<()>) -> Self {
+    pub(crate) fn from_stage(arena: &'a Arena, stage: Stage<()>) -> Self {
         Prog {
             field_sep: None,
-            prelude_vardecs: Default::default(),
+            prelude_vardecs: Vec::new(),
             output_sep: None,
             output_record_sep: None,
-            decs: Default::default(),
-            begin: vec![],
-            prepare: vec![],
-            end: vec![],
-            pats: Default::default(),
-            argv: Default::default(),
+            decs: arena.new_vec(),
+            begin: arena.new_vec(),
+            prepare: arena.new_vec(),
+            end: arena.new_vec(),
+            pats: arena.new_vec(),
+            argv: Vec::new(),
             parse_header: false,
             stage,
         }
@@ -138,7 +141,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         use {self::Binop::*, self::Expr::*, Stmt::*};
         let mut conds = 0;
 
-        let mut begin = Vec::with_capacity(self.begin.len());
+        let mut begin = arena.vec_with_capacity(self.begin.len() * 2);
         let mut main_loop = None;
         let mut end = None;
 
@@ -199,29 +202,29 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         begin.extend(self.begin.iter().cloned());
 
         // Desugar patterns into if statements, with the usual desugaring for an empty action.
-        let mut inner = vec![
-            arena.alloc(Expr(arena.alloc(Inc {
-                is_inc: true,
-                is_post: false,
-                x: arena.alloc(Var("NR".into())),
-            }))),
-            arena.alloc(Expr(arena.alloc(Inc {
-                is_inc: true,
-                is_post: false,
-                x: arena.alloc(Var("FNR".into())),
-            }))),
-        ];
+        let mut inner = arena.vec_with_capacity(10);
+        inner.push(arena.alloc(Expr(arena.alloc(Inc {
+            is_inc: true,
+            is_post: false,
+            x: arena.alloc(Var("NR".into())),
+        }))));
+        inner.push(arena.alloc(Expr(arena.alloc(Inc {
+            is_inc: true,
+            is_post: false,
+            x: arena.alloc(Var("FNR".into())),
+        }))));
         let init_len = inner.len();
         for (pat, body) in self.pats.iter() {
             let body = if let Some(body) = body {
                 body
             } else {
-                arena.alloc(Print(vec![], None))
+                arena.alloc(Print(&[], None))
             };
             match pat {
                 Pattern::Null => inner.push(body),
                 Pattern::Bool(pat) => inner.push(arena.alloc(If(pat, body, None))),
                 Pattern::Comma(l, r) => {
+                    let mut block = arena.vec_with_capacity(2);
                     // Comma patterns run the corresponding action between pairs of lines matching
                     // patterns `l` and `r`, inclusive. One common example is the patterh
                     //  /\/*/,/*\//
@@ -263,14 +266,12 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                     //  }
                     inner.push(arena.alloc(If(l, arena.alloc(StartCond(conds)), None)));
                     inner.push(arena.alloc(If(r, arena.alloc(LastCond(conds)), None)));
-                    let block = vec![
-                        arena.alloc(If(
-                            arena.alloc(Binop(EQ, arena.alloc(Cond(conds)), arena.alloc(ILit(2)))),
-                            arena.alloc(EndCond(conds)),
-                            None,
-                        )),
-                        body,
-                    ];
+                    block.push(arena.alloc(If(
+                        arena.alloc(Binop(EQ, arena.alloc(Cond(conds)), arena.alloc(ILit(2)))),
+                        arena.alloc(EndCond(conds)),
+                        None,
+                    )));
+                    block.push(body);
                     inner.push(arena.alloc(If(
                         arena.alloc(Cond(conds)),
                         arena.alloc(Block(block)),
@@ -289,7 +290,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                 arena.alloc(Block(inner)),
             ));
             main_loop = Some(if self.prepare.len() > 0 {
-                let mut block = Vec::with_capacity(self.prepare.len() + 1);
+                let mut block = arena.vec_with_capacity(self.prepare.len() + 1);
                 block.push(main_portion);
                 block.extend(self.prepare.iter().cloned());
                 arena.alloc(Stmt::Block(block))
@@ -360,7 +361,7 @@ pub enum Expr<'a, 'b, I> {
     PatLit(&'b [u8]),
     Unop(Unop, &'a Expr<'a, 'b, I>),
     Binop(Binop, &'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
-    Call(Either<I, Function>, Vec<&'a Expr<'a, 'b, I>>),
+    Call(Either<I, Function>, &'a [&'a Expr<'a, 'b, I>]),
     Var(I),
     Index(&'a Expr<'a, 'b, I>, &'a Expr<'a, 'b, I>),
     Assign(
@@ -396,15 +397,15 @@ pub enum Stmt<'a, 'b, I> {
     EndCond(usize),
     LastCond(usize),
     Expr(&'a Expr<'a, 'b, I>),
-    Block(Vec<&'a Stmt<'a, 'b, I>>),
+    Block(arena::Vec<'a, &'a Stmt<'a, 'b, I>>),
     Print(
-        Vec<&'a Expr<'a, 'b, I>>,
+        &'a [&'a Expr<'a, 'b, I>],
         Option<(&'a Expr<'a, 'b, I>, FileSpec)>,
     ),
     // Unlike print, printf must have at least one argument.
     Printf(
         &'a Expr<'a, 'b, I>,
-        Vec<&'a Expr<'a, 'b, I>>,
+        &'a [&'a Expr<'a, 'b, I>],
         Option<(&'a Expr<'a, 'b, I>, FileSpec)>,
     ),
     If(

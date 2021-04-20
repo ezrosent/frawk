@@ -308,7 +308,7 @@ pub(crate) fn parse_program<'a, 'inp>(
     let prog = a.alloc_str(prog);
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
-    let mut program = ast::Prog::from_stage(strat.stage());
+    let mut program = ast::Prog::from_stage(a, strat.stage());
     let parser = syntax::ProgParser::new();
     match parser.parse(a, &mut buf, &mut program, lexer) {
         Ok(()) => {

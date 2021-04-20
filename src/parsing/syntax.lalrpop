@@ -136,7 +136,7 @@ Redirect: (&'a Expr<'a, 'a, &'a str>, FileSpec) = {
 }
 
 ClosedLoopBody: &'a Stmt<'a, 'a, &'a str> = {
-    SemiSep => arena.alloc(Stmt::Block(vec![])),
+    SemiSep => arena.alloc(Stmt::Block(arena.new_vec())),
     ClosedStmt,
 }
 
@@ -148,17 +148,17 @@ BaseStmt: &'a Stmt<'a, 'a, &'a str> = {
 LeafStmt: &'a Stmt<'a, 'a, &'a str> = {
     <e: Expr> => arena.alloc(Stmt::Expr(e)),
     "delete" <i: IndexBase> =>
-        arena.alloc(Stmt::Expr(arena.alloc(Expr::Call(Either::Right(Function::Delete), vec![i.0, i.1])))),
+        arena.alloc(Stmt::Expr(arena.alloc(Expr::Call(Either::Right(Function::Delete), arena.alloc_slice(&[i.0, i.1]))))),
     "delete" <b: LeafTerm> =>
-        arena.alloc(Stmt::Expr(arena.alloc(Expr::Call(Either::Right(Function::Clear), vec![b])))),
+        arena.alloc(Stmt::Expr(arena.alloc(Expr::Call(Either::Right(Function::Clear), arena.alloc_slice(&[b]))))),
     "print" <pa:PrintArgs?> <re:Redirect?> =>
-        arena.alloc(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
+        arena.alloc(Stmt::Print(arena.alloc_slice(pa.unwrap_or_else(Vec::new).as_slice()), re)),
     "print(" "\n"* <pa:(<Args?>)> ")" <re:Redirect?> =>
-        arena.alloc(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
+        arena.alloc(Stmt::Print(arena.alloc_slice(pa.unwrap_or_else(Vec::new).as_slice()), re)),
     "printf" <spec:PrecAdd> <pa: ("," "\n"* <PrintArgs>)?> <re:Redirect?> =>
-        arena.alloc(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
+        arena.alloc(Stmt::Printf(spec, arena.alloc_slice(pa.unwrap_or_else(Vec::new).as_slice()), re)),
     "printf(" "\n"* <spec:(<Expr> "\n"*)> <pa: ("," "\n"* <Args>)?> ")" <re:Redirect?> =>
-        arena.alloc(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
+        arena.alloc(Stmt::Printf(spec, arena.alloc_slice(pa.unwrap_or_else(Vec::new).as_slice()), re)),
     "break" => arena.alloc(Stmt::Break),
     "continue" => arena.alloc(Stmt::Continue),
     "next" => arena.alloc(Stmt::Next),
@@ -167,9 +167,9 @@ LeafStmt: &'a Stmt<'a, 'a, &'a str> = {
 }
 
 Block: &'a Stmt<'a,'a,&'a str> = {
-    Lbrace Rbrace SemiSep? => arena.alloc(Stmt::Block(vec![])),
+    Lbrace Rbrace SemiSep? => arena.alloc(Stmt::Block(arena.new_vec())),
     Lbrace <LeafStmt> Rbrace SemiSep? => <>,
-    Lbrace <BlockInner> Rbrace SemiSep? => arena.alloc(Stmt::Block(<>)),
+    Lbrace <BlockInner> Rbrace SemiSep? => arena.alloc(Stmt::Block(arena.new_vec_from_slice(&<>[..]))),
 }
 
 BlockInner: Vec<&'a Stmt<'a,'a,&'a str>> = {
@@ -249,9 +249,9 @@ PrecAnd: &'a Expr<'a, 'a, &'a str> = {
 
 PrecIn: &'a Expr<'a,'a,&'a str> = {
     <l: PrecMatch> "in" <r: PrecMatch> =>
-        arena.alloc(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
+        arena.alloc(Expr::Call(Either::Right(Function::Contains), arena.alloc_slice(&[r, l]))),
     "(" <l: LookupList> Rparen "in" <r: PrecMatch> =>
-        arena.alloc(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
+        arena.alloc(Expr::Call(Either::Right(Function::Contains), arena.alloc_slice(&[r, l]))),
     PrecMatch,
 }
 
@@ -387,7 +387,7 @@ LeafTerm: &'a Expr<'a,'a, &'a str> = {
   "PATLIT" => arena.alloc(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
   // TODO: not Rparen for these next two?
   <i:CallStart> <args:Args?> ")" =>
-        arena.alloc(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
+        arena.alloc(Expr::Call(Either::Left(i), arena.alloc_slice(args.unwrap_or_else(Vec::new).as_slice()))),
 }
 
 And: () = { "&&" "\n"* }

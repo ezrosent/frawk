@@ -47,6 +47,7 @@ use runtime::{
 use std::fs::File;
 use std::io::{self, BufReader, Write};
 use std::iter::once;
+use std::mem;
 
 #[cfg(feature = "use_jemalloc")]
 #[global_allocator]
@@ -184,8 +185,8 @@ fn get_context<'a>(
     let lexer = lexer::Tokenizer::new(prog);
     let mut buf = Vec::new();
     let parser = parsing::syntax::ProgParser::new();
-    let mut prog = ast::Prog::from_stage(prelude.scalars.stage.clone());
-    prog.argv = std::mem::replace(&mut prelude.argv, Default::default());
+    let mut prog = ast::Prog::from_stage(a, prelude.scalars.stage.clone());
+    prog.argv = mem::take(&mut prelude.argv);
     let stmt = match parser.parse(a, &mut buf, &mut prog, lexer) {
         Ok(()) => {
             prog.field_sep = prelude.field_sep;
