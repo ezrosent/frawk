@@ -136,10 +136,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             stage,
         }
     }
-    pub(crate) fn desugar_stage<'outer>(
-        &self,
-        arena: &'a Arena<'outer>,
-    ) -> Stage<&'a Stmt<'a, 'b, I>> {
+    pub(crate) fn desugar_stage(&self, arena: &'a Arena) -> Stage<&'a Stmt<'a, 'b, I>> {
         use {self::Binop::*, self::Expr::*, Stmt::*};
         let mut conds = 0;
 

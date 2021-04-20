@@ -438,8 +438,8 @@ where
             .collect()
     }
 
-    pub(crate) fn from_prog<'b, 'outer>(
-        arena: &'a arena::Arena<'outer>,
+    pub(crate) fn from_prog<'b>(
+        arena: &'a arena::Arena,
         p: &ast::Prog<'a, 'b, I>,
         esc: Escaper,
     ) -> Result<Self> {

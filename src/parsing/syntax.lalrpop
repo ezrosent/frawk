@@ -10,8 +10,8 @@ use crate::{
   lexer::{self, Tok},
 };
 
-grammar<'a, 'outer>(
-  arena: &'a Arena<'outer>,
+grammar<'a>(
+  arena: &'a Arena,
   buf: &mut Vec<u8>,
   prog: &mut Prog<'a, 'a, &'a str>,
 );

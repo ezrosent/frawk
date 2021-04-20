@@ -299,9 +299,9 @@ pub(crate) fn used_fields(prog: &str) -> Result<FieldSet> {
     compile::used_fields(&mut ctx)
 }
 
-pub(crate) fn parse_program<'a, 'inp, 'outer>(
+pub(crate) fn parse_program<'a, 'inp>(
     prog: &'inp str,
-    a: &'a Arena<'outer>,
+    a: &'a Arena,
     esc: Escaper,
     strat: ExecutionStrategy,
 ) -> Result<Prog<'a>> {
@@ -332,8 +332,8 @@ pub(crate) fn parse_program<'a, 'inp, 'outer>(
 }
 
 #[cfg(feature = "unstable")]
-fn compile_program<'a, 'inp, 'outer>(
-    a: &'a Arena<'outer>,
+fn compile_program<'a, 'inp>(
+    a: &'a Arena,
     prog: Prog<'a>,
     stdin: impl Into<String>,
     esc: Escaper,

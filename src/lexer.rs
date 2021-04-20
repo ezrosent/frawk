@@ -247,11 +247,7 @@ fn push_char(buf: &mut Vec<u8>, c: char) {
     c.encode_utf8(&mut buf[start..]);
 }
 
-pub(crate) fn parse_string_literal<'a, 'outer>(
-    lit: &str,
-    arena: &'a Arena<'outer>,
-    buf: &mut Vec<u8>,
-) -> &'a [u8] {
+pub(crate) fn parse_string_literal<'a>(lit: &str, arena: &'a Arena, buf: &mut Vec<u8>) -> &'a [u8] {
     fn hex_digit(c: char) -> Option<u8> {
         match c {
             '0'..='9' => Some((c as u8) - b'0'),
@@ -352,11 +348,7 @@ pub(crate) fn parse_string_literal<'a, 'outer>(
     arena.alloc_bytes(&buf[..])
 }
 
-pub(crate) fn parse_regex_literal<'a, 'outer>(
-    lit: &str,
-    arena: &'a Arena<'outer>,
-    buf: &mut Vec<u8>,
-) -> &'a [u8] {
+pub(crate) fn parse_regex_literal<'a>(lit: &str, arena: &'a Arena, buf: &mut Vec<u8>) -> &'a [u8] {
     // Regexes have their own escaping rules, let them apply them. The only think we look to do is
     // replace "\/" with "/".
     // NB: Awk escaping rules are a subset of Rust's regex escape rule syntax, but if we applied
