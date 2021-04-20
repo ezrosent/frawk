@@ -148,7 +148,7 @@ fn get_vars<'a, 'b>(
             );
         }
         let str_lit = lexer::parse_string_literal(split_buf[1], a, buf);
-        res.push((ident, a.alloc_v(ast::Expr::StrLit(str_lit))))
+        res.push((ident, a.alloc(ast::Expr::StrLit(str_lit))))
     }
     res
 }
@@ -193,7 +193,7 @@ fn get_context<'a>(
             prog.output_sep = prelude.output_sep;
             prog.output_record_sep = prelude.output_record_sep;
             prog.parse_header = prelude.scalars.parse_header;
-            a.alloc_v(prog)
+            a.alloc(prog)
         }
         Err(e) => {
             fail!("{}", e);

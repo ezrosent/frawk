@@ -317,7 +317,7 @@ pub(crate) fn parse_program<'a, 'inp>(
                 Escaper::TSV => program.output_sep = Some(b"\t"),
                 Escaper::Identity => {}
             };
-            Ok(a.alloc_v(program))
+            Ok(a.alloc(program))
         }
         Err(e) => {
             let mut ix = 0;
@@ -1062,7 +1062,8 @@ print w,z;
     );
 
     test_program!(
-        division_parse, r#"BEGIN { a[0] = 4; t = 2; print "test/test\t" (a[0] / t)}"#,
+        division_parse,
+        r#"BEGIN { a[0] = 4; t = 2; print "test/test\t" (a[0] / t)}"#,
         "test/test\t2\n"
     );
 

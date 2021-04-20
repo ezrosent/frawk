@@ -83,38 +83,36 @@ fn parse_header<'a, 'b, I: From<&'b str> + Clone>(
     //  update_used_fields()
     // }
 
-    let loop_var = arena.alloc_v(Var(LOOP_VAR.into()));
-    let init = arena.alloc_v(Expr(
-        arena.alloc_v(Assign(loop_var, arena.alloc_v(ILit(1)))),
-    ));
-    let cond = arena.alloc_v(Binop(
+    let loop_var = arena.alloc(Var(LOOP_VAR.into()));
+    let init = arena.alloc(Expr(arena.alloc(Assign(loop_var, arena.alloc(ILit(1))))));
+    let cond = arena.alloc(Binop(
         self::Binop::LTE,
         loop_var,
-        arena.alloc_v(Var("NF".into())),
+        arena.alloc(Var("NF".into())),
     ));
-    let update = arena.alloc_v(Expr(arena.alloc_v(Inc {
+    let update = arena.alloc(Expr(arena.alloc(Inc {
         is_inc: true,
         is_post: false,
         x: loop_var,
     })));
-    let body = arena.alloc_v(Expr(arena.alloc_v(Call(
+    let body = arena.alloc(Expr(arena.alloc(Call(
         Either::Right(Function::SetFI),
         vec![loop_var, loop_var],
     ))));
 
     let block = vec![
-        arena.alloc_v(For(Some(init), Some(cond), Some(update), body)),
-        arena.alloc_v(Expr(
-            arena.alloc_v(Call(Either::Right(Function::UpdateUsedFields), vec![])),
+        arena.alloc(For(Some(init), Some(cond), Some(update), body)),
+        arena.alloc(Expr(
+            arena.alloc(Call(Either::Right(Function::UpdateUsedFields), vec![])),
         )),
     ];
-    begin.push(arena.alloc_v(If(
-        arena.alloc_v(Binop(
+    begin.push(arena.alloc(If(
+        arena.alloc(Binop(
             self::Binop::GT,
-            arena.alloc_v(ReadStdin),
-            arena.alloc_v(ILit(0)),
+            arena.alloc(ReadStdin),
+            arena.alloc(ILit(0)),
         )),
-        arena.alloc_v(Block(block)),
+        arena.alloc(Block(block)),
         /*else*/ None,
     )));
 }
@@ -146,9 +144,9 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
 
         // Desugar -F flag
         if let Some(sep) = self.field_sep {
-            begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
-                arena.alloc_v(Var("FS".into())),
-                arena.alloc_v(StrLit(sep)),
+            begin.push(arena.alloc(Expr(arena.alloc(Assign(
+                arena.alloc(Var("FS".into())),
+                arena.alloc(StrLit(sep)),
             )))));
         }
 
@@ -159,42 +157,42 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
 
         // Support "output csv/tsv" mode
         if let Some(sep) = self.output_sep {
-            begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
-                arena.alloc_v(Var("OFS".into())),
-                arena.alloc_v(StrLit(sep)),
+            begin.push(arena.alloc(Expr(arena.alloc(Assign(
+                arena.alloc(Var("OFS".into())),
+                arena.alloc(StrLit(sep)),
             )))));
         }
         if let Some(sep) = self.output_record_sep {
-            begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
-                arena.alloc_v(Var("ORS".into())),
-                arena.alloc_v(StrLit(sep)),
+            begin.push(arena.alloc(Expr(arena.alloc(Assign(
+                arena.alloc(Var("ORS".into())),
+                arena.alloc(StrLit(sep)),
             )))));
         }
 
         // Assign SUBSEP, which we treat as a normal variable
-        begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
-            arena.alloc_v(Var("SUBSEP".into())),
-            arena.alloc_v(StrLit(&[0o034u8])),
+        begin.push(arena.alloc(Expr(arena.alloc(Assign(
+            arena.alloc(Var("SUBSEP".into())),
+            arena.alloc(StrLit(&[0o034u8])),
         )))));
         // Desugar -v flags
         for (ident, exp) in self.prelude_vardecs.iter() {
-            begin.push(arena.alloc_v(Expr(
-                arena.alloc_v(Assign(arena.alloc_v(Var(ident.clone())), exp)),
+            begin.push(arena.alloc(Expr(
+                arena.alloc(Assign(arena.alloc(Var(ident.clone())), exp)),
             )));
         }
 
         // Set argc, argv
         if self.argv.len() > 0 {
-            begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(
-                arena.alloc_v(Var("ARGC".into())),
-                arena.alloc_v(ILit(self.argv.len() as i64)),
+            begin.push(arena.alloc(Expr(arena.alloc(Assign(
+                arena.alloc(Var("ARGC".into())),
+                arena.alloc(ILit(self.argv.len() as i64)),
             )))));
-            let argv = arena.alloc_v(Var("ARGV".into()));
+            let argv = arena.alloc(Var("ARGV".into()));
             for (ix, arg) in self.argv.iter().enumerate() {
-                let arg = arena.alloc_v(StrLit(arg.as_bytes()));
-                let ix = arena.alloc_v(ILit(ix as i64));
-                let arr_exp = arena.alloc_v(Index(argv, ix));
-                begin.push(arena.alloc_v(Expr(arena.alloc_v(Assign(arr_exp, arg)))));
+                let arg = arena.alloc(StrLit(arg.as_bytes()));
+                let ix = arena.alloc(ILit(ix as i64));
+                let arr_exp = arena.alloc(Index(argv, ix));
+                begin.push(arena.alloc(Expr(arena.alloc(Assign(arr_exp, arg)))));
             }
         }
 
@@ -202,15 +200,15 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
 
         // Desugar patterns into if statements, with the usual desugaring for an empty action.
         let mut inner = vec![
-            arena.alloc_v(Expr(arena.alloc_v(Inc {
+            arena.alloc(Expr(arena.alloc(Inc {
                 is_inc: true,
                 is_post: false,
-                x: arena.alloc_v(Var("NR".into())),
+                x: arena.alloc(Var("NR".into())),
             }))),
-            arena.alloc_v(Expr(arena.alloc_v(Inc {
+            arena.alloc(Expr(arena.alloc(Inc {
                 is_inc: true,
                 is_post: false,
-                x: arena.alloc_v(Var("FNR".into())),
+                x: arena.alloc(Var("FNR".into())),
             }))),
         ];
         let init_len = inner.len();
@@ -218,11 +216,11 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             let body = if let Some(body) = body {
                 body
             } else {
-                arena.alloc_v(Print(vec![], None))
+                arena.alloc(Print(vec![], None))
             };
             match pat {
                 Pattern::Null => inner.push(body),
-                Pattern::Bool(pat) => inner.push(arena.alloc_v(If(pat, body, None))),
+                Pattern::Bool(pat) => inner.push(arena.alloc(If(pat, body, None))),
                 Pattern::Comma(l, r) => {
                     // Comma patterns run the corresponding action between pairs of lines matching
                     // patterns `l` and `r`, inclusive. One common example is the patterh
@@ -263,23 +261,19 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                     //      if (Cond(0) == 2) EndCond(0); # _cond_0 = 0;
                     //      next;
                     //  }
-                    inner.push(arena.alloc_v(If(l, arena.alloc_v(StartCond(conds)), None)));
-                    inner.push(arena.alloc_v(If(r, arena.alloc_v(LastCond(conds)), None)));
+                    inner.push(arena.alloc(If(l, arena.alloc(StartCond(conds)), None)));
+                    inner.push(arena.alloc(If(r, arena.alloc(LastCond(conds)), None)));
                     let block = vec![
-                        arena.alloc_v(If(
-                            arena.alloc_v(Binop(
-                                EQ,
-                                arena.alloc_v(Cond(conds)),
-                                arena.alloc_v(ILit(2)),
-                            )),
-                            arena.alloc_v(EndCond(conds)),
+                        arena.alloc(If(
+                            arena.alloc(Binop(EQ, arena.alloc(Cond(conds)), arena.alloc(ILit(2)))),
+                            arena.alloc(EndCond(conds)),
                             None,
                         )),
                         body,
                     ];
-                    inner.push(arena.alloc_v(If(
-                        arena.alloc_v(Cond(conds)),
-                        arena.alloc_v(Block(block)),
+                    inner.push(arena.alloc(If(
+                        arena.alloc(Cond(conds)),
+                        arena.alloc(Block(block)),
                         None,
                     )));
                     conds += 1;
@@ -289,31 +283,31 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
 
         if self.end.len() > 0 || self.prepare.len() > 0 || inner.len() > init_len {
             // Wrap the whole thing in a while((getline) > 0) { } statement.
-            let main_portion = arena.alloc_v(While(
+            let main_portion = arena.alloc(While(
                 /*is_toplevel=*/ true,
-                arena.alloc(|| Binop(GT, arena.alloc(|| ReadStdin), arena.alloc(|| ILit(0)))),
-                arena.alloc(move || Block(inner)),
+                arena.alloc(Binop(GT, arena.alloc(ReadStdin), arena.alloc(ILit(0)))),
+                arena.alloc(Block(inner)),
             ));
             main_loop = Some(if self.prepare.len() > 0 {
                 let mut block = Vec::with_capacity(self.prepare.len() + 1);
                 block.push(main_portion);
                 block.extend(self.prepare.iter().cloned());
-                arena.alloc_v(Stmt::Block(block))
+                arena.alloc(Stmt::Block(block))
             } else {
                 main_portion
             });
         }
         if self.end.len() > 0 {
-            end = Some(arena.alloc_v(Stmt::Block(self.end.clone())));
+            end = Some(arena.alloc(Stmt::Block(self.end.clone())));
         }
         match self.stage {
             Stage::Main(_) => {
                 begin.extend(main_loop.into_iter().chain(end));
-                Stage::Main(arena.alloc_v(Stmt::Block(begin)))
+                Stage::Main(arena.alloc(Stmt::Block(begin)))
             }
             Stage::Par { .. } => Stage::Par {
                 begin: if begin.len() > 0 {
-                    Some(arena.alloc_v(Stmt::Block(begin)))
+                    Some(arena.alloc(Stmt::Block(begin)))
                 } else {
                     None
                 },

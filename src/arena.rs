@@ -32,12 +32,8 @@ impl Arena {
             std::slice::from_raw_parts(res_p, bs.len())
         }
     }
-    pub fn alloc_v<T>(&self, t: T) -> &T {
-        self.alloc(move || t)
-    }
-
-    pub fn alloc<T>(&self, f: impl FnOnce() -> T) -> &T {
-        self.0.alloc_with(f)
+    pub fn alloc<T>(&self, t: T) -> &T {
+        self.0.alloc(t)
     }
 }
 
@@ -95,12 +91,12 @@ mod bench {
 
     fn build_2<'a>(a: &'a Arena, depth: usize) -> &'a Arith2<'a> {
         use Arith2::*;
-        let mut expr = a.alloc(|| N(1));
+        let mut expr = a.alloc(N(1));
         for i in 0..depth {
             if i % 2 == 0 {
-                expr = a.alloc(|| Add(expr, a.alloc(|| N(i as i64))));
+                expr = a.alloc(Add(expr, a.alloc(N(i as i64))));
             } else {
-                expr = a.alloc(|| Sub(expr, a.alloc(|| N(i as i64))));
+                expr = a.alloc(Sub(expr, a.alloc(N(i as i64))));
             }
         }
         expr
@@ -108,13 +104,13 @@ mod bench {
 
     fn build_2_cheat<'a>(a: &'a Arena, depth: usize) -> &'a Arith2<'a> {
         use Arith2::*;
-        let n1 = a.alloc(|| N(1));
+        let n1 = a.alloc(N(1));
         let mut expr = n1;
         for i in 0..depth {
             if i % 2 == 0 {
-                expr = a.alloc(|| Add(expr, n1));
+                expr = a.alloc(Add(expr, n1));
             } else {
-                expr = a.alloc(|| Sub(expr, n1));
+                expr = a.alloc(Sub(expr, n1));
             }
         }
         expr

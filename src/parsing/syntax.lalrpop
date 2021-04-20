@@ -89,45 +89,44 @@ Stmt: &'a Stmt<'a, 'a, &'a str> = {
 }
 
 OpenStmt: &'a Stmt<'a,'a,&'a str> = {
-    "if" "(" <cond:Expr> Rparen <s1:ClosedStmt> Else <s2:OpenStmt> => arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
-    "if" "(" <cond:Expr> Rparen <s1:Stmt> => arena.alloc_v(Stmt::If(cond, s1, None)),
-    "while" "(" <cond:Expr> Rparen <body:OpenStmt> => arena.alloc_v(Stmt::While(false, cond, body)),
+    "if" "(" <cond:Expr> Rparen <s1:ClosedStmt> Else <s2:OpenStmt> => arena.alloc(Stmt::If(cond, s1, Some(s2))),
+    "if" "(" <cond:Expr> Rparen <s1:Stmt> => arena.alloc(Stmt::If(cond, s1, None)),
+    "while" "(" <cond:Expr> Rparen <body:OpenStmt> => arena.alloc(Stmt::While(false, cond, body)),
     "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> Rparen <body:OpenStmt> =>
-        arena.alloc_v(Stmt::For(
-                init.map(|x| arena.alloc_v(Stmt::Expr(x))),
+        arena.alloc(Stmt::For(
+                init.map(|x| arena.alloc(Stmt::Expr(x))),
                 cond,
-                update.map(|x| arena.alloc_v(Stmt::Expr(x))),
+                update.map(|x| arena.alloc(Stmt::Expr(x))),
                 body
         )),
-    // TODO: for ((i, j) in arr)
     "for" "(" <id:"IDENT"> "in" <arr:Expr> Rparen <body:OpenStmt> =>
-        arena.alloc_v(Stmt::ForEach(id, arr, body)),
+        arena.alloc(Stmt::ForEach(id, arr, body)),
 }
 
 ClosedStmt: &'a Stmt<'a,'a,&'a str> = {
     BaseStmt,
     "if" "(" <cond:Expr> Rparen <s1:ClosedStmt> Else <s2:ClosedStmt> =>
-           arena.alloc_v(Stmt::If(cond, s1, Some(s2))),
-    "while" "(" <cond:Expr> Rparen <body:ClosedStmt> => arena.alloc_v(Stmt::While(false, cond, body)),
+           arena.alloc(Stmt::If(cond, s1, Some(s2))),
+    "while" "(" <cond:Expr> Rparen <body:ClosedStmt> => arena.alloc(Stmt::While(false, cond, body)),
     "for" "(" <init: ExprNoIn?> ";" <cond:Expr?> ";" <update:Expr?> Rparen <body:ClosedLoopBody> =>
-        arena.alloc_v(Stmt::For(
-                init.map(|x| arena.alloc_v(Stmt::Expr(x))),
+        arena.alloc(Stmt::For(
+                init.map(|x| arena.alloc(Stmt::Expr(x))),
                 cond,
-                update.map(|x| arena.alloc_v(Stmt::Expr(x))),
+                update.map(|x| arena.alloc(Stmt::Expr(x))),
                 body
         )),
     "for" "(" <id:"IDENT"> "in" <arr:Expr> Rparen <body:ClosedLoopBody> =>
-        arena.alloc_v(Stmt::ForEach(id, arr, body)),
+        arena.alloc(Stmt::ForEach(id, arr, body)),
 
 
-    Do <body:BaseStmt> "while" "(" <cond:Expr> ")" Sep => arena.alloc_v(Stmt::DoWhile(cond, body)),
+    Do <body:BaseStmt> "while" "(" <cond:Expr> ")" Sep => arena.alloc(Stmt::DoWhile(cond, body)),
 }
 
 Getline : &'a Expr<'a, 'a, &'a str> = {
     "getline" <into:BaseTerm?> <from:("<" <Expr>)?> =>
-      arena.alloc_v(Expr::Getline{into, from, is_file: true}),
+      arena.alloc(Expr::Getline{into, from, is_file: true}),
     <from:PrecFieldRef> "|" "getline" <into:BaseTerm?> =>
-      arena.alloc_v(Expr::Getline{into, from: Some(from), is_file: false}),
+      arena.alloc(Expr::Getline{into, from: Some(from), is_file: false}),
 }
 
 Redirect: (&'a Expr<'a, 'a, &'a str>, FileSpec) = {
@@ -137,7 +136,7 @@ Redirect: (&'a Expr<'a, 'a, &'a str>, FileSpec) = {
 }
 
 ClosedLoopBody: &'a Stmt<'a, 'a, &'a str> = {
-    SemiSep => arena.alloc_v(Stmt::Block(vec![])),
+    SemiSep => arena.alloc(Stmt::Block(vec![])),
     ClosedStmt,
 }
 
@@ -147,30 +146,30 @@ BaseStmt: &'a Stmt<'a, 'a, &'a str> = {
 }
 
 LeafStmt: &'a Stmt<'a, 'a, &'a str> = {
-    <e: Expr> => arena.alloc_v(Stmt::Expr(e)),
+    <e: Expr> => arena.alloc(Stmt::Expr(e)),
     "delete" <i: IndexBase> =>
-        arena.alloc_v(Stmt::Expr(arena.alloc_v(Expr::Call(Either::Right(Function::Delete), vec![i.0, i.1])))),
+        arena.alloc(Stmt::Expr(arena.alloc(Expr::Call(Either::Right(Function::Delete), vec![i.0, i.1])))),
     "delete" <b: LeafTerm> =>
-        arena.alloc_v(Stmt::Expr(arena.alloc_v(Expr::Call(Either::Right(Function::Clear), vec![b])))),
+        arena.alloc(Stmt::Expr(arena.alloc(Expr::Call(Either::Right(Function::Clear), vec![b])))),
     "print" <pa:PrintArgs?> <re:Redirect?> =>
-        arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
+        arena.alloc(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "print(" "\n"* <pa:(<Args?>)> ")" <re:Redirect?> =>
-        arena.alloc_v(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
+        arena.alloc(Stmt::Print(pa.unwrap_or(Vec::new()), re)),
     "printf" <spec:PrecAdd> <pa: ("," "\n"* <PrintArgs>)?> <re:Redirect?> =>
-        arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
+        arena.alloc(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
     "printf(" "\n"* <spec:(<Expr> "\n"*)> <pa: ("," "\n"* <Args>)?> ")" <re:Redirect?> =>
-        arena.alloc_v(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
-    "break" => arena.alloc_v(Stmt::Break),
-    "continue" => arena.alloc_v(Stmt::Continue),
-    "next" => arena.alloc_v(Stmt::Next),
-    "nextfile" => arena.alloc_v(Stmt::NextFile),
-    "return" <Expr?> => arena.alloc_v(Stmt::Return(<>)),
+        arena.alloc(Stmt::Printf(spec, pa.unwrap_or(Vec::new()), re)),
+    "break" => arena.alloc(Stmt::Break),
+    "continue" => arena.alloc(Stmt::Continue),
+    "next" => arena.alloc(Stmt::Next),
+    "nextfile" => arena.alloc(Stmt::NextFile),
+    "return" <Expr?> => arena.alloc(Stmt::Return(<>)),
 }
 
 Block: &'a Stmt<'a,'a,&'a str> = {
-    Lbrace Rbrace SemiSep? => arena.alloc_v(Stmt::Block(vec![])),
+    Lbrace Rbrace SemiSep? => arena.alloc(Stmt::Block(vec![])),
     Lbrace <LeafStmt> Rbrace SemiSep? => <>,
-    Lbrace <BlockInner> Rbrace SemiSep? => arena.alloc_v(Stmt::Block(<>)),
+    Lbrace <BlockInner> Rbrace SemiSep? => arena.alloc(Stmt::Block(<>)),
 }
 
 BlockInner: Vec<&'a Stmt<'a,'a,&'a str>> = {
@@ -211,56 +210,56 @@ Expr: &'a Expr<'a,'a,&'a str> = {
 };
 
 PrecAsgn: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecIn> "=" <r: PrecAsgn> => arena.alloc_v(Expr::Assign(l, r)),
-    <l: PrecIn> "+=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Plus, r)),
-    <l: PrecIn> "-=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Minus, r)),
-    <l: PrecIn> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
-    <l: PrecIn> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
-    <l: PrecIn> "^=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Pow, r)),
-    <l: PrecIn> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
+    <l: PrecIn> "=" <r: PrecAsgn> => arena.alloc(Expr::Assign(l, r)),
+    <l: PrecIn> "+=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Plus, r)),
+    <l: PrecIn> "-=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Minus, r)),
+    <l: PrecIn> "*=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Mult, r)),
+    <l: PrecIn> "/=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Div, r)),
+    <l: PrecIn> "^=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Pow, r)),
+    <l: PrecIn> "%=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Mod, r)),
     PrecTern,
 }
 
 LookupList: &'a Expr<'a, 'a, &'a str> = {
     <first:PrecMatch> <rest:("," <PrecMatch>)+> => {
       let mut res = first;
-      let subsep = arena.alloc_v(Expr::Var("SUBSEP"));
+      let subsep = arena.alloc(Expr::Var("SUBSEP"));
       for dim in rest.into_iter() {
-        res = arena.alloc_v(Expr::Binop(Binop::Concat, res, subsep));
-        res = arena.alloc_v(Expr::Binop(Binop::Concat, res, dim));
+        res = arena.alloc(Expr::Binop(Binop::Concat, res, subsep));
+        res = arena.alloc(Expr::Binop(Binop::Concat, res, dim));
       }
       res
    }
 }
 
 PrecTern: &'a Expr<'a, 'a, &'a str> = {
-   <c: PrecOr> "?" <t: PrecTern> ":" <f: PrecTern> => arena.alloc_v(Expr::ITE(c, t, f)),
+   <c: PrecOr> "?" <t: PrecTern> ":" <f: PrecTern> => arena.alloc(Expr::ITE(c, t, f)),
    PrecOr,
 }
 
 PrecOr: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecAnd> Or <r: PrecOr> => arena.alloc_v(Expr::Or(l, r)),
+    <l: PrecAnd> Or <r: PrecOr> => arena.alloc(Expr::Or(l, r)),
     PrecAnd,
 }
 
 PrecAnd: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecIn> And <r: PrecAnd> => arena.alloc_v(Expr::And(l, r)),
+    <l: PrecIn> And <r: PrecAnd> => arena.alloc(Expr::And(l, r)),
     PrecIn,
 }
 
 PrecIn: &'a Expr<'a,'a,&'a str> = {
     <l: PrecMatch> "in" <r: PrecMatch> =>
-        arena.alloc_v(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
+        arena.alloc(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
     "(" <l: LookupList> Rparen "in" <r: PrecMatch> =>
-        arena.alloc_v(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
+        arena.alloc(Expr::Call(Either::Right(Function::Contains), vec![r, l])),
     PrecMatch,
 }
 
 PrecMatch: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecMatch> "~" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::IsMatch, l, r)),
-    <l: PrecMatch> "!~" <r: PrecCmp> => arena.alloc_v(Expr::Unop(
+    <l: PrecMatch> "~" <r: PrecCmp> => arena.alloc(Expr::Binop(Binop::IsMatch, l, r)),
+    <l: PrecMatch> "!~" <r: PrecCmp> => arena.alloc(Expr::Unop(
             Unop::Not,
-            arena.alloc_v(Expr::Binop(Binop::IsMatch, l, r)))),
+            arena.alloc(Expr::Binop(Binop::IsMatch, l, r)))),
     PrecCmp,
 }
 
@@ -273,77 +272,77 @@ ExprNoIn: &'a Expr<'a,'a,&'a str> = {
 };
 
 PrecAsgnNoIn: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecTernNoIn> "=" <r: PrecAsgn> => arena.alloc_v(Expr::Assign(l, r)),
-    <l: PrecTernNoIn> "+=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Plus, r)),
-    <l: PrecTernNoIn> "-=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Minus, r)),
-    <l: PrecTernNoIn> "*=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mult, r)),
-    <l: PrecTernNoIn> "/=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Div, r)),
-    <l: PrecTernNoIn> "^=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Pow, r)),
-    <l: PrecTernNoIn> "%=" <r: PrecAsgn> => arena.alloc_v(Expr::AssignOp(l, Binop::Mod, r)),
+    <l: PrecTernNoIn> "=" <r: PrecAsgn> => arena.alloc(Expr::Assign(l, r)),
+    <l: PrecTernNoIn> "+=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Plus, r)),
+    <l: PrecTernNoIn> "-=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Minus, r)),
+    <l: PrecTernNoIn> "*=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Mult, r)),
+    <l: PrecTernNoIn> "/=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Div, r)),
+    <l: PrecTernNoIn> "^=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Pow, r)),
+    <l: PrecTernNoIn> "%=" <r: PrecAsgn> => arena.alloc(Expr::AssignOp(l, Binop::Mod, r)),
     PrecTernNoIn,
 }
 
 PrecTernNoIn: &'a Expr<'a, 'a, &'a str> = {
-   <c: PrecOrNoIn> "?" <t: PrecTernNoIn> ":" <f: PrecTern> => arena.alloc_v(Expr::ITE(c, t, f)),
+   <c: PrecOrNoIn> "?" <t: PrecTernNoIn> ":" <f: PrecTern> => arena.alloc(Expr::ITE(c, t, f)),
    PrecOrNoIn,
 }
 
 PrecOrNoIn: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecAndNoIn> Or <r: PrecOrNoIn> => arena.alloc_v(Expr::Or(l, r)),
+    <l: PrecAndNoIn> Or <r: PrecOrNoIn> => arena.alloc(Expr::Or(l, r)),
     PrecAndNoIn,
 }
 
 PrecAndNoIn: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecMatch> And <r: PrecAndNoIn> => arena.alloc_v(Expr::And(l, r)),
+    <l: PrecMatch> And <r: PrecAndNoIn> => arena.alloc(Expr::And(l, r)),
     PrecMatch,
 }
 
 
 PrecCmp: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecAdd> "<" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::LT, l, r)),
-    <l: PrecAdd> "<=" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::LTE, l, r)),
-    <l: PrecAdd> ">" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::GT, l, r)),
-    <l: PrecAdd> ">=" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::GTE, l, r)),
-    <l: PrecAdd> "==" <r: PrecCmp> => arena.alloc_v(Expr::Binop(Binop::EQ, l, r)),
-    <l: PrecAdd> "!=" <r: PrecCmp> => arena.alloc_v(Expr::Unop(Unop::Not, arena.alloc_v(Expr::Binop(Binop::EQ, l, r)))),
+    <l: PrecAdd> "<" <r: PrecCmp> => arena.alloc(Expr::Binop(Binop::LT, l, r)),
+    <l: PrecAdd> "<=" <r: PrecCmp> => arena.alloc(Expr::Binop(Binop::LTE, l, r)),
+    <l: PrecAdd> ">" <r: PrecCmp> => arena.alloc(Expr::Binop(Binop::GT, l, r)),
+    <l: PrecAdd> ">=" <r: PrecCmp> => arena.alloc(Expr::Binop(Binop::GTE, l, r)),
+    <l: PrecAdd> "==" <r: PrecCmp> => arena.alloc(Expr::Binop(Binop::EQ, l, r)),
+    <l: PrecAdd> "!=" <r: PrecCmp> => arena.alloc(Expr::Unop(Unop::Not, arena.alloc(Expr::Binop(Binop::EQ, l, r)))),
     PrecAdd
 }
 
 PrecAdd: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecAdd> "+" <r:PrecMul>  => arena.alloc_v(Expr::Binop(Binop::Plus, l, r)),
-    <l: PrecAdd> "-" <r:PrecMul>  => arena.alloc_v(Expr::Binop(Binop::Minus, l, r)),
+    <l: PrecAdd> "+" <r:PrecMul>  => arena.alloc(Expr::Binop(Binop::Plus, l, r)),
+    <l: PrecAdd> "-" <r:PrecMul>  => arena.alloc(Expr::Binop(Binop::Minus, l, r)),
     PrecMul,
 }
 
 PrecMul: &'a Expr<'a,'a,&'a str> = {
-    <l: PrecMul> "*" <r:PrecPow> => arena.alloc_v(Expr::Binop(Binop::Mult, l, r)),
-    <l: PrecMul> "/" <r:PrecPow> => arena.alloc_v(Expr::Binop(Binop::Div, l, r)),
-    <l: PrecMul> "%" <r:PrecPow> => arena.alloc_v(Expr::Binop(Binop::Mod, l, r)),
+    <l: PrecMul> "*" <r:PrecPow> => arena.alloc(Expr::Binop(Binop::Mult, l, r)),
+    <l: PrecMul> "/" <r:PrecPow> => arena.alloc(Expr::Binop(Binop::Div, l, r)),
+    <l: PrecMul> "%" <r:PrecPow> => arena.alloc(Expr::Binop(Binop::Mod, l, r)),
     PrecPow,
 }
 
 PrecPow: &'a Expr<'a, 'a, &'a str> = {
-    <l: PrecUnop> "^" <r: PrecPow> => arena.alloc_v(Expr::Binop(Binop::Pow, l, r)),
+    <l: PrecUnop> "^" <r: PrecPow> => arena.alloc(Expr::Binop(Binop::Pow, l, r)),
     PrecUnop
 }
 
 PrecUnop: &'a Expr<'a,'a,&'a str> = {
-    "-" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Neg, e)),
-    "+" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Pos, e)),
-    "!" <e: PrecInc> => arena.alloc_v(Expr::Unop(Unop::Not, e)),
+    "-" <e: PrecInc> => arena.alloc(Expr::Unop(Unop::Neg, e)),
+    "+" <e: PrecInc> => arena.alloc(Expr::Unop(Unop::Pos, e)),
+    "!" <e: PrecInc> => arena.alloc(Expr::Unop(Unop::Not, e)),
     PrecInc
 }
 
 PrecInc: &'a Expr<'a,'a,&'a str> = {
-    <e:CatBaseTerm>"++" => arena.alloc_v(Expr::Inc { is_inc: true, is_post: true, x: e }),
-    <e:CatBaseTerm>"--"=> arena.alloc_v(Expr::Inc { is_inc: false, is_post: true, x: e }),
-    "++" <e:CatBaseTerm> => arena.alloc_v(Expr::Inc { is_inc: true, is_post: false, x: e }),
-    "--" <e:CatBaseTerm> => arena.alloc_v(Expr::Inc { is_inc: false, is_post: false, x: e }),
+    <e:CatBaseTerm>"++" => arena.alloc(Expr::Inc { is_inc: true, is_post: true, x: e }),
+    <e:CatBaseTerm>"--"=> arena.alloc(Expr::Inc { is_inc: false, is_post: true, x: e }),
+    "++" <e:CatBaseTerm> => arena.alloc(Expr::Inc { is_inc: true, is_post: false, x: e }),
+    "--" <e:CatBaseTerm> => arena.alloc(Expr::Inc { is_inc: false, is_post: false, x: e }),
     CatBaseTerm,
 }
 
 CatBaseTerm: &'a Expr<'a,'a, &'a str> = {
-    <l: CatBaseTerm> <r: PrecFieldRef> => arena.alloc_v(Expr::Binop(Binop::Concat, l, r)),
+    <l: CatBaseTerm> <r: PrecFieldRef> => arena.alloc(Expr::Binop(Binop::Concat, l, r)),
     PrecFieldRef
 }
 
@@ -353,19 +352,19 @@ PrecFieldRef: &'a Expr<'a,'a,&'a str> = {
 }
 
 Col: &'a Expr<'a,'a,&'a str> = {
-    "$" <e:BaseTerm> => arena.alloc_v(Expr::Unop(Unop::Column, e)),
+    "$" <e:BaseTerm> => arena.alloc(Expr::Unop(Unop::Column, e)),
 }
 
 Ident: &'a Expr<'a,'a,&'a str> = {
-  "IDENT" => arena.alloc_v(Expr::Var(arena.alloc_str(<>))),
+  "IDENT" => arena.alloc(Expr::Var(arena.alloc_str(<>))),
 }
 
 StrLit: &'a Expr<'a,'a,&'a str> = {
-  "STRLIT" => arena.alloc_v(Expr::StrLit(lexer::parse_string_literal(<>, &arena, buf))),
+  "STRLIT" => arena.alloc(Expr::StrLit(lexer::parse_string_literal(<>, &arena, buf))),
 }
 
 Index: &'a Expr<'a,'a,&'a str> = {
-    <i:IndexBase> => arena.alloc_v(Expr::Index(i.0, i.1)),
+    <i:IndexBase> => arena.alloc(Expr::Index(i.0, i.1)),
 }
 
 IndexBase: (&'a Expr<'a,'a,&'a str>, &'a Expr<'a,'a,&'a str>) = {
@@ -382,13 +381,13 @@ BaseTerm: &'a Expr<'a,'a, &'a str> = {
 LeafTerm: &'a Expr<'a,'a, &'a str> = {
   Ident,
   StrLit,
-  "INT" => arena.alloc_v(Expr::ILit(strtoi(<>.as_bytes()))),
-  "HEX" => arena.alloc_v(Expr::ILit(hextoi(<>.as_bytes()))),
-  "FLOAT" => arena.alloc_v(Expr::FLit(strtod(<>.as_bytes()))),
-  "PATLIT" => arena.alloc_v(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
+  "INT" => arena.alloc(Expr::ILit(strtoi(<>.as_bytes()))),
+  "HEX" => arena.alloc(Expr::ILit(hextoi(<>.as_bytes()))),
+  "FLOAT" => arena.alloc(Expr::FLit(strtod(<>.as_bytes()))),
+  "PATLIT" => arena.alloc(Expr::PatLit(lexer::parse_regex_literal(<>, &arena, buf))),
   // TODO: not Rparen for these next two?
   <i:CallStart> <args:Args?> ")" =>
-        arena.alloc_v(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
+        arena.alloc(Expr::Call(Either::Left(i), args.unwrap_or(vec![]))),
 }
 
 And: () = { "&&" "\n"* }
