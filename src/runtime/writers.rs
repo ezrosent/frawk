@@ -44,10 +44,10 @@ use std::sync::{
 };
 
 #[cfg(not(feature = "unstable"))]
-use crate::lazy_static::__Deref;
+use itertools::Itertools;
 
 #[cfg(not(feature = "unstable"))]
-use itertools::Itertools;
+use std::ops::Deref;
 
 // TODO: get_handle() should return an error on failure to parse UTF8
 
