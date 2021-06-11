@@ -1,6 +1,6 @@
 [package]
 name = "frawk"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Eli Rosenthal <ezr@cs.brown.edu>"]
 edition = "2018"
 description = "an efficient Awk-like language"
