@@ -424,7 +424,7 @@ fn main() {
             // We specified a file on the command line, so the "program" will be
             // interpreted as another input file.
             if let Some(p) = matches.value_of("program") {
-                input_files.push(p.into());
+                input_files.insert(0, p.into());
             }
             let mut prog = String::new();
             for pfile in pfiles {

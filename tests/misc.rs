@@ -98,7 +98,7 @@ fn simple_fi() {
             .arg(String::from("-icsv"))
             .arg(String::from("-H"))
             .arg(prog.clone())
-            .arg(data_fname.clone().into_os_string().into_string().unwrap())
+            .arg(fname_to_string(&data_fname))
             .assert()
             .stdout(expected.clone());
     }
@@ -140,15 +140,9 @@ file 2 3
         Command::cargo_bin("frawk")
             .unwrap()
             .arg(String::from(*backend_arg))
-            .arg(format!(
-                "-f{}",
-                prog1.clone().into_os_string().into_string().unwrap()
-            ))
-            .arg(format!(
-                "-f{}",
-                prog2.clone().into_os_string().into_string().unwrap()
-            ))
-            .arg(data_fname.clone().into_os_string().into_string().unwrap())
+            .arg(format!("-f{}", fname_to_string(&prog1)))
+            .arg(format!("-f{}", fname_to_string(&prog2)))
+            .arg(fname_to_string(&data_fname))
             .assert()
             .stdout(expected.clone());
     }
@@ -251,7 +245,7 @@ fn iter_across_functions() {
             .unwrap()
             .arg(String::from(*backend_arg))
             .arg(prog.clone())
-            .arg(data_fname.clone().into_os_string().into_string().unwrap())
+            .arg(fname_to_string(&data_fname))
             .output()
             .unwrap()
             .stdout;
@@ -274,4 +268,42 @@ fn nested_loops() {
             .stdout;
         unordered_output_equals(expected.as_bytes(), &output[..]);
     }
+}
+
+#[test]
+fn dont_reorder_files_with_f() {
+    let expected = "1 1\n2 2\n3 3\n";
+    let prog = "NR == FNR { print NR, FNR}";
+    let test_data_1 = "1\n2\n3\n";
+    let test_data_2 = "1\n2\n3\n4\n5\n";
+    let tmp = tempdir().unwrap();
+    let prog_file = tmp.path().join("prog");
+    let f1 = tmp.path().join("f1");
+    let f2 = tmp.path().join("f2");
+    File::create(f1.clone())
+        .unwrap()
+        .write(test_data_1.as_bytes())
+        .unwrap();
+    File::create(f2.clone())
+        .unwrap()
+        .write(test_data_2.as_bytes())
+        .unwrap();
+    File::create(prog_file.clone())
+        .unwrap()
+        .write(prog.as_bytes())
+        .unwrap();
+    for backend_arg in BACKEND_ARGS {
+        Command::cargo_bin("frawk")
+            .unwrap()
+            .arg(String::from(*backend_arg))
+            .arg(format!("-f{}", fname_to_string(&prog_file)))
+            .arg(fname_to_string(&f1))
+            .arg(fname_to_string(&f2))
+            .assert()
+            .stdout(String::from(expected));
+    }
+}
+
+fn fname_to_string(path: &std::path::PathBuf) -> String {
+    path.clone().into_os_string().into_string().unwrap()
 }
