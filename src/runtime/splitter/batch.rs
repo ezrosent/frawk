@@ -2158,5 +2158,12 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         whitespace_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
         whitespace_split(crate::test_string_constants::VIRGIL);
         whitespace_split("   leading whitespace   \n and some    more\n");
+        whitespace_split(
+            r#"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx  yyyyyyyyyyyyyyyyyyyyyyyyyyyy 111111
+xxxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyy     222222
+xxxxxxxxxxxxxxxxxxxxxxxxxxxx  yyyyyyyyyyyyyyyyyyyyyyyyyyyy 3333333
+xxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyy     4444444
+"#,
+        );
     }
 }
