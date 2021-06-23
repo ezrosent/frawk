@@ -637,7 +637,9 @@ pub fn get_find_indexes(
     }
 }
 
-pub fn get_find_indexes_bytes() -> unsafe fn(&[u8], &mut Offsets, u8, u8) {
+pub type BytesIndexKernel = unsafe fn(&[u8], &mut Offsets, u8, u8);
+
+pub fn get_find_indexes_bytes() -> BytesIndexKernel {
     #[cfg(feature = "allow_avx2")]
     const ALLOW_AVX2: bool = true;
     #[cfg(not(feature = "allow_avx2"))]
@@ -652,7 +654,9 @@ pub fn get_find_indexes_bytes() -> unsafe fn(&[u8], &mut Offsets, u8, u8) {
     }
 }
 
-pub fn get_find_indexes_ascii_whitespace() -> unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64 {
+pub type WhitespaceIndexKernel = unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64;
+
+pub fn get_find_indexes_ascii_whitespace() -> WhitespaceIndexKernel {
     #[cfg(feature = "allow_avx2")]
     const ALLOW_AVX2: bool = true;
     #[cfg(not(feature = "allow_avx2"))]
@@ -816,9 +820,12 @@ mod generic {
             let nl = self.cmp_against_input(b'\n');
             let cr = self.cmp_against_input(b'\r');
             let ws1 = space.or(tab).or(nl).or(cr).mask();
-            let ws2 = ws1.wrapping_shl(1) | start_ws;
+            let mut ws2 = ws1.wrapping_shl(1) | start_ws;
+            if Self::INPUT_SIZE != 64 {
+                ws2 &= !(1 << Self::INPUT_SIZE as u32)
+            }
             let ws_res = ws1 ^ ws2;
-            let next_start_ws = ws1.wrapping_shr(63);
+            let next_start_ws = ws1.wrapping_shr(Self::INPUT_SIZE as u32 - 1);
             (ws_res, nl.mask(), next_start_ws)
         }
     }
@@ -892,6 +899,7 @@ mod generic {
                 in_quotes.0[ix] = if in_quote { 1 } else { 0 };
             }
             let in_quotes_mask = in_quotes.mask() ^ *prev_iter_inside_quote;
+            // TODO: should this be 31?
             *prev_iter_inside_quote = (in_quotes_mask as i64).wrapping_shr(63) as u64;
             (in_quotes_mask, quote_mask.mask())
         }
@@ -932,6 +940,7 @@ mod generic {
         // We need to invert the mask if we started off inside a quote.
         quote_mask ^= prev;
         // We want all 1s if we ended in a quote, all zeros if not
+        // TODO: should 63 be V::INPUT_SIZE-1?
         *prev_iter_inside_quote = (quote_mask as i64).wrapping_shr(63) as u64;
         (quote_mask, quote_bits)
     }
@@ -1373,18 +1382,43 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
         I: Iterator<Item = (S, String)> + 'static + Send,
         S: Read + Send + 'static,
     {
+        Self::new_whitespace_internal(
+            rs,
+            chunk_size,
+            check_utf8,
+            exec_strategy,
+            get_find_indexes_ascii_whitespace(),
+        )
+    }
+    pub fn new_whitespace_internal<I, S>(
+        rs: I,
+        chunk_size: usize,
+        check_utf8: bool,
+        exec_strategy: ExecutionStrategy,
+        find_indexes: unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64,
+    ) -> Self
+    where
+        I: Iterator<Item = (S, String)> + 'static + Send,
+        S: Read + Send + 'static,
+    {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>> =
             match exec_strategy {
                 ExecutionStrategy::Serial => {
                     Box::new(chunk::new_chained_offset_chunk_producer_ascii_whitespace(
-                        rs, chunk_size, check_utf8,
+                        rs,
+                        chunk_size,
+                        check_utf8,
+                        find_indexes,
                     ))
                 }
                 x @ ExecutionStrategy::ShardPerRecord => {
                     Box::new(ParallelChunkProducer::new(
                         move || {
                             chunk::new_chained_offset_chunk_producer_ascii_whitespace(
-                                rs, chunk_size, check_utf8,
+                                rs,
+                                chunk_size,
+                                check_utf8,
+                                find_indexes,
                             )
                         },
                         /*channel_size*/ x.num_workers() * 2,
@@ -1399,6 +1433,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
                                 name.as_str(),
                                 i as u32 + 1,
                                 check_utf8,
+                                find_indexes,
                             )
                         }
                     });
@@ -2086,7 +2121,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         multithreaded_count("   leading whitespace   \n and some    more\n", 2, make_br);
     }
 
-    fn whitespace_split(corpus: &'static str) {
+    fn whitespace_split(kernel: WhitespaceIndexKernel, corpus: &'static str) {
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
         let mut expected_lines: Vec<Str<'static>> = Vec::new();
@@ -2108,11 +2143,12 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             let _ = expected.pop();
         }
         let reader = std::io::Cursor::new(corpus);
-        let mut reader = ByteReader::new_whitespace(
+        let mut reader = ByteReader::new_whitespace_internal(
             std::iter::once((reader, String::from("fake-stdin"))),
             1024,
             /*check_utf8=*/ false,
             ExecutionStrategy::Serial,
+            kernel,
         );
         let mut got_lines = Vec::new();
         let mut got = Vec::new();
@@ -2153,17 +2189,29 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         }
     }
 
-    #[test]
-    fn whitespace_splitter() {
-        whitespace_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
-        whitespace_split(crate::test_string_constants::VIRGIL);
-        whitespace_split("   leading whitespace   \n and some    more\n");
+    fn whitespace_splitter_generic<V: generic::Vector>() {
+        let k = generic::find_indexes_ascii_whitespace::<V>;
+        whitespace_split(k, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+        whitespace_split(k, crate::test_string_constants::VIRGIL);
+        whitespace_split(k, "   leading whitespace   \n and some    more\n");
         whitespace_split(
+            k,
             r#"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx  yyyyyyyyyyyyyyyyyyyyyyyyyyyy 111111
 xxxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyy     222222
 xxxxxxxxxxxxxxxxxxxxxxxxxxxx  yyyyyyyyyyyyyyyyyyyyyyyyyyyy 3333333
 xxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyy     4444444
 "#,
         );
+    }
+
+    #[test]
+    fn whitespace_splitter() {
+        if is_x86_feature_detected!("avx2") {
+            whitespace_splitter_generic::<avx2::Impl>()
+        }
+        if is_x86_feature_detected!("sse2") {
+            whitespace_splitter_generic::<sse2::Impl>()
+        }
+        whitespace_splitter_generic::<generic::Impl>()
     }
 }
