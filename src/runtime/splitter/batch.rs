@@ -891,16 +891,32 @@ mod generic {
 
         unsafe fn find_quote_mask(self, prev_iter_inside_quote: &mut u64) -> (u64, u64) {
             let quote_mask = self.cmp_against_input(b'"');
-            let mut in_quote = false;
+            // let mut in_quote = false;
             let mut in_quotes = Impl([0; 32]);
+            let mut running_xor = 0;
             for ix in 0..Self::VEC_BYTES {
-                let cmp = quote_mask.0[ix];
-                in_quote = (cmp == 1 && !in_quote) || (in_quote && cmp == 0);
-                in_quotes.0[ix] = if in_quote { 1 } else { 0 };
+                running_xor ^= quote_mask.0[ix];
+                in_quotes.0[ix] = running_xor;
+                // let cmp = quote_mask.0[ix];
+                // if in_quote {
+                //     if cmp == 1 {
+                //         in_quote = false;
+                //         in_quotes.0[ix] = 0;
+                //     } else {
+                //         in_quotes.0[ix] = 1;
+                //     }
+                // } else {
+                //     if cmp == 1 {
+                //         in_quote = true;
+                //         in_quotes.0[ix] = 1;
+                //     } else {
+                //         in_quotes.0[ix] = 0;
+                //     }
+                // }
             }
             let in_quotes_mask = in_quotes.mask() ^ *prev_iter_inside_quote;
-            // TODO: should this be 31?
-            *prev_iter_inside_quote = (in_quotes_mask as i64).wrapping_shr(63) as u64;
+            *prev_iter_inside_quote =
+                (in_quotes_mask as i64).wrapping_shr(Self::INPUT_SIZE as u32 - 1) as u64;
             (in_quotes_mask, quote_mask.mask())
         }
     }
@@ -940,8 +956,7 @@ mod generic {
         // We need to invert the mask if we started off inside a quote.
         quote_mask ^= prev;
         // We want all 1s if we ended in a quote, all zeros if not
-        // TODO: should 63 be V::INPUT_SIZE-1?
-        *prev_iter_inside_quote = (quote_mask as i64).wrapping_shr(63) as u64;
+        *prev_iter_inside_quote = (quote_mask as i64).wrapping_shr(V::INPUT_SIZE as u32 - 1) as u64;
         (quote_mask, quote_bits)
     }
 
@@ -1108,7 +1123,7 @@ mod generic {
             let lf = inp.cmp_mask_against_input(0x0a);
             // Allow for either \r\n or \n.
             let end = (lf & cr_adjusted) | lf;
-            prev_iter_cr_end = cr.wrapping_shr(63);
+            prev_iter_cr_end = cr.wrapping_shr(V::INPUT_SIZE as u32 - 1);
             // NB: for now, NL is going to be unused for csv
             // Don't use NL here for now
             // let nl = end & !quote_mask;
@@ -1825,17 +1840,17 @@ mod tests {
 
     fn smoke_test<V: generic::Vector>() {
         let text: &'static str = r#"This,is,"a line with a quoted, comma",and
-unquoted,commas,"as well, including some long ones", and there we have it."#;
+unquoted,commas,"as well, including some long ones", and there we have it.""#;
         let mut mem: Vec<u8> = text.as_bytes().iter().cloned().collect();
         mem.reserve(32);
         let mut offsets: Offsets = Default::default();
         let (in_quote, in_cr) =
             unsafe { generic::find_indexes_csv::<V>(&mem[..], &mut offsets, 0, 0) };
-        assert_eq!(in_quote, 0);
+        assert_ne!(in_quote, 0);
         assert_eq!(in_cr, 0);
         assert_eq!(
             &offsets.rel.fields[..],
-            &[4, 7, 8, 36, 37, 41, 50, 57, 58, 92, 93],
+            &[4, 7, 8, 36, 37, 41, 50, 57, 58, 92, 93, 116],
             "offset_fields={:?}",
             offsets
                 .rel
@@ -1856,8 +1871,16 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
 
     #[test]
     fn sse2_smoke_test() {
-        smoke_test::<sse2::Impl>();
+        if is_x86_feature_detected!("sse2") {
+            smoke_test::<sse2::Impl>();
+        }
     }
+
+    #[test]
+    fn generic_smoke_test() {
+        smoke_test::<generic::Impl>();
+    }
+
     fn disp_vec(v: &Vec<Str>) -> String {
         format!(
             "{:?}",
