@@ -1189,7 +1189,7 @@ mod sse2 {
 
     impl Vector for Impl {
         const VEC_BYTES: usize = 16;
-        #[inline(always)]
+        #[target_feature(enable = "sse2")]
         unsafe fn fill_input(bptr: *const u8) -> Self {
             Impl {
                 lo: _mm_loadu_si128(bptr as *const _),
@@ -1197,28 +1197,28 @@ mod sse2 {
             }
         }
 
-        #[inline(always)]
+        #[target_feature(enable = "sse2")]
         unsafe fn mask(self) -> u64 {
             let lo = _mm_movemask_epi8(self.lo) as u32 as u64;
             let hi = _mm_movemask_epi8(self.hi) as u32 as u64;
             lo | hi << Self::VEC_BYTES
         }
 
-        #[inline(always)]
+        #[target_feature(enable = "sse2")]
         unsafe fn or(self, rhs: Self) -> Self {
             let lo = _mm_or_si128(self.lo, rhs.lo);
             let hi = _mm_or_si128(self.hi, rhs.hi);
             Impl { lo, hi }
         }
 
-        #[inline(always)]
+        #[target_feature(enable = "sse2")]
         unsafe fn and(self, rhs: Self) -> Self {
             let lo = _mm_and_si128(self.lo, rhs.lo);
             let hi = _mm_and_si128(self.hi, rhs.hi);
             Impl { lo, hi }
         }
 
-        #[inline(always)]
+        #[target_feature(enable = "sse2")]
         unsafe fn cmp_against_input(self, m: u8) -> Self {
             // Load the mask into all lanes.
             let mask = _mm_set1_epi8(m as i8);
@@ -1227,6 +1227,7 @@ mod sse2 {
             Impl { lo, hi }
         }
 
+        #[target_feature(enable = "sse2")]
         unsafe fn find_quote_mask(
             self,
             prev_iter_inside_quote: &mut u64,
@@ -1250,7 +1251,7 @@ mod avx2 {
 
     impl Vector for Impl {
         const VEC_BYTES: usize = 32;
-        #[inline(always)]
+        #[target_feature(enable = "avx2")]
         unsafe fn fill_input(bptr: *const u8) -> Self {
             Impl {
                 lo: _mm256_loadu_si256(bptr as *const _),
@@ -1258,28 +1259,28 @@ mod avx2 {
             }
         }
 
-        #[inline(always)]
+        #[target_feature(enable = "avx2")]
         unsafe fn mask(self) -> u64 {
             let lo = _mm256_movemask_epi8(self.lo) as u32 as u64;
             let hi = _mm256_movemask_epi8(self.hi) as u32 as u64;
             lo | hi << Self::VEC_BYTES
         }
 
-        #[inline(always)]
+        #[target_feature(enable = "avx2")]
         unsafe fn or(self, rhs: Self) -> Self {
             let lo = _mm256_or_si256(self.lo, rhs.lo);
             let hi = _mm256_or_si256(self.hi, rhs.hi);
             Impl { lo, hi }
         }
 
-        #[inline(always)]
+        #[target_feature(enable = "avx2")]
         unsafe fn and(self, rhs: Self) -> Self {
             let lo = _mm256_and_si256(self.lo, rhs.lo);
             let hi = _mm256_and_si256(self.hi, rhs.hi);
             Impl { lo, hi }
         }
 
-        #[inline(always)]
+        #[target_feature(enable = "avx2")]
         unsafe fn cmp_against_input(self, m: u8) -> Self {
             // Load the mask into all lanes.
             let mask = _mm256_set1_epi8(m as i8);
@@ -1288,6 +1289,7 @@ mod avx2 {
             Impl { lo, hi }
         }
 
+        #[target_feature(enable = "avx2")]
         unsafe fn find_quote_mask(
             self,
             prev_iter_inside_quote: &mut u64,

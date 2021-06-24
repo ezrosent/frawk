@@ -327,6 +327,8 @@ mod x86 {
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::*;
 
+    // TODO: use target_feature = "sse2" here?
+
     #[inline]
     unsafe fn check_smaller_than_0xf4(current_bytes: __m128i, has_error: &mut __m128i) {
         // Intel doesn't define a byte-wise comparison instruction. We could load these byte values

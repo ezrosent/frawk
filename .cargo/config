@@ -1,5 +1,6 @@
 [build]
-rustflags = ["-C", "target-cpu=native", "-A" , "unused_attributes"]
+# rustflags = ["-C", "target-cpu=native", "-A" , "unused_attributes"]
+rustflags = ["-A" , "unused_attributes"]
 
 [profile.dev]
 split-debuginfo = 'unpacked'
