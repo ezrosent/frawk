@@ -890,34 +890,17 @@ mod generic {
         }
 
         unsafe fn find_quote_mask(self, prev_iter_inside_quote: &mut u64) -> (u64, u64) {
-            let quote_mask = self.cmp_against_input(b'"');
-            // let mut in_quote = false;
-            let mut in_quotes = Impl([0; 32]);
+            // NB: this implementation is pretty naive. We could definitely speed this up.
+            let quote_mask = self.cmp_against_input(b'"').mask();
             let mut running_xor = 0;
-            for ix in 0..Self::VEC_BYTES {
-                running_xor ^= quote_mask.0[ix];
-                in_quotes.0[ix] = running_xor;
-                // let cmp = quote_mask.0[ix];
-                // if in_quote {
-                //     if cmp == 1 {
-                //         in_quote = false;
-                //         in_quotes.0[ix] = 0;
-                //     } else {
-                //         in_quotes.0[ix] = 1;
-                //     }
-                // } else {
-                //     if cmp == 1 {
-                //         in_quote = true;
-                //         in_quotes.0[ix] = 1;
-                //     } else {
-                //         in_quotes.0[ix] = 0;
-                //     }
-                // }
+            let mut res = 0u64;
+            for ix in 0..64 {
+                running_xor ^= quote_mask.wrapping_shr(ix) & 1;
+                res |= running_xor.wrapping_shl(ix);
             }
-            let in_quotes_mask = in_quotes.mask() ^ *prev_iter_inside_quote;
-            *prev_iter_inside_quote =
-                (in_quotes_mask as i64).wrapping_shr(Self::INPUT_SIZE as u32 - 1) as u64;
-            (in_quotes_mask, quote_mask.mask())
+            let in_quotes_mask = res ^ *prev_iter_inside_quote;
+            *prev_iter_inside_quote = (in_quotes_mask as i64).wrapping_shr(63) as u64;
+            (in_quotes_mask, quote_mask)
         }
     }
 
@@ -956,7 +939,7 @@ mod generic {
         // We need to invert the mask if we started off inside a quote.
         quote_mask ^= prev;
         // We want all 1s if we ended in a quote, all zeros if not
-        *prev_iter_inside_quote = (quote_mask as i64).wrapping_shr(V::INPUT_SIZE as u32 - 1) as u64;
+        *prev_iter_inside_quote = (quote_mask as i64).wrapping_shr(63) as u64;
         (quote_mask, quote_bits)
     }
 
@@ -1861,23 +1844,14 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
                 .collect::<Vec<_>>()
         );
     }
-
     #[test]
-    fn avx2_smoke_test() {
+    fn csv_smoke_test() {
         if is_x86_feature_detected!("avx2") {
             smoke_test::<avx2::Impl>();
         }
-    }
-
-    #[test]
-    fn sse2_smoke_test() {
         if is_x86_feature_detected!("sse2") {
             smoke_test::<sse2::Impl>();
         }
-    }
-
-    #[test]
-    fn generic_smoke_test() {
         smoke_test::<generic::Impl>();
     }
 
