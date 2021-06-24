@@ -1324,15 +1324,38 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         I: Iterator<Item = (S, String)> + 'static + Send,
         S: Read + Send + 'static,
     {
+        Self::new_internal(
+            rs,
+            field_sep,
+            record_sep,
+            chunk_size,
+            check_utf8,
+            exec_strategy,
+            get_find_indexes_bytes(),
+        )
+    }
+    pub fn new_internal<I, S>(
+        rs: I,
+        field_sep: u8,
+        record_sep: u8,
+        chunk_size: usize,
+        check_utf8: bool,
+        exec_strategy: ExecutionStrategy,
+        kernel: BytesIndexKernel,
+    ) -> Self
+    where
+        I: Iterator<Item = (S, String)> + 'static + Send,
+        S: Read + Send + 'static,
+    {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
             ExecutionStrategy::Serial => Box::new(chunk::new_chained_offset_chunk_producer_bytes(
-                rs, chunk_size, field_sep, record_sep, check_utf8,
+                rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
                 Box::new(ParallelChunkProducer::new(
                     move || {
                         chunk::new_chained_offset_chunk_producer_bytes(
-                            rs, chunk_size, field_sep, record_sep, check_utf8,
+                            rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
                         )
                     },
                     /*channel_size*/ x.num_workers() * 2,
@@ -1349,6 +1372,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                             record_sep,
                             i as u32 + 1,
                             check_utf8,
+                            kernel,
                         )
                     }
                 });
@@ -1921,7 +1945,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
         tsv_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
     }
 
-    fn bytes_split(fs: u8, rs: u8, corpus: &'static str) {
+    fn bytes_split(kernel: BytesIndexKernel, fs: u8, rs: u8, corpus: &'static str) {
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
         let mut expected_lines: Vec<Str<'static>> = Vec::new();
@@ -1947,13 +1971,14 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
         }
 
         let reader = std::io::Cursor::new(corpus);
-        let mut reader = ByteReader::new(
+        let mut reader = ByteReader::new_internal(
             iter::once((reader, String::from("fake-stdin"))),
             fs,
             rs,
             1024,
             /*check_utf8=*/ true,
             ExecutionStrategy::Serial,
+            kernel,
         );
         let mut got_lines = Vec::new();
         let mut got = Vec::new();
@@ -1994,41 +2019,60 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
         }
     }
 
-    #[test]
-    fn bytes_splitter_basic() {
-        bytes_split(b' ', b'\n', crate::test_string_constants::VIRGIL);
+    fn bytes_splitter_generic<V: generic::Vector>() {
+        let k = generic::find_indexes_byte::<V>;
+
+        // Basic functionality
+        bytes_split(k, b' ', b'\n', crate::test_string_constants::VIRGIL);
         bytes_split(
+            k,
             b' ',
             b'\n',
             crate::test_string_constants::PRIDE_PREJUDICE_CH2,
         );
-    }
 
-    #[test]
-    fn bytes_splitter_no_linesep() {
         // Lots of fields, but line separator not present
-        bytes_split(b' ', 0u8, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
-    }
+        bytes_split(
+            k,
+            b' ',
+            0u8,
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2,
+        );
 
-    #[test]
-    fn bytes_splitter_no_fieldsep() {
         // Many lines, lots of single fields
         bytes_split(
+            k,
             0u8,
             b'\n',
             crate::test_string_constants::PRIDE_PREJUDICE_CH2,
         );
-    }
 
-    #[test]
-    fn bytes_splitter_no_sep() {
         // One line, One field
-        bytes_split(0u8, 0u8, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+        bytes_split(
+            k,
+            0u8,
+            0u8,
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2,
+        );
+
+        // Trailing separators
+        bytes_split(
+            k,
+            b' ',
+            b'\n',
+            "   leading whitespace   \n and some    more\n",
+        );
     }
 
     #[test]
-    fn bytes_splitter_trailing() {
-        bytes_split(b' ', b'\n', "   leading whitespace   \n and some    more\n");
+    fn bytes_splitter() {
+        if is_x86_feature_detected!("avx2") {
+            bytes_splitter_generic::<avx2::Impl>()
+        }
+        if is_x86_feature_detected!("sse2") {
+            bytes_splitter_generic::<sse2::Impl>()
+        }
+        bytes_splitter_generic::<generic::Impl>()
     }
 
     fn multithreaded_count<LR: LineReader + 'static>(
