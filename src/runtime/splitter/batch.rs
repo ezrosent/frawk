@@ -611,6 +611,46 @@ impl InputFormat {
 // will instead store a function pointer that is computed at startup based on the dynamically
 // available CPU features.
 
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_csv_avx2(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    generic::find_indexes_csv::<avx2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_tsv_avx2(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    generic::find_indexes_tsv::<avx2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
+
+#[target_feature(enable = "sse2")]
+unsafe fn find_indexes_csv_sse2(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    generic::find_indexes_csv::<sse2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_tsv_sse2(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    generic::find_indexes_tsv::<sse2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
+
 pub fn get_find_indexes(
     ifmt: InputFormat,
 ) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
@@ -621,13 +661,13 @@ pub fn get_find_indexes(
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("pclmulqdq") {
         match ifmt {
-            InputFormat::CSV => generic::find_indexes_csv::<avx2::Impl>,
-            InputFormat::TSV => generic::find_indexes_tsv::<avx2::Impl>,
+            InputFormat::CSV => find_indexes_csv_avx2,
+            InputFormat::TSV => find_indexes_tsv_avx2,
         }
     } else if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("pclmulqdq") {
         match ifmt {
-            InputFormat::CSV => generic::find_indexes_csv::<sse2::Impl>,
-            InputFormat::TSV => generic::find_indexes_tsv::<sse2::Impl>,
+            InputFormat::CSV => find_indexes_csv_sse2,
+            InputFormat::TSV => find_indexes_tsv_sse2,
         }
     } else {
         match ifmt {
@@ -639,6 +679,16 @@ pub fn get_find_indexes(
 
 pub type BytesIndexKernel = unsafe fn(&[u8], &mut Offsets, u8, u8);
 
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_byte_avx2(buf: &[u8], offsets: &mut Offsets, field_sep: u8, record_sep: u8) {
+    generic::find_indexes_byte::<avx2::Impl>(buf, offsets, field_sep, record_sep)
+}
+
+#[target_feature(enable = "sse2")]
+unsafe fn find_indexes_byte_sse2(buf: &[u8], offsets: &mut Offsets, field_sep: u8, record_sep: u8) {
+    generic::find_indexes_byte::<sse2::Impl>(buf, offsets, field_sep, record_sep)
+}
+
 pub fn get_find_indexes_bytes() -> BytesIndexKernel {
     #[cfg(feature = "allow_avx2")]
     const ALLOW_AVX2: bool = true;
@@ -646,15 +696,33 @@ pub fn get_find_indexes_bytes() -> BytesIndexKernel {
     const ALLOW_AVX2: bool = false;
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        generic::find_indexes_byte::<avx2::Impl>
+        find_indexes_byte_avx2
     } else if is_x86_feature_detected!("sse2") {
-        generic::find_indexes_byte::<sse2::Impl>
+        find_indexes_byte_sse2
     } else {
         generic::find_indexes_byte::<generic::Impl>
     }
 }
 
 pub type WhitespaceIndexKernel = unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64;
+
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_ascii_whitespace_avx2(
+    buf: &[u8],
+    offsets: &mut WhitespaceOffsets,
+    start_ws: u64,
+) -> u64 {
+    generic::find_indexes_ascii_whitespace::<avx2::Impl>(buf, offsets, start_ws)
+}
+
+#[target_feature(enable = "sse2")]
+unsafe fn find_indexes_ascii_whitespace_sse2(
+    buf: &[u8],
+    offsets: &mut WhitespaceOffsets,
+    start_ws: u64,
+) -> u64 {
+    generic::find_indexes_ascii_whitespace::<sse2::Impl>(buf, offsets, start_ws)
+}
 
 pub fn get_find_indexes_ascii_whitespace() -> WhitespaceIndexKernel {
     #[cfg(feature = "allow_avx2")]
@@ -663,9 +731,9 @@ pub fn get_find_indexes_ascii_whitespace() -> WhitespaceIndexKernel {
     const ALLOW_AVX2: bool = false;
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        generic::find_indexes_ascii_whitespace::<avx2::Impl>
+        find_indexes_ascii_whitespace_avx2
     } else if is_x86_feature_detected!("sse2") {
-        generic::find_indexes_ascii_whitespace::<sse2::Impl>
+        find_indexes_ascii_whitespace_sse2
     } else {
         generic::find_indexes_ascii_whitespace::<generic::Impl>
     }
@@ -1175,6 +1243,8 @@ mod generic {
     }
 }
 
+// #[target_feature(enable = "sse2")]
+
 #[cfg(target_arch = "x86_64")]
 mod sse2 {
     use super::generic::{default_x86_find_quote_mask, Vector};
@@ -1189,7 +1259,7 @@ mod sse2 {
 
     impl Vector for Impl {
         const VEC_BYTES: usize = 16;
-        #[target_feature(enable = "sse2")]
+        #[inline(always)]
         unsafe fn fill_input(bptr: *const u8) -> Self {
             Impl {
                 lo: _mm_loadu_si128(bptr as *const _),
@@ -1197,28 +1267,28 @@ mod sse2 {
             }
         }
 
-        #[target_feature(enable = "sse2")]
+        #[inline(always)]
         unsafe fn mask(self) -> u64 {
             let lo = _mm_movemask_epi8(self.lo) as u32 as u64;
             let hi = _mm_movemask_epi8(self.hi) as u32 as u64;
             lo | hi << Self::VEC_BYTES
         }
 
-        #[target_feature(enable = "sse2")]
+        #[inline(always)]
         unsafe fn or(self, rhs: Self) -> Self {
             let lo = _mm_or_si128(self.lo, rhs.lo);
             let hi = _mm_or_si128(self.hi, rhs.hi);
             Impl { lo, hi }
         }
 
-        #[target_feature(enable = "sse2")]
+        #[inline(always)]
         unsafe fn and(self, rhs: Self) -> Self {
             let lo = _mm_and_si128(self.lo, rhs.lo);
             let hi = _mm_and_si128(self.hi, rhs.hi);
             Impl { lo, hi }
         }
 
-        #[target_feature(enable = "sse2")]
+        #[inline(always)]
         unsafe fn cmp_against_input(self, m: u8) -> Self {
             // Load the mask into all lanes.
             let mask = _mm_set1_epi8(m as i8);
@@ -1227,7 +1297,7 @@ mod sse2 {
             Impl { lo, hi }
         }
 
-        #[target_feature(enable = "sse2")]
+        #[inline(always)]
         unsafe fn find_quote_mask(
             self,
             prev_iter_inside_quote: &mut u64,
@@ -1251,7 +1321,7 @@ mod avx2 {
 
     impl Vector for Impl {
         const VEC_BYTES: usize = 32;
-        #[target_feature(enable = "avx2")]
+        #[inline(always)]
         unsafe fn fill_input(bptr: *const u8) -> Self {
             Impl {
                 lo: _mm256_loadu_si256(bptr as *const _),
@@ -1259,28 +1329,28 @@ mod avx2 {
             }
         }
 
-        #[target_feature(enable = "avx2")]
+        #[inline(always)]
         unsafe fn mask(self) -> u64 {
             let lo = _mm256_movemask_epi8(self.lo) as u32 as u64;
             let hi = _mm256_movemask_epi8(self.hi) as u32 as u64;
             lo | hi << Self::VEC_BYTES
         }
 
-        #[target_feature(enable = "avx2")]
+        #[inline(always)]
         unsafe fn or(self, rhs: Self) -> Self {
             let lo = _mm256_or_si256(self.lo, rhs.lo);
             let hi = _mm256_or_si256(self.hi, rhs.hi);
             Impl { lo, hi }
         }
 
-        #[target_feature(enable = "avx2")]
+        #[inline(always)]
         unsafe fn and(self, rhs: Self) -> Self {
             let lo = _mm256_and_si256(self.lo, rhs.lo);
             let hi = _mm256_and_si256(self.hi, rhs.hi);
             Impl { lo, hi }
         }
 
-        #[target_feature(enable = "avx2")]
+        #[inline(always)]
         unsafe fn cmp_against_input(self, m: u8) -> Self {
             // Load the mask into all lanes.
             let mask = _mm256_set1_epi8(m as i8);
@@ -1289,7 +1359,7 @@ mod avx2 {
             Impl { lo, hi }
         }
 
-        #[target_feature(enable = "avx2")]
+        #[inline(always)]
         unsafe fn find_quote_mask(
             self,
             prev_iter_inside_quote: &mut u64,
