@@ -611,6 +611,46 @@ impl InputFormat {
 // will instead store a function pointer that is computed at startup based on the dynamically
 // available CPU features.
 
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_csv_avx2(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    generic::find_indexes_csv::<avx2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_tsv_avx2(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    generic::find_indexes_tsv::<avx2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
+
+#[target_feature(enable = "sse2")]
+unsafe fn find_indexes_csv_sse2(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    generic::find_indexes_csv::<sse2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_tsv_sse2(
+    buf: &[u8],
+    offsets: &mut Offsets,
+    prev_iter_inside_quote: u64,
+    prev_iter_cr_end: u64,
+) -> (u64, u64) {
+    generic::find_indexes_tsv::<sse2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
+}
+
 pub fn get_find_indexes(
     ifmt: InputFormat,
 ) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
@@ -621,13 +661,13 @@ pub fn get_find_indexes(
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("pclmulqdq") {
         match ifmt {
-            InputFormat::CSV => generic::find_indexes_csv::<avx2::Impl>,
-            InputFormat::TSV => generic::find_indexes_tsv::<avx2::Impl>,
+            InputFormat::CSV => find_indexes_csv_avx2,
+            InputFormat::TSV => find_indexes_tsv_avx2,
         }
     } else if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("pclmulqdq") {
         match ifmt {
-            InputFormat::CSV => generic::find_indexes_csv::<sse2::Impl>,
-            InputFormat::TSV => generic::find_indexes_tsv::<sse2::Impl>,
+            InputFormat::CSV => find_indexes_csv_sse2,
+            InputFormat::TSV => find_indexes_tsv_sse2,
         }
     } else {
         match ifmt {
@@ -637,31 +677,63 @@ pub fn get_find_indexes(
     }
 }
 
-pub fn get_find_indexes_bytes() -> unsafe fn(&[u8], &mut Offsets, u8, u8) {
+pub type BytesIndexKernel = unsafe fn(&[u8], &mut Offsets, u8, u8);
+
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_byte_avx2(buf: &[u8], offsets: &mut Offsets, field_sep: u8, record_sep: u8) {
+    generic::find_indexes_byte::<avx2::Impl>(buf, offsets, field_sep, record_sep)
+}
+
+#[target_feature(enable = "sse2")]
+unsafe fn find_indexes_byte_sse2(buf: &[u8], offsets: &mut Offsets, field_sep: u8, record_sep: u8) {
+    generic::find_indexes_byte::<sse2::Impl>(buf, offsets, field_sep, record_sep)
+}
+
+pub fn get_find_indexes_bytes() -> BytesIndexKernel {
     #[cfg(feature = "allow_avx2")]
     const ALLOW_AVX2: bool = true;
     #[cfg(not(feature = "allow_avx2"))]
     const ALLOW_AVX2: bool = false;
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        generic::find_indexes_byte::<avx2::Impl>
+        find_indexes_byte_avx2
     } else if is_x86_feature_detected!("sse2") {
-        generic::find_indexes_byte::<sse2::Impl>
+        find_indexes_byte_sse2
     } else {
         generic::find_indexes_byte::<generic::Impl>
     }
 }
 
-pub fn get_find_indexes_ascii_whitespace() -> unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64 {
+pub type WhitespaceIndexKernel = unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64;
+
+#[target_feature(enable = "avx2")]
+unsafe fn find_indexes_ascii_whitespace_avx2(
+    buf: &[u8],
+    offsets: &mut WhitespaceOffsets,
+    start_ws: u64,
+) -> u64 {
+    generic::find_indexes_ascii_whitespace::<avx2::Impl>(buf, offsets, start_ws)
+}
+
+#[target_feature(enable = "sse2")]
+unsafe fn find_indexes_ascii_whitespace_sse2(
+    buf: &[u8],
+    offsets: &mut WhitespaceOffsets,
+    start_ws: u64,
+) -> u64 {
+    generic::find_indexes_ascii_whitespace::<sse2::Impl>(buf, offsets, start_ws)
+}
+
+pub fn get_find_indexes_ascii_whitespace() -> WhitespaceIndexKernel {
     #[cfg(feature = "allow_avx2")]
     const ALLOW_AVX2: bool = true;
     #[cfg(not(feature = "allow_avx2"))]
     const ALLOW_AVX2: bool = false;
 
     if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        generic::find_indexes_ascii_whitespace::<avx2::Impl>
+        find_indexes_ascii_whitespace_avx2
     } else if is_x86_feature_detected!("sse2") {
-        generic::find_indexes_ascii_whitespace::<sse2::Impl>
+        find_indexes_ascii_whitespace_sse2
     } else {
         generic::find_indexes_ascii_whitespace::<generic::Impl>
     }
@@ -816,9 +888,12 @@ mod generic {
             let nl = self.cmp_against_input(b'\n');
             let cr = self.cmp_against_input(b'\r');
             let ws1 = space.or(tab).or(nl).or(cr).mask();
-            let ws2 = ws1.wrapping_shl(1) | start_ws;
+            let mut ws2 = ws1.wrapping_shl(1) | start_ws;
+            if Self::INPUT_SIZE != 64 {
+                ws2 &= !(1 << Self::INPUT_SIZE as u32)
+            }
             let ws_res = ws1 ^ ws2;
-            let next_start_ws = ws1.wrapping_shr(63);
+            let next_start_ws = ws1.wrapping_shr(Self::INPUT_SIZE as u32 - 1);
             (ws_res, nl.mask(), next_start_ws)
         }
     }
@@ -883,17 +958,17 @@ mod generic {
         }
 
         unsafe fn find_quote_mask(self, prev_iter_inside_quote: &mut u64) -> (u64, u64) {
-            let quote_mask = self.cmp_against_input(b'"');
-            let mut in_quote = false;
-            let mut in_quotes = Impl([0; 32]);
-            for ix in 0..Self::VEC_BYTES {
-                let cmp = quote_mask.0[ix];
-                in_quote = (cmp == 1 && !in_quote) || (in_quote && cmp == 0);
-                in_quotes.0[ix] = if in_quote { 1 } else { 0 };
+            // NB: this implementation is pretty naive. We could definitely speed this up.
+            let quote_mask = self.cmp_against_input(b'"').mask();
+            let mut running_xor = 0;
+            let mut res = 0u64;
+            for ix in 0..64 {
+                running_xor ^= quote_mask.wrapping_shr(ix) & 1;
+                res |= running_xor.wrapping_shl(ix);
             }
-            let in_quotes_mask = in_quotes.mask() ^ *prev_iter_inside_quote;
+            let in_quotes_mask = res ^ *prev_iter_inside_quote;
             *prev_iter_inside_quote = (in_quotes_mask as i64).wrapping_shr(63) as u64;
-            (in_quotes_mask, quote_mask.mask())
+            (in_quotes_mask, quote_mask)
         }
     }
 
@@ -1099,7 +1174,7 @@ mod generic {
             let lf = inp.cmp_mask_against_input(0x0a);
             // Allow for either \r\n or \n.
             let end = (lf & cr_adjusted) | lf;
-            prev_iter_cr_end = cr.wrapping_shr(63);
+            prev_iter_cr_end = cr.wrapping_shr(V::INPUT_SIZE as u32 - 1);
             // NB: for now, NL is going to be unused for csv
             // Don't use NL here for now
             // let nl = end & !quote_mask;
@@ -1168,6 +1243,8 @@ mod generic {
     }
 }
 
+// #[target_feature(enable = "sse2")]
+
 #[cfg(target_arch = "x86_64")]
 mod sse2 {
     use super::generic::{default_x86_find_quote_mask, Vector};
@@ -1220,6 +1297,7 @@ mod sse2 {
             Impl { lo, hi }
         }
 
+        #[inline(always)]
         unsafe fn find_quote_mask(
             self,
             prev_iter_inside_quote: &mut u64,
@@ -1281,6 +1359,7 @@ mod avx2 {
             Impl { lo, hi }
         }
 
+        #[inline(always)]
         unsafe fn find_quote_mask(
             self,
             prev_iter_inside_quote: &mut u64,
@@ -1317,15 +1396,38 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         I: Iterator<Item = (S, String)> + 'static + Send,
         S: Read + Send + 'static,
     {
+        Self::new_internal(
+            rs,
+            field_sep,
+            record_sep,
+            chunk_size,
+            check_utf8,
+            exec_strategy,
+            get_find_indexes_bytes(),
+        )
+    }
+    pub fn new_internal<I, S>(
+        rs: I,
+        field_sep: u8,
+        record_sep: u8,
+        chunk_size: usize,
+        check_utf8: bool,
+        exec_strategy: ExecutionStrategy,
+        kernel: BytesIndexKernel,
+    ) -> Self
+    where
+        I: Iterator<Item = (S, String)> + 'static + Send,
+        S: Read + Send + 'static,
+    {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk>> = match exec_strategy {
             ExecutionStrategy::Serial => Box::new(chunk::new_chained_offset_chunk_producer_bytes(
-                rs, chunk_size, field_sep, record_sep, check_utf8,
+                rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
                 Box::new(ParallelChunkProducer::new(
                     move || {
                         chunk::new_chained_offset_chunk_producer_bytes(
-                            rs, chunk_size, field_sep, record_sep, check_utf8,
+                            rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
                         )
                     },
                     /*channel_size*/ x.num_workers() * 2,
@@ -1342,6 +1444,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                             record_sep,
                             i as u32 + 1,
                             check_utf8,
+                            kernel,
                         )
                     }
                 });
@@ -1373,18 +1476,43 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
         I: Iterator<Item = (S, String)> + 'static + Send,
         S: Read + Send + 'static,
     {
+        Self::new_whitespace_internal(
+            rs,
+            chunk_size,
+            check_utf8,
+            exec_strategy,
+            get_find_indexes_ascii_whitespace(),
+        )
+    }
+    pub fn new_whitespace_internal<I, S>(
+        rs: I,
+        chunk_size: usize,
+        check_utf8: bool,
+        exec_strategy: ExecutionStrategy,
+        find_indexes: unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64,
+    ) -> Self
+    where
+        I: Iterator<Item = (S, String)> + 'static + Send,
+        S: Read + Send + 'static,
+    {
         let prod: Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>> =
             match exec_strategy {
                 ExecutionStrategy::Serial => {
                     Box::new(chunk::new_chained_offset_chunk_producer_ascii_whitespace(
-                        rs, chunk_size, check_utf8,
+                        rs,
+                        chunk_size,
+                        check_utf8,
+                        find_indexes,
                     ))
                 }
                 x @ ExecutionStrategy::ShardPerRecord => {
                     Box::new(ParallelChunkProducer::new(
                         move || {
                             chunk::new_chained_offset_chunk_producer_ascii_whitespace(
-                                rs, chunk_size, check_utf8,
+                                rs,
+                                chunk_size,
+                                check_utf8,
+                                find_indexes,
                             )
                         },
                         /*channel_size*/ x.num_workers() * 2,
@@ -1399,6 +1527,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
                                 name.as_str(),
                                 i as u32 + 1,
                                 check_utf8,
+                                find_indexes,
                             )
                         }
                     });
@@ -1790,17 +1919,17 @@ mod tests {
 
     fn smoke_test<V: generic::Vector>() {
         let text: &'static str = r#"This,is,"a line with a quoted, comma",and
-unquoted,commas,"as well, including some long ones", and there we have it."#;
+unquoted,commas,"as well, including some long ones", and there we have it.""#;
         let mut mem: Vec<u8> = text.as_bytes().iter().cloned().collect();
         mem.reserve(32);
         let mut offsets: Offsets = Default::default();
         let (in_quote, in_cr) =
             unsafe { generic::find_indexes_csv::<V>(&mem[..], &mut offsets, 0, 0) };
-        assert_eq!(in_quote, 0);
+        assert_ne!(in_quote, 0);
         assert_eq!(in_cr, 0);
         assert_eq!(
             &offsets.rel.fields[..],
-            &[4, 7, 8, 36, 37, 41, 50, 57, 58, 92, 93],
+            &[4, 7, 8, 36, 37, 41, 50, 57, 58, 92, 93, 116],
             "offset_fields={:?}",
             offsets
                 .rel
@@ -1811,18 +1940,17 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
                 .collect::<Vec<_>>()
         );
     }
-
     #[test]
-    fn avx2_smoke_test() {
+    fn csv_smoke_test() {
         if is_x86_feature_detected!("avx2") {
             smoke_test::<avx2::Impl>();
         }
+        if is_x86_feature_detected!("sse2") {
+            smoke_test::<sse2::Impl>();
+        }
+        smoke_test::<generic::Impl>();
     }
 
-    #[test]
-    fn sse2_smoke_test() {
-        smoke_test::<sse2::Impl>();
-    }
     fn disp_vec(v: &Vec<Str>) -> String {
         format!(
             "{:?}",
@@ -1889,7 +2017,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         tsv_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
     }
 
-    fn bytes_split(fs: u8, rs: u8, corpus: &'static str) {
+    fn bytes_split(kernel: BytesIndexKernel, fs: u8, rs: u8, corpus: &'static str) {
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
         let mut expected_lines: Vec<Str<'static>> = Vec::new();
@@ -1915,13 +2043,14 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         }
 
         let reader = std::io::Cursor::new(corpus);
-        let mut reader = ByteReader::new(
+        let mut reader = ByteReader::new_internal(
             iter::once((reader, String::from("fake-stdin"))),
             fs,
             rs,
             1024,
             /*check_utf8=*/ true,
             ExecutionStrategy::Serial,
+            kernel,
         );
         let mut got_lines = Vec::new();
         let mut got = Vec::new();
@@ -1962,41 +2091,60 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         }
     }
 
-    #[test]
-    fn bytes_splitter_basic() {
-        bytes_split(b' ', b'\n', crate::test_string_constants::VIRGIL);
+    fn bytes_splitter_generic<V: generic::Vector>() {
+        let k = generic::find_indexes_byte::<V>;
+
+        // Basic functionality
+        bytes_split(k, b' ', b'\n', crate::test_string_constants::VIRGIL);
         bytes_split(
+            k,
             b' ',
             b'\n',
             crate::test_string_constants::PRIDE_PREJUDICE_CH2,
         );
-    }
 
-    #[test]
-    fn bytes_splitter_no_linesep() {
         // Lots of fields, but line separator not present
-        bytes_split(b' ', 0u8, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
-    }
+        bytes_split(
+            k,
+            b' ',
+            0u8,
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2,
+        );
 
-    #[test]
-    fn bytes_splitter_no_fieldsep() {
         // Many lines, lots of single fields
         bytes_split(
+            k,
             0u8,
             b'\n',
             crate::test_string_constants::PRIDE_PREJUDICE_CH2,
         );
-    }
 
-    #[test]
-    fn bytes_splitter_no_sep() {
         // One line, One field
-        bytes_split(0u8, 0u8, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+        bytes_split(
+            k,
+            0u8,
+            0u8,
+            crate::test_string_constants::PRIDE_PREJUDICE_CH2,
+        );
+
+        // Trailing separators
+        bytes_split(
+            k,
+            b' ',
+            b'\n',
+            "   leading whitespace   \n and some    more\n",
+        );
     }
 
     #[test]
-    fn bytes_splitter_trailing() {
-        bytes_split(b' ', b'\n', "   leading whitespace   \n and some    more\n");
+    fn bytes_splitter() {
+        if is_x86_feature_detected!("avx2") {
+            bytes_splitter_generic::<avx2::Impl>()
+        }
+        if is_x86_feature_detected!("sse2") {
+            bytes_splitter_generic::<sse2::Impl>()
+        }
+        bytes_splitter_generic::<generic::Impl>()
     }
 
     fn multithreaded_count<LR: LineReader + 'static>(
@@ -2086,7 +2234,7 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         multithreaded_count("   leading whitespace   \n and some    more\n", 2, make_br);
     }
 
-    fn whitespace_split(corpus: &'static str) {
+    fn whitespace_split(kernel: WhitespaceIndexKernel, corpus: &'static str) {
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
         let mut expected_lines: Vec<Str<'static>> = Vec::new();
@@ -2108,11 +2256,12 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
             let _ = expected.pop();
         }
         let reader = std::io::Cursor::new(corpus);
-        let mut reader = ByteReader::new_whitespace(
+        let mut reader = ByteReader::new_whitespace_internal(
             std::iter::once((reader, String::from("fake-stdin"))),
             1024,
             /*check_utf8=*/ false,
             ExecutionStrategy::Serial,
+            kernel,
         );
         let mut got_lines = Vec::new();
         let mut got = Vec::new();
@@ -2153,17 +2302,29 @@ unquoted,commas,"as well, including some long ones", and there we have it."#;
         }
     }
 
-    #[test]
-    fn whitespace_splitter() {
-        whitespace_split(crate::test_string_constants::PRIDE_PREJUDICE_CH2);
-        whitespace_split(crate::test_string_constants::VIRGIL);
-        whitespace_split("   leading whitespace   \n and some    more\n");
+    fn whitespace_splitter_generic<V: generic::Vector>() {
+        let k = generic::find_indexes_ascii_whitespace::<V>;
+        whitespace_split(k, crate::test_string_constants::PRIDE_PREJUDICE_CH2);
+        whitespace_split(k, crate::test_string_constants::VIRGIL);
+        whitespace_split(k, "   leading whitespace   \n and some    more\n");
         whitespace_split(
+            k,
             r#"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx  yyyyyyyyyyyyyyyyyyyyyyyyyyyy 111111
 xxxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyy     222222
 xxxxxxxxxxxxxxxxxxxxxxxxxxxx  yyyyyyyyyyyyyyyyyyyyyyyyyyyy 3333333
 xxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyy     4444444
 "#,
         );
+    }
+
+    #[test]
+    fn whitespace_splitter() {
+        if is_x86_feature_detected!("avx2") {
+            whitespace_splitter_generic::<avx2::Impl>()
+        }
+        if is_x86_feature_detected!("sse2") {
+            whitespace_splitter_generic::<sse2::Impl>()
+        }
+        whitespace_splitter_generic::<generic::Impl>()
     }
 }

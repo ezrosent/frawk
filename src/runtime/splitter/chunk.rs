@@ -9,8 +9,8 @@ use crate::common::Result;
 use crate::runtime::{
     splitter::{
         batch::{
-            get_find_indexes, get_find_indexes_ascii_whitespace, get_find_indexes_bytes,
-            InputFormat, Offsets, WhitespaceOffsets,
+            get_find_indexes, BytesIndexKernel, InputFormat, Offsets, WhitespaceIndexKernel,
+            WhitespaceOffsets,
         },
         Reader,
     },
@@ -94,8 +94,8 @@ pub fn new_offset_chunk_producer_bytes<R: Read>(
     record_sep: u8,
     start_version: u32,
     check_utf8: bool,
+    find_indexes: BytesIndexKernel,
 ) -> OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)> {
-    let find_indexes = get_find_indexes_bytes();
     OffsetChunkProducer {
         name: name.into(),
         inner: Reader::new(r, chunk_size, /*padding=*/ 128, check_utf8),
@@ -114,8 +114,8 @@ pub fn new_offset_chunk_producer_ascii_whitespace<R: Read>(
     name: &str,
     start_version: u32,
     check_utf8: bool,
+    find_indexes: WhitespaceIndexKernel,
 ) -> WhitespaceChunkProducer<R, impl FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> {
-    let find_indexes = get_find_indexes_ascii_whitespace();
     WhitespaceChunkProducer(
         OffsetChunkProducer {
             name: name.into(),
@@ -168,6 +168,7 @@ pub fn new_chained_offset_chunk_producer_bytes<
     field_sep: u8,
     record_sep: u8,
     check_utf8: bool,
+    kernel: BytesIndexKernel,
 ) -> ChainedChunkProducer<OffsetChunkProducer<R, impl FnMut(&[u8], &mut Offsets)>> {
     ChainedChunkProducer::new(
         r.enumerate()
@@ -180,6 +181,7 @@ pub fn new_chained_offset_chunk_producer_bytes<
                     record_sep,
                     /*start_version=*/ (i as u32).wrapping_add(1),
                     check_utf8,
+                    kernel,
                 )
             })
             .collect(),
@@ -194,6 +196,7 @@ pub fn new_chained_offset_chunk_producer_ascii_whitespace<
     r: I,
     chunk_size: usize,
     check_utf8: bool,
+    find_indexes: WhitespaceIndexKernel,
 ) -> ChainedChunkProducer<
     WhitespaceChunkProducer<R, impl FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64>,
 > {
@@ -206,6 +209,7 @@ pub fn new_chained_offset_chunk_producer_ascii_whitespace<
                     name.borrow(),
                     /*start_version=*/ (i as u32).wrapping_add(1),
                     check_utf8,
+                    find_indexes,
                 )
             })
             .collect(),
