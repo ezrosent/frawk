@@ -202,9 +202,27 @@ impl Jit for Generator {
     }
 }
 
+fn jit_builder() -> Result<JITBuilder> {
+    use std::str::FromStr;
+    use target_lexicon::triple;
+
+    let mut shared_builder = settings::builder();
+    if let Err(e) = shared_builder.enable("enable_llvm_abi_extensions") {
+        return err!("unable to enable LLVM ABI extensions: {}", e);
+    }
+    let shared_flags = settings::Flags::new(shared_builder);
+    match isa::lookup(triple!("x86_64")) {
+        Err(e) => return err!("failed to look up x86_64 ISA: {}", e),
+        Ok(isa_builder) => Ok(JITBuilder::with_isa(
+            isa_builder.finish(shared_flags),
+            default_libcall_names(),
+        )),
+    }
+}
+
 impl Generator {
     pub(crate) fn init(typer: &mut Typer, _config: Config) -> Result<Generator> {
-        let builder = JITBuilder::new(default_libcall_names());
+        let builder = jit_builder()?;
         let mut regstate = RegistrationState { builder };
         intrinsics::register_all(&mut regstate)?;
         let module = JITModule::new(regstate.builder);
@@ -331,7 +349,12 @@ impl Generator {
     fn define_cur_function(&mut self, id: FuncId) -> Result<()> {
         self.shared
             .module
-            .define_function(id, &mut self.cctx, &mut codegen::binemit::NullTrapSink {})
+            .define_function(
+                id,
+                &mut self.cctx,
+                &mut codegen::binemit::NullTrapSink {},
+                &mut codegen::binemit::NullStackMapSink {},
+            )
             .map_err(|e| CompileError(e.to_string()))?;
         self.shared.module.clear_context(&mut self.cctx);
         Ok(())
