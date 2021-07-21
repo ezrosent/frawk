@@ -1269,6 +1269,13 @@ this as well"#
     );
 
     test_program!(
+        add_zero_prints_float,
+        r#"{ print $2 + 1; }"#,
+        "3.5\n",
+        @input "x 2.5\n"
+    );
+
+    test_program!(
         bitwise_operators,
         r#"BEGIN {
         print xor(1,3);

@@ -330,7 +330,7 @@ pub(crate) fn val_of(s: &State) -> Result<State> {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) enum Constraint<T> {
     // TODO(ezr): Better names for Key/KeyIn etc.
     KeyIn(T),
@@ -720,6 +720,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             let main_base = tc.udf_nodes[offset];
             tc.get_function(main, /*arg_nodes=*/ Default::default(), main_base);
         }
+
         tc.solve()?;
         let mut var_tys = HashMap::new();
         let mut func_tys = HashMap::new();
@@ -950,7 +951,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
                 .call_deps
                 .entry(*arg)
                 .or_insert(Default::default())
-                .push(to);
+                .push(tmp_res);
         }
         let from = self.nw.base_node;
         self.nw

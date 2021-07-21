@@ -468,10 +468,9 @@ impl Function {
         fn step_arith(x: &types::State, y: &types::State) -> types::State {
             use BaseTy::*;
             match (x, y) {
-                (Some(Scalar(Some(Str))), _)
-                | (_, Some(Scalar(Some(Str))))
-                | (Some(Scalar(Some(Float))), _)
-                | (_, Some(Scalar(Some(Float)))) => Scalar(Float).abs(),
+                (Some(Scalar(Some(Str | Float))), _) | (_, Some(Scalar(Some(Str | Float)))) => {
+                    Scalar(Float).abs()
+                }
                 (_, _) => Scalar(Int).abs(),
             }
         }
