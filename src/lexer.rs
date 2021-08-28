@@ -615,7 +615,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 match $e {
                     Ok(e) => e,
                     Err(e) => return Some(Err(e)),
-                };
+                }
             };
         }
         self.advance();
