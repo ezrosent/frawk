@@ -208,7 +208,7 @@ PREPARE { max_map[PID] = max }
 END {
     for (pid in max_map) {
         v = max_map[pid]
-        max = max>v?:max:v
+        max = max>v?max:v
     }
     print max;
 }
