@@ -105,6 +105,33 @@ fn simple_fi() {
 }
 
 #[test]
+fn file_and_data_arg() {
+    let input = r#"Hi"#;
+    let prog = r#"{ print; }"#;
+    let expected = "Hi\n";
+
+    let tmpdir = tempdir().unwrap();
+    let data_fname = tmpdir.path().join("numbers");
+    let prog_fname = tmpdir.path().join("prog");
+    {
+        let mut data_file = File::create(data_fname.clone()).unwrap();
+        data_file.write(input.as_bytes()).unwrap();
+        let mut prog_file = File::create(prog_fname.clone()).unwrap();
+        prog_file.write(prog.as_bytes()).unwrap();
+    }
+    for backend_arg in BACKEND_ARGS {
+        Command::cargo_bin("frawk")
+            .unwrap()
+            .arg(backend_arg)
+            .arg("-f")
+            .arg(prog_fname.clone())
+            .arg(data_fname.clone())
+            .assert()
+            .stdout(expected.clone());
+    }
+}
+
+#[test]
 fn multiple_files() {
     let input = r#"Item,Count
 carrots,2
