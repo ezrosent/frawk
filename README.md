@@ -31,11 +31,11 @@ the LLVM backend, you will need an installation of LLVM 10.0 on your machine:
 
 * See [this site](https://apt.llvm.org/) for installation instructions on some debian-based Linux distros.
 * On Arch `pacman -Sy llvm llvm-libs` and a C compiler (e.g. `clang`) are sufficient as of September 2020.
-* `brew install llvm@10` or similar seem to work on Mac OS.
+* `brew install llvm@12` or similar seem to work on Mac OS.
 
 Depending on where your package manager puts these libraries, you may need to
-point `LLVM_SYS_100_PREFIX` at the llvm library installation (e.g.
-`/usr/lib/llvm-10`).
+point `LLVM_SYS_120_PREFIX` at the llvm library installation (e.g.
+`/usr/lib/llvm-12`).
 
 ### Building Without LLVM
 
