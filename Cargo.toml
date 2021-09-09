@@ -27,7 +27,7 @@ jemallocator = { version = "0.3", optional = true }
 rand = "0.8.3"
 lalrpop-util = "0.19.6"
 unicode-xid = "0.2.0"
-llvm-sys = {version = "100", optional = true }
+llvm-sys = {version = "120", optional = true }
 clap = "3.0.0-beta.4"
 crossbeam-channel = "0.4"
 crossbeam = "0.7.3"
