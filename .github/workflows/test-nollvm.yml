@@ -19,15 +19,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Recover cache files
-        if: hashFiles('**/Cargo.lock') != ''
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Install musl-gcc if required
         if: contains(matrix.target, 'musl')
         run: |

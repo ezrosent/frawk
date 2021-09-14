@@ -5,59 +5,15 @@ on: [push, pull_request]
 jobs:
   build:
     name: Run test
-    runs-on: ${{matrix.os}}
-    if: "! contains(github.event.head_commit.message, '[skip ci]')"
-    strategy:
-      matrix:
-        include:
-          - build: linux-musl
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          # - build: mac
-          #   os: macOS-latest
-          #   target: x86_64-apple-darwin
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Recover cache files
-        if: hashFiles('**/Cargo.lock') != ''
-        uses: actions/cache@v2
+      - uses: actions-rs/toolchain@v1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Install musl-gcc if required
-        if: contains(matrix.target, 'musl')
-        run: |
-          sudo apt-get install musl-tools -yqq
-      - name: Prepare make
-        run: |
-          if [[ ${{ matrix.os }} =~ "mac" ]] ;then
-            brew install make -q
-          elif [[ ${{ matrix.target }} =~ "musl" ]] ;then
-            sudo apt-get install make build-essential -yqq
-          else
-            echo "unknown os: ${{ matrix.os }}">&2
-            exit 1
-          fi
-      - name: Build the release target
-        run: |
-          rustup install nightly
-          rustup default nightly
-          rustup target add ${{ matrix.target }}
-          if [[ ${{ matrix.target }} =~ "musl" ]] ;then
-            CFLAGS="-fPIC" CC="musl-gcc -static" cargo build --no-default-features --features use_jemalloc,allow_avx2,unstable --release --verbose --target x86_64-unknown-linux-musl
-          else
-            cargo build --no-default-features --features use_jemalloc,allow_avx2,unstable --verbose --release --target ${{ matrix.target }}
-          fi
-          mv target/${{matrix.target}}/release/frawk target/release
-      - name: Setup toolchains
-        run: |
-          rustup component add rustfmt
-      - name: Test formatting
-        uses: actions-rs/cargo@v1
+            toolchain: nightly
+            components: rustfmt
+            override: true
+      - uses: mbrobbel/rustfmt-check@master
         with:
-          command: fmt
-          args: --all -- --check
+          token: ${{ secrets.GITHUB_TOKEN }}
