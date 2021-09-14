@@ -1,0 +1,55 @@
+name: Run testcases
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Run test
+    runs-on: ${{matrix.os}}
+    if: "! contains(github.event.head_commit.message, '[skip ci]')"
+    strategy:
+      matrix:
+        include:
+          - build: linux-musl
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - build: mac
+            os: macOS-latest
+            target: x86_64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Recover cache files
+        if: hashFiles('**/Cargo.lock') != ''
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install musl-gcc if required
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get install musl-tools -yqq
+      - name: Build the release target
+        run: |
+          rustup install nightly
+          rustup default nightly
+          rustup target add ${{ matrix.target }}
+          if [[ ${{ matrix.target }} =~ "musl" ]] ;then
+            CFLAGS="-fPIC" CC="musl-gcc -static" \
+            cargo build --verbose --release \
+                        --target x86_64-unknown-linux-musl \
+                        --no-default-features --features use_jemalloc,allow_avx2,unstable
+          else
+            cargo build --verbose --release \
+                        --target ${{ matrix.target }} \
+                        --no-default-features --features use_jemalloc,allow_avx2,unstable
+          fi
+          mv target/${{matrix.target}}/release/frawk target/release
+      - name: Run testcases
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --no-default-features --features use_jemalloc,allow_avx2,unstable
