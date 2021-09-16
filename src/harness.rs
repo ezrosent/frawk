@@ -880,6 +880,13 @@ print w,z;
     );
 
     test_program!(
+        print_no_space,
+        r#"{print}"#,
+        "test\n",
+        @input "test\n"
+    );
+
+    test_program!(
         uncalled_function,
         r#"function unused() { return 5; }
         BEGIN { print "x"; }"#,

@@ -130,6 +130,7 @@ lazy_static! {
     static ref WS_BRACE: Regex = Regex::new(r"^[\s{}]").unwrap();
     static ref WS_SEMI: Regex = Regex::new(r"^[\s;]").unwrap();
     static ref WS_SEMI_NL: Regex = Regex::new(r"^[\s;\n]").unwrap();
+    static ref WS_SEMI_NL_RB: Regex = Regex::new(r"^[\s;\n}]").unwrap();
     static ref WS_SEMI_RPAREN: Regex = Regex::new(r"^[\s;)]").unwrap();
     static ref WS_PAREN: Regex = Regex::new(r"^[\s()]").unwrap();
 }
@@ -146,7 +147,7 @@ keyword_map!(
     [b"for", Tok::For, WS_PAREN.clone()],
     [b"if", Tok::If],
     [b"else", Tok::Else],
-    [b"print", Tok::Print, WS_SEMI_NL.clone()],
+    [b"print", Tok::Print, WS_SEMI_NL_RB.clone()],
     [b"printf", Tok::Printf, WS_SEMI_NL.clone()],
     [b"print(", Tok::PrintLP],
     [b"printf(", Tok::PrintfLP],
