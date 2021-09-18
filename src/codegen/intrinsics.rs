@@ -819,8 +819,12 @@ pub(crate) unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 
     let base = &*(base as *mut Str);
     let len = base.len();
     let l = max(0, l - 1);
-    let r = min(len as Int, l.saturating_add(r)) as usize;
-    mem::transmute::<Str, U128>(base.slice(l as usize, r))
+    if l as usize >= len {
+        mem::transmute::<Str, U128>(Str::default())
+    } else {
+        let r = min(len as Int, l.saturating_add(r)) as usize;
+        mem::transmute::<Str, U128>(base.slice(l as usize, r))
+    }
 }
 
 pub(crate) unsafe extern "C" fn ref_str(s: *mut c_void) {

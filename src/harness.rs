@@ -1322,6 +1322,11 @@ this as well"#
     }"#,
         "[t] is a this string string\n"
     );
+    test_program!(
+        out_of_range_substr,
+        r#"BEGIN { print substr("hi", 5, 10); }"#,
+        "\n"
+    );
 
     test_program!(
         arithmetic,
