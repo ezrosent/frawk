@@ -128,6 +128,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         seed_rng(rt_ty, int_ty) -> int_ty;
         reseed_rng(rt_ty) -> int_ty;
 
+        exit(rt_ty, int_ty);
         run_system(str_ref_ty) -> int_ty;
         print_all_stdout(rt_ty, pa_args_ty, int_ty);
         print_all_file(rt_ty, pa_args_ty, int_ty, str_ref_ty, int_ty);
@@ -284,7 +285,7 @@ macro_rules! fail {
         #[cfg(not(test))]
         {
             eprintln_ignore!("failure in runtime {}. Halting execution", format!($($es),*));
-            exit!($rt, 1, format!($($es),*))
+            exit!($rt, 1)
         }
     }}
 }
@@ -314,9 +315,9 @@ macro_rules! try_silent_abort {
 
 macro_rules! exit {
     ($runtime:expr) => {
-        exit!($runtime, 0, "")
+        exit!($runtime, 0)
     };
-    ($runtime:expr, $code:expr, $msg:expr) => {{
+    ($runtime:expr, $code:expr) => {{
         let rt = $runtime as *const _ as *mut Runtime;
         let concurrent = (*rt).concurrent;
         if concurrent {
@@ -407,6 +408,10 @@ impl<'a> Runtime<'a> {
             read_files.stdin_filename().upcast()
         });
     }
+}
+
+pub(crate) unsafe extern "C" fn exit(runtime: *mut c_void, code: Int) {
+    exit!(runtime, code as i32);
 }
 
 pub(crate) unsafe extern "C" fn run_system(cmd: *mut U128) -> Int {

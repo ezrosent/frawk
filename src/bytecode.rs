@@ -219,6 +219,7 @@ pub(crate) enum Instr<'a> {
     },
     Close(Reg<Str<'a>>),
     RunCmd(Reg<Int>, Reg<Str<'a>>),
+    Exit(Reg<Int>),
 
     // Map operations
     Lookup {
@@ -706,6 +707,7 @@ impl<'a> Instr<'a> {
                 dst.accum(&mut f);
                 cmd.accum(&mut f);
             }
+            Exit(code) => code.accum(&mut f),
             Lookup {
                 map_ty,
                 dst,

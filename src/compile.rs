@@ -1428,6 +1428,7 @@ impl<'a, 'b> View<'a, 'b> {
                 }
                 self.pushl(LL::RunCmd(res_reg.into(), conv_regs[0].into()))
             }
+            Exit => self.pushl(LL::Exit(conv_regs[0].into())),
             ReadErr => {
                 if res_reg != UNUSED {
                     self.pushl(LL::ReadErr(

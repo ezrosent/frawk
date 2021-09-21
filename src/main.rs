@@ -216,13 +216,18 @@ fn run_interp_with_context<'a>(
     ff: impl runtime::writers::FileFactory,
     num_workers: usize,
 ) {
-    let mut interp = match compile::bytecode(&mut ctx, stdin, ff, num_workers) {
-        Ok(ctx) => ctx,
-        Err(e) => fail!("bytecode compilation failure: {}", e),
+    let rc = {
+        let mut interp = match compile::bytecode(&mut ctx, stdin, ff, num_workers) {
+            Ok(ctx) => ctx,
+            Err(e) => fail!("bytecode compilation failure: {}", e),
+        };
+        match interp.run() {
+            Err(e) => fail!("fatal error during execution: {}", e),
+            Ok(0) => return,
+            Ok(n) => n,
+        }
     };
-    if let Err(e) = interp.run() {
-        fail!("fatal error during execution: {}", e);
-    }
+    std::process::exit(rc);
 }
 
 fn run_cranelift_with_context<'a>(

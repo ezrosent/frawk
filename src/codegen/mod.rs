@@ -213,7 +213,7 @@ where
                                         input_data: reader.into(),
                                     };
                                     main_loop_fn.invoke(&mut runtime);
-                                    sender.send(runtime.core.extract_result()).unwrap();
+                                    sender.send(runtime.core.extract_result(0)).unwrap();
                                 }
                             });
                         }
@@ -796,6 +796,12 @@ pub(crate) trait CodeGenerator: Backend {
                 Ok(())
             }
             RunCmd(dst, cmd) => self.unop(intrinsic!(run_system), dst, cmd),
+            Exit(code) => {
+                let rt = self.runtime_val();
+                let codev = self.get_val(code.reflect())?;
+                self.call_void(external!(exit), &mut [rt, codev])?;
+                Ok(())
+            }
             ReadErr(dst, file, is_file) => {
                 let rt = self.runtime_val();
                 let filev = self.get_val(file.reflect())?;

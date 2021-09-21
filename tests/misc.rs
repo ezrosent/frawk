@@ -280,6 +280,30 @@ fn iter_across_functions() {
     }
 }
 
+// TODO: test that auxiliary output is flushed
+// TODO: test alternative exit syntax
+// TODO: test exit behavior with parallelism (no stderror)
+
+#[test]
+fn simple_rc() {
+    let expected = "hi\n";
+    for (prog, rc) in [
+        (r#"BEGIN { print "hi"; exit(0); print "there"; }"#, 0),
+        (r#"BEGIN { print "hi"; exit(1); print "there"; }"#, 1),
+        (r#"BEGIN { print "hi"; exit(4); print "there"; }"#, 4),
+    ] {
+        for backend_arg in BACKEND_ARGS {
+            Command::cargo_bin("frawk")
+                .unwrap()
+                .arg(String::from(*backend_arg))
+                .arg(String::from(prog))
+                .assert()
+                .stdout(expected)
+                .code(rc);
+        }
+    }
+}
+
 #[test]
 fn nested_loops() {
     let expected = "0 0\n0 1\n0 2\n1 0\n1 1\n1 2\n2 0\n2 1\n2 2\n";
