@@ -286,6 +286,8 @@ impl<'a> Display for lexer::Tok<'a> {
             For => "for",
             If => "if",
             Else => "else",
+            Exit => "exit",
+            ExitLP => "exit(",
             Print => "print",
             Printf => "printf",
             // Separate token for a "print(" and "printf(".

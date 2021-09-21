@@ -35,6 +35,8 @@ pub enum Tok<'a> {
     // Separate token for a "print(" and "printf(".
     PrintLP,
     PrintfLP,
+    Exit,
+    ExitLP,
     While,
     Do,
 
@@ -151,6 +153,8 @@ keyword_map!(
     [b"printf", Tok::Printf, WS_SEMI_NL.clone()],
     [b"print(", Tok::PrintLP],
     [b"printf(", Tok::PrintfLP],
+    [b"exit(", Tok::ExitLP],
+    [b"exit", Tok::Exit],
     [b"while", Tok::While, WS_PAREN.clone()],
     [b"do", Tok::Do, WS_BRACE.clone()],
     [b"{", Tok::LBrace],

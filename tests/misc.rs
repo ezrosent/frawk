@@ -281,7 +281,6 @@ fn iter_across_functions() {
 }
 
 // TODO: test that auxiliary output is flushed
-// TODO: test alternative exit syntax
 // TODO: test exit behavior with parallelism (no stderror)
 
 #[test]
@@ -289,8 +288,12 @@ fn simple_rc() {
     let expected = "hi\n";
     for (prog, rc) in [
         (r#"BEGIN { print "hi"; exit(0); print "there"; }"#, 0),
+        (r#"BEGIN { print "hi"; exit 0; print "there"; }"#, 0),
+        (r#"BEGIN { print "hi"; exit; print "there"; }"#, 0),
         (r#"BEGIN { print "hi"; exit(1); print "there"; }"#, 1),
+        (r#"BEGIN { print "hi"; exit 1; print "there"; }"#, 1),
         (r#"BEGIN { print "hi"; exit(4); print "there"; }"#, 4),
+        (r#"BEGIN { print "hi"; exit 4; print "there"; }"#, 4),
     ] {
         for backend_arg in BACKEND_ARGS {
             Command::cargo_bin("frawk")
