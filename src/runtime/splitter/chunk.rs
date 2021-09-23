@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
-use crate::common::Result;
+use crate::common::{CancelSignal, Result};
 use crate::runtime::{
     splitter::{
         batch::{
@@ -495,6 +495,16 @@ impl<P: ChunkProducer> Clone for ParallelChunkProducer<P> {
     }
 }
 
+// TODO:
+// 1. build "CancelSignal" primitive for atomically slotting in an error code. [x]
+// 2. build a CancellableChunkProducer based on such a signal that wraps any ChunkProducer. [x]
+// 3. thread this chunk producer through everywhere.
+// 4. Store copies of the relevant signal in the runtime.
+// 5. When we reach exit, do cancel, drop in place of runtime, and then park the thread.
+// 6. Other threads will exit the main loop normally (as the producer will stop generating input).
+// 7. Return the exit code as before. Everything should get dropped.
+// 8. unit tests for chunk producer and end to end tests for exit for exit
+
 impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
     pub fn new(
         p_factory: impl FnOnce() -> P + Send + 'static,
@@ -684,6 +694,63 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
         }
     }
 }
+
+pub struct CancellableChunkProducer<P> {
+    signal: CancelSignal,
+    prod: P,
+}
+
+impl<P: ChunkProducer + 'static> CancellableChunkProducer<P> {
+    pub fn new(prod: P) -> (Self, CancelSignal) {
+        let signal = CancelSignal::default();
+        (
+            Self {
+                signal: signal.clone(),
+                prod,
+            },
+            signal,
+        )
+    }
+}
+
+impl<P: ChunkProducer + 'static> ChunkProducer for CancellableChunkProducer<P> {
+    type Chunk = P::Chunk;
+
+    // TODO this API means we have two layers of virtual dispatch, which isn't great.
+    // It's not the end of the world, but we should think about whether there is a way around this.
+    fn try_dyn_resize(
+        &self,
+        requested_size: usize,
+    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
+        let children = self.prod.try_dyn_resize(requested_size);
+        let mut res = Vec::with_capacity(children.len());
+        for factory in children.into_iter() {
+            let signal = self.signal.clone();
+            res.push(Box::new(move || {
+                Box::new(CancellableChunkProducer {
+                    signal,
+                    prod: factory(),
+                }) as Box<dyn ChunkProducer<Chunk = P::Chunk>>
+            }) as _)
+        }
+        res
+    }
+
+    fn next_file(&mut self) -> Result<bool> {
+        if self.signal.cancelled() {
+            return Ok(false);
+        }
+        self.prod.next_file()
+    }
+    fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
+        if self.signal.cancelled() {
+            return Ok(false);
+        }
+        self.prod.get_chunk(chunk)
+    }
+}
+
+// NB: what to do about try_dyn_resize?
 
 #[cfg(test)]
 mod tests {

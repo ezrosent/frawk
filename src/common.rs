@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Condvar, Mutex,
+    atomic::{AtomicBool, AtomicI32, Ordering},
+    Arc, Condvar, Mutex,
 };
 
 pub(crate) type NumTy = u32;
@@ -303,6 +303,43 @@ impl Notification {
             }
             _guard = self.cv.wait(_guard).unwrap();
         }
+    }
+}
+
+/// A CancelSignal is a thread-safe handle for propagating error information. It is used for
+/// cancelling processes running in parallel. The intent is that the cancellation status can be
+/// queried cheaply by multiple threads. CancelSignal has "first writer wins" semantics.
+#[derive(Clone)]
+pub struct CancelSignal {
+    state: Arc<AtomicI32>,
+}
+
+impl Default for CancelSignal {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(AtomicI32::new(0)),
+        }
+    }
+}
+
+impl CancelSignal {
+    pub fn get_code(&self) -> i32 {
+        self.state.load(Ordering::Acquire)
+    }
+    pub fn cancelled(&self) -> bool {
+        self.get_code() != 0
+    }
+    pub fn cancel(&self, code: i32) {
+        // We use relaxed here because we are not using the output of this variable at all.
+        //
+        // We could probably get away with weaker semantics than AcqRel: no one relies on the
+        // output of the `get_code` value except when setting the error code. However, the
+        // semantics of relaxed RMW operations are sufficiently murky that we should only go that
+        // route if this code ends up being used in more performance-sensitive settings than it is
+        // today.
+        let _ = self
+            .state
+            .compare_exchange(0, code, Ordering::AcqRel, Ordering::Relaxed);
     }
 }
 
