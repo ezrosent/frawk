@@ -16,7 +16,7 @@ use crate::runtime::{
 };
 use crate::{
     builtins::Variable,
-    common::{FileSpec, Result},
+    common::{CancelSignal, FileSpec, Notification, Result},
     compile::Ty,
     pushdown::FieldSet,
 };
@@ -318,11 +318,15 @@ macro_rules! exit {
         exit!($runtime, 0)
     };
     ($runtime:expr, $code:expr) => {{
-        let rt = $runtime as *const _ as *mut Runtime;
-        let concurrent = (*rt).concurrent;
-        if concurrent {
+        let rt = &mut *($runtime as *const _ as *mut Runtime);
+        std::ptr::drop_in_place(rt);
+        if rt.concurrent {
             // Use panic to allow 'graceful' shutdown of other worker threads.
-            panic!("")
+            rt.cancel_signal.cancel($code);
+            // Block forever. Let the main thread exit.
+            let n = Notification::default();
+            n.wait();
+            unreachable!()
         } else {
             std::ptr::drop_in_place(rt);
             std::process::exit($code)
@@ -355,6 +359,7 @@ pub(crate) trait IntoRuntime {
         ff: impl runtime::writers::FileFactory,
         used_fields: &FieldSet,
         named_columns: Option<Vec<&[u8]>>,
+        cancel_signal: CancelSignal,
     ) -> Runtime<'a>;
 }
 
@@ -366,6 +371,7 @@ macro_rules! impl_into_runtime {
                 ff: impl runtime::writers::FileFactory,
                 used_fields: &FieldSet,
                 named_columns: Option<Vec<&[u8]>>,
+                cancel_signal: CancelSignal,
             ) -> Runtime<'a> {
                 Runtime {
                     concurrent: false,
@@ -374,6 +380,7 @@ macro_rules! impl_into_runtime {
                         FileRead::new(self, used_fields.clone(), named_columns),
                     )),
                     core: crate::interp::Core::new(ff),
+                    cancel_signal,
                 }
             }
         }
@@ -399,6 +406,7 @@ pub(crate) struct Runtime<'a> {
     pub(crate) input_data: InputData,
     #[allow(unused)]
     pub(crate) concurrent: bool,
+    pub(crate) cancel_signal: CancelSignal,
 }
 
 impl<'a> Runtime<'a> {

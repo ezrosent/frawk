@@ -5,7 +5,7 @@
 use crate::{
     builtins,
     bytecode::{self, Accum},
-    common::{FileSpec, NumTy, Result, Stage},
+    common::{CancelSignal, FileSpec, NumTy, Result, Stage},
     compile,
     pushdown::FieldSet,
     runtime::{self, UniqueStr},
@@ -144,13 +144,14 @@ pub(crate) unsafe fn run_main<R, FF, J>(
     used_fields: &FieldSet,
     named_columns: Option<Vec<&[u8]>>,
     num_workers: usize,
+    cancel_signal: CancelSignal,
 ) -> Result<()>
 where
     R: intrinsics::IntoRuntime,
     FF: runtime::writers::FileFactory,
     J: Jit,
 {
-    let mut rt = stdin.into_runtime(ff, used_fields, named_columns);
+    let mut rt = stdin.into_runtime(ff, used_fields, named_columns, cancel_signal.clone());
     let main = jit.main_functions()?;
     match main {
         Stage::Main(m) => Ok(m.invoke(&mut rt)),
@@ -205,12 +206,14 @@ where
                     let main_loop_fn = main_loop.unwrap();
                     let scope_res = crossbeam::scope(|s| {
                         for (reader, sender, shuttle) in launch_data.into_iter() {
+                            let cancel_signal = cancel_signal.clone();
                             s.spawn(move |_| {
                                 if let Some(reader) = reader() {
                                     let mut runtime = Runtime {
                                         concurrent: true,
                                         core: shuttle(),
                                         input_data: reader.into(),
+                                        cancel_signal,
                                     };
                                     main_loop_fn.invoke(&mut runtime);
                                     sender.send(runtime.core.extract_result(0)).unwrap();
@@ -218,12 +221,19 @@ where
                             });
                         }
                         rt.core.vars.pid = 1;
+                        // TODO do this in a child thread (?)
                         main_loop_fn.invoke(&mut rt);
                         rt.core.vars.pid = 0;
                         mem::drop(sender);
+                        
                         with_input!(&mut rt.input_data, |(_, read_files)| {
+                            // TODO: recv_timeout loop, checking the cancel signal
                             while let Ok(res) = receiver.recv() {
                                 rt.core.combine(res);
+                            }
+                            if let Some(rc) = cancel_signal.get_code() {
+                                mem::drop(rt);
+                                std::process::exit(rc);
                             }
                             rt.concurrent = false;
                             if let Some(end) = end {

@@ -27,7 +27,7 @@ use std::str;
 use lazy_static::lazy_static;
 use regex::{bytes, bytes::Regex};
 
-use crate::common::{ExecutionStrategy, Result};
+use crate::common::{CancelSignal, ExecutionStrategy, Result};
 use crate::pushdown::FieldSet;
 use crate::runtime::{
     str_impl::{Buf, Str, UniqueBuf},
@@ -130,6 +130,7 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         chunk_size: usize,
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + Send + 'static,
@@ -1391,6 +1392,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         chunk_size: usize,
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
@@ -1404,6 +1406,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             check_utf8,
             exec_strategy,
             get_find_indexes_bytes(),
+            cancel_signal,
         )
     }
     pub fn new_internal<I, S>(
@@ -1414,6 +1417,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
         kernel: BytesIndexKernel,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
@@ -1471,6 +1475,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
         chunk_size: usize,
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
@@ -1482,6 +1487,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
             check_utf8,
             exec_strategy,
             get_find_indexes_ascii_whitespace(),
+            cancel_signal,
         )
     }
     pub fn new_whitespace_internal<I, S>(
@@ -1490,6 +1496,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
         find_indexes: unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
@@ -1981,6 +1988,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
             /*chunk_size=*/ 512,
             /*check_utf8=*/ true,
             ExecutionStrategy::Serial,
+            Default::default(),
         );
         loop {
             let (_, line) = reader
@@ -2051,6 +2059,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
             /*check_utf8=*/ true,
             ExecutionStrategy::Serial,
             kernel,
+            Default::default(),
         );
         let mut got_lines = Vec::new();
         let mut got = Vec::new();
@@ -2202,6 +2211,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
                 /*chunk_size=*/ 1024,
                 /*check_utf8=*/ false,
                 ExecutionStrategy::ShardPerRecord,
+                Default::default(),
             )
         }
         fn make_br(reader: impl io::Read + Send + 'static) -> impl LineReader {
@@ -2212,6 +2222,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
                 /*chunk_size=*/ 1024,
                 /*check_utf8=*/ false,
                 ExecutionStrategy::ShardPerRecord,
+                Default::default(),
             )
         }
         multithreaded_count(
@@ -2262,6 +2273,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
             /*check_utf8=*/ false,
             ExecutionStrategy::Serial,
             kernel,
+            Default::default(),
         );
         let mut got_lines = Vec::new();
         let mut got = Vec::new();

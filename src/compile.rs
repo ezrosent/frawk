@@ -4,7 +4,9 @@ use crate::cfg::{self, is_unused, Function, Ident, PrimExpr, PrimStmt, PrimVal, 
 use crate::codegen;
 #[cfg(feature = "llvm_backend")]
 use crate::codegen::llvm;
-use crate::common::{CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList};
+use crate::common::{
+    CancelSignal, CompileError, Either, Graph, NodeIx, NumTy, Result, Stage, WorkList,
+};
 use crate::cross_stage;
 use crate::input_taint::TaintedStringAnalysis;
 use crate::pushdown::{FieldSet, UsedFieldAnalysis};
@@ -210,6 +212,7 @@ pub(crate) fn run_llvm<'a>(
     reader: impl codegen::intrinsics::IntoRuntime,
     ff: impl runtime::writers::FileFactory,
     cfg: llvm::Config,
+    cancel_signal: CancelSignal,
 ) -> Result<()> {
     use llvm::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
@@ -217,7 +220,15 @@ pub(crate) fn run_llvm<'a>(
     let named_cols = typer.named_columns.take();
     unsafe {
         let gen = Generator::init(&mut typer, cfg)?;
-        codegen::run_main(gen, reader, ff, &used_fields, named_cols, cfg.num_workers)
+        codegen::run_main(
+            gen,
+            reader,
+            ff,
+            &used_fields,
+            named_cols,
+            cfg.num_workers,
+            cancel_signal,
+        )
     }
 }
 
@@ -226,6 +237,7 @@ pub(crate) fn run_cranelift<'a>(
     reader: impl codegen::intrinsics::IntoRuntime,
     ff: impl runtime::writers::FileFactory,
     cfg: codegen::Config,
+    cancel_signal: CancelSignal,
 ) -> Result<()> {
     use codegen::clif::Generator;
     let mut typer = Typer::init_from_ctx(ctx)?;
@@ -233,7 +245,15 @@ pub(crate) fn run_cranelift<'a>(
     let named_cols = typer.named_columns.take();
     unsafe {
         let gen = Generator::init(&mut typer, cfg)?;
-        codegen::run_main(gen, reader, ff, &used_fields, named_cols, cfg.num_workers)
+        codegen::run_main(
+            gen,
+            reader,
+            ff,
+            &used_fields,
+            named_cols,
+            cfg.num_workers,
+            cancel_signal,
+        )
     }
 }
 

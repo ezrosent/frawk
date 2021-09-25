@@ -597,9 +597,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             }
             mem::drop(sender);
             self.core.vars.pid = 1;
-            self.run_at(main_loop)?;
+            let mut rc = self.run_at(main_loop)?;
             self.core.vars.pid = 0;
-            let mut rc = 0;
             while let Ok(res) = receiver.recv() {
                 let res = res?;
                 let sub_rc = res.rc;

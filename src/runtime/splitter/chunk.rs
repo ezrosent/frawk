@@ -701,15 +701,8 @@ pub struct CancellableChunkProducer<P> {
 }
 
 impl<P: ChunkProducer + 'static> CancellableChunkProducer<P> {
-    pub fn new(prod: P) -> (Self, CancelSignal) {
-        let signal = CancelSignal::default();
-        (
-            Self {
-                signal: signal.clone(),
-                prod,
-            },
-            signal,
-        )
+    pub fn new(signal: CancelSignal, prod: P) -> Self {
+        Self { signal, prod }
     }
 }
 
@@ -744,13 +737,11 @@ impl<P: ChunkProducer + 'static> ChunkProducer for CancellableChunkProducer<P> {
     }
     fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
         if self.signal.cancelled() {
-            return Ok(false);
+            return Ok(true);
         }
         self.prod.get_chunk(chunk)
     }
 }
-
-// NB: what to do about try_dyn_resize?
 
 #[cfg(test)]
 mod tests {

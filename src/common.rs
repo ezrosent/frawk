@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::{
-    atomic::{AtomicBool, AtomicI32, Ordering},
+    atomic::{AtomicBool, AtomicI64, Ordering},
     Arc, Condvar, Mutex,
 };
 
@@ -311,23 +311,30 @@ impl Notification {
 /// queried cheaply by multiple threads. CancelSignal has "first writer wins" semantics.
 #[derive(Clone)]
 pub struct CancelSignal {
-    state: Arc<AtomicI32>,
+    state: Arc<AtomicI64>,
 }
+
+const SENTINEL: i64 = i64::MAX;
 
 impl Default for CancelSignal {
     fn default() -> Self {
         Self {
-            state: Arc::new(AtomicI32::new(0)),
+            state: Arc::new(AtomicI64::new(SENTINEL)),
         }
     }
 }
 
 impl CancelSignal {
-    pub fn get_code(&self) -> i32 {
-        self.state.load(Ordering::Acquire)
+    pub fn get_code(&self) -> Option<i32> {
+        let raw = self.state.load(Ordering::Acquire);
+        if raw == SENTINEL {
+            None
+        } else {
+            Some(raw as i32)
+        }
     }
     pub fn cancelled(&self) -> bool {
-        self.get_code() != 0
+        self.get_code().is_some()
     }
     pub fn cancel(&self, code: i32) {
         // We use relaxed here because we are not using the output of this variable at all.
@@ -337,9 +344,9 @@ impl CancelSignal {
         // semantics of relaxed RMW operations are sufficiently murky that we should only go that
         // route if this code ends up being used in more performance-sensitive settings than it is
         // today.
-        let _ = self
-            .state
-            .compare_exchange(0, code, Ordering::AcqRel, Ordering::Relaxed);
+        let _ =
+            self.state
+                .compare_exchange(SENTINEL, code as i64, Ordering::AcqRel, Ordering::Relaxed);
     }
 }
 
