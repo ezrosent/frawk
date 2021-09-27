@@ -149,8 +149,11 @@ impl FieldSet {
         self.0 |= rest ^ mask;
     }
     pub fn get(&self, index: usize) -> bool {
-        ((index > MAX_INDEX) && (self.0 == Self::all().0))
-            || ((1u64 << (index as u32)) & self.0 != 0)
+        if index > MAX_INDEX {
+            self.0 == Self::all().0
+        } else {
+            (1u64 << (index as u32)) & self.0 != 0
+        }
     }
     pub fn set(&mut self, index: usize) {
         if index <= MAX_INDEX {

@@ -16,7 +16,7 @@ use crate::runtime::{
 };
 use crate::{
     builtins::Variable,
-    common::{CancelSignal, FileSpec, Notification, Result},
+    common::{CancelSignal, Cleanup, FileSpec, Notification, Result},
     compile::Ty,
     pushdown::FieldSet,
 };
@@ -318,18 +318,31 @@ macro_rules! exit {
         exit!($runtime, 0)
     };
     ($runtime:expr, $code:expr) => {{
-        let rt = &mut *($runtime as *const _ as *mut Runtime);
-        std::ptr::drop_in_place(rt);
+        let rt_raw = $runtime as *mut Runtime;
+        // If $runtime was an &mut, drop it. We'll try and avoid calling drop_in_place with any
+        // &mut Runtimes in scope.
+        mem::drop($runtime);
+        let rt = &mut *rt_raw;
+        let code = $code;
         if rt.concurrent {
-            // Use panic to allow 'graceful' shutdown of other worker threads.
-            rt.cancel_signal.cancel($code);
-            // Block forever. Let the main thread exit.
-            let n = Notification::default();
-            n.wait();
-            unreachable!()
+            let pid = rt.core.vars.pid;
+            rt.cancel_signal.cancel(code);
+            mem::drop(rt);
+            std::ptr::drop_in_place(rt_raw);
+            if pid == 1 {
+                // We are the main thread. Drop on `rt` should have waited for other threads to exit.
+                // All that's left is for us to abort.
+                std::process::exit(code)
+            } else {
+                // Block forever. Let the main thread exit.
+                let n = Notification::default();
+                n.wait();
+                unreachable!()
+            }
         } else {
-            std::ptr::drop_in_place(rt);
-            std::process::exit($code)
+            mem::drop(rt);
+            std::ptr::drop_in_place(rt_raw);
+            std::process::exit(code)
         }
     }};
 }
@@ -380,6 +393,7 @@ macro_rules! impl_into_runtime {
                         FileRead::new(self, used_fields.clone(), named_columns),
                     )),
                     core: crate::interp::Core::new(ff),
+                    cleanup: Cleanup::null(),
                     cancel_signal,
                 }
             }
@@ -407,6 +421,7 @@ pub(crate) struct Runtime<'a> {
     #[allow(unused)]
     pub(crate) concurrent: bool,
     pub(crate) cancel_signal: CancelSignal,
+    pub(crate) cleanup: Cleanup<Self>,
 }
 
 impl<'a> Runtime<'a> {
@@ -415,6 +430,12 @@ impl<'a> Runtime<'a> {
         self.core.vars.filename = with_input!(&mut self.input_data, |(_, read_files)| {
             read_files.stdin_filename().upcast()
         });
+    }
+}
+
+impl<'a> Drop for Runtime<'a> {
+    fn drop(&mut self) {
+        mem::replace(&mut self.cleanup, Cleanup::null()).invoke(self);
     }
 }
 
@@ -897,7 +918,7 @@ pub(crate) unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
 }
 
 pub(crate) unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
-    let runtime = &*(rt as *mut Runtime);
+    let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_str(var));
         mem::transmute::<Str, U128>(res)
@@ -943,7 +964,7 @@ pub(crate) unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: In
 }
 
 pub(crate) unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
-    let runtime = &*(rt as *mut Runtime);
+    let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_intmap(var));
         mem::transmute::<IntMap<_>, *mut c_void>(res)
@@ -964,7 +985,7 @@ pub(crate) unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, ma
 }
 
 pub(crate) unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void {
-    let runtime = &*(rt as *mut Runtime);
+    let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
         let res = try_abort!(runtime, runtime.core.vars.load_strmap(var));
         mem::transmute::<StrMap<_>, *mut c_void>(res)

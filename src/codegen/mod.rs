@@ -5,7 +5,7 @@
 use crate::{
     builtins,
     bytecode::{self, Accum},
-    common::{CancelSignal, FileSpec, NumTy, Result, Stage},
+    common::{CancelSignal, Cleanup, FileSpec, NumTy, Result, Stage},
     compile,
     pushdown::FieldSet,
     runtime::{self, UniqueStr},
@@ -213,21 +213,27 @@ where
                                         concurrent: true,
                                         core: shuttle(),
                                         input_data: reader.into(),
+                                        cleanup: Cleanup::<Runtime>::new(move |rt| {
+                                            sender.send(rt.core.extract_result(0)).unwrap();
+                                        }),
                                         cancel_signal,
                                     };
                                     main_loop_fn.invoke(&mut runtime);
-                                    sender.send(runtime.core.extract_result(0)).unwrap();
                                 }
                             });
                         }
-                        rt.core.vars.pid = 1;
-                        // TODO do this in a child thread (?)
-                        main_loop_fn.invoke(&mut rt);
-                        rt.core.vars.pid = 0;
                         mem::drop(sender);
-                        
+                        {
+                            rt.core.vars.pid = 1;
+                            let r = receiver.clone();
+                            rt.cleanup =
+                                Cleanup::<Runtime>::new(move |_| while let Ok(_) = r.recv() {});
+                            main_loop_fn.invoke(&mut rt);
+                            rt.cleanup.cancel();
+                        }
+                        rt.core.vars.pid = 0;
+
                         with_input!(&mut rt.input_data, |(_, read_files)| {
-                            // TODO: recv_timeout loop, checking the cancel signal
                             while let Ok(res) = receiver.recv() {
                                 rt.core.combine(res);
                             }

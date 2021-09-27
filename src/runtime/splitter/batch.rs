@@ -35,7 +35,10 @@ use crate::runtime::{
 };
 
 use super::{
-    chunk::{self, Chunk, ChunkProducer, OffsetChunk, ParallelChunkProducer, ShardedChunkProducer},
+    chunk::{
+        self, CancellableChunkProducer, Chunk, ChunkProducer, OffsetChunk, ParallelChunkProducer,
+        ShardedChunkProducer,
+    },
     normalize_join_indexes, DefaultLine, LineReader, ReaderState,
 };
 
@@ -141,13 +144,16 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 rs, chunk_size, ifmt, check_utf8,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
-                Box::new(ParallelChunkProducer::new(
-                    move || {
-                        chunk::new_chained_offset_chunk_producer_csv(
-                            rs, chunk_size, ifmt, check_utf8,
-                        )
-                    },
-                    /*channel_size*/ x.num_workers() * 2,
+                Box::new(CancellableChunkProducer::new(
+                    cancel_signal,
+                    ParallelChunkProducer::new(
+                        move || {
+                            chunk::new_chained_offset_chunk_producer_csv(
+                                rs, chunk_size, ifmt, check_utf8,
+                            )
+                        },
+                        /*channel_size*/ x.num_workers() * 2,
+                    ),
                 ))
             }
             ExecutionStrategy::ShardPerFile => {
@@ -163,7 +169,10 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                         )
                     }
                 });
-                Box::new(ShardedChunkProducer::new(iter))
+                Box::new(CancellableChunkProducer::new(
+                    cancel_signal,
+                    ShardedChunkProducer::new(iter),
+                ))
             }
         };
         let empty_buf = UniqueBuf::new(0).into_buf();
@@ -1428,13 +1437,16 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
-                Box::new(ParallelChunkProducer::new(
-                    move || {
-                        chunk::new_chained_offset_chunk_producer_bytes(
-                            rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
-                        )
-                    },
-                    /*channel_size*/ x.num_workers() * 2,
+                Box::new(CancellableChunkProducer::new(
+                    cancel_signal,
+                    ParallelChunkProducer::new(
+                        move || {
+                            chunk::new_chained_offset_chunk_producer_bytes(
+                                rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
+                            )
+                        },
+                        /*channel_size*/ x.num_workers() * 2,
+                    ),
                 ))
             }
             ExecutionStrategy::ShardPerFile => {
@@ -1452,7 +1464,10 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                         )
                     }
                 });
-                Box::new(ShardedChunkProducer::new(iter))
+                Box::new(CancellableChunkProducer::new(
+                    cancel_signal,
+                    ShardedChunkProducer::new(iter),
+                ))
             }
         };
         ByteReader {
@@ -1513,16 +1528,19 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
                     ))
                 }
                 x @ ExecutionStrategy::ShardPerRecord => {
-                    Box::new(ParallelChunkProducer::new(
-                        move || {
-                            chunk::new_chained_offset_chunk_producer_ascii_whitespace(
-                                rs,
-                                chunk_size,
-                                check_utf8,
-                                find_indexes,
-                            )
-                        },
-                        /*channel_size*/ x.num_workers() * 2,
+                    Box::new(CancellableChunkProducer::new(
+                        cancel_signal,
+                        ParallelChunkProducer::new(
+                            move || {
+                                chunk::new_chained_offset_chunk_producer_ascii_whitespace(
+                                    rs,
+                                    chunk_size,
+                                    check_utf8,
+                                    find_indexes,
+                                )
+                            },
+                            /*channel_size*/ x.num_workers() * 2,
+                        ),
                     ))
                 }
                 ExecutionStrategy::ShardPerFile => {
@@ -1538,7 +1556,10 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
                             )
                         }
                     });
-                    Box::new(ShardedChunkProducer::new(iter))
+                    Box::new(CancellableChunkProducer::new(
+                        cancel_signal,
+                        ShardedChunkProducer::new(iter),
+                    ))
                 }
             };
         ByteReader {

@@ -495,15 +495,7 @@ impl<P: ChunkProducer> Clone for ParallelChunkProducer<P> {
     }
 }
 
-// TODO:
-// 1. build "CancelSignal" primitive for atomically slotting in an error code. [x]
-// 2. build a CancellableChunkProducer based on such a signal that wraps any ChunkProducer. [x]
-// 3. thread this chunk producer through everywhere.
-// 4. Store copies of the relevant signal in the runtime.
-// 5. When we reach exit, do cancel, drop in place of runtime, and then park the thread.
-// 6. Other threads will exit the main loop normally (as the producer will stop generating input).
-// 7. Return the exit code as before. Everything should get dropped.
-// 8. unit tests for chunk producer and end to end tests for exit for exit
+// TODO unit tests for chunk producer and end to end tests for exit for exit
 
 impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
     pub fn new(

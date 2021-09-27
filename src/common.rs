@@ -350,6 +350,38 @@ impl CancelSignal {
     }
 }
 
+pub struct Cleanup<Arg> {
+    data: Option<Box<dyn for<'a> FnOnce(&'a mut Arg)>>,
+}
+
+impl<Arg> Cleanup<Arg> {
+    pub fn null() -> Self {
+        Cleanup { data: None }
+    }
+    pub fn cancel(&mut self) {
+        self.data = None;
+    }
+    pub fn invoke(&mut self, arg: &mut Arg) {
+        if let Some(f) = self.data.take() {
+            f(arg)
+        }
+    }
+    pub fn new(f: impl for<'a> FnOnce(&'a mut Arg) + 'static) -> Self {
+        Cleanup {
+            data: Some(Box::new(f) as _),
+        }
+    }
+}
+
+impl<Arg> Drop for Cleanup<Arg> {
+    fn drop(&mut self) {
+        assert!(
+            self.data.is_none(),
+            "destroying un-executed cleanup handler"
+        );
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 #[repr(i64)]
 pub enum FileSpec {
