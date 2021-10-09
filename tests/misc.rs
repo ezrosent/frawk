@@ -1,5 +1,5 @@
 use assert_cmd::Command;
-use std::fs::File;
+use std::fs::{read_to_string, File};
 use std::io::Write;
 use tempfile::tempdir;
 
@@ -308,6 +308,34 @@ fn simple_rc() {
 }
 
 #[test]
+fn multi_rc() {
+    let mut text = String::default();
+    for _ in 0..500 {
+        text.push_str("x\n");
+    }
+    let (dir, data) = file_from_string("inputs", &text);
+    let out = dir.path().join("out");
+    let prog = format!(
+      "BEGIN {{ print \"should flush\" > \"{}\"; }} PID == 2 && NR == 100 {{ print \"hi\"; close(\"{}\"); exit 2; }} END {{ print \"should not print\"; }}",
+      fname_to_string(&out),
+      );
+    eprintln!("data={:?}", data);
+    for backend_arg in BACKEND_ARGS {
+        Command::cargo_bin("frawk")
+            .unwrap()
+            .arg(backend_arg)
+            .arg("-pf")
+            .arg(&prog)
+            .arg(fname_to_string(&data))
+            .arg(fname_to_string(&data))
+            .assert()
+            .stdout("hi\n")
+            .code(2);
+        assert_eq!(read_to_string(&prog).unwrap(), "should_flush\n");
+    }
+}
+
+#[test]
 fn nested_loops() {
     let expected = "0 0\n0 1\n0 2\n1 0\n1 1\n1 2\n2 0\n2 1\n2 2\n";
     let prog: String =
@@ -360,4 +388,17 @@ fn dont_reorder_files_with_f() {
 
 fn fname_to_string(path: &std::path::PathBuf) -> String {
     path.clone().into_os_string().into_string().unwrap()
+}
+
+fn file_from_string(
+    name: impl AsRef<str>,
+    s: impl AsRef<str>,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let tmp = tempdir().unwrap();
+    let file = tmp.path().join(name.as_ref());
+    File::create(file.clone())
+        .unwrap()
+        .write(s.as_ref().as_bytes())
+        .unwrap();
+    (tmp, file)
 }
