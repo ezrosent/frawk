@@ -280,9 +280,6 @@ fn iter_across_functions() {
     }
 }
 
-// TODO: test that auxiliary output is flushed
-// TODO: test exit behavior with parallelism (no stderror)
-
 #[test]
 fn simple_rc() {
     let expected = "hi\n";
@@ -316,9 +313,9 @@ fn multi_rc() {
     let (dir, data) = file_from_string("inputs", &text);
     let out = dir.path().join("out");
     let prog = format!(
-      "BEGIN {{ print \"should flush\" > \"{}\"; }} PID == 2 && NR == 100 {{ print \"hi\"; close(\"{}\"); exit 2; }} END {{ print \"should not print\"; }}",
+      "BEGIN {{ print \"should flush\" > \"{}\"; }} PID == 2 && NR == 100 {{ print \"hi\"; exit 2; }} PREPARE {{ m[PID] = \"done\"; }} END {{ for (k in m) print k, m[k]; }}",
       fname_to_string(&out),
-      );
+    );
     eprintln!("data={:?}", data);
     for backend_arg in BACKEND_ARGS {
         Command::cargo_bin("frawk")
@@ -331,7 +328,7 @@ fn multi_rc() {
             .assert()
             .stdout("hi\n")
             .code(2);
-        assert_eq!(read_to_string(&prog).unwrap(), "should_flush\n");
+        assert_eq!(read_to_string(&out).unwrap(), "should flush\n");
     }
 }
 
