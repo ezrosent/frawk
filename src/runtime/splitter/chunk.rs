@@ -582,8 +582,6 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
         err!("nextfile is not supported in record-oriented parallel mode")
     }
     fn wait(&self) -> bool {
-        // TODO: we could probably make this work better for shorter scripts by sending a "done"
-        // signal on the channel, or at least flipping a boolean of some kind to that end.
         self.start
             .recv_timeout(std::time::Duration::from_secs(2))
             .is_ok()
