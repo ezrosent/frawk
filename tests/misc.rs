@@ -305,15 +305,35 @@ fn simple_rc() {
 }
 
 #[test]
+fn trivial_parallel_rc() {
+    let expected = "hi\n";
+    for (prog, rc) in [
+        (r#"BEGIN { print "hi"; exit 0; print "there"; }"#, 0),
+        (r#"END { print "hi"; exit 1; print "there"; }"#, 1),
+    ] {
+        for backend_arg in BACKEND_ARGS {
+            Command::cargo_bin("frawk")
+                .unwrap()
+                .arg(String::from(*backend_arg))
+                .arg(String::from(prog))
+                .arg("-pr")
+                .assert()
+                .stdout(expected)
+                .code(rc);
+        }
+    }
+}
+
+#[test]
 fn multi_rc() {
     let mut text = String::default();
-    for _ in 0..500 {
+    for _ in 0..50_000 {
         text.push_str("x\n");
     }
     let (dir, data) = file_from_string("inputs", &text);
     let out = dir.path().join("out");
     let prog = format!(
-      "BEGIN {{ print \"should flush\" > \"{}\"; }} PID == 2 && NR == 100 {{ print \"hi\"; exit 2; }} PREPARE {{ m[PID] = \"done\"; }} END {{ for (k in m) print k, m[k]; }}",
+      "BEGIN {{ print \"should flush\" > \"{}\"; }} PID == 2 && NR == 100 {{ print \"hi\"; exit 2; }} PREPARE {{ m[PID] = NR; }} END {{ for (k in m) print k, m[k]; }}",
       fname_to_string(&out),
     );
     eprintln!("data={:?}", data);
@@ -322,7 +342,10 @@ fn multi_rc() {
             .unwrap()
             .arg(backend_arg)
             .arg("-pf")
+            .arg("-j2")
             .arg(&prog)
+            .arg(fname_to_string(&data))
+            .arg(fname_to_string(&data))
             .arg(fname_to_string(&data))
             .arg(fname_to_string(&data))
             .assert()

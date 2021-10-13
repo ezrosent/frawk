@@ -160,7 +160,6 @@ where
             main_loop,
             end,
         } => {
-            rt.concurrent = true;
             // This triply-nested macro is here to allow mutable access to a "runtime" struct
             // as well as mutable access to the same "read_files" value. The generated code is
             // pretty awful; It may be worth a RefCell just to clean up.
@@ -189,6 +188,9 @@ where
                 if let Err(_) = rt.core.write_files.flush_stdout() {
                     return Ok(());
                 }
+
+                rt.concurrent = true;
+
                 let (sender, receiver) = crossbeam_channel::bounded(reads.len());
                 let launch_data: Vec<_> = reads
                     .into_iter()
