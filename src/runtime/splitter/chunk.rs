@@ -495,8 +495,6 @@ impl<P: ChunkProducer> Clone for ParallelChunkProducer<P> {
     }
 }
 
-// TODO unit tests for chunk producer and end to end tests for exit for exit
-
 impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
     pub fn new(
         p_factory: impl FnOnce() -> P + Send + 'static,
@@ -584,6 +582,8 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
         err!("nextfile is not supported in record-oriented parallel mode")
     }
     fn wait(&self) -> bool {
+        // TODO: we could probably make this work better for shorter scripts by sending a "done"
+        // signal on the channel, or at least flipping a boolean of some kind to that end.
         self.start
             .recv_timeout(std::time::Duration::from_secs(2))
             .is_ok()
@@ -687,6 +687,7 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
     }
 }
 
+/// A ChunkProducer that stops input early if a [CancelSignal] is triggered.
 pub struct CancellableChunkProducer<P> {
     signal: CancelSignal,
     prod: P,
@@ -719,6 +720,10 @@ impl<P: ChunkProducer + 'static> ChunkProducer for CancellableChunkProducer<P> {
             }) as _)
         }
         res
+    }
+
+    fn wait(&self) -> bool {
+        self.prod.wait()
     }
 
     fn next_file(&mut self) -> Result<bool> {
