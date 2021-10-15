@@ -1,5 +1,5 @@
 use assert_cmd::Command;
-use std::fs::File;
+use std::fs::{read_to_string, File};
 use std::io::Write;
 use tempfile::tempdir;
 
@@ -281,6 +281,81 @@ fn iter_across_functions() {
 }
 
 #[test]
+fn simple_rc() {
+    let expected = "hi\n";
+    for (prog, rc) in [
+        (r#"BEGIN { print "hi"; exit(0); print "there"; }"#, 0),
+        (r#"BEGIN { print "hi"; exit 0; print "there"; }"#, 0),
+        (r#"BEGIN { print "hi"; exit; print "there"; }"#, 0),
+        (r#"BEGIN { print "hi"; exit(1); print "there"; }"#, 1),
+        (r#"BEGIN { print "hi"; exit 1; print "there"; }"#, 1),
+        (r#"BEGIN { print "hi"; exit(4); print "there"; }"#, 4),
+        (r#"BEGIN { print "hi"; exit 4; print "there"; }"#, 4),
+    ] {
+        for backend_arg in BACKEND_ARGS {
+            Command::cargo_bin("frawk")
+                .unwrap()
+                .arg(String::from(*backend_arg))
+                .arg(String::from(prog))
+                .assert()
+                .stdout(expected)
+                .code(rc);
+        }
+    }
+}
+
+#[test]
+fn trivial_parallel_rc() {
+    let expected = "hi\n";
+    for (prog, rc) in [
+        (r#"BEGIN { print "hi"; exit 0; print "there"; }"#, 0),
+        (r#"END { print "hi"; exit 1; print "there"; }"#, 1),
+    ] {
+        for backend_arg in BACKEND_ARGS {
+            Command::cargo_bin("frawk")
+                .unwrap()
+                .arg(String::from(*backend_arg))
+                .arg(String::from(prog))
+                .arg("-pr")
+                .assert()
+                .stdout(expected)
+                .code(rc);
+        }
+    }
+}
+
+#[test]
+fn multi_rc() {
+    let mut text = String::default();
+    for _ in 0..50_000 {
+        text.push_str("x\n");
+    }
+    let (dir, data) = file_from_string("inputs", &text);
+    let out = dir.path().join("out");
+    let prog = format!(
+      "BEGIN {{ print \"should flush\" > \"{}\"; }} PID == 2 && NR == 100 {{ print \"hi\"; exit 2; }} PREPARE {{ m[PID] = NR; }} END {{ for (k in m) print k, m[k]; }}",
+      fname_to_string(&out),
+    );
+    eprintln!("data={:?}", data);
+    for backend_arg in BACKEND_ARGS {
+        Command::cargo_bin("frawk")
+            .unwrap()
+            .arg(backend_arg)
+            .arg("-pf")
+            .arg("-j2")
+            .arg(&prog)
+            .arg(fname_to_string(&data))
+            .arg(fname_to_string(&data))
+            .arg(fname_to_string(&data))
+            .arg(fname_to_string(&data))
+            .assert()
+            .stdout("hi\n")
+            .code(2);
+        assert_eq!(read_to_string(&out).unwrap(), "should flush\n");
+    }
+}
+
+#[test]
 fn nested_loops() {
     let expected = "0 0\n0 1\n0 2\n1 0\n1 1\n1 2\n2 0\n2 1\n2 2\n";
     let prog: String =
@@ -333,4 +408,17 @@ fn dont_reorder_files_with_f() {
 
 fn fname_to_string(path: &std::path::PathBuf) -> String {
     path.clone().into_os_string().into_string().unwrap()
+}
+
+fn file_from_string(
+    name: impl AsRef<str>,
+    s: impl AsRef<str>,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let tmp = tempdir().unwrap();
+    let file = tmp.path().join(name.as_ref());
+    File::create(file.clone())
+        .unwrap()
+        .write(s.as_ref().as_bytes())
+        .unwrap();
+    (tmp, file)
 }

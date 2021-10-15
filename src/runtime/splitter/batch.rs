@@ -27,7 +27,7 @@ use std::str;
 use lazy_static::lazy_static;
 use regex::{bytes, bytes::Regex};
 
-use crate::common::{ExecutionStrategy, Result};
+use crate::common::{CancelSignal, ExecutionStrategy, Result};
 use crate::pushdown::FieldSet;
 use crate::runtime::{
     str_impl::{Buf, Str, UniqueBuf},
@@ -35,7 +35,10 @@ use crate::runtime::{
 };
 
 use super::{
-    chunk::{self, Chunk, ChunkProducer, OffsetChunk, ParallelChunkProducer, ShardedChunkProducer},
+    chunk::{
+        self, CancellableChunkProducer, Chunk, ChunkProducer, OffsetChunk, ParallelChunkProducer,
+        ShardedChunkProducer,
+    },
     normalize_join_indexes, DefaultLine, LineReader, ReaderState,
 };
 
@@ -130,6 +133,7 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         chunk_size: usize,
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + Send + 'static,
@@ -140,13 +144,16 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 rs, chunk_size, ifmt, check_utf8,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
-                Box::new(ParallelChunkProducer::new(
-                    move || {
-                        chunk::new_chained_offset_chunk_producer_csv(
-                            rs, chunk_size, ifmt, check_utf8,
-                        )
-                    },
-                    /*channel_size*/ x.num_workers() * 2,
+                Box::new(CancellableChunkProducer::new(
+                    cancel_signal,
+                    ParallelChunkProducer::new(
+                        move || {
+                            chunk::new_chained_offset_chunk_producer_csv(
+                                rs, chunk_size, ifmt, check_utf8,
+                            )
+                        },
+                        /*channel_size*/ x.num_workers() * 2,
+                    ),
                 ))
             }
             ExecutionStrategy::ShardPerFile => {
@@ -162,7 +169,10 @@ impl CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                         )
                     }
                 });
-                Box::new(ShardedChunkProducer::new(iter))
+                Box::new(CancellableChunkProducer::new(
+                    cancel_signal,
+                    ShardedChunkProducer::new(iter),
+                ))
             }
         };
         let empty_buf = UniqueBuf::new(0).into_buf();
@@ -1391,6 +1401,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         chunk_size: usize,
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
@@ -1404,6 +1415,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             check_utf8,
             exec_strategy,
             get_find_indexes_bytes(),
+            cancel_signal,
         )
     }
     pub fn new_internal<I, S>(
@@ -1414,6 +1426,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
         kernel: BytesIndexKernel,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
@@ -1424,13 +1437,16 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                 rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
             )),
             x @ ExecutionStrategy::ShardPerRecord => {
-                Box::new(ParallelChunkProducer::new(
-                    move || {
-                        chunk::new_chained_offset_chunk_producer_bytes(
-                            rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
-                        )
-                    },
-                    /*channel_size*/ x.num_workers() * 2,
+                Box::new(CancellableChunkProducer::new(
+                    cancel_signal,
+                    ParallelChunkProducer::new(
+                        move || {
+                            chunk::new_chained_offset_chunk_producer_bytes(
+                                rs, chunk_size, field_sep, record_sep, check_utf8, kernel,
+                            )
+                        },
+                        /*channel_size*/ x.num_workers() * 2,
+                    ),
                 ))
             }
             ExecutionStrategy::ShardPerFile => {
@@ -1448,7 +1464,10 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
                         )
                     }
                 });
-                Box::new(ShardedChunkProducer::new(iter))
+                Box::new(CancellableChunkProducer::new(
+                    cancel_signal,
+                    ShardedChunkProducer::new(iter),
+                ))
             }
         };
         ByteReader {
@@ -1471,6 +1490,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
         chunk_size: usize,
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
@@ -1482,6 +1502,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
             check_utf8,
             exec_strategy,
             get_find_indexes_ascii_whitespace(),
+            cancel_signal,
         )
     }
     pub fn new_whitespace_internal<I, S>(
@@ -1490,6 +1511,7 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
         check_utf8: bool,
         exec_strategy: ExecutionStrategy,
         find_indexes: unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64,
+        cancel_signal: CancelSignal,
     ) -> Self
     where
         I: Iterator<Item = (S, String)> + 'static + Send,
@@ -1506,16 +1528,19 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
                     ))
                 }
                 x @ ExecutionStrategy::ShardPerRecord => {
-                    Box::new(ParallelChunkProducer::new(
-                        move || {
-                            chunk::new_chained_offset_chunk_producer_ascii_whitespace(
-                                rs,
-                                chunk_size,
-                                check_utf8,
-                                find_indexes,
-                            )
-                        },
-                        /*channel_size*/ x.num_workers() * 2,
+                    Box::new(CancellableChunkProducer::new(
+                        cancel_signal,
+                        ParallelChunkProducer::new(
+                            move || {
+                                chunk::new_chained_offset_chunk_producer_ascii_whitespace(
+                                    rs,
+                                    chunk_size,
+                                    check_utf8,
+                                    find_indexes,
+                                )
+                            },
+                            /*channel_size*/ x.num_workers() * 2,
+                        ),
                     ))
                 }
                 ExecutionStrategy::ShardPerFile => {
@@ -1531,7 +1556,10 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk<WhitespaceOffsets>>>> 
                             )
                         }
                     });
-                    Box::new(ShardedChunkProducer::new(iter))
+                    Box::new(CancellableChunkProducer::new(
+                        cancel_signal,
+                        ShardedChunkProducer::new(iter),
+                    ))
                 }
             };
         ByteReader {
@@ -1981,6 +2009,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
             /*chunk_size=*/ 512,
             /*check_utf8=*/ true,
             ExecutionStrategy::Serial,
+            Default::default(),
         );
         loop {
             let (_, line) = reader
@@ -2051,6 +2080,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
             /*check_utf8=*/ true,
             ExecutionStrategy::Serial,
             kernel,
+            Default::default(),
         );
         let mut got_lines = Vec::new();
         let mut got = Vec::new();
@@ -2202,6 +2232,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
                 /*chunk_size=*/ 1024,
                 /*check_utf8=*/ false,
                 ExecutionStrategy::ShardPerRecord,
+                Default::default(),
             )
         }
         fn make_br(reader: impl io::Read + Send + 'static) -> impl LineReader {
@@ -2212,6 +2243,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
                 /*chunk_size=*/ 1024,
                 /*check_utf8=*/ false,
                 ExecutionStrategy::ShardPerRecord,
+                Default::default(),
             )
         }
         multithreaded_count(
@@ -2262,6 +2294,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
             /*check_utf8=*/ false,
             ExecutionStrategy::Serial,
             kernel,
+            Default::default(),
         );
         let mut got_lines = Vec::new();
         let mut got = Vec::new();

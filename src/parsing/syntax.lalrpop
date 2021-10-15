@@ -159,6 +159,12 @@ LeafStmt: &'a Stmt<'a, 'a, &'a str> = {
         arena.alloc(Stmt::Printf(spec, arena.alloc_slice(pa.unwrap_or_else(Vec::new).as_slice()), re)),
     "printf(" "\n"* <spec:(<Expr> "\n"*)> <pa: ("," "\n"* <Args>)?> ")" <re:Redirect?> =>
         arena.alloc(Stmt::Printf(spec, arena.alloc_slice(pa.unwrap_or_else(Vec::new).as_slice()), re)),
+    "exit" <PrecAdd?> =>
+       arena.alloc(Stmt::Expr(arena.alloc(Expr::Call(Either::Right(Function::Exit),
+                                                     arena.alloc_slice(&[<>.unwrap_or_else(|| arena.alloc(Expr::ILit(0)))]))))),
+    "exit(" <Expr?> ")" =>
+       arena.alloc(Stmt::Expr(arena.alloc(Expr::Call(Either::Right(Function::Exit),
+                                                     arena.alloc_slice(&[<>.unwrap_or_else(|| arena.alloc(Expr::ILit(0)))]))))),
     "break" => arena.alloc(Stmt::Break),
     "continue" => arena.alloc(Stmt::Continue),
     "next" => arena.alloc(Stmt::Next),
@@ -430,6 +436,8 @@ extern {
       "print(" =>  Tok::PrintLP,
       "printf" =>  Tok::Printf,
       "printf(" =>  Tok::PrintfLP,
+      "exit" => Tok::Exit,
+      "exit(" => Tok::ExitLP,
       "while" =>  Tok::While,
       "do" =>  Tok::Do,
       "{" =>  Tok::LBrace,

@@ -188,6 +188,7 @@ impl Display for Function {
             ToLower => write!(f, "tolower"),
             ToUpper => write!(f, "toupper"),
             IncMap => write!(f, "inc_map"),
+            Exit => write!(f, "exit"),
         }
     }
 }
@@ -285,6 +286,8 @@ impl<'a> Display for lexer::Tok<'a> {
             For => "for",
             If => "if",
             Else => "else",
+            Exit => "exit",
+            ExitLP => "exit(",
             Print => "print",
             Printf => "printf",
             // Separate token for a "print(" and "printf(".

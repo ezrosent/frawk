@@ -373,7 +373,7 @@ pub(crate) mod boilerplate {
             },
             StoreVarStr(v, src) => f(Key::Var(*v), Some(src.into())),
             StoreVarInt(v, src) => f(Key::Var(*v), Some(src.into())),
-            
+
             LoadSlot{ty,slot,dst} =>
                 f(Key::Reg(*dst, *ty), Some(Key::Slot(u32::try_from(*slot).expect("slot too large"), *ty))),
             StoreSlot{ty,slot,src} =>
@@ -398,7 +398,8 @@ pub(crate) mod boilerplate {
             | NextLineStdinFused()
             | NextFile()
             | SetColumn(_, _)
-            | AllocMap(_, _) => {}
+            | AllocMap(_, _)
+            | Exit(_) => {}
         }
     }
 }

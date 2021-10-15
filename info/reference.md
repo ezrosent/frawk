@@ -93,6 +93,12 @@ _Unary Operators:_
   replaced with their lowercase counterparts; other characters are unchanged.
 * `toupper(s)`: Returns a copy of `s` where all lowercase ASCII characters are
   replaced with their uppercase counterparts; other characters are unchanged.
+* `exit [code]`: Exits the current process with the given code. `exit` attempts
+  to flush any open file buffers. For parallel scripts, other worker threads
+  have inputs cut off. Once those threads exit their main loop the process
+  exits with the given exit code. This means that scripts with long loop
+  iterations may not exit immediately. `exit` can be called with and without
+  parentheses.
 
 # Other Functions
 

@@ -89,6 +89,7 @@ fn simulate_stdin_singlechar(
         runtime::CHUNK_SIZE,
         /*check_utf8=*/ true,
         ExecutionStrategy::Serial,
+        Default::default(),
     )
 }
 
@@ -98,6 +99,7 @@ fn simulate_stdin_whitespace(inp: impl Into<String>) -> impl IntoRuntime + runti
         runtime::CHUNK_SIZE,
         /*check_utf8=*/ true,
         ExecutionStrategy::Serial,
+        Default::default(),
     )
 }
 
@@ -122,6 +124,7 @@ fn simulate_stdin_csv(
         runtime::CHUNK_SIZE,
         /*check_utf8=*/ true,
         strat,
+        Default::default(),
     )
 }
 
@@ -214,10 +217,11 @@ cfg_if! {
                         opt_level: CODEGEN_CONFIG.opt_level,
                         num_workers: strat.num_workers(),
                     },
+                    Default::default(),
                 )?;
             } else {
                 with_reader!(sep_analysis, stdin, |reader| {
-                    compile::run_llvm(&mut ctx, reader, fake_fs.clone(), CODEGEN_CONFIG)?;
+                    compile::run_llvm(&mut ctx, reader, fake_fs.clone(), CODEGEN_CONFIG, Default::default())?;
                 });
             }
             let v = fake_fs.stdout.read_data();
@@ -256,10 +260,17 @@ pub(crate) fn run_cranelift(
                 opt_level: CODEGEN_CONFIG.opt_level,
                 num_workers: strat.num_workers(),
             },
+            Default::default(),
         )?;
     } else {
         with_reader!(sep_analysis, stdin, |reader| {
-            compile::run_cranelift(&mut ctx, reader, fake_fs.clone(), CODEGEN_CONFIG)?;
+            compile::run_cranelift(
+                &mut ctx,
+                reader,
+                fake_fs.clone(),
+                CODEGEN_CONFIG,
+                Default::default(),
+            )?;
         });
     }
     let v = fake_fs.stdout.read_data();

@@ -53,6 +53,7 @@ pub enum Function {
     ToUpper,
     ToLower,
     IncMap,
+    Exit,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -231,7 +232,8 @@ static_map!(
     ["index", Function::SubstrIndex],
     ["toupper", Function::ToUpper],
     ["tolower", Function::ToLower],
-    ["system", Function::System]
+    ["system", Function::System],
+    ["exit", Function::Exit]
 );
 
 impl<'a> TryFrom<&'a str> for Function {
@@ -429,6 +431,7 @@ impl Function {
             ToUpper | ToLower | EscapeCSV | EscapeTSV => (smallvec![Str], Str),
             Substr => (smallvec![Str, Int, Int], Str),
             Match => (smallvec![Str, Str], Int),
+            Exit => (smallvec![Int], Null),
             // Split's second input can be a map of either type
             Split => {
                 if let MapIntStr | MapStrStr = incoming[1] {
@@ -450,7 +453,7 @@ impl Function {
             IntFunc(bw) => bw.arity(),
             UpdateUsedFields | Rand | ReseedRng | ReadErrStdin | NextlineStdin | NextFile
             | ReadLineStdinFused => 0,
-            ToUpper | ToLower | Clear | Srand | System | HexToInt | ToInt | EscapeCSV
+            Exit | ToUpper | ToLower | Clear | Srand | System | HexToInt | ToInt | EscapeCSV
             | EscapeTSV | Close | Length | ReadErr | ReadErrCmd | Nextline | NextlineCmd
             | Unop(_) => 1,
             SetFI | SubstrIndex | Match | Setcol | Binop(_) => 2,
@@ -497,7 +500,7 @@ impl Function {
                 Ok(Scalar(BaseTy::Str).abs())
             }
             IncMap => Ok(step_arith(&types::val_of(&args[0])?, &args[2])),
-            SetFI | UpdateUsedFields | NextFile | ReadLineStdinFused | Close => Ok(None),
+            Exit | SetFI | UpdateUsedFields | NextFile | ReadLineStdinFused | Close => Ok(None),
         }
     }
 }

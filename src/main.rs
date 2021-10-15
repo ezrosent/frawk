@@ -36,7 +36,7 @@ use clap::{App, Arg};
 use arena::Arena;
 use cfg::Escaper;
 use codegen::intrinsics::IntoRuntime;
-use common::{ExecutionStrategy, Stage};
+use common::{CancelSignal, ExecutionStrategy, Stage};
 use runtime::{
     splitter::{
         batch::{ByteReader, CSVReader, InputFormat},
@@ -216,13 +216,18 @@ fn run_interp_with_context<'a>(
     ff: impl runtime::writers::FileFactory,
     num_workers: usize,
 ) {
-    let mut interp = match compile::bytecode(&mut ctx, stdin, ff, num_workers) {
-        Ok(ctx) => ctx,
-        Err(e) => fail!("bytecode compilation failure: {}", e),
+    let rc = {
+        let mut interp = match compile::bytecode(&mut ctx, stdin, ff, num_workers) {
+            Ok(ctx) => ctx,
+            Err(e) => fail!("bytecode compilation failure: {}", e),
+        };
+        match interp.run() {
+            Err(e) => fail!("fatal error during execution: {}", e),
+            Ok(0) => return,
+            Ok(n) => n,
+        }
     };
-    if let Err(e) = interp.run() {
-        fail!("fatal error during execution: {}", e);
-    }
+    std::process::exit(rc);
 }
 
 fn run_cranelift_with_context<'a>(
@@ -230,8 +235,9 @@ fn run_cranelift_with_context<'a>(
     stdin: impl IntoRuntime,
     ff: impl runtime::writers::FileFactory,
     cfg: codegen::Config,
+    signal: CancelSignal,
 ) {
-    if let Err(e) = compile::run_cranelift(&mut ctx, stdin, ff, cfg) {
+    if let Err(e) = compile::run_cranelift(&mut ctx, stdin, ff, cfg, signal) {
         fail!("error compiling cranelift: {}", e)
     }
 }
@@ -243,8 +249,9 @@ cfg_if::cfg_if! {
             stdin: impl IntoRuntime,
             ff: impl runtime::writers::FileFactory,
             cfg: codegen::Config,
+            signal: CancelSignal,
         ) {
-            if let Err(e) = compile::run_llvm(&mut ctx, stdin, ff, cfg) {
+            if let Err(e) = compile::run_llvm(&mut ctx, stdin, ff, cfg, signal) {
                 fail!("error compiling llvm: {}", e)
             }
         }
@@ -276,6 +283,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
             CHUNK_SIZE,
             /*check_utf8=*/ false,
             ExecutionStrategy::Serial,
+            Default::default(),
         )),
         runtime::writers::default_factory(),
         /*num_workers=*/ 1,
@@ -520,12 +528,13 @@ fn main() {
         return;
     }
     let check_utf8 = matches.is_present("utf8");
+    let signal = CancelSignal::default();
 
     // This horrid macro is here because all of the different ways of reading input are different
     // types, making functions hard to write. Still, there must be something to be done to clean
     // this up here.
     macro_rules! with_inp {
-        ($analysis:expr, $inp:ident, $body:expr) => {
+        ($analysis:expr, $inp:ident, $body:expr) => {{
             if input_files.len() == 0 {
                 let _reader: Box<dyn io::Read + Send> = Box::new(io::stdin());
                 match (ifmt, $analysis) {
@@ -536,6 +545,7 @@ fn main() {
                             chunk_size,
                             check_utf8,
                             exec_strategy,
+                            signal.clone(),
                         );
                         $body
                     }
@@ -555,6 +565,7 @@ fn main() {
                                     chunk_size,
                                     check_utf8,
                                     exec_strategy,
+                                    signal.clone(),
                                 );
                                 $body
                             } else {
@@ -565,6 +576,7 @@ fn main() {
                                     chunk_size,
                                     check_utf8,
                                     exec_strategy,
+                                    signal.clone(),
                                 );
                                 $body
                             }
@@ -592,6 +604,7 @@ fn main() {
                     chunk_size,
                     check_utf8,
                     exec_strategy,
+                    signal.clone(),
                 );
                 $body
             } else {
@@ -614,6 +627,7 @@ fn main() {
                                     chunk_size,
                                     check_utf8,
                                     exec_strategy,
+                                    signal.clone(),
                                 );
                                 $body
                             } else {
@@ -624,6 +638,7 @@ fn main() {
                                     chunk_size,
                                     check_utf8,
                                     exec_strategy,
+                                    signal.clone(),
                                 );
                                 $body
                             }
@@ -648,7 +663,7 @@ fn main() {
                     }
                 }
             }
-        };
+        }};
     }
 
     let a = Arena::default();
@@ -682,6 +697,7 @@ fn main() {
                                 opt_level: opt_level as usize,
                                 num_workers,
                             },
+                            signal,
                     ));
                 } else {
                     fail!("backend specified as LLVM, but compiled without LLVM support");
@@ -700,6 +716,7 @@ fn main() {
                     opt_level: opt_level as usize,
                     num_workers,
                 },
+                signal,
             ));
         }
         Some(b) => {

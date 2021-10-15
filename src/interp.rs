@@ -101,6 +101,7 @@ pub(crate) struct StageResult {
     // TODO: put more variables in here? Most builtin variables are just going to be propagated
     // from the initial thread.
     nr: Int,
+    rc: i32,
 }
 
 impl Slots {
@@ -201,14 +202,15 @@ impl<'a> Core<'a> {
         }
     }
 
-    pub fn extract_result(&mut self) -> StageResult {
+    pub fn extract_result(&mut self, rc: i32) -> StageResult {
         StageResult {
             slots: mem::replace(&mut self.slots, Default::default()),
             nr: self.vars.nr,
+            rc,
         }
     }
 
-    pub fn combine(&mut self, StageResult { slots, nr }: StageResult) {
+    pub fn combine(&mut self, StageResult { slots, nr, rc: _ }: StageResult) {
         self.slots.combine(slots);
         self.vars.nr = self.vars.nr.agg(nr);
     }
@@ -499,7 +501,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         self.core.vars.filename = self.read_files.stdin_filename().upcast();
     }
 
-    pub(crate) fn run_parallel(&mut self) -> Result<()> {
+    pub(crate) fn run_parallel(&mut self) -> Result<i32> {
         if self.num_workers <= 1 {
             return self.run_serial();
         }
@@ -523,10 +525,13 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             return self.run_serial();
         };
         if let Some(off) = begin {
-            self.run_at(off)?;
+            let rc = self.run_at(off)?;
+            if rc != 0 {
+                return Ok(rc);
+            }
         }
         if let Err(_) = self.core.write_files.flush_stdout() {
-            return Ok(());
+            return Ok(1);
         }
         // For handling the worker portion, we want to transfer the current stdin progress to a
         // worker thread, but to withold any progress on other files open for read. We'll swap
@@ -583,47 +588,58 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
 
                         // Ignore errors, as it means another thread executed with an error and we are
                         // exiting anyway.
-                        let _ = if let Err(e) = res {
-                            sender.send(Err(e))
-                        } else {
-                            sender.send(Ok(interp.core.extract_result()))
+                        let _ = match res {
+                            Err(e) => sender.send(Err(e)),
+                            Ok(rc) => sender.send(Ok(interp.core.extract_result(rc))),
                         };
                     }
                 });
             }
             mem::drop(sender);
             self.core.vars.pid = 1;
-            self.run_at(main_loop)?;
+            let mut rc = self.run_at(main_loop)?;
             self.core.vars.pid = 0;
             while let Ok(res) = receiver.recv() {
-                self.core.combine(res?);
+                let res = res?;
+                let sub_rc = res.rc;
+                self.core.combine(res);
+                if rc == 0 && sub_rc != 0 {
+                    rc = sub_rc;
+                }
             }
-            Ok(())
+            Ok(rc)
         });
-        wrap_error(scope_res)?;
+        let rc = wrap_error(scope_res)?;
+        if rc != 0 {
+            return Ok(rc);
+        }
         if let Some(end) = end {
             mem::swap(&mut self.read_files.inputs, &mut old_read_files);
-            self.run_at(end)?;
+            Ok(self.run_at(end)?)
+        } else {
+            Ok(0)
         }
-        Ok(())
     }
 
-    pub(crate) fn run_serial(&mut self) -> Result<()> {
+    pub(crate) fn run_serial(&mut self) -> Result<i32> {
         let offs: smallvec::SmallVec<[usize; 3]> = self.main_func.iter().cloned().collect();
         for off in offs.into_iter() {
-            self.run_at(off)?
+            let rc = self.run_at(off)?;
+            if rc != 0 {
+                return Ok(rc);
+            }
         }
-        Ok(())
+        Ok(0)
     }
 
-    pub(crate) fn run(&mut self) -> Result<()> {
+    pub(crate) fn run(&mut self) -> Result<i32> {
         match self.main_func {
             Stage::Main(_) => self.run_serial(),
             Stage::Par { .. } => self.run_parallel(),
         }
     }
 
-    pub(crate) fn run_at(&mut self, mut cur_fn: usize) -> Result<()> {
+    pub(crate) fn run_at(&mut self, mut cur_fn: usize) -> Result<i32> {
         use Instr::*;
         let mut scratch: Vec<runtime::FormatArg> = Vec::new();
         // We are only accessing one vector at a time here, but it's hard to convince the borrow
@@ -1088,7 +1104,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             self.core.write_files.write_all(&scratch_strs[..], None)
                         };
                         if res.is_err() {
-                            return Ok(());
+                            return Ok(0);
                         }
                     }
                     Printf { output, fmt, args } => {
@@ -1109,7 +1125,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             self.core.write_files.printf(None, fmt_str, &scratch[..])
                         };
                         if res.is_err() {
-                            return Ok(());
+                            return Ok(0);
                         }
                         scratch.clear();
                     }
@@ -1125,6 +1141,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         *index_mut(&mut self.ints, dst) =
                             index(&self.strs, cmd).with_bytes(runtime::run_command);
                     }
+                    Exit(code) => return Ok(*index(&self.ints, code) as i32),
                     Lookup {
                         map_ty,
                         dst,
@@ -1308,7 +1325,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                             instrs = &mut self.instrs[func];
                             break inst as usize;
                         } else {
-                            break 'outer Ok(());
+                            break 'outer Ok(0);
                         }
                     }
                 };

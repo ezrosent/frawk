@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Condvar, Mutex,
+    atomic::{AtomicBool, AtomicI64, Ordering},
+    Arc, Condvar, Mutex,
 };
 
 pub(crate) type NumTy = u32;
@@ -303,6 +303,82 @@ impl Notification {
             }
             _guard = self.cv.wait(_guard).unwrap();
         }
+    }
+}
+
+/// A CancelSignal is a thread-safe handle for propagating error information. It is used for
+/// cancelling processes running in parallel. The intent is that the cancellation status can be
+/// queried cheaply by multiple threads. CancelSignal has "first writer wins" semantics.
+#[derive(Clone)]
+pub struct CancelSignal {
+    state: Arc<AtomicI64>,
+}
+
+const SENTINEL: i64 = i64::MAX;
+
+impl Default for CancelSignal {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(AtomicI64::new(SENTINEL)),
+        }
+    }
+}
+
+impl CancelSignal {
+    pub fn get_code(&self) -> Option<i32> {
+        let raw = self.state.load(Ordering::Acquire);
+        if raw == SENTINEL {
+            None
+        } else {
+            Some(raw as i32)
+        }
+    }
+    pub fn cancelled(&self) -> bool {
+        self.get_code().is_some()
+    }
+    pub fn cancel(&self, code: i32) {
+        // We use relaxed here because we are not using the output of this variable at all.
+        //
+        // We could probably get away with weaker semantics than AcqRel: no one relies on the
+        // output of the `get_code` value except when setting the error code. However, the
+        // semantics of relaxed RMW operations are sufficiently murky that we should only go that
+        // route if this code ends up being used in more performance-sensitive settings than it is
+        // today.
+        let _ =
+            self.state
+                .compare_exchange(SENTINEL, code as i64, Ordering::AcqRel, Ordering::Relaxed);
+    }
+}
+
+pub struct Cleanup<Arg> {
+    data: Option<Box<dyn for<'a> FnOnce(&'a mut Arg)>>,
+}
+
+impl<Arg> Cleanup<Arg> {
+    pub fn null() -> Self {
+        Cleanup { data: None }
+    }
+    pub fn cancel(&mut self) {
+        self.data = None;
+    }
+    pub fn invoke(&mut self, arg: &mut Arg) {
+        if let Some(f) = self.data.take() {
+            f(arg)
+        }
+    }
+    pub fn new(f: impl for<'a> FnOnce(&'a mut Arg) + 'static) -> Self {
+        Cleanup {
+            data: Some(Box::new(f) as _),
+        }
+    }
+}
+
+impl<Arg> Drop for Cleanup<Arg> {
+    fn drop(&mut self) {
+        assert!(
+            self.data.is_none(),
+            "destroying un-executed cleanup handler"
+        );
     }
 }
 

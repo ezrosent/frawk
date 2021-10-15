@@ -5,7 +5,7 @@
 use crate::{
     builtins,
     bytecode::{self, Accum},
-    common::{FileSpec, NumTy, Result, Stage},
+    common::{CancelSignal, Cleanup, FileSpec, NumTy, Result, Stage},
     compile,
     pushdown::FieldSet,
     runtime::{self, UniqueStr},
@@ -144,13 +144,14 @@ pub(crate) unsafe fn run_main<R, FF, J>(
     used_fields: &FieldSet,
     named_columns: Option<Vec<&[u8]>>,
     num_workers: usize,
+    cancel_signal: CancelSignal,
 ) -> Result<()>
 where
     R: intrinsics::IntoRuntime,
     FF: runtime::writers::FileFactory,
     J: Jit,
 {
-    let mut rt = stdin.into_runtime(ff, used_fields, named_columns);
+    let mut rt = stdin.into_runtime(ff, used_fields, named_columns, cancel_signal.clone());
     let main = jit.main_functions()?;
     match main {
         Stage::Main(m) => Ok(m.invoke(&mut rt)),
@@ -159,7 +160,6 @@ where
             main_loop,
             end,
         } => {
-            rt.concurrent = true;
             // This triply-nested macro is here to allow mutable access to a "runtime" struct
             // as well as mutable access to the same "read_files" value. The generated code is
             // pretty awful; It may be worth a RefCell just to clean up.
@@ -188,6 +188,9 @@ where
                 if let Err(_) = rt.core.write_files.flush_stdout() {
                     return Ok(());
                 }
+
+                rt.concurrent = true;
+
                 let (sender, receiver) = crossbeam_channel::bounded(reads.len());
                 let launch_data: Vec<_> = reads
                     .into_iter()
@@ -205,25 +208,40 @@ where
                     let main_loop_fn = main_loop.unwrap();
                     let scope_res = crossbeam::scope(|s| {
                         for (reader, sender, shuttle) in launch_data.into_iter() {
+                            let cancel_signal = cancel_signal.clone();
                             s.spawn(move |_| {
                                 if let Some(reader) = reader() {
                                     let mut runtime = Runtime {
                                         concurrent: true,
                                         core: shuttle(),
                                         input_data: reader.into(),
+                                        cleanup: Cleanup::<Runtime>::new(move |rt| {
+                                            sender.send(rt.core.extract_result(0)).unwrap();
+                                        }),
+                                        cancel_signal,
                                     };
                                     main_loop_fn.invoke(&mut runtime);
-                                    sender.send(runtime.core.extract_result()).unwrap();
                                 }
                             });
                         }
-                        rt.core.vars.pid = 1;
-                        main_loop_fn.invoke(&mut rt);
-                        rt.core.vars.pid = 0;
                         mem::drop(sender);
+                        {
+                            rt.core.vars.pid = 1;
+                            let r = receiver.clone();
+                            rt.cleanup =
+                                Cleanup::<Runtime>::new(move |_| while let Ok(_) = r.recv() {});
+                            main_loop_fn.invoke(&mut rt);
+                            rt.cleanup.cancel();
+                        }
+                        rt.core.vars.pid = 0;
+
                         with_input!(&mut rt.input_data, |(_, read_files)| {
                             while let Ok(res) = receiver.recv() {
                                 rt.core.combine(res);
+                            }
+                            if let Some(rc) = cancel_signal.get_code() {
+                                mem::drop(rt);
+                                std::process::exit(rc);
                             }
                             rt.concurrent = false;
                             if let Some(end) = end {
@@ -796,6 +814,12 @@ pub(crate) trait CodeGenerator: Backend {
                 Ok(())
             }
             RunCmd(dst, cmd) => self.unop(intrinsic!(run_system), dst, cmd),
+            Exit(code) => {
+                let rt = self.runtime_val();
+                let codev = self.get_val(code.reflect())?;
+                self.call_void(external!(exit), &mut [rt, codev])?;
+                Ok(())
+            }
             ReadErr(dst, file, is_file) => {
                 let rt = self.runtime_val();
                 let filev = self.get_val(file.reflect())?;

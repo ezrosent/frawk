@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
-use crate::common::Result;
+use crate::common::{CancelSignal, Result};
 use crate::runtime::{
     splitter::{
         batch::{
@@ -682,6 +682,59 @@ impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
                 ProducerState::Done => return Ok(true),
             };
         }
+    }
+}
+
+/// A ChunkProducer that stops input early if a [CancelSignal] is triggered.
+pub struct CancellableChunkProducer<P> {
+    signal: CancelSignal,
+    prod: P,
+}
+
+impl<P: ChunkProducer + 'static> CancellableChunkProducer<P> {
+    pub fn new(signal: CancelSignal, prod: P) -> Self {
+        Self { signal, prod }
+    }
+}
+
+impl<P: ChunkProducer + 'static> ChunkProducer for CancellableChunkProducer<P> {
+    type Chunk = P::Chunk;
+
+    // TODO this API means we have two layers of virtual dispatch, which isn't great.
+    // It's not the end of the world, but we should think about whether there is a way around this.
+    fn try_dyn_resize(
+        &self,
+        requested_size: usize,
+    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
+        let children = self.prod.try_dyn_resize(requested_size);
+        let mut res = Vec::with_capacity(children.len());
+        for factory in children.into_iter() {
+            let signal = self.signal.clone();
+            res.push(Box::new(move || {
+                Box::new(CancellableChunkProducer {
+                    signal,
+                    prod: factory(),
+                }) as Box<dyn ChunkProducer<Chunk = P::Chunk>>
+            }) as _)
+        }
+        res
+    }
+
+    fn wait(&self) -> bool {
+        self.prod.wait()
+    }
+
+    fn next_file(&mut self) -> Result<bool> {
+        if self.signal.cancelled() {
+            return Ok(false);
+        }
+        self.prod.next_file()
+    }
+    fn get_chunk(&mut self, chunk: &mut P::Chunk) -> Result<bool> {
+        if self.signal.cancelled() {
+            return Ok(true);
+        }
+        self.prod.get_chunk(chunk)
     }
 }
 
