@@ -37,7 +37,7 @@ the LLVM backend, you will need an installation of LLVM 12 on your machine:
 
 Depending on where your package manager puts these libraries, you may need to
 point `LLVM_SYS_120_PREFIX` at the llvm library installation (e.g.
-`/usr/lib/llvm-12`).
+`/usr/lib/llvm-12` on Linux or `/usr/local/opt/llvm@12` on Mac OS when installing llvm@12 via Homebrew).
 
 ### Building Without LLVM
 
