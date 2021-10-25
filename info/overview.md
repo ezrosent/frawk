@@ -49,7 +49,7 @@ Awk processes data line by line, splitting by a "record separator" which is
 (essentially) a regular expression. That means it's easy enough to write the
 script
 
-```
+```awk
 awk -F',' 'NR>1 { SUM+=$2 } END { print SUM }'
 ```
 
