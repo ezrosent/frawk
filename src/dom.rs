@@ -68,7 +68,7 @@ impl<'a, V, E> DomInfo<'a, V, E> {
         );
         if self.at(p).ancestor != NODEINFO_UNINIT {
             let b = self.eval(p);
-            *(&mut self.at_mut(node).ancestor) = self.at(p).ancestor;
+            self.at_mut(node).ancestor = self.at(p).ancestor;
             if self.at(self.at(b).sdom).dfsnum < self.at(self.at(self.best_at(node)).sdom).dfsnum {
                 self.set_best(node, b);
             }
@@ -126,7 +126,7 @@ impl<'a, V, E> DomInfo<'a, V, E> {
                     semi = candidate
                 }
             }
-            *(&mut self.at_mut(n).sdom) = semi;
+            self.at_mut(n).sdom = semi;
             self.link(parent, n);
         }
         mem::swap(&mut self.dfs, &mut dfs);
@@ -144,7 +144,7 @@ impl<'a, V, E> DomInfo<'a, V, E> {
             while self.at(idom).dfsnum > semi_dfs {
                 idom = self.at(idom).idom;
             }
-            (&mut self.at_mut(n)).idom = idom;
+            self.at_mut(n).idom = idom;
         }
         mem::swap(&mut self.dfs, &mut dfs);
     }
@@ -211,7 +211,7 @@ impl<'a, V, E> DomInfo<'a, V, E> {
         &mut self.info[ix.ix()]
     }
     fn link(&mut self, parent: impl HasNum, node: impl HasNum) {
-        *(&mut self.at_mut(node).ancestor) = parent.num();
+        self.at_mut(node).ancestor = parent.num();
         self.set_best(node, node);
     }
 }

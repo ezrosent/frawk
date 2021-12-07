@@ -414,8 +414,7 @@ impl FileHandle {
         // error of some kind. In that case, the receiver thread stashed away the error it recieved
         // in raw.error for us to read it out. We don't optimize this path too aggressively because
         // IO errors in frawk scripts are fatal.
-        const BAD_SHUTDOWN_MSG: &'static str =
-            "internal error: (writer?) thread did not shut down cleanly";
+        const BAD_SHUTDOWN_MSG: &str = "internal error: (writer?) thread did not shut down cleanly";
         if let Ok(lock) = self.raw.error.lock() {
             match &*lock {
                 Some(err) => err.clone(),

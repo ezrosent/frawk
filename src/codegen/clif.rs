@@ -277,12 +277,7 @@ impl Generator {
             .shared
             .module
             .declare_function(name, Linkage::Export, &sig)
-            .map_err(|e| {
-                CompileError(format!(
-                    "failed to declare main function: {}",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| CompileError(format!("failed to declare main function: {}", e)))?;
         let prelude = Prelude {
             sig,
             refs: smallvec![PLACEHOLDER],
@@ -378,7 +373,7 @@ impl Generator {
     }
 
     /// Initialize a new user-defined function and prepare it for full code generation.
-    fn create_view<'a>(&'a mut self, Prelude { sig, refs, n_args }: Prelude) -> View<'a> {
+    fn create_view(&mut self, Prelude { sig, refs, n_args }: Prelude) -> View {
         // Initialize a frame for the function at the given offset, declare variables corresponding
         // to globals and params, return a View to proceed with the rest of code generation.
         let n_params = sig.params.len();
@@ -470,7 +465,7 @@ impl Generator {
                 .shared
                 .module
                 .declare_function(name.as_str(), Linkage::Local, &sig)
-                .map_err(|e| CompileError(format!("cranelift module error: {}", e.to_string())))?;
+                .map_err(|e| CompileError(format!("cranelift module error: {}", e)))?;
 
             self.funcs.push(Some(Prelude {
                 sig,
@@ -529,7 +524,7 @@ impl<'a> View<'a> {
                 while let Some(e) = walker.next_edge(&insts.cfg) {
                     let (_, next) = insts.cfg.edge_endpoints(e).unwrap();
                     let bb = bbs[next.index()];
-                    if let Some(e) = insts.cfg.edge_weight(e).unwrap().clone() {
+                    if let Some(e) = *insts.cfg.edge_weight(e).unwrap() {
                         tcase = Some(((e, compile::Ty::Int), bb));
                     } else {
                         ecase = Some(bb);
@@ -1220,21 +1215,11 @@ struct RegistrationState {
 
 impl Backend for RegistrationState {
     type Ty = ();
-    fn void_ptr_ty(&self) -> () {
-        ()
-    }
-    fn ptr_to(&self, (): ()) -> () {
-        ()
-    }
-    fn usize_ty(&self) -> () {
-        ()
-    }
-    fn u32_ty(&self) -> () {
-        ()
-    }
-    fn get_ty(&self, _ty: compile::Ty) -> () {
-        ()
-    }
+    fn void_ptr_ty(&self) {}
+    fn ptr_to(&self, (): ()) {}
+    fn usize_ty(&self) {}
+    fn u32_ty(&self) {}
+    fn get_ty(&self, _ty: compile::Ty) {}
 
     fn register_external_fn(
         &mut self,

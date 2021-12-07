@@ -23,6 +23,7 @@ mod input_taint;
 pub mod interp;
 pub mod lexer;
 #[allow(unused_parens)] // Warnings appear in generated code
+#[allow(clippy::all)]
 pub mod parsing;
 pub mod pushdown;
 pub mod runtime;
@@ -293,11 +294,11 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
     };
     let mut v = Vec::<u8>::new();
     for (i, func) in interp.instrs().iter().enumerate() {
-        write!(&mut v, "function {} {{\n", i).unwrap();
+        writeln!(&mut v, "function {} {{", i).unwrap();
         for (j, inst) in func.iter().enumerate() {
-            write!(&mut v, "\t[{:2}] {:?}\n", j, inst).unwrap();
+            writeln!(&mut v, "\t[{:2}] {:?}", j, inst).unwrap();
         }
-        write!(&mut v, "}}\n").unwrap();
+        writeln!(&mut v, "}}\n").unwrap();
     }
     String::from_utf8(v).unwrap()
 }

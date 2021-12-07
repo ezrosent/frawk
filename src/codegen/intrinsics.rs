@@ -318,16 +318,14 @@ macro_rules! exit {
         exit!($runtime, 0)
     };
     ($runtime:expr, $code:expr) => {{
+        // XXX: revisit if this is undefined behavior having &mut Runtime in scope even if it is
+        // not used after the call to drop_in_place.
         let rt_raw = $runtime as *mut Runtime;
-        // If $runtime was an &mut, drop it. We'll try and avoid calling drop_in_place with any
-        // &mut Runtimes in scope.
-        mem::drop($runtime);
         let rt = &mut *rt_raw;
         let code = $code;
         if rt.concurrent {
             let pid = rt.core.vars.pid;
             rt.cancel_signal.cancel(code);
-            mem::drop(rt);
             std::ptr::drop_in_place(rt_raw);
             if pid == 1 {
                 // We are the main thread. Drop on `rt` should have waited for other threads to exit.
@@ -340,7 +338,6 @@ macro_rules! exit {
                 unreachable!()
             }
         } else {
-            mem::drop(rt);
             std::ptr::drop_in_place(rt_raw);
             std::process::exit(code)
         }
@@ -714,7 +711,6 @@ pub(crate) unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut 
 pub(crate) unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
     let s = &*(s as *mut Str);
     let res = s.len();
-    mem::forget(s);
     res
 }
 
@@ -750,7 +746,6 @@ pub(crate) unsafe extern "C" fn match_pat(
         (*runtime).core.is_match_regex(s, pat),
         "match_pat:"
     );
-    mem::forget((s, pat));
     res as Int
 }
 
@@ -773,7 +768,6 @@ pub(crate) unsafe extern "C" fn match_pat_loc(
         (*runtime).core.match_regex(s, pat),
         "match_pat_loc:"
     );
-    mem::forget((s, pat));
     res as Int
 }
 
@@ -901,20 +895,17 @@ pub(crate) unsafe extern "C" fn float_to_str(f: Float) -> U128 {
 
 pub(crate) unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
-    let res = runtime::convert::<&Str, Int>(&s);
-    res
+    runtime::convert::<&Str, Int>(&s)
 }
 
 pub(crate) unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
-    let res = s.with_bytes(runtime::hextoi);
-    res
+    s.with_bytes(runtime::hextoi)
 }
 
 pub(crate) unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
     let s = &*(s as *mut Str);
-    let res = runtime::convert::<&Str, Float>(&s);
-    res
+    runtime::convert::<&Str, Float>(s)
 }
 
 pub(crate) unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
@@ -1007,12 +998,10 @@ pub(crate) unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, ma
 
 macro_rules! str_compare_inner {
     ($name:ident, $op:tt) => {
-
         pub(crate) unsafe extern "C" fn $name(s1: *mut c_void, s2: *mut c_void) -> Int {
             let s1 = &*(s1 as *mut Str);
             let s2 = &*(s2 as *mut Str);
             let res = s1.with_bytes(|bs1| s2.with_bytes(|bs2| bs1 $op bs2)) as Int;
-            mem::forget((s1, s2));
             res
         }
     }
@@ -1055,7 +1044,7 @@ unsafe fn wrap_args<'a>(
         };
         let typed_arg: FormatArg = match ty {
             Ty::Int => mem::transmute::<usize, Int>(arg).into(),
-            Ty::Float => mem::transmute::<usize, Float>(arg).into(),
+            Ty::Float => Float::from_bits(arg as u64).into(),
             Ty::Str => mem::transmute::<usize, &Str>(arg).clone().into(),
             _ => fail!(
                 _rt,

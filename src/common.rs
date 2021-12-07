@@ -74,7 +74,7 @@ impl<T> Stage<T> {
                 end,
             } => {
                 let mut x = SmallVec::new();
-                x.extend(begin.into_iter().chain(main_loop).chain(end));
+                x.extend(begin.iter().chain(main_loop).chain(end));
                 x
             }
         };
@@ -204,7 +204,6 @@ macro_rules! eprintln_ignore {
         let mut err = std::io::stderr();
         let _ = writeln!(&mut err, $($t)*);
         let _ = err.flush();
-        ()
     }};
 }
 
@@ -351,6 +350,7 @@ impl CancelSignal {
 }
 
 pub struct Cleanup<Arg> {
+    #[allow(clippy::type_complexity)]
     data: Option<Box<dyn for<'a> FnOnce(&'a mut Arg)>>,
 }
 

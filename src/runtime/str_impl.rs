@@ -1229,6 +1229,7 @@ impl Buf {
     }
 
     // Unsafe because `from` and `to` must point to the start of characters.
+    #[allow(clippy::suspicious_else_formatting)]
     pub fn slice_to_str<'a>(&self, from: usize, to: usize) -> Str<'a> {
         debug_assert!(from <= self.len());
         debug_assert!(to <= self.len());
@@ -1421,10 +1422,9 @@ mod tests {
     #[test]
     fn dynamic_string() {
         let mut d = DynamicBuf::new(0);
-        write!(
+        writeln!(
             &mut d,
-            "This is the first part of the string {}\n",
-            "with formatting and everything!"
+            "This is the first part of the string with formatting and everything!"
         )
         .unwrap();
         write!(&mut d, "And this is the second part").unwrap();

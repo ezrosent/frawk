@@ -359,7 +359,7 @@ impl Function {
                     (Str, Str) => smallvec![Str; 2],
                     (Int, Int) | (Null, Int) | (Int, Null) | (Null, Null) => smallvec![Int; 2],
                     (_, Str) | (Str, _) | (Float, _) | (_, Float) => smallvec![Float; 2],
-                    _ => return err!("invalid input spec for comparison op: {:?}", &incoming[..]),
+                    _ => return err!("invalid input spec for comparison op: {:?}", incoming),
                 },
                 Int,
             ),
@@ -370,12 +370,12 @@ impl Function {
             Contains => match incoming[0] {
                 MapIntInt | MapIntStr | MapIntFloat => (smallvec![incoming[0], Int], Int),
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
-                _ => return err!("invalid input spec fo Contains: {:?}", &incoming[..]),
+                _ => return err!("invalid input spec fo Contains: {:?}", incoming),
             },
             Delete => match incoming[0] {
                 MapIntInt | MapIntStr | MapIntFloat => (smallvec![incoming[0], Int], Int),
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
-                _ => return err!("invalid input spec fo Delete: {:?}", &incoming[..]),
+                _ => return err!("invalid input spec fo Delete: {:?}", incoming),
             },
             IncMap => {
                 let map = incoming[0];
@@ -396,10 +396,7 @@ impl Function {
                 if incoming.len() == 1 && incoming[0].is_array() {
                     (smallvec![incoming[0]], Int)
                 } else {
-                    return err!(
-                        "invalid input spec for delete (of a map): {:?}",
-                        &incoming[..]
-                    );
+                    return err!("invalid input spec for delete (of a map): {:?}", incoming);
                 }
             }
             Srand => (smallvec![Int], Int),
@@ -437,7 +434,7 @@ impl Function {
                 if let MapIntStr | MapStrStr = incoming[1] {
                     (smallvec![Str, incoming[1], Str], Int)
                 } else {
-                    return err!("invalid input spec for split: {:?}", &incoming[..]);
+                    return err!("invalid input spec for split: {:?}", incoming);
                 }
             }
             JoinCols => (smallvec![Int, Int, Str], Str),
@@ -589,7 +586,7 @@ impl<'a> Variables<'a> {
 
     pub fn store_int(&mut self, var: Variable, i: Int) -> Result<()> {
         use Variable::*;
-        Ok(match var {
+        match var {
             ARGC => self.argc = i,
             NF => self.nf = i,
             NR => self.nr = i,
@@ -598,7 +595,8 @@ impl<'a> Variables<'a> {
             RLENGTH => self.rlength = i,
             PID => self.pid = i,
             FI | ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
-        })
+        }
+        Ok(())
     }
 
     pub fn load_str(&self, var: Variable) -> Result<Str<'a>> {
@@ -617,7 +615,7 @@ impl<'a> Variables<'a> {
 
     pub fn store_str(&mut self, var: Variable, s: Str<'a>) -> Result<()> {
         use Variable::*;
-        Ok(match var {
+        match var {
             FS => self.fs = s,
             OFS => self.ofs = s,
             ORS => self.ors = s,
@@ -626,7 +624,8 @@ impl<'a> Variables<'a> {
             FI | PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
                 return err!("var {} not a string", var)
             }
-        })
+        };
+        Ok(())
     }
 
     pub fn load_intmap(&self, var: Variable) -> Result<IntMap<Str<'a>>> {
@@ -642,7 +641,10 @@ impl<'a> Variables<'a> {
     pub fn store_intmap(&mut self, var: Variable, m: IntMap<Str<'a>>) -> Result<()> {
         use Variable::*;
         match var {
-            ARGV => Ok(self.argv = m),
+            ARGV => {
+                self.argv = m;
+                Ok(())
+            }
             FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
                 err!("var {} is not an int-keyed map", var)
             }

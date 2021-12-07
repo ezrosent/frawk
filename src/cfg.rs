@@ -64,9 +64,9 @@ impl<'a> Transition<'a> {
     }
 }
 
-pub(crate) type CFG<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
+pub(crate) type Cfg<'a> = Graph<BasicBlock<'a>, Transition<'a>>;
 
-fn dbg_print(cfg: &CFG, w: &mut impl io::Write) -> io::Result<()> {
+fn dbg_print(cfg: &Cfg, w: &mut impl io::Write) -> io::Result<()> {
     for (i, n) in cfg.raw_nodes().iter().enumerate() {
         writeln!(w, "{}:", i)?;
         for s in n.weight.q.iter() {
@@ -74,7 +74,7 @@ fn dbg_print(cfg: &CFG, w: &mut impl io::Write) -> io::Result<()> {
         }
         let mut walker = cfg.neighbors(NodeIx::new(i)).detach();
         let mut sv = SmallVec::new();
-        while let Some((t_ix, n_ix)) = walker.next(&cfg) {
+        while let Some((t_ix, n_ix)) = walker.next(cfg) {
             sv.push((t_ix, n_ix));
         }
         sv.reverse();
@@ -274,12 +274,9 @@ impl<'a> PrimStmt<'a> {
     }
 }
 
-fn valid_lhs<'a, 'b, I>(e: &ast::Expr<'a, 'b, I>) -> bool {
+fn valid_lhs<I>(e: &ast::Expr<I>) -> bool {
     use ast::Expr::*;
-    match e {
-        Index(_, _) | Var(_) | Unop(ast::Unop::Column, _) => true,
-        _ => false,
-    }
+    matches!(e, Index(..) | Var(..) | Unop(ast::Unop::Column, _))
 }
 
 #[derive(Debug)]
@@ -349,7 +346,7 @@ where
         + From<&'a str>,
 {
     pub(crate) fn local_globals(&mut self) -> HashSet<NumTy> {
-        std::mem::replace(&mut self.shared.local_globals, Default::default())
+        std::mem::take(&mut self.shared.local_globals)
     }
     pub(crate) fn local_globals_ref(&self) -> &HashSet<NumTy> {
         &self.shared.local_globals
@@ -401,13 +398,14 @@ where
                         **sep = v;
                     }
                 }
-                if let Some(_) = f.vars.get(&None).and_then(|v| {
-                    if v.len() > 0 && v.iter().filter(|(bb, _)| *bb == 0).next().is_some() {
+                let check_getline = |v: &Vec<(usize, Option<&[u8]>)>| {
+                    if !v.is_empty() && v.iter().any(|(bb, _)| *bb == 0) {
                         Some(())
                     } else {
                         None
                     }
-                }) {
+                };
+                if f.vars.get(&None).and_then(check_getline).is_some() {
                     has_getline = true;
                 }
             } else {
@@ -434,7 +432,7 @@ where
         self.shared
             .hm
             .iter()
-            .map(|(k, v)| (v.clone(), k.clone()))
+            .map(|(k, v)| (*v, k.clone()))
             .collect()
     }
 
@@ -455,10 +453,13 @@ where
         let mut func_table: HashMap<FunctionName<I>, NumTy> = Default::default();
         let mut funcs: Vec<Function<'a, I>> = Default::default();
         for fundec in p.decs.iter() {
-            if let Some(_) = func_table.insert(
-                FunctionName::Named(fundec.name.clone()),
-                funcs.len() as NumTy,
-            ) {
+            if func_table
+                .insert(
+                    FunctionName::Named(fundec.name.clone()),
+                    funcs.len() as NumTy,
+                )
+                .is_some()
+            {
                 return err!("duplicate function found for name {}", fundec.name);
             }
             if let Ok(bi) = builtins::Function::try_from(fundec.name.clone()) {
@@ -617,6 +618,11 @@ pub(crate) struct Arg<I> {
     pub id: Ident,
 }
 
+// Variable assignments, used to extract fast paths for splitting.
+// None indicates a call to `getline`.
+type VarAssigns<'a> =
+    HashMap<Option<builtins::Variable>, Vec<(/* basic block */ usize, Option<&'a [u8]>)>>;
+
 #[derive(Debug)]
 pub(crate) struct Function<'a, I> {
     pub name: FunctionName<I>,
@@ -625,7 +631,7 @@ pub(crate) struct Function<'a, I> {
     args_map: HashMap<I, NumTy>,
     pub args: SmallVec<Arg<I>>,
     ret: Ident,
-    pub cfg: CFG<'a>,
+    pub cfg: Cfg<'a>,
 
     defsites: HashMap<Ident, HashSet<NodeIx>>,
     orig: HashMap<NodeIx, HashSet<Ident>>,
@@ -642,9 +648,7 @@ pub(crate) struct Function<'a, I> {
     // NB: We only support doing this from main.
     toplevel_header: Option<NodeIx>,
 
-    // Variable assignments, used to extract fast paths for splitting.
-    // None indicates a call to `getline`.
-    vars: HashMap<Option<builtins::Variable>, Vec<(usize, Option<&'a [u8]>)>>,
+    vars: VarAssigns<'a>,
 
     // Dominance information about `cfg`.
     dt: dom::Tree,
@@ -653,7 +657,7 @@ pub(crate) struct Function<'a, I> {
 
 impl<'a, I> Function<'a, I> {
     fn new(name: FunctionName<I>, ident: NumTy) -> Function<'a, I> {
-        let mut cfg = CFG::default();
+        let mut cfg = Cfg::default();
         let entry = cfg.add_node(Default::default());
         let exit = cfg.add_node(Default::default());
         Function {
@@ -698,7 +702,7 @@ where
     I: IsSprintf,
 {
     fn fill<'c>(&mut self, stmt: &'c Stmt<'c, 'b, I>) -> Result<()> {
-        // Add a CFG corresponding to `stmt`
+        // Add a Cfg corresponding to `stmt`
         let _next = self.convert_stmt(stmt, self.f.entry)?;
         // Insert edges to the exit nodes if where they do not exist
         self.finish()?;
@@ -823,10 +827,7 @@ where
                     let ors = self.fresh_local();
                     self.add_stmt(
                         current_open,
-                        PrimStmt::AsgnVar(
-                            ors.clone(),
-                            PrimExpr::LoadBuiltin(builtins::Variable::ORS),
-                        ),
+                        PrimStmt::AsgnVar(ors, PrimExpr::LoadBuiltin(builtins::Variable::ORS)),
                     )?;
                     PrimVal::Var(ors)
                 };
@@ -841,7 +842,7 @@ where
                 // Why a macro? breaking this out into methods too easily runs afoul of aliasing
                 // rules, a previous version here had to split out several local variables into
                 // parameters of outer functions; it was a lot more code.
-                if vs.len() == 0 {
+                if vs.is_empty() {
                     let tmp = self.fresh_local();
                     self.add_stmt(
                         current_open,
@@ -863,10 +864,7 @@ where
                     let fs = self.fresh_local();
                     self.add_stmt(
                         current_open,
-                        PrimStmt::AsgnVar(
-                            fs.clone(),
-                            PrimExpr::LoadBuiltin(builtins::Variable::OFS),
-                        ),
+                        PrimStmt::AsgnVar(fs, PrimExpr::LoadBuiltin(builtins::Variable::OFS)),
                     )?;
                     PrimVal::Var(fs)
                 } else {
@@ -903,11 +901,7 @@ where
                     current_open
                 };
                 let (h, b_start, _b_end, f) = self.make_loop(
-                    body,
-                    update.clone(),
-                    init_end,
-                    /*is_do*/ false,
-                    /*is_toplevel*/ false,
+                    body, *update, init_end, /*is_do*/ false, /*is_toplevel*/ false,
                 )?;
                 let (h_end, cond_val) = if let Some(c) = cond {
                     self.convert_val(c, h)?
@@ -1263,7 +1257,7 @@ where
                     (from, None /* $0 */) => {
                         return self.convert_expr(
                             &ast::Expr::Getline {
-                                from: from.clone(),
+                                from: *from,
                                 into: Some(&Unop(ast::Unop::Column, &ast::Expr::ILit(0))),
                                 is_file: *is_file,
                             },
@@ -1314,7 +1308,7 @@ where
         args: &'c [&'c Expr<'c, 'b, I>],
         mut current_open: NodeIx,
     ) -> Result<(NodeIx, PrimExpr<'b>)> {
-        if args.len() == 0 {
+        if args.is_empty() {
             return err!("sprintf must have at least one argument");
         }
         let mut iter = args.iter();
@@ -1648,10 +1642,7 @@ where
                     let fs = self.fresh_local();
                     self.add_stmt(
                         current_open,
-                        PrimStmt::AsgnVar(
-                            fs.clone(),
-                            PrimExpr::LoadBuiltin(builtins::Variable::FS),
-                        ),
+                        PrimStmt::AsgnVar(fs, PrimExpr::LoadBuiltin(builtins::Variable::FS)),
                     )?;
                     prim_args.push(PrimVal::Var(fs));
                 }
@@ -1667,7 +1658,7 @@ where
                             self.add_stmt(
                                 current_open,
                                 PrimStmt::AsgnVar(
-                                    fs.clone(),
+                                    fs,
                                     PrimExpr::LoadBuiltin(builtins::Variable::OFS),
                                 ),
                             )?;
@@ -1685,7 +1676,7 @@ where
                 }
 
                 // srand() => the special "reseed rng" function
-                if bi == builtins::Function::Srand && args.len() == 0 {
+                if bi == builtins::Function::Srand && args.is_empty() {
                     bi = builtins::Function::ReseedRng;
                 }
 
@@ -1697,7 +1688,7 @@ where
                 // expression in the appropriate locations.
                 if let builtins::Function::Sub | builtins::Function::GSub = bi {
                     let assignee = match args.len() {
-                        3 => &args[2],
+                        3 => args[2],
                         2 => {
                             // If a third argument isn't provided, we assume you mean $0.
                             let e = &Expr::Unop(ast::Unop::Column, &Expr::ILit(0));
@@ -1722,17 +1713,14 @@ where
                     // asignee expression, yielding the saved result.
                     let to_set = self.fresh_local();
                     let res = self.fresh_local();
-                    let last_arg = mem::replace(&mut prim_args[2], PrimVal::Var(to_set.clone()));
+                    let last_arg = mem::replace(&mut prim_args[2], PrimVal::Var(to_set));
+                    self.add_stmt(open, PrimStmt::AsgnVar(to_set, PrimExpr::Val(last_arg)))?;
+                    prim_args[2] = PrimVal::Var(to_set);
                     self.add_stmt(
                         open,
-                        PrimStmt::AsgnVar(to_set.clone(), PrimExpr::Val(last_arg)),
+                        PrimStmt::AsgnVar(res, PrimExpr::CallBuiltin(bi, prim_args)),
                     )?;
-                    prim_args[2] = PrimVal::Var(to_set.clone());
-                    self.add_stmt(
-                        open,
-                        PrimStmt::AsgnVar(res.clone(), PrimExpr::CallBuiltin(bi, prim_args)),
-                    )?;
-                    let to_set_var = PrimExpr::Val(PrimVal::Var(to_set.clone()));
+                    let to_set_var = PrimExpr::Val(PrimVal::Var(to_set));
                     let (next, _) = match assignee {
                         Expr::Unop(_, _) => self.do_assign(assignee, |_| to_set_var, open),
                         Expr::Index(arr, ix) => self.do_assign_index(
@@ -1838,7 +1826,7 @@ where
             } else {
                 continue;
             };
-            worklist.extend(defsites.iter().map(|x| *x));
+            worklist.extend(defsites.iter().copied());
             while let Some(node) = worklist.pop() {
                 // For all nodes on the dominance frontier without phi nodes for this identifier,
                 // create a phi node of the appropriate size and insert it at the front of the

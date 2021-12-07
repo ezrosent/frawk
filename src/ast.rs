@@ -78,7 +78,7 @@ fn parse_header<'a, 'b, I: From<&'b str> + Clone>(
 ) {
     use {self::Expr::*, Stmt::*};
     // Pick an illegal frawk identifier.
-    const LOOP_VAR: &'static str = "--";
+    const LOOP_VAR: &str = "--";
     // Append the following to begin:
     // if (getline > 0) {
     //  for (LOOP_VAR=1; LOOP_VAR <= NF; ++LOOP_VAR)
@@ -185,7 +185,7 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
         }
 
         // Set argc, argv
-        if self.argv.len() > 0 {
+        if !self.argv.is_empty() {
             begin.push(arena.alloc(Expr(arena.alloc(Assign(
                 arena.alloc(Var("ARGC".into())),
                 arena.alloc(ILit(self.argv.len() as i64)),
@@ -282,23 +282,23 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
             }
         }
 
-        if self.end.len() > 0 || self.prepare.len() > 0 || inner.len() > init_len {
+        if !self.end.is_empty() || !self.prepare.is_empty() || inner.len() > init_len {
             // Wrap the whole thing in a while((getline) > 0) { } statement.
             let main_portion = arena.alloc(While(
                 /*is_toplevel=*/ true,
                 arena.alloc(Binop(GT, arena.alloc(ReadStdin), arena.alloc(ILit(0)))),
                 arena.alloc(Block(inner)),
             ));
-            main_loop = Some(if self.prepare.len() > 0 {
+            main_loop = Some(if self.prepare.is_empty() {
+                main_portion
+            } else {
                 let mut block = arena.vec_with_capacity(self.prepare.len() + 1);
                 block.push(main_portion);
                 block.extend(self.prepare.iter().cloned());
                 arena.alloc(Stmt::Block(block))
-            } else {
-                main_portion
             });
         }
-        if self.end.len() > 0 {
+        if !self.end.is_empty() {
             end = Some(arena.alloc(Stmt::Block(self.end.clone())));
         }
         match self.stage {
@@ -307,10 +307,10 @@ impl<'a, 'b, I: From<&'b str> + Clone> Prog<'a, 'b, I> {
                 Stage::Main(arena.alloc(Stmt::Block(begin)))
             }
             Stage::Par { .. } => Stage::Par {
-                begin: if begin.len() > 0 {
-                    Some(arena.alloc(Stmt::Block(begin)))
-                } else {
+                begin: if begin.is_empty() {
                     None
+                } else {
+                    Some(arena.alloc(Stmt::Block(begin)))
                 },
                 main_loop,
                 end,
