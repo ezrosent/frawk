@@ -698,7 +698,7 @@ impl<'a> Instr<'a> {
                 if let Some((path_reg, _)) = output {
                     path_reg.accum(&mut f);
                 }
-                for reg in args.iter().cloned() {
+                for reg in args {
                     reg.accum(&mut f)
                 }
             }

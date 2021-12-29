@@ -49,7 +49,7 @@ impl IntrinsicMap {
             MapStrInt => Some(self.get(external!(drop_strint))),
             MapStrFloat => Some(self.get(external!(drop_strfloat))),
             MapStrStr => Some(self.get(external!(drop_strstr))),
-            _ => return None,
+            _ => None,
         }
     }
 
@@ -96,7 +96,7 @@ impl IntrinsicMap {
         LLVMAddSymbol(intr.name, intr.func);
         let func = LLVMAddFunction(self.module, intr.name, ty);
         LLVMSetLinkage(func, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
-        if intr.attrs.len() > 0 {
+        if !intr.attrs.is_empty() {
             attr::add_function_attrs(self.ctx, func, &intr.attrs[..]);
         }
         *val = Either::Right(func);

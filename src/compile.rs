@@ -73,11 +73,7 @@ impl Default for Ty {
 
 impl Ty {
     fn is_iter(self) -> bool {
-        if let Ty::IterInt | Ty::IterStr = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Ty::IterInt | Ty::IterStr)
     }
 
     pub(crate) fn key_iter(self) -> Result<Ty> {
@@ -457,7 +453,7 @@ struct View<'a, 'b> {
     stream: &'b mut Node<'a>,
 }
 
-fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
+fn pop_var(instrs: &mut Vec<LL>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
     instrs.push(match ty {
         Null => return Ok(()),
@@ -468,7 +464,7 @@ fn pop_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
     Ok(())
 }
 
-fn push_var<'a>(instrs: &mut Vec<LL<'a>>, reg: NumTy, ty: Ty) -> Result<()> {
+fn push_var(instrs: &mut Vec<LL>, reg: NumTy, ty: Ty) -> Result<()> {
     use Ty::*;
     match ty {
         Null => Ok(()),
@@ -506,7 +502,7 @@ fn mov<'a>(dst_reg: u32, src_reg: u32, ty: Ty) -> Result<Option<LL<'a>>> {
     Ok(Some(res))
 }
 
-fn accum<'a>(inst: &Instr<'a>, mut f: impl FnMut(NumTy, Ty)) {
+fn accum(inst: &Instr, mut f: impl FnMut(NumTy, Ty)) {
     use {Either::*, HighLevel::*};
     match inst {
         Left(ll) => ll.accum(f),
@@ -551,6 +547,7 @@ impl<'a> Typer<'a> {
     }
 
     // At initialization time, we generate Either<LL, HL>, this function lowers the HL into LL.
+    #[allow(clippy::wrong_self_convention)]
     fn to_bytecode(&mut self) -> Result<Vec<Vec<LL<'a>>>> {
         let mut res = vec![vec![]; self.frames.len()];
         let ret_regs: Vec<_> = (0..self.frames.len())
@@ -697,7 +694,7 @@ impl<'a> Typer<'a> {
                 edges.reverse();
                 for eix in edges.iter().cloned() {
                     let dst = frame.cfg.edge_endpoints(eix).unwrap().1.index();
-                    if let Some(reg) = frame.cfg.edge_weight(eix).unwrap().clone() {
+                    if let Some(reg) = *frame.cfg.edge_weight(eix).unwrap() {
                         jmps.push(instrs.len());
                         instrs.push(LL::JmpIf(reg.into(), dst.into()));
                     } else if dst != j + 1 {
@@ -860,7 +857,7 @@ impl<'a> Typer<'a> {
                     if strs.len() != 1 {
                         continue;
                     }
-                    let text = std::str::from_utf8(&strs[0]).map_err(|e| {
+                    let text = std::str::from_utf8(strs[0]).map_err(|e| {
                         CompileError(format!("regex patterns must be valid UTF-8: {}", e))
                     })?;
                     let re = Arc::new(Regex::new(text).map_err(|err| {
@@ -1101,7 +1098,7 @@ impl<'a, 'b> View<'a, 'b> {
             (self.regs.globals[id], RegStatus::Global)
         } else {
             match self.frame.locals.get(id) {
-                Some(x) => (x.clone(), RegStatus::Local),
+                Some(x) => (*x, RegStatus::Local),
                 // In some degenerate cases, we'll run into an uninitialized local. These are
                 // always null.
                 None if id.sub == 0 => ((NULL_REG, Ty::Null), RegStatus::Local),
@@ -1212,8 +1209,8 @@ impl<'a, 'b> View<'a, 'b> {
                 );
             }
         };
-
-        Ok(self.pushl(res))
+        self.pushl(res);
+        Ok(())
     }
 
     // Store values into a register at a given type, converting if necessary.
@@ -1596,7 +1593,7 @@ impl<'a, 'b> View<'a, 'b> {
                         | Ty::MapStrFloat => LL::Len {
                             map_ty: conv_tys[0],
                             map: conv_regs[0],
-                            dst: res_reg.into(),
+                            dst: res_reg,
                         },
                         Ty::Str => LL::LenStr(res_reg.into(), conv_regs[0].into()),
                         _ => return err!("invalid input type for length: {:?}", &conv_tys[..]),
@@ -2020,9 +2017,7 @@ fn extract_anchored_literal(text: &str) -> Option<Arc<[u8]>> {
                         continue;
                     }
                     let cur = bs.len();
-                    for _ in 0..l.c.len_utf8() {
-                        bs.push(0);
-                    }
+                    bs.resize(cur + l.c.len_utf8(), 0);
                     l.c.encode_utf8(&mut bs[cur..]);
                 } else {
                     return None;

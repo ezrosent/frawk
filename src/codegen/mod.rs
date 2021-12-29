@@ -130,7 +130,7 @@ impl<'a> MainFunction<'a> {
 
 pub(crate) trait Jit: Sized {
     fn main_pointers(&mut self) -> Result<Stage<*const u8>>;
-    fn main_functions<'a>(&'a mut self) -> Result<Stage<MainFunction<'a>>> {
+    fn main_functions(&mut self) -> Result<Stage<MainFunction>> {
         Ok(self.main_pointers()?.map(MainFunction::from_ptr))
     }
 }
@@ -154,7 +154,10 @@ where
     let mut rt = stdin.into_runtime(ff, used_fields, named_columns, cancel_signal.clone());
     let main = jit.main_functions()?;
     match main {
-        Stage::Main(m) => Ok(m.invoke(&mut rt)),
+        Stage::Main(m) => {
+            m.invoke(&mut rt);
+            Ok(())
+        }
         Stage::Par {
             begin,
             main_loop,
@@ -165,7 +168,7 @@ where
             // pretty awful; It may be worth a RefCell just to clean up.
             with_input!(&mut rt.input_data, |(_, read_files)| {
                 let reads = read_files.try_resize(num_workers.saturating_sub(1));
-                if num_workers <= 1 || reads.len() == 0 || main_loop.is_none() {
+                if num_workers <= 1 || reads.is_empty() || main_loop.is_none() {
                     // execute serially.
                     for main in begin.into_iter().chain(main_loop).chain(end) {
                         main.invoke(&mut rt);
@@ -185,7 +188,7 @@ where
                 if let Some(begin) = begin {
                     begin.invoke(&mut rt);
                 }
-                if let Err(_) = rt.core.write_files.flush_stdout() {
+                if rt.core.write_files.flush_stdout().is_err() {
                     return Ok(());
                 }
 
@@ -204,7 +207,7 @@ where
                     })
                     .collect();
                 with_input!(&mut rt.input_data, |(_, read_files)| {
-                    let old_read_files = mem::replace(&mut read_files.inputs, Default::default());
+                    let old_read_files = mem::take(&mut read_files.inputs);
                     let main_loop_fn = main_loop.unwrap();
                     let scope_res = crossbeam::scope(|s| {
                         for (reader, sender, shuttle) in launch_data.into_iter() {
@@ -229,7 +232,7 @@ where
                             rt.core.vars.pid = 1;
                             let r = receiver.clone();
                             rt.cleanup =
-                                Cleanup::<Runtime>::new(move |_| while let Ok(_) = r.recv() {});
+                                Cleanup::<Runtime>::new(move |_| while r.recv().is_ok() {});
                             main_loop_fn.invoke(&mut rt);
                             rt.cleanup.cancel();
                         }
@@ -250,7 +253,7 @@ where
                             }
                         });
                     });
-                    if let Err(_) = scope_res {
+                    if scope_res.is_err() {
                         return err!("failed to execute parallel script");
                     }
                 });

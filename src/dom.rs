@@ -108,8 +108,8 @@ impl<'a, V, E> DomInfo<'a, V, E> {
         // We need to borrow self.dfs, but also other parts of the struct, so we swap it out.
         // Note that this only works because we know that `eval` and `link` do not use the
         // `dfs` vector.
-        let mut dfs = mem::replace(&mut self.dfs, Default::default());
-        for n in dfs[1..].iter().rev().map(|x| *x) {
+        let mut dfs = mem::take(&mut self.dfs);
+        for n in dfs[1..].iter().rev().copied() {
             let parent = self.at(n).parent;
             let mut semi = parent;
             for pred in self
@@ -135,8 +135,8 @@ impl<'a, V, E> DomInfo<'a, V, E> {
     // Compute dominator tree.
     // Assumes self.semis has been called.
     fn idoms(&mut self) {
-        let mut dfs = mem::replace(&mut self.dfs, Default::default());
-        for n in dfs[1..].iter().map(|x| *x) {
+        let mut dfs = mem::take(&mut self.dfs);
+        for n in dfs[1..].iter().copied() {
             let (mut idom, semi_dfs) = {
                 let entry = self.at(n);
                 (entry.idom, self.at(entry.sdom).dfsnum)

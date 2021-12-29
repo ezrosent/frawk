@@ -60,10 +60,10 @@ impl<K: Eq + Hash, J: JoinSemiLattice> Analysis<J, K> {
     }
     fn get_node(&mut self, k: impl Into<K>) -> NodeIx {
         let graph = &mut self.graph;
-        self.nodes
+        *self
+            .nodes
             .entry(k.into())
             .or_insert_with(|| graph.add_node(J::bottom()))
-            .clone()
     }
     pub(crate) fn add_query(&mut self, k: impl Into<K>) {
         let ix = self.get_node(k);
@@ -120,6 +120,10 @@ impl<K: Eq + Hash, J: JoinSemiLattice> Analysis<J, K> {
 }
 
 #[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
+#[allow(clippy::enum_variant_names)]
+// "Key" as an enum variant refers to "key for an array value" whereas "Key" as the datatype name
+// refers to "Key" key associated with the value of a dataflow analysis (e.g. some particular
+// lattice).
 pub(crate) enum Key {
     Reg(NumTy, Ty),
     MapKey(NumTy, Ty),
@@ -164,9 +168,9 @@ pub(crate) mod boilerplate {
                 args,
             } => {
                 let dst_key = Key::Reg(*dst_reg, *dst_ty);
-                f(dst_key.clone(), Some(Key::Func(*func_id)));
+                f(dst_key, Some(Key::Func(*func_id)));
                 for (reg, ty) in args.iter().cloned() {
-                    f(dst_key.clone(), Some(Key::Reg(reg, ty)));
+                    f(dst_key, Some(Key::Reg(reg, ty)));
                 }
             }
             Ret(reg, ty) => {

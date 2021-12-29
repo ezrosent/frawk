@@ -726,14 +726,12 @@ impl<'a> View<'a> {
             }
             Ret(reg, ty) => {
                 let mut v = self.get_val((*reg, *ty))?;
-                if matches!(
-                    self.f.vars.get_mut(&(*reg, *ty)).map(|x| {
-                        // if this is a local, we want to avoid dropping it.
-                        x.kind.skip_drop();
-                        &x.kind
-                    }),
-                    Some(VarKind::Param) | Some(VarKind::Global)
-                ) {
+                let test = self.f.vars.get_mut(&(*reg, *ty)).map(|x| {
+                    // if this is a local, we want to avoid dropping it.
+                    x.kind.skip_drop();
+                    &x.kind
+                });
+                if let Some(VarKind::Param) | Some(VarKind::Global) = test {
                     // This was passed in as a parameter, so us returning it will introduce a new
                     // reference.
                     self.ref_val(*ty, v);
@@ -801,7 +799,7 @@ impl<'a> View<'a> {
     }
 
     fn execute_actions(&mut self) -> Result<()> {
-        let header_actions = mem::replace(&mut self.f.header_actions, Default::default());
+        let header_actions = mem::take(&mut self.f.header_actions);
         for EntryDeclaration { var, ty } in header_actions {
             use compile::Ty::*;
             let cl_ty = self.get_ty(ty);
@@ -1349,7 +1347,8 @@ impl<'a> CodeGenerator for View<'a> {
     }
 
     fn call_void(&mut self, func: *const u8, args: &mut [Self::Val]) -> Result<()> {
-        Ok(self.call_external_void(func, args))
+        self.call_external_void(func, args);
+        Ok(())
     }
 
     // TODO We may eventually want to remove the `Result` return value here
@@ -1384,7 +1383,7 @@ impl<'a> CodeGenerator for View<'a> {
         args: &[Ref],
     ) -> Result<()> {
         // For empty args, just delegate to print_all
-        if args.len() == 0 {
+        if args.is_empty() {
             return self.print_all(output, &[*fmt]);
         }
         let (arg_slot, type_slot, num_args) = self.bundle_printf_args(args)?;
@@ -1413,7 +1412,7 @@ impl<'a> CodeGenerator for View<'a> {
 
     fn sprintf(&mut self, dst: &StrReg, fmt: &StrReg, args: &[Ref]) -> Result<()> {
         // For empty args, just move fmt into dst.
-        if args.len() == 0 {
+        if args.is_empty() {
             return self.mov(compile::Ty::Str, dst.reflect().0, fmt.reflect().0);
         }
 

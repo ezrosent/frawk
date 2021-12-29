@@ -111,7 +111,7 @@ impl<'a> Backend for View<'a> {
     ) -> Result<()> {
         let f_ty = unsafe {
             LLVMFunctionType(
-                sig.ret.unwrap_or(LLVMVoidTypeInContext(self.ctx)),
+                sig.ret.unwrap_or_else(|| LLVMVoidTypeInContext(self.ctx)),
                 sig.args.as_mut_ptr(),
                 sig.args.len() as u32,
                 0,
@@ -847,10 +847,8 @@ impl<'a, 'b> Generator<'a, 'b> {
         );
         self.type_map
             .init(Ty::Float, make(LLVMDoubleTypeInContext(self.ctx)));
-        self.type_map.init(
-            Ty::Str,
-            make(LLVMIntTypeInContext(self.ctx, 128 as libc::c_uint)),
-        );
+        self.type_map
+            .init(Ty::Str, make(LLVMIntTypeInContext(self.ctx, 128)));
         self.type_map.init(Ty::MapIntInt, make(voidptr));
         self.type_map.init(Ty::MapIntFloat, make(voidptr));
         self.type_map.init(Ty::MapIntStr, make(voidptr));
@@ -1153,7 +1151,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             while let Some(e) = walker.next_edge(&frame.cfg) {
                 let (_, t) = frame.cfg.edge_endpoints(e).unwrap();
                 let bb = bbs[t.index()];
-                if let Some(e) = frame.cfg.edge_weight(e).unwrap().clone() {
+                if let Some(e) = *frame.cfg.edge_weight(e).unwrap() {
                     tcase = Some((e, bb));
                 } else {
                     // NB, we used to disallow duplicate unconditional branches outbound from a

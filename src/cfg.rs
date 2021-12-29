@@ -1573,6 +1573,7 @@ where
         Ok((h, b_start, b_end, f))
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn to_val(&mut self, exp: PrimExpr<'b>, current_open: NodeIx) -> Result<PrimVal<'b>> {
         Ok(if let PrimExpr::Val(v) = exp {
             v

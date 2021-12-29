@@ -664,7 +664,10 @@ impl<'a> Variables<'a> {
     pub fn store_strmap(&mut self, var: Variable, m: StrMap<'a, Int>) -> Result<()> {
         use Variable::*;
         match var {
-            FI => Ok(self.fi = m),
+            FI => {
+                self.fi = m;
+                Ok(())
+            }
             ARGV | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART
             | RLENGTH => {
                 err!("var {} is not a string-keyed map", var)

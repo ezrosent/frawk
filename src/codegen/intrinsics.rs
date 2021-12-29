@@ -579,7 +579,7 @@ pub(crate) unsafe extern "C" fn split_str(
     if let Err(e) = runtime
         .core
         .regexes
-        .split_regex_strmap(&pat, &to_split, &into_arr)
+        .split_regex_strmap(pat, to_split, &into_arr)
     {
         fail!(runtime, "failed to split string: {}", e);
     }
@@ -710,8 +710,7 @@ pub(crate) unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut 
 
 pub(crate) unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
     let s = &*(s as *mut Str);
-    let res = s.len();
-    res
+    s.len()
 }
 
 pub(crate) unsafe extern "C" fn starts_with_const(
@@ -895,7 +894,7 @@ pub(crate) unsafe extern "C" fn float_to_str(f: Float) -> U128 {
 
 pub(crate) unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
-    runtime::convert::<&Str, Int>(&s)
+    runtime::convert::<&Str, Int>(s)
 }
 
 pub(crate) unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
