@@ -93,18 +93,6 @@ impl Inline {
             )
         }
     }
-
-    #[inline(always)]
-    fn itoa(i: Int) -> Option<Inline> {
-        if i > 999999999999999 || i < -99999999999999 {
-            return None;
-        }
-        let mut res = 0u128;
-        let buf =
-            unsafe { slice::from_raw_parts_mut((&mut res as *mut _ as *mut u8).offset(1), 15) };
-        let len = itoa::write(buf, i).unwrap();
-        Some(Inline(res | ((len << 3) | StrTag::Inline as usize) as u128))
-    }
 }
 
 #[derive(Clone)]
@@ -926,12 +914,9 @@ impl<'a> From<String> for Str<'a> {
 
 impl<'a> From<Int> for Str<'a> {
     fn from(i: Int) -> Str<'a> {
-        if let Some(i) = Inline::itoa(i) {
-            return Str::from_rep(i.into());
-        }
-        let mut buf = [0u8; 21];
-        let n = itoa::write(&mut buf[..], i).unwrap();
-        Buf::read_from_bytes(&buf[..n]).into_str()
+        let mut itoabuf = itoa::Buffer::new();
+        let s = itoabuf.format(i);
+        Buf::read_from_bytes(&s.as_bytes()).into_str()
     }
 }
 
