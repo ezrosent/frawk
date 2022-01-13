@@ -23,7 +23,7 @@ regex-syntax = "0.6.25"
 itoa = "1.0"
 ryu = "1.0"
 libc = "0.2"
-jemallocator = { version = "0.3", optional = true }
+tikv-jemallocator = { version = "0.4", optional = true }
 rand = "0.8.4"
 lalrpop-util = "0.19.6"
 unicode-xid = "0.2.2"
@@ -55,7 +55,7 @@ tempfile = "3.3"
 
 [features]
 default = ["use_jemalloc", "allow_avx2", "llvm_backend", "unstable"]
-use_jemalloc = ["jemallocator"]
+use_jemalloc = ["tikv-jemallocator"]
 # Certain features leverage the AVX2 instruction set, but AVX2 can often make
 # the entire application slightly slower, even on chips that support it. For
 # those cases, consider disabling allow_avx2.

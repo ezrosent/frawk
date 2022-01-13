@@ -52,7 +52,7 @@ use std::mem;
 
 #[cfg(feature = "use_jemalloc")]
 #[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 macro_rules! fail {
     ($($t:tt)*) => {{
