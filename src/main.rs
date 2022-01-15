@@ -402,7 +402,10 @@ fn main() {
              .help("Number or worker threads to launch when executing in parallel, requires '-p' flag to be set. When using record-level parallelism, this value is an upper bound on the number of worker threads that will be spawned; the number of active worker threads is chosen dynamically"));
     cfg_if::cfg_if! {
         if #[cfg(feature = "llvm_backend")] {
-            app = app.arg("--dump-llvm 'Print LLVM-IR for the input program'");
+            app = app.arg(Arg::new("dump-llvm")
+             .long("dump-llvm")
+             .takes_value(false)
+             .help("Print LLVM-IR for the input program"));
         }
     }
     let matches = app.get_matches();
