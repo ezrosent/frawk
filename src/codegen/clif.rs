@@ -573,7 +573,7 @@ impl<'a> View<'a> {
         self.builder.seal_all_blocks();
         self.builder.finalize();
         if DUMP_IR {
-            eprintln!("{}", self.builder.display(None));
+            eprintln!("{}", self.builder.func);
         }
         Ok(())
     }

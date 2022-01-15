@@ -39,11 +39,11 @@ termcolor = "1.1"
 itertools = "0.10"
 assert_cmd = "2.0.3"
 paste = "1.0"
-cranelift = "0.75.0"
-cranelift-codegen = "0.75.0"
-cranelift-frontend = "0.75.0"
-cranelift-module = "0.75.0"
-cranelift-jit = "0.75.0"
+cranelift = "0.80.0"
+cranelift-codegen = "0.80.0"
+cranelift-frontend = "0.80.0"
+cranelift-module = "0.80.0"
+cranelift-jit = "0.80.0"
 fast-float = "0.2"
 bumpalo = { version = "3.6", features = ["collections"] }
 target-lexicon = "0.12.2"
@@ -65,8 +65,6 @@ unstable = []
 
 [profile.release]
 lto = "thin"
-# debug = true
-# codegen-units = 1
 
 [build-dependencies]
 lalrpop = "0.19.6"
