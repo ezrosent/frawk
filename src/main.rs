@@ -366,7 +366,7 @@ fn main() {
              .help("Field separator `FS` for frawk program"))
         .arg(Arg::new("backend")
              .long("backend")
-             .short('b')
+             .short('B')
              .help("The backend used to run the frawk program, ranging from fastest to compile and slowest to execute, and slowest to compile and fastest to execute. Cranelift is the default")
              .possible_values(&["interp", "cranelift", "llvm"]))
         .arg(Arg::new("output-format")

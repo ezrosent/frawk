@@ -102,7 +102,7 @@ frawk's higher performance are:
    fairly simple CLIF or LLVM IR and then JIT that IR to machine code at
    runtime. This avoids the overhead of an interpreter at the cost of a few
    milliseconds of time at startup. frawk provides a bytecode interpreter
-   (enabled via the `-binterp` option) for smaller scripts and for help in testing.
+   (enabled via the `-Binterp` option) for smaller scripts and for help in testing.
 1. frawk uses some fairly recent techniques for [efficiently validating
    UTF-8](https://github.com/lemire/fastvalidate-utf-8), [parsing
    CSV](https://github.com/geofflangdale/simdcsv), and [parsing floating point

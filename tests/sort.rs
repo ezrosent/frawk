@@ -20,9 +20,9 @@ fn numbers_str(n: usize) -> (String, String) {
 const N: usize = 10_000;
 
 #[cfg(feature = "llvm_backend")]
-const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bllvm", "-bcranelift"];
+const BACKEND_ARGS: &'static [&'static str] = &["-Binterp", "-Bllvm", "-Bcranelift"];
 #[cfg(not(feature = "llvm_backend"))]
-const BACKEND_ARGS: &'static [&'static str] = &["-binterp", "-bcranelift"];
+const BACKEND_ARGS: &'static [&'static str] = &["-Binterp", "-Bcranelift"];
 
 #[cfg(not(target_os = "windows"))]
 #[test]
