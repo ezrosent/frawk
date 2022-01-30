@@ -1387,6 +1387,17 @@ this as well"#
         @input "4\n3\n2\n3\n2\n3\n"
     );
 
+    test_program!(
+        scientific_notation,
+        "$1 <= 1e-8",
+        r#"6.18163e-27
+1.80782e-40
+1.92843e-09
+7.37465e-39
+"#,
+        @input "6.18163e-27\n1.80782e-40\n2.38296e-05\n1.92843e-09\n7.37465e-39\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 }
 

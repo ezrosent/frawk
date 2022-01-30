@@ -420,7 +420,7 @@ impl<'a> Tokenizer<'a> {
             static ref HEX_PATTERN: Regex = Regex::new(r"^[+-]?0[xX][0-9A-Fa-f]+").unwrap();
             static ref INT_PATTERN: Regex = Regex::new(r"^[+-]?\d+").unwrap();
             // Adapted from https://www.regular-expressions.info/floatingpoint.html
-            static ref FLOAT_PATTERN: Regex = Regex::new(r"^[-+]?\d*\.\d+([eE][-+]?\d+)?").unwrap();
+            static ref FLOAT_PATTERN: Regex = Regex::new(r"^[-+]?(\d*\.\d+([eE][-+]?\d+)?|\d+[eE][-+]?\d+)").unwrap();
         };
         let text = &self.text[self.cur..];
         if let Some(i) = HEX_PATTERN.captures(text).and_then(|c| c.get(0)) {
