@@ -234,11 +234,10 @@ surprised to discover there were bugs in frawk's parser.
   these commands from within a function, and it's a major simplification to just
   disallow this case. Again, let me know if this is an important use-case for
   you.
-* Some basic Awk commands are missing (e.g. `exit` is not present as its
-  semantics are unclear in a multithreaded setting, though `nextfile` is and
-  suffices in many cases), because I have not gotten to them
-  yet. Many of the extensions in gawk (e.g. co-processes, multidimensional
-  arrays) are also not implemented.
+* Many of the extensions in gawk (e.g. co-processes, multidimensional
+  arrays) are also not implemented. Most "book" awk builtin functions and
+  commands are supported at this point, but please file an issue if you notice
+  any gaps.
 * While it has never been tried, I sincerely doubt that frawk will run at all
   well --- or at all --- on a 32-bit platform. I suspect it would run much
   slower on a 64-bit non-x86 architecture.
