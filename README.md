@@ -26,7 +26,11 @@ frawk is dual-licensed under MIT or Apache 2.0.
 
 ## Installation
 
-You will need to [install Rust](https://rustup.rs/).  If you would like to use
+*Note: frawk uses some nightly-only Rust features by default.
+Build [without the `unstable`](https://github.com/ezrosent/frawk#building-using-stable)
+feature to build on stable.*  
+
+You will need to [install Rust](https://rustup.rs/). If you would like to use
 the LLVM backend, you will need an installation of LLVM 12 on your machine: 
 
 * See [this site](https://apt.llvm.org/) for installation instructions on some debian-based Linux distros.
@@ -70,7 +74,7 @@ $ cargo +nightly install --path . --no-default-features --features use_jemalloc,
 ```
 
 frawk is now on [crates.io](https://crates.io/crates/frawk), so running 
-`cargo install frawk` with the desired features should also work.
+`cargo +nightly install frawk` with the desired features should also work.
 
 While there are no _deliberate_ unix-isms in frawk, I have not tested it on Windows.
 
