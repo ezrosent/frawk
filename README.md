@@ -77,6 +77,8 @@ frawk is now on [crates.io](https://crates.io/crates/frawk), so running
 `cargo +nightly install frawk` with the desired features should also work.
 
 While there are no _deliberate_ unix-isms in frawk, I have not tested it on Windows.
+frawk does appear to build on Windows with default features disabled; see comments on [this issue](https://github.com/ezrosent/frawk/issues/87)
+for more information.
 
 ## Bugs and Feature Requests
 
