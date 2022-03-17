@@ -30,8 +30,9 @@ frawk is dual-licensed under MIT or Apache 2.0.
 Build [without the `unstable`](https://github.com/ezrosent/frawk#building-using-stable)
 feature to build on stable.*  
 
-You will need to [install Rust](https://rustup.rs/). If you would like to use
-the LLVM backend, you will need an installation of LLVM 12 on your machine: 
+You will need to [install Rust](https://rustup.rs/). If you have not updated rust in a while, 
+run `rustup update nightly` (or `rustup update` if building using stable). If you would like
+to use the LLVM backend, you will need an installation of LLVM 12 on your machine: 
 
 * See [this site](https://apt.llvm.org/) for installation instructions on some debian-based Linux distros.
   See also the comments on [this issue](https://github.com/ezrosent/frawk/issues/63) for docker files that
