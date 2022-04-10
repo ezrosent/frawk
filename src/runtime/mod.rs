@@ -299,7 +299,7 @@ impl<LR: LineReader> FileRead<LR> {
                             inputs: Default::default(),
                             named_columns: None,
                             used_fields: fields.clone(),
-                            backup_used_fields: fields.clone(),
+                            backup_used_fields: fields,
                             stdin,
                         })
                     } else {
@@ -376,7 +376,7 @@ impl<LR: LineReader> FileRead<LR> {
         self.stdin.filename()
     }
 
-    pub(crate) fn read_err_stdin<'a>(&mut self) -> Int {
+    pub(crate) fn read_err_stdin(&mut self) -> Int {
         self.stdin.read_state()
     }
 
@@ -607,7 +607,7 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
     pub(crate) fn delete(&self, k: &K) {
         self.borrow_mut().remove(k);
     }
-    pub(crate) fn iter<'a, F, R>(&'a self, f: F) -> R
+    pub(crate) fn iter<F, R>(&self, f: F) -> R
     where
         F: FnOnce(hashbrown::hash_map::Iter<K, V>) -> R,
     {

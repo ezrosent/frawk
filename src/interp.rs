@@ -86,8 +86,8 @@ impl<'a> Agg for UniqueStr<'a> {
 impl<K: std::hash::Hash + Eq, V: Agg + Default> Agg for HashMap<K, V> {
     fn agg(mut self, other: HashMap<K, V>) -> HashMap<K, V> {
         for (k, v) in other {
-            let entry = self.entry(k).or_insert(Default::default());
-            let v2 = mem::replace(entry, Default::default());
+            let entry = self.entry(k).or_default();
+            let v2 = mem::take(entry);
             *entry = v2.agg(v);
         }
         self
@@ -123,7 +123,7 @@ impl Slots {
         for_each_slot_pair!(a, b, {
             a.resize_with(std::cmp::max(a.len(), b.len()), Default::default);
             for (a_elt, b_elt_v) in a.iter_mut().zip(b.drain(..)) {
-                let a_elt_v = mem::replace(a_elt, Default::default());
+                let a_elt_v = mem::take(a_elt);
                 *a_elt = a_elt_v.agg(b_elt_v);
             }
         });
@@ -141,7 +141,7 @@ pub fn set_slot<T: Default>(vec: &mut Vec<T>, slot: usize, v: T) {
 
 pub fn combine_slot<T: Default>(vec: &mut Vec<T>, slot: usize, f: impl FnOnce(T) -> T) {
     if slot < vec.len() {
-        let res = f(std::mem::replace(&mut vec[slot], Default::default()));
+        let res = f(std::mem::take(&mut vec[slot]));
         vec[slot] = res;
         return;
     }
@@ -204,7 +204,7 @@ impl<'a> Core<'a> {
 
     pub fn extract_result(&mut self, rc: i32) -> StageResult {
         StageResult {
-            slots: mem::replace(&mut self.slots, Default::default()),
+            slots: mem::take(&mut self.slots),
             nr: self.vars.nr,
             rc,
         }
@@ -245,36 +245,34 @@ impl<'a> Core<'a> {
         self.slots.float[slot]
     }
     pub fn load_str(&mut self, slot: usize) -> Str<'a> {
-        mem::replace(&mut self.slots.strs[slot], Default::default())
-            .into_str()
-            .upcast()
+        mem::take(&mut self.slots.strs[slot]).into_str().upcast()
     }
     pub fn load_intint(&mut self, slot: usize) -> runtime::IntMap<Int> {
-        mem::replace(&mut self.slots.intint[slot], Default::default()).into()
+        mem::take(&mut self.slots.intint[slot]).into()
     }
     pub fn load_intfloat(&mut self, slot: usize) -> runtime::IntMap<Float> {
-        mem::replace(&mut self.slots.intfloat[slot], Default::default()).into()
+        mem::take(&mut self.slots.intfloat[slot]).into()
     }
     pub fn load_intstr(&mut self, slot: usize) -> runtime::IntMap<Str<'a>> {
-        mem::replace(&mut self.slots.intstr[slot], Default::default())
+        mem::take(&mut self.slots.intstr[slot])
             .into_iter()
             .map(|(k, v)| (k, v.into_str().upcast()))
             .collect()
     }
     pub fn load_strint(&mut self, slot: usize) -> runtime::StrMap<'a, Int> {
-        mem::replace(&mut self.slots.strint[slot], Default::default())
+        mem::take(&mut self.slots.strint[slot])
             .into_iter()
             .map(|(k, v)| (k.into_str().upcast(), v))
             .collect()
     }
     pub fn load_strfloat(&mut self, slot: usize) -> runtime::StrMap<'a, Float> {
-        mem::replace(&mut self.slots.strfloat[slot], Default::default())
+        mem::take(&mut self.slots.strfloat[slot])
             .into_iter()
             .map(|(k, v)| (k.into_str().upcast(), v))
             .collect()
     }
     pub fn load_strstr(&mut self, slot: usize) -> runtime::StrMap<'a, Str<'a>> {
-        mem::replace(&mut self.slots.strstr[slot], Default::default())
+        mem::take(&mut self.slots.strstr[slot])
             .into_iter()
             .map(|(k, v)| (k.into_str().upcast(), v.into_str().upcast()))
             .collect()
@@ -490,8 +488,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     fn format_arg(&self, (reg, ty): (NumTy, Ty)) -> Result<runtime::FormatArg<'a>> {
         Ok(match ty {
             Ty::Str => self.get(Reg::<Str<'a>>::from(reg)).clone().into(),
-            Ty::Int => self.get(Reg::<Int>::from(reg)).clone().into(),
-            Ty::Float => self.get(Reg::<Float>::from(reg)).clone().into(),
+            Ty::Int => (*self.get(Reg::<Int>::from(reg))).into(),
+            Ty::Float => (*self.get(Reg::<Float>::from(reg))).into(),
             _ => return err!("non-scalar (s)printf argument type {:?}", ty),
         })
     }
@@ -506,7 +504,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             return self.run_serial();
         }
         let handles = self.read_files.try_resize(self.num_workers - 1);
-        if handles.len() == 0 {
+        if handles.is_empty() {
             return self.run_serial();
         }
         let (begin, middle, end) = match self.main_func {
@@ -530,13 +528,13 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 return Ok(rc);
             }
         }
-        if let Err(_) = self.core.write_files.flush_stdout() {
+        if self.core.write_files.flush_stdout().is_err() {
             return Ok(1);
         }
         // For handling the worker portion, we want to transfer the current stdin progress to a
         // worker thread, but to withold any progress on other files open for read. We'll swap
         // these back in when we execute the `end` block, if there is one.
-        let mut old_read_files = mem::replace(&mut self.read_files.inputs, Default::default());
+        let mut old_read_files = mem::take(&mut self.read_files.inputs);
         fn wrap_error<T, S>(r: std::result::Result<Result<T>, S>) -> Result<T> {
             match r {
                 Ok(Ok(t)) => Ok(t),
@@ -639,6 +637,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         }
     }
 
+    #[allow(clippy::never_loop)]
     pub(crate) fn run_at(&mut self, mut cur_fn: usize) -> Result<i32> {
         use Instr::*;
         let mut scratch: Vec<runtime::FormatArg> = Vec::new();
@@ -648,6 +647,8 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         let mut cur = 0;
 
         'outer: loop {
+            // This somewhat ersatz structure is to allow 'cur' to be reassigned
+            // in most but not all branches in the big match below.
             cur = loop {
                 debug_assert!(cur < unsafe { (*instrs).len() });
                 use Variable::*;
@@ -767,7 +768,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     NotStr(res, sr) => {
                         let res = *res;
                         let sr = *sr;
-                        let is_empty = self.get(sr).with_bytes(|bs| bs.len() == 0);
+                        let is_empty = self.get(sr).with_bytes(|bs| bs.is_empty());
                         *self.get_mut(res) = is_empty as Int;
                     }
                     NegInt(res, ir) => {
@@ -816,7 +817,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     StartsWithConst(res, s, bs) => {
                         let s_bytes = unsafe { &*index(&self.strs, s).get_bytes() };
                         *index_mut(&mut self.ints, res) =
-                            (bs.len() <= s_bytes.len() && &s_bytes[..bs.len()] == &**bs) as Int;
+                            (bs.len() <= s_bytes.len() && s_bytes[..bs.len()] == **bs) as Int;
                     }
                     Concat(res, l, r) => {
                         let res = *res;
@@ -1055,9 +1056,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let to_split = index(&self.strs, to_split);
                         let arr = index(&self.maps_int_str, arr);
                         let pat = index(&self.strs, pat);
-                        self.core
-                            .regexes
-                            .split_regex_intmap(&pat, &to_split, &arr)?;
+                        self.core.regexes.split_regex_intmap(pat, to_split, arr)?;
                         let res = arr.len() as Int;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
@@ -1067,9 +1066,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let to_split = index(&self.strs, to_split);
                         let arr = index(&self.maps_str_str, arr);
                         let pat = index(&self.strs, pat);
-                        self.core
-                            .regexes
-                            .split_regex_strmap(&pat, &to_split, &arr)?;
+                        self.core.regexes.split_regex_strmap(pat, to_split, arr)?;
                         let res = arr.len() as Int;
                         let flds = *flds;
                         *self.get_mut(flds) = res;
@@ -1402,6 +1399,9 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     fn clear(&mut self, map_ty: Ty, map: NumTy) {
         map_regs!(map_ty, map, self.get(map).clear());
     }
+
+    // Allowing this because it allows for easier use of the map_regs macro.
+    #[allow(clippy::clone_on_copy)]
     fn store_map(&mut self, map_ty: Ty, map: NumTy, key: NumTy, val: NumTy) {
         map_regs!(map_ty, map, key, val, {
             let k = self.get(key).clone();
@@ -1413,7 +1413,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         map_regs!(map_ty, map, key, dst, {
             let k = self.get(key);
             let m = self.get(map);
-            let by = self.get(by).clone();
+            let by = *self.get(by);
             let res = m.inc_int(k, by);
             *self.get_mut(dst) = res;
         })
@@ -1422,7 +1422,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
         map_regs!(map_ty, map, key, dst, {
             let k = self.get(key);
             let m = self.get(map);
-            let by = self.get(by).clone();
+            let by = *self.get(by);
             let res = m.inc_float(k, by);
             *self.get_mut(dst) = res;
         })
@@ -1455,7 +1455,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
     fn iter_get_next(&mut self, iter_ty: Ty, dst: NumTy, iter: NumTy) {
         match iter_ty {
             Ty::IterInt => {
-                let res = unsafe { index(&self.iters_int, &iter.into()).get_next().clone() };
+                let res = unsafe { *index(&self.iters_int, &iter.into()).get_next() };
                 *index_mut(&mut self.ints, &dst.into()) = res;
             }
             Ty::IterStr => {
@@ -1584,12 +1584,12 @@ pub(crate) fn index_mut<'a, T>(
     }
 }
 
-pub(crate) fn push<'a, T: Clone>(s: &'a mut Storage<T>, reg: &Reg<T>) {
+pub(crate) fn push<T: Clone>(s: &mut Storage<T>, reg: &Reg<T>) {
     let v = index(s, reg).clone();
     s.stack.push(v);
 }
 
-pub(crate) fn pop<'a, T: Clone>(s: &'a mut Storage<T>) -> T {
+pub(crate) fn pop<T: Clone>(s: &mut Storage<T>) -> T {
     s.stack.pop().expect("pop must be called on nonempty stack")
 }
 

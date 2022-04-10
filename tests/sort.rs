@@ -20,9 +20,9 @@ fn numbers_str(n: usize) -> (String, String) {
 const N: usize = 10_000;
 
 #[cfg(feature = "llvm_backend")]
-const BACKEND_ARGS: &'static [&'static str] = &["-Binterp", "-Bllvm", "-Bcranelift"];
+const BACKEND_ARGS: &[&str] = &["-Binterp", "-Bllvm", "-Bcranelift"];
 #[cfg(not(feature = "llvm_backend"))]
-const BACKEND_ARGS: &'static [&'static str] = &["-Binterp", "-Bcranelift"];
+const BACKEND_ARGS: &[&str] = &["-Binterp", "-Bcranelift"];
 
 #[cfg(not(target_os = "windows"))]
 #[test]
@@ -32,7 +32,7 @@ fn sort_command_single_threaded() {
     let data_fname = tmpdir.path().join("numbers");
     {
         let mut file = File::create(data_fname.clone()).unwrap();
-        file.write(input.as_bytes()).unwrap();
+        file.write_all(input.as_bytes()).unwrap();
     }
     let prog: String = r#"{ print $0 | "sort -n"; }"#.into();
     for backend_arg in BACKEND_ARGS {
@@ -54,7 +54,7 @@ fn sort_command_multi_threaded() {
     let data_fname = tmpdir.path().join("numbers");
     {
         let mut file = File::create(data_fname.clone()).unwrap();
-        file.write(input.as_bytes()).unwrap();
+        file.write_all(input.as_bytes()).unwrap();
     }
     let prog: String = r#"{ print $0 | "sort -n"; }"#.into();
     for backend_arg in BACKEND_ARGS {

@@ -1,4 +1,4 @@
-pub const PRIDE_PREJUDICE_CH2: &'static str = r#"
+pub const PRIDE_PREJUDICE_CH2: &str = r#"
 Mr. Bennet was among the earliest of those who waited on Mr. Bingley. He had always intended to
 visit him, though to the last always assuring his wife that he should not go; and till the evening
 after the visit was paid she had no knowledge of it. It was then disclosed in the following manner.
@@ -83,7 +83,7 @@ will dance with you at the next ball.”
 
 The rest of the evening was spent in conjecturing how soon he would return Mr. Bennet’s visit, and
 determining when they should ask him to dinner."#;
-pub const VIRGIL: &'static str = r#"Arms, and the man I sing, who, forc'd by fate,
+pub const VIRGIL: &str = r#"Arms, and the man I sing, who, forc'd by fate,
 And haughty Juno's unrelenting hate,
 Expell'd and exil'd, left the Trojan shore.
 Long labors, both by sea and land, he bore,

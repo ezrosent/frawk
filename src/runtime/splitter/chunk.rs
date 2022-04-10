@@ -17,6 +17,10 @@ use crate::runtime::{
     str_impl::UniqueBuf,
 };
 
+/// A vector of dynamically typed factory functions producing a chunk producer
+/// for a particular chunk type in a different thread.
+type DynamicProducers<C> = Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = C>> + Send>>;
+
 // TODO: We probably want a better story here about ChunkProducers propagating error values.
 
 pub trait ChunkProducer {
@@ -32,10 +36,7 @@ pub trait ChunkProducer {
     // implementations are not Send, even though the data to initialize a new ChunkProducer reading
     // from the same source is Send. Passing a FnOnce allows us to handle this, which is the case
     // for (e.g.) ShardedChunkProducer.
-    fn try_dyn_resize(
-        &self,
-        _requested_size: usize,
-    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
+    fn try_dyn_resize(&self, _requested_size: usize) -> DynamicProducers<Self::Chunk> {
         vec![]
     }
     fn wait(&self) -> bool {
@@ -132,7 +133,6 @@ pub fn new_offset_chunk_producer_ascii_whitespace<R: Read>(
 }
 
 pub fn new_chained_offset_chunk_producer_csv<
-    'a,
     R: Read,
     N: Borrow<str>,
     I: Iterator<Item = (R, N)>,
@@ -218,10 +218,7 @@ pub fn new_chained_offset_chunk_producer_ascii_whitespace<
 
 impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
     type Chunk = C;
-    fn try_dyn_resize(
-        &self,
-        requested_size: usize,
-    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = C>> + Send>> {
+    fn try_dyn_resize(&self, requested_size: usize) -> DynamicProducers<C> {
         (&**self).try_dyn_resize(requested_size)
     }
     fn wait(&self) -> bool {
@@ -459,7 +456,7 @@ impl<P: ChunkProducer> ChunkProducer for ChainedChunkProducer<P> {
                 let _last = self.0.pop();
                 debug_assert!(_last.is_some());
             }
-            Ok(self.0.len() != 0)
+            Ok(!self.0.is_empty())
         } else {
             Ok(false)
         }
@@ -567,10 +564,7 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
 
 impl<P: ChunkProducer + 'static> ChunkProducer for ParallelChunkProducer<P> {
     type Chunk = P::Chunk;
-    fn try_dyn_resize(
-        &self,
-        requested_size: usize,
-    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
+    fn try_dyn_resize(&self, requested_size: usize) -> DynamicProducers<P::Chunk> {
         let mut res = Vec::with_capacity(requested_size);
         for _ in 0..requested_size {
             let p = self.clone();
@@ -646,10 +640,7 @@ impl<P: ChunkProducer + 'static> ShardedChunkProducer<P> {
 
 impl<P: ChunkProducer + 'static> ChunkProducer for ShardedChunkProducer<P> {
     type Chunk = P::Chunk;
-    fn try_dyn_resize(
-        &self,
-        requested_size: usize,
-    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
+    fn try_dyn_resize(&self, requested_size: usize) -> DynamicProducers<P::Chunk> {
         let mut res = Vec::with_capacity(requested_size);
         for _ in 0..requested_size {
             let incoming = self.incoming.clone();
@@ -702,10 +693,7 @@ impl<P: ChunkProducer + 'static> ChunkProducer for CancellableChunkProducer<P> {
 
     // TODO this API means we have two layers of virtual dispatch, which isn't great.
     // It's not the end of the world, but we should think about whether there is a way around this.
-    fn try_dyn_resize(
-        &self,
-        requested_size: usize,
-    ) -> Vec<Box<dyn FnOnce() -> Box<dyn ChunkProducer<Chunk = Self::Chunk>> + Send>> {
+    fn try_dyn_resize(&self, requested_size: usize) -> DynamicProducers<P::Chunk> {
         let children = self.prod.try_dyn_resize(requested_size);
         let mut res = Vec::with_capacity(children.len());
         for factory in children.into_iter() {

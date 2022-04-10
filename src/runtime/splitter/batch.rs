@@ -105,7 +105,7 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
         _rc: &mut RegexCache,
         old: &'a mut Line,
     ) -> Result<bool> {
-        Ok(self.read_line_inner(old)?)
+        self.read_line_inner(old)
     }
     fn read_state(&self) -> i64 {
         if self.cur_chunk.version != 0 && self.last_len == 0 {
@@ -305,6 +305,9 @@ pub struct Line {
 }
 
 impl Line {
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
     pub fn len(&self) -> usize {
         self.len
     }
@@ -350,7 +353,7 @@ impl<'a> super::Line<'a> for Line {
             .fields
             .get(col as usize - 1)
             .cloned()
-            .unwrap_or_else(Str::default)
+            .unwrap_or_default()
             .upcast())
     }
 
@@ -408,7 +411,7 @@ pub struct Stepper<'a> {
 
 impl<'a> Stepper<'a> {
     fn append(&mut self, s: Str<'static>) {
-        let partial = mem::replace(&mut self.line.partial, Str::default());
+        let partial = mem::take(&mut self.line.partial);
         self.line.partial = Str::concat(partial, s);
     }
 
@@ -1119,7 +1122,7 @@ mod generic {
             let mut nls = [0u64; BUFFER_SIZE];
             while ix < len_minus_64 - V::INPUT_SIZE * BUFFER_SIZE + 1 {
                 for b in 0..BUFFER_SIZE {
-                    let (rel, nl) = iterate!(buf_ptr.offset((V::INPUT_SIZE * b + ix) as isize));
+                    let (rel, nl) = iterate!(buf_ptr.add(V::INPUT_SIZE * b + ix));
                     fields[b] = rel;
                     nls[b] = nl;
                 }
@@ -1153,11 +1156,7 @@ mod generic {
         let remaining = len - ix;
         if remaining > 0 {
             let mut rest = [0u8; MAX_INPUT_SIZE];
-            std::ptr::copy_nonoverlapping(
-                buf_ptr.offset(ix as isize),
-                rest.as_mut_ptr(),
-                remaining,
-            );
+            std::ptr::copy_nonoverlapping(buf_ptr.add(ix), rest.as_mut_ptr(), remaining);
             let (fields, nl) = iterate!(rest.as_mut_ptr());
             flatten_bits(field_base_ptr, &mut field_base, ix as u64, fields);
             flatten_bits(newline_base_ptr, &mut newline_base, ix as u64, nl);
@@ -1418,6 +1417,12 @@ impl ByteReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
             cancel_signal,
         )
     }
+
+    // Not great, but grouping into a separate type is a bit awkward given the
+    // different permutations used between these modules.
+    //
+    // TODO: there are absolutely opportunities here to clean things up.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_internal<I, S>(
         rs: I,
         field_sep: u8,
@@ -1785,7 +1790,7 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> ByteReaderBase for ByteReader<P> {
 
             offs.rel.start += 1;
             let mut is_record_sep = index == end;
-            if !(is_record_sep && fields.len() == 0 && self.progress == index) {
+            if !(is_record_sep && fields.is_empty() && self.progress == index) {
                 // If we have a field of length 0, NF should be zero. This check fires when
                 // record_sep is the first offset we see for this line, and it occurs as the first
                 // character in the line.
@@ -1920,15 +1925,15 @@ fn gallop(slice: &[u64], mut cmp: impl FnMut(u64) -> bool) -> usize {
         let mut step = 1;
         while res + step < slice.len() && cmp(slice[res + step]) {
             res += step;
-            step = step << 1;
+            step <<= 1;
         }
 
-        step = step >> 1;
+        step >>= 1;
         while step > 0 {
             if step + res < slice.len() && cmp(slice[res + step]) {
                 res += step;
             }
-            step = step >> 1;
+            step >>= 1;
         }
         res += 1; // advance one, as we always stayed < value
     }
@@ -1979,7 +1984,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
         smoke_test::<generic::Impl>();
     }
 
-    fn disp_vec(v: &Vec<Str>) -> String {
+    fn disp_vec(v: &[Str]) -> String {
         format!(
             "{:?}",
             v.iter().map(|s| format!("{}", s)).collect::<Vec<String>>()
@@ -1990,7 +1995,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
         // Replace spaces with tabs to get some traction here.
         let fs = b'\t';
         let rs = b'\n';
-        let corpus = String::from(corpus).replace(" ", "\t");
+        let corpus = String::from(corpus).replace(' ', "\t");
         let mut _cache = RegexCache::default();
         let _pat = Str::default();
         let expected: Vec<Vec<Str<'static>>> = corpus

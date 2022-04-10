@@ -321,7 +321,7 @@ pub(crate) struct Node<'a> {
 
 pub(crate) type LL<'a> = bytecode::Instr<'a>;
 type Instr<'a> = Either<LL<'a>, HighLevel>;
-type CFG<'a> = Graph<Node<'a>, Option<NumTy /* Int register */>>;
+type Cfg<'a> = Graph<Node<'a>, Option<NumTy /* Int register */>>;
 type CallGraph = Graph<HashSet<(NumTy, Ty)>, ()>;
 
 // Typer contains much of the state necessary for generating a typed CFG, which in turn can
@@ -405,7 +405,7 @@ pub(crate) struct Frame<'a> {
     exit: NodeIx,
     pub locals: HashMap<Ident, (u32, Ty)>,
     pub arg_regs: SmallVec<NumTy>,
-    pub cfg: CFG<'a>,
+    pub cfg: Cfg<'a>,
     pub is_called: bool,
 }
 

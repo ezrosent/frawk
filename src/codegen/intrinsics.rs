@@ -601,7 +601,7 @@ pub(crate) unsafe extern "C" fn split_int(
     if let Err(e) = runtime
         .core
         .regexes
-        .split_regex_intmap(&pat, &to_split, &into_arr)
+        .split_regex_intmap(pat, to_split, &into_arr)
     {
         fail!(runtime, "failed to split string: {}", e);
     }

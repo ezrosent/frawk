@@ -958,22 +958,22 @@ impl<'a> View<'a> {
         use crate::codegen::Cmp::*;
         let res = if is_float {
             match op {
-                EQ => self.builder.ins().fcmp(FloatCC::Equal, l, r),
-                LTE => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
-                LT => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
-                GTE => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
-                GT => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
+                Eq => self.builder.ins().fcmp(FloatCC::Equal, l, r),
+                Lte => self.builder.ins().fcmp(FloatCC::LessThanOrEqual, l, r),
+                Lt => self.builder.ins().fcmp(FloatCC::LessThan, l, r),
+                Gte => self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, l, r),
+                Gt => self.builder.ins().fcmp(FloatCC::GreaterThan, l, r),
             }
         } else {
             match op {
-                EQ => self.builder.ins().icmp(IntCC::Equal, l, r),
-                LTE => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
-                LT => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
-                GTE => self
+                Eq => self.builder.ins().icmp(IntCC::Equal, l, r),
+                Lte => self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r),
+                Lt => self.builder.ins().icmp(IntCC::SignedLessThan, l, r),
+                Gte => self
                     .builder
                     .ins()
                     .icmp(IntCC::SignedGreaterThanOrEqual, l, r),
-                GT => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
+                Gt => self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r),
             }
         };
         self.bool_to_int(res)
@@ -1274,13 +1274,7 @@ impl<'a> Backend for View<'a> {
             .shared
             .module
             .declare_function(name, Linkage::Import, cl_sig)
-            .map_err(|e| {
-                CompileError(format!(
-                    "error declaring {} in module: {}",
-                    name,
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| CompileError(format!("error declaring {} in module: {}", name, e,)))?;
         self.shared.external_funcs.insert(addr, id);
         Ok(())
     }

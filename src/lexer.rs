@@ -500,7 +500,7 @@ impl<'a> Tokenizer<'a> {
     fn consume_comment(&mut self) {
         let mut iter = self.text[self.cur..].char_indices();
         if let Some((_, '#')) = iter.next() {
-            if let Some((ix, _)) = iter.skip_while(|x| x.1 != '\n').next() {
+            if let Some((ix, _)) = iter.find(|x| x.1 == '\n') {
                 self.cur += ix;
             } else {
                 self.cur = self.text.len();
@@ -508,9 +508,11 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    #[allow(clippy::never_loop)]
     fn consume_ws(&mut self) {
         let mut res = 0;
         let mut iter = self.text[self.cur..].char_indices();
+        // We use loops here purely for multi-level breaks.
         'outer: while let Some((ix, c)) = iter.next() {
             loop {
                 res = ix;
@@ -678,13 +680,13 @@ impl<'a> Iterator for Tokenizer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn lex_str<'b>(s: &'b str) -> Vec<Spanned<Tok<'b>>> {
+    fn lex_str(s: &str) -> Vec<Spanned<Tok>> {
         Tokenizer::new(s).map(|x| x.ok().unwrap()).collect()
     }
 
     #[test]
     fn locations() {
-        const TEXT: &'static str = r#"This is the first line
+        const TEXT: &str = r#"This is the first line
 and the second
 and the third"#;
         let tok = Tokenizer::new(TEXT);

@@ -32,7 +32,7 @@ mod string_constants;
 mod test_string_constants;
 pub mod types;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use arena::Arena;
 use cfg::Escaper;
@@ -100,7 +100,7 @@ fn open_file_read(f: &str) -> impl io::BufRead {
             match self {
                 LazyReader::Uninit(f) => {
                     *self = LazyReader::Init(f()?);
-                    return self.delegate(next);
+                    self.delegate(next)
                 }
                 LazyReader::Init(r) => next(r),
             }
@@ -115,9 +115,7 @@ fn open_file_read(f: &str) -> impl io::BufRead {
     }
 
     let filename = String::from(f);
-    BufReader::new(LazyReader::Uninit(move || {
-        Ok(File::open(filename.as_str())?)
-    }))
+    BufReader::new(LazyReader::Uninit(move || File::open(filename.as_str())))
 }
 
 fn chained<LR: LineReader>(lr: LR) -> ChainedReader<LR> {
@@ -305,7 +303,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
 
 fn main() {
     #[allow(unused_mut)]
-    let mut app = App::new("frawk")
+    let mut app = Command::new("frawk")
         .version("0.4.5")
         .author("Eli R.")
         .about("frawk is a pattern scanning and (semi-structured) text processing language")
@@ -467,7 +465,7 @@ fn main() {
                 match std::fs::read_to_string(pfile) {
                     Ok(p) => {
                         prog.push_str(p.as_str());
-                        prog.push_str("\n");
+                        prog.push('\n');
                     }
                     Err(e) => fail!("failed to read program from {}: {}", pfile, e),
                 }

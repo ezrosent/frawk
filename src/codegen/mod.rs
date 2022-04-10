@@ -55,11 +55,11 @@ macro_rules! intrinsic {
 
 #[derive(Copy, Clone)]
 pub(crate) enum Cmp {
-    EQ,
-    LTE,
-    LT,
-    GTE,
-    GT,
+    Eq,
+    Lte,
+    Lt,
+    Gte,
+    Gt,
 }
 
 pub(crate) enum Arith {
@@ -632,7 +632,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let cmp = self.call_intrinsic(
                     Op::Cmp {
                         is_float: false,
-                        op: Cmp::EQ,
+                        op: Cmp::Eq,
                     },
                     &mut [iv, zero],
                 )?;
@@ -645,7 +645,7 @@ pub(crate) trait CodeGenerator: Backend {
                 let cmp = self.call_intrinsic(
                     Op::Cmp {
                         is_float: false,
-                        op: Cmp::EQ,
+                        op: Cmp::Eq,
                     },
                     &mut [lenv, zero],
                 )?;
@@ -738,16 +738,16 @@ pub(crate) trait CodeGenerator: Backend {
                 let resv = self.call_intrinsic(intrinsic!(substr), &mut [basev, lv, rv])?;
                 self.bind_val(res.reflect(), resv)
             }
-            LTInt(res, l, r) => self.binop(cmp(Cmp::LT, false), res, l, r),
-            GTInt(res, l, r) => self.binop(cmp(Cmp::GT, false), res, l, r),
-            LTEInt(res, l, r) => self.binop(cmp(Cmp::LTE, false), res, l, r),
-            GTEInt(res, l, r) => self.binop(cmp(Cmp::GTE, false), res, l, r),
-            EQInt(res, l, r) => self.binop(cmp(Cmp::EQ, false), res, l, r),
-            LTFloat(res, l, r) => self.binop(cmp(Cmp::LT, true), res, l, r),
-            GTFloat(res, l, r) => self.binop(cmp(Cmp::GT, true), res, l, r),
-            LTEFloat(res, l, r) => self.binop(cmp(Cmp::LTE, true), res, l, r),
-            GTEFloat(res, l, r) => self.binop(cmp(Cmp::GTE, true), res, l, r),
-            EQFloat(res, l, r) => self.binop(cmp(Cmp::EQ, true), res, l, r),
+            LTInt(res, l, r) => self.binop(cmp(Cmp::Lt, false), res, l, r),
+            GTInt(res, l, r) => self.binop(cmp(Cmp::Gt, false), res, l, r),
+            LTEInt(res, l, r) => self.binop(cmp(Cmp::Lte, false), res, l, r),
+            GTEInt(res, l, r) => self.binop(cmp(Cmp::Gte, false), res, l, r),
+            EQInt(res, l, r) => self.binop(cmp(Cmp::Eq, false), res, l, r),
+            LTFloat(res, l, r) => self.binop(cmp(Cmp::Lt, true), res, l, r),
+            GTFloat(res, l, r) => self.binop(cmp(Cmp::Gt, true), res, l, r),
+            LTEFloat(res, l, r) => self.binop(cmp(Cmp::Lte, true), res, l, r),
+            GTEFloat(res, l, r) => self.binop(cmp(Cmp::Gte, true), res, l, r),
+            EQFloat(res, l, r) => self.binop(cmp(Cmp::Eq, true), res, l, r),
             LTStr(res, l, r) => self.binop(intrinsic!(str_lt), res, l, r),
             GTStr(res, l, r) => self.binop(intrinsic!(str_gt), res, l, r),
             LTEStr(res, l, r) => self.binop(intrinsic!(str_lte), res, l, r),

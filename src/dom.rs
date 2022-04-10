@@ -298,9 +298,7 @@ mod test {
             .max()
             .unwrap();
         let mut cfg = Graph::<(), ()>::new();
-        let ixes: Vec<_> = (0..n_nodes)
-            .map(|_| cfg.add_node(Default::default()))
-            .collect();
+        let ixes: Vec<_> = (0..n_nodes).map(|_| cfg.add_node(())).collect();
         cfg.extend_with_edges(edges.into_iter().map(|(i, j)| (ixes[i.ix()], ixes[j.ix()])));
         (cfg, NodeIx::new(0))
     }
@@ -312,9 +310,8 @@ mod test {
         ($x:tt) => {{
             let s = stringify!($x);
             let fst = s.as_bytes()[0] as usize;
-            if fst > 90 || fst < 65 {
-                assert!(
-                    false,
+            if !(65..=90).contains(&fst) {
+                panic!(
                     "invalid identifier {:?}, need single character between 'A' and 'Z'",
                     s
                 )

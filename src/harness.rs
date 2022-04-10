@@ -27,24 +27,25 @@ use crate::{
 
 use cfg_if::cfg_if;
 use hashbrown::HashMap;
-use std::io;
-use std::io::Write;
+use std::io::{self, Write};
+use std::iter::FromIterator;
 
-const FILE_BREAK: &'static str = "<<<FILE BREAK>>>";
+const FILE_BREAK: &str = "<<<FILE BREAK>>>";
 
 fn split_stdin(
     stdin: String,
 ) -> impl Iterator<Item = (Box<dyn io::Read + Send>, String)> + 'static {
-    let inputs: Vec<_> = stdin
-        .split(FILE_BREAK)
-        .map(String::from)
-        .enumerate()
-        .map(|(i, x)| {
-            let reader: Box<dyn io::Read + Send> = Box::new(std::io::Cursor::new(x));
-            (reader, format!("fake_stdin_{}", i))
-        })
-        .collect();
-    inputs.into_iter()
+    Vec::from_iter(
+        stdin
+            .split(FILE_BREAK)
+            .map(String::from)
+            .enumerate()
+            .map(|(i, x)| {
+                let reader: Box<dyn io::Read + Send> = Box::new(std::io::Cursor::new(x));
+                (reader, format!("fake_stdin_{}", i))
+            }),
+    )
+    .into_iter()
 }
 macro_rules! with_reader {
     ($report:expr, $inp:expr, |$id:ident| $body:expr) => {
@@ -343,7 +344,7 @@ pub(crate) fn parse_program<'a, 'inp>(
 }
 
 #[cfg(feature = "unstable")]
-fn compile_program<'a, 'inp>(
+fn compile_program<'a>(
     a: &'a Arena,
     prog: Prog<'a>,
     stdin: impl Into<String>,
@@ -364,8 +365,8 @@ fn compile_program<'a, 'inp>(
 }
 
 #[cfg(feature = "unstable")]
-fn run_prog_nodebug<'a, LR: runtime::LineReader>(
-    interp: &mut Interp<'a, LR>,
+fn run_prog_nodebug<LR: runtime::LineReader>(
+    interp: &mut Interp<LR>,
     fake_fs: FakeFs,
 ) -> Result<String /*output*/> {
     interp.run()?;
@@ -391,9 +392,9 @@ pub(crate) fn run_prog<'a>(
     let fake_fs = FakeFs::default();
     let (instrs, type_map) = {
         let mut instrs_buf = Vec::<u8>::new();
-        write!(&mut instrs_buf, "\nCFG:\n").unwrap();
+        writeln!(&mut instrs_buf, "\nCFG:").unwrap();
         ctx.dbg_print(&mut instrs_buf).unwrap();
-        write!(&mut instrs_buf, "\n").unwrap();
+        writeln!(&mut instrs_buf).unwrap();
         let types::TypeInfo { var_tys, func_tys } = get_types(&ctx)?;
         // ident_map : Ident -> &str (but only has globals)
         // ts: Ident -> Type
@@ -401,7 +402,7 @@ pub(crate) fn run_prog<'a>(
         // We want the types of all the entries in ts that show up in ident_map.
         let type_map: HashMap<&'a str, compile::Ty> = var_tys
             .iter()
-            .flat_map(|((ident, _, _), ty)| ident_map.get(&ident._base()).map(|s| (*s, ty.clone())))
+            .flat_map(|((ident, _, _), ty)| ident_map.get(&ident._base()).map(|s| (*s, *ty)))
             .collect();
         macro_rules! with_interp {
             ($interp:ident, $body: expr) => {

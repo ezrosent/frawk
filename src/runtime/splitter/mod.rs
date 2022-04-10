@@ -113,7 +113,7 @@ impl Default for DefaultLine {
 
 impl DefaultLine {
     fn split_if_needed(&mut self, pat: &Str, rc: &mut RegexCache) -> Result<()> {
-        if self.fields.len() == 0 {
+        if self.fields.is_empty() {
             rc.split_regex(pat, &self.line, &self.used_fields, &mut self.fields)?;
         }
         Ok(())
@@ -133,7 +133,7 @@ impl<'a> Line<'a> for DefaultLine {
         F: FnMut(Str<'static>) -> Str<'static>,
     {
         // Should have split before calling this function.
-        debug_assert!(self.fields.len() > 0);
+        debug_assert!(!self.fields.is_empty());
         let (start, end) = normalize_join_indexes(start, end, nf)?;
         Ok(sep
             .clone()
@@ -184,7 +184,7 @@ impl<'a> Line<'a> for DefaultLine {
             self.fields
                 .get((col - 1) as usize)
                 .cloned()
-                .unwrap_or_else(Str::default)
+                .unwrap_or_default()
         };
         Ok(res.upcast())
     }
@@ -327,7 +327,7 @@ struct Reader<R> {
 
 fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
     let mut read = 0;
-    while buf.len() > 0 {
+    while !buf.is_empty() {
         match r.read(buf) {
             Ok(n) => {
                 if n == 0 {
@@ -350,7 +350,7 @@ fn read_to_slice(r: &mut impl Read, mut buf: &mut [u8]) -> Result<usize> {
 
 impl<R: Read> Reader<R> {
     pub(crate) fn new(r: R, chunk_size: usize, padding: usize, check_utf8: bool) -> Self {
-        let res = Reader {
+        Reader {
             inner: r,
             buf: UniqueBuf::new(0).into_buf(),
             start: 0,
@@ -361,8 +361,7 @@ impl<R: Read> Reader<R> {
             state: ReaderState::OK,
             last_len: 0,
             check_utf8,
-        };
-        res
+        }
     }
 
     pub(crate) fn check_utf8(&self) -> bool {

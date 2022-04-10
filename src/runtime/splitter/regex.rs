@@ -189,7 +189,7 @@ mod tests {
     }
 
     // Helps type inference along.
-    fn ref_str<'a>(s: &'a [u8]) -> Str<'a> {
+    fn ref_str(s: &[u8]) -> Str {
         std::str::from_utf8(s).unwrap().into()
     }
 
@@ -222,7 +222,7 @@ mod tests {
                     eprintln!("mismatch at index {}:\ngot={:?}\nwant={:?}", i, l, e);
                 }
             }
-            assert!(false, "lines do not match");
+            panic!("lines do not match");
         }
     }
 

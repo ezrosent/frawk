@@ -17,11 +17,11 @@ use std::io::Write;
 use tempfile::tempdir;
 
 #[cfg(feature = "llvm_backend")]
-const BACKEND_ARGS: &'static [&'static str] = &["-Binterp", "-Bllvm", "-Bcranelift"];
+const BACKEND_ARGS: &[&str] = &["-Binterp", "-Bllvm", "-Bcranelift"];
 #[cfg(not(feature = "llvm_backend"))]
-const BACKEND_ARGS: &'static [&'static str] = &["-Binterp", "-Bcranelift"];
+const BACKEND_ARGS: &[&str] = &["-Binterp", "-Bcranelift"];
 
-const COUNTRIES: &'static str = r#"Russia	8650	262	Asia
+const COUNTRIES: &str = r#"Russia	8650	262	Asia
 Canada	3852	24	North America
 China	3692	866	Asia
 USA	3615	219	North America
@@ -41,11 +41,7 @@ fn unordered_output_equals(bs1: &[u8], bs2: &[u8]) {
     if lines1 != lines2 {
         let pretty_1: Vec<_> = lines1.into_iter().map(String::from_utf8_lossy).collect();
         let pretty_2: Vec<_> = lines2.into_iter().map(String::from_utf8_lossy).collect();
-        assert!(
-            false,
-            "expected (in any order) {:?}, got {:?}",
-            pretty_1, pretty_2
-        );
+        panic!("expected (in any order) {:?}, got {:?}", pretty_1, pretty_2);
     }
 }
 

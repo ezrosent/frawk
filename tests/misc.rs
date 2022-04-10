@@ -4,9 +4,9 @@ use std::io::Write;
 use tempfile::tempdir;
 
 #[cfg(feature = "llvm_backend")]
-const BACKEND_ARGS: &'static [&'static str] = &["-Binterp", "-Bllvm", "-Bcranelift"];
+const BACKEND_ARGS: &[&str] = &["-Binterp", "-Bllvm", "-Bcranelift"];
 #[cfg(not(feature = "llvm_backend"))]
-const BACKEND_ARGS: &'static [&'static str] = &["-Binterp", "-Bcranelift"];
+const BACKEND_ARGS: &[&str] = &["-Binterp", "-Bcranelift"];
 
 // A simple function that looks for the "constant folded" regex instructions in the generated
 // output. This is a function that is possible to fool: test cases should be mindful of how it is
@@ -20,7 +20,7 @@ fn assert_folded(p: &str) {
     let out = String::from_utf8(
         Command::cargo_bin("frawk")
             .unwrap()
-            .arg(prog.clone())
+            .arg(prog)
             .arg(String::from("--dump-bytecode"))
             .output()
             .unwrap()
@@ -39,11 +39,7 @@ fn unordered_output_equals(bs1: &[u8], bs2: &[u8]) {
     if lines1 != lines2 {
         let pretty_1: Vec<_> = lines1.into_iter().map(String::from_utf8_lossy).collect();
         let pretty_2: Vec<_> = lines2.into_iter().map(String::from_utf8_lossy).collect();
-        assert!(
-            false,
-            "expected (in any order) {:?}, got {:?}",
-            pretty_1, pretty_2
-        );
+        panic!("expected (in any order) {:?}, got {:?}", pretty_1, pretty_2);
     }
 }
 
@@ -88,7 +84,7 @@ fn simple_fi() {
     let data_fname = tmpdir.path().join("numbers");
     {
         let mut file = File::create(data_fname.clone()).unwrap();
-        file.write(input.as_bytes()).unwrap();
+        file.write_all(input.as_bytes()).unwrap();
     }
     let prog: String = r#"{n+=$FI["Count"]} END { print n, NR; }"#.into();
     for backend_arg in BACKEND_ARGS {
@@ -100,7 +96,7 @@ fn simple_fi() {
             .arg(prog.clone())
             .arg(fname_to_string(&data_fname))
             .assert()
-            .stdout(expected.clone());
+            .stdout(expected);
     }
 }
 
@@ -115,9 +111,9 @@ fn file_and_data_arg() {
     let prog_fname = tmpdir.path().join("prog");
     {
         let mut data_file = File::create(data_fname.clone()).unwrap();
-        data_file.write(input.as_bytes()).unwrap();
+        data_file.write_all(input.as_bytes()).unwrap();
         let mut prog_file = File::create(prog_fname.clone()).unwrap();
-        prog_file.write(prog.as_bytes()).unwrap();
+        prog_file.write_all(prog.as_bytes()).unwrap();
     }
     for backend_arg in BACKEND_ARGS {
         Command::cargo_bin("frawk")
@@ -127,7 +123,7 @@ fn file_and_data_arg() {
             .arg(prog_fname.clone())
             .arg(data_fname.clone())
             .assert()
-            .stdout(expected.clone());
+            .stdout(expected);
     }
 }
 
@@ -160,8 +156,8 @@ file 2 3
             r#"{ x = max(int($2), x); } END { print "file 2", x; }"#,
         ),
     ] {
-        let mut file = File::create(fname.clone()).unwrap();
-        file.write(data.as_bytes()).unwrap();
+        let mut file = File::create(fname).unwrap();
+        file.write_all(data.as_bytes()).unwrap();
     }
     for backend_arg in BACKEND_ARGS {
         Command::cargo_bin("frawk")
@@ -171,7 +167,7 @@ file 2 3
             .arg(format!("-f{}", fname_to_string(&prog2)))
             .arg(fname_to_string(&data_fname))
             .assert()
-            .stdout(expected.clone());
+            .stdout(expected);
     }
 }
 
@@ -190,7 +186,7 @@ mod v_args {
                 .arg(String::from("-vx=1"))
                 .arg(prog.clone())
                 .assert()
-                .stdout(expected.clone());
+                .stdout(expected);
         }
     }
 
@@ -205,7 +201,7 @@ mod v_args {
                 .arg(String::from("-vx=var-with-dash"))
                 .arg(prog.clone())
                 .assert()
-                .stdout(expected.clone());
+                .stdout(expected);
         }
     }
 
@@ -221,7 +217,7 @@ mod v_args {
                 .arg(String::from("-vy=1+1"))
                 .arg(prog.clone())
                 .assert()
-                .stdout(expected.clone());
+                .stdout(expected);
         }
     }
 }
@@ -258,7 +254,7 @@ fn iter_across_functions() {
     let data_fname = tmpdir.path().join("numbers");
     {
         let mut file = File::create(data_fname.clone()).unwrap();
-        file.write(input.as_bytes()).unwrap();
+        file.write_all(input.as_bytes()).unwrap();
     }
     let prog: String = r#"function update(h, k, v) {
             h[k] += v*v+v;
@@ -384,15 +380,15 @@ fn dont_reorder_files_with_f() {
     let f2 = tmp.path().join("f2");
     File::create(f1.clone())
         .unwrap()
-        .write(test_data_1.as_bytes())
+        .write_all(test_data_1.as_bytes())
         .unwrap();
     File::create(f2.clone())
         .unwrap()
-        .write(test_data_2.as_bytes())
+        .write_all(test_data_2.as_bytes())
         .unwrap();
     File::create(prog_file.clone())
         .unwrap()
-        .write(prog.as_bytes())
+        .write_all(prog.as_bytes())
         .unwrap();
     for backend_arg in BACKEND_ARGS {
         Command::cargo_bin("frawk")
@@ -406,8 +402,8 @@ fn dont_reorder_files_with_f() {
     }
 }
 
-fn fname_to_string(path: &std::path::PathBuf) -> String {
-    path.clone().into_os_string().into_string().unwrap()
+fn fname_to_string(path: &std::path::Path) -> String {
+    path.to_owned().into_os_string().into_string().unwrap()
 }
 
 fn file_from_string(
@@ -418,7 +414,7 @@ fn file_from_string(
     let file = tmp.path().join(name.as_ref());
     File::create(file.clone())
         .unwrap()
-        .write(s.as_ref().as_bytes())
+        .write_all(s.as_ref().as_bytes())
         .unwrap();
     (tmp, file)
 }

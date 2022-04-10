@@ -104,7 +104,7 @@ impl FieldSet {
         FieldSet(0)
     }
     pub fn union(&mut self, other: &FieldSet) {
-        self.0 = self.0 | other.0;
+        self.0 |= other.0;
     }
 
     /// Return a safe upper bound on the maximum integer value column represented by this set.

@@ -391,10 +391,19 @@ impl<'a> Str<'a> {
     unsafe fn rep(&self) -> &StrRep<'a> {
         &*self.0.get()
     }
+
+    // We have rep_mut() for the same reasons that Rust has UnsafeCell: to allow
+    // for otpimizations on Str that leverage interipr mutability.
+    //
+    // Callers _must_ ensure they are not aliasing mutable references this way.
+    // In practice this is a murky question given the fact that all strings are
+    // "logically" immutable and reference counted.
+    #[allow(clippy::mut_from_ref)]
     unsafe fn rep_mut(&self) -> &mut StrRep<'a> {
         &mut *self.0.get()
     }
-    pub unsafe fn drop_with_tag(&self, tag: u64) {
+
+    pub(crate) unsafe fn drop_with_tag(&self, tag: u64) {
         self.rep_mut().drop_with_tag(tag)
     }
     // We rely on string literals having trivial drops for LLVM codegen, as they may be dropped
@@ -462,9 +471,9 @@ impl<'a> Str<'a> {
         }
         let mut buf = DynamicBufHeap::new(size);
         for (i, inp) in sv.into_iter().enumerate() {
-            buf.write(inp).unwrap();
+            buf.write_all(inp).unwrap();
             if i < inps.len() - 1 {
-                buf.write(sep_bytes).unwrap();
+                buf.write_all(sep_bytes).unwrap();
             }
         }
         unsafe { buf.into_str() }
@@ -522,9 +531,9 @@ impl<'a> Str<'a> {
             subst.with_bytes(|subst| {
                 if let Some(m) = pat.find(s) {
                     let mut buf = DynamicBuf::new(s.len());
-                    buf.write(&s[0..m.start()]).unwrap();
+                    buf.write_all(&s[0..m.start()]).unwrap();
                     process_match(&s[m.start()..m.end()], subst, &mut buf).unwrap();
-                    buf.write(&s[m.end()..s.len()]).unwrap();
+                    buf.write_all(&s[m.end()..s.len()]).unwrap();
                     (unsafe { buf.into_str() }, true)
                 } else {
                     (self.clone(), false)
@@ -540,7 +549,7 @@ impl<'a> Str<'a> {
                 let mut prev = 0;
                 let mut count = 0;
                 for m in pat.find_iter(s) {
-                    buf.write(&s[prev..m.start()]).unwrap();
+                    buf.write_all(&s[prev..m.start()]).unwrap();
                     process_match(&s[m.start()..m.end()], subst, &mut buf).unwrap();
                     prev = m.end();
                     count += 1;
@@ -548,7 +557,7 @@ impl<'a> Str<'a> {
                 if count == 0 {
                     (self.clone(), count)
                 } else {
-                    buf.write(&s[prev..s.len()]).unwrap();
+                    buf.write_all(&s[prev..s.len()]).unwrap();
                     (unsafe { buf.into_str() }, count)
                 }
             })
@@ -574,8 +583,8 @@ impl<'a> Str<'a> {
         if new_len <= MAX_INLINE_SIZE {
             let mut b = DynamicBuf::new(0);
             unsafe {
-                b.write(&*left.get_bytes()).unwrap();
-                b.write(&*right.get_bytes()).unwrap();
+                b.write_all(&*left.get_bytes()).unwrap();
+                b.write_all(&*right.get_bytes()).unwrap();
                 b.into_str()
             }
         } else {
@@ -676,7 +685,7 @@ impl<'a> Str<'a> {
             // just called `force`
             debug_assert_eq!(tag, StrTag::Boxed);
             return Str::from_rep(rep.view_as(|b: &Boxed| {
-                let buf = Buf::read_from_raw(b.buf.as_ptr().offset(from as isize), new_len);
+                let buf = Buf::read_from_raw(b.buf.as_ptr().add(from), new_len);
                 Boxed {
                     len: new_len as u64,
                     buf,
@@ -722,6 +731,7 @@ impl<'a> Str<'a> {
     //         If we add force to a public API (e.g. for garbage collection), we'll need to ensure
     //         that we don't call with_bytes around it, or clone the string before forcing.
 
+    #[allow(clippy::never_loop)]
     unsafe fn force(&self) {
         let (tag, len) = {
             let rep = self.rep_mut();
@@ -1095,8 +1105,8 @@ impl Write for DynamicBuf {
                 let new_len = sv.len() + buf.len();
                 if sv.len() + buf.len() > MAX_INLINE_SIZE {
                     let mut heap = DynamicBufHeap::new(new_len);
-                    heap.write(&sv[..]).unwrap();
-                    heap.write(buf).unwrap();
+                    heap.write_all(&sv[..]).unwrap();
+                    heap.write_all(buf).unwrap();
                     *self = DynamicBuf::Heap(heap);
                 } else {
                     sv.extend(buf.iter().cloned());
@@ -1276,7 +1286,7 @@ impl Buf {
 /// Helper function for `subst_first` and `subst_all`: handles '&' syntax.
 fn process_match(matched: &[u8], subst: &[u8], w: &mut impl Write) -> io::Result<()> {
     if memchr::memchr(b'&', subst).is_none() {
-        w.write(subst).unwrap();
+        w.write_all(subst).unwrap();
         return Ok(());
     }
     let mut start = 0;
@@ -1285,11 +1295,11 @@ fn process_match(matched: &[u8], subst: &[u8], w: &mut impl Write) -> io::Result
         match b {
             b'&' => {
                 if escaped {
-                    w.write(&subst[start..i - 1])?;
-                    w.write(&[b'&'])?;
+                    w.write_all(&subst[start..i - 1])?;
+                    w.write_all(&[b'&'])?;
                 } else {
-                    w.write(&subst[start..i])?;
-                    w.write(matched)?;
+                    w.write_all(&subst[start..i])?;
+                    w.write_all(matched)?;
                 }
                 start = i + 1;
             }
@@ -1298,14 +1308,14 @@ fn process_match(matched: &[u8], subst: &[u8], w: &mut impl Write) -> io::Result
                     escaped = true;
                     continue;
                 }
-                w.write(&subst[start..i])?;
+                w.write_all(&subst[start..i])?;
                 start = i + 1;
             }
             _ => {}
         }
         escaped = false;
     }
-    w.write(&subst[start..])?;
+    w.write_all(&subst[start..])?;
     Ok(())
 }
 
@@ -1549,7 +1559,7 @@ mod bench {
         // Write 4KiB of As
         let mut dbuf = DynamicBuf::new(4096);
         let bs: Vec<u8> = (0..4096).map(|_| b'A').collect();
-        dbuf.write(&bs[..]).unwrap();
+        dbuf.write_all(&bs[..]).unwrap();
         let s = unsafe { dbuf.into_str() };
         let mut i = 0;
         let len = 4096;

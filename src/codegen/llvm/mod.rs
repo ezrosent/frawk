@@ -272,19 +272,19 @@ impl<'a> CodeGenerator for View<'a> {
                     // LLVM gives you `O` and `U` variants for float comparisons that "fail true"
                     // or "fail false" if either operand is NaN. `O` is  what matches the bytecode
                     // interpreter, but we may want to switch this around at some point.
-                    EQ => FPred::LLVMRealOEQ,
-                    LT => FPred::LLVMRealOLT,
-                    LTE => FPred::LLVMRealOLE,
-                    GT => FPred::LLVMRealOGT,
-                    GTE => FPred::LLVMRealOGE,
+                    Eq => FPred::LLVMRealOEQ,
+                    Lt => FPred::LLVMRealOLT,
+                    Lte => FPred::LLVMRealOLE,
+                    Gt => FPred::LLVMRealOGT,
+                    Gte => FPred::LLVMRealOGE,
                 })
             } else {
                 Either::Left(match cmp {
-                    EQ => Pred::LLVMIntEQ,
-                    LT => Pred::LLVMIntSLT,
-                    LTE => Pred::LLVMIntSLE,
-                    GT => Pred::LLVMIntSGT,
-                    GTE => Pred::LLVMIntSGE,
+                    Eq => Pred::LLVMIntEQ,
+                    Lt => Pred::LLVMIntSLT,
+                    Lte => Pred::LLVMIntSLE,
+                    Gt => Pred::LLVMIntSGT,
+                    Gte => Pred::LLVMIntSGE,
                 })
             }
         }
@@ -832,7 +832,6 @@ impl<'a, 'b> Generator<'a, 'b> {
     }
 
     unsafe fn build_map(&mut self) {
-        use mem::size_of;
         let make = |ty| TypeRef {
             base: ty,
             ptr: LLVMPointerType(ty, 0),
@@ -842,7 +841,7 @@ impl<'a, 'b> Generator<'a, 'b> {
             Ty::Int,
             make(LLVMIntTypeInContext(
                 self.ctx,
-                (size_of::<runtime::Int>() * 8) as libc::c_uint,
+                runtime::Int::BITS as libc::c_uint,
             )),
         );
         self.type_map

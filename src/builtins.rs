@@ -503,6 +503,9 @@ impl Function {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+// We may relax this in the future, but these names are all-caps here to match
+// their names in Awk.
+#[allow(clippy::upper_case_acronyms)]
 pub(crate) enum Variable {
     ARGC = 0,
     ARGV = 1,

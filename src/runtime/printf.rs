@@ -137,10 +137,7 @@ impl Default for FormatSpec {
 }
 
 fn is_spec(c: u8) -> bool {
-    match c {
-        b'f' | b'c' | b'd' | b'e' | b'g' | b'o' | b's' | b'x' => true,
-        _ => false,
-    }
+    matches!(c, b'f' | b'c' | b'd' | b'e' | b'g' | b'o' | b's' | b'x')
 }
 
 fn process_spec(mut w: impl Write, fspec: &mut FormatSpec, arg: &FormatArg) -> Result<()> {
@@ -270,7 +267,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &[u8], mut args: &[FormatArg]) -> 
     let mut state = next_state!(iter.next());
     let default = FormatArg::S(Default::default());
     let mut next_arg = || {
-        if args.len() == 0 {
+        if args.is_empty() {
             &default
         } else {
             let res = &args[0];
@@ -282,7 +279,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &[u8], mut args: &[FormatArg]) -> 
     'outer: loop {
         match state {
             Raw(start) => {
-                while let Some((ix, ch)) = iter.next() {
+                for (ix, ch) in iter.by_ref() {
                     if ch == b'%' {
                         write_bytes(&mut w, &spec[start..ix])?;
                         state = Format(ix);
@@ -368,7 +365,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &[u8], mut args: &[FormatArg]) -> 
                             }
                             buf.clear();
                             next = None;
-                            while let Some((ix, ch)) = iter.next() {
+                            for (ix, ch) in iter.by_ref() {
                                 if !matches!(ch, b'0'..=b'9') {
                                     next = Some((ix, ch));
                                     break;
