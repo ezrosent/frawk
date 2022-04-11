@@ -112,6 +112,7 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         [ReadOnly] substr_index(str_ref_ty, str_ref_ty) -> int_ty;
         subst_first(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
         subst_all(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> int_ty;
+        gen_subst(rt_ty, str_ref_ty, str_ref_ty, str_ref_ty, str_ref_ty) -> str_ty;
         escape_csv(str_ref_ty) -> str_ty;
         escape_tsv(str_ref_ty) -> str_ty;
         substr(str_ref_ty, int_ty, int_ty) -> str_ty;
@@ -831,6 +832,28 @@ pub(crate) unsafe extern "C" fn subst_all(
     );
     *in_s = subbed;
     nsubs
+}
+
+pub(crate) unsafe extern "C" fn gen_subst(
+    runtime: *mut c_void,
+    pat: *mut U128,
+    s: *mut U128,
+    how: *mut U128,
+    in_s: *mut U128,
+) -> U128 {
+    let runtime = &mut *(runtime as *mut Runtime);
+    let s = &mut *(s as *mut Str);
+    let pat = &*(pat as *mut Str);
+    let how = &*(how as *mut Str);
+    let in_s = &mut *(in_s as *mut Str);
+    let subbed = try_abort!(
+        runtime,
+        runtime
+            .core
+            .regexes
+            .with_regex(pat, |re| in_s.gen_subst_dynamic(re, s, how))
+    );
+    mem::transmute::<Str, U128>(subbed)
 }
 
 pub(crate) unsafe extern "C" fn escape_csv(s: *mut U128) -> U128 {

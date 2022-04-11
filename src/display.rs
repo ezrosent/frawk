@@ -171,6 +171,7 @@ impl Display for Function {
             SubstrIndex => write!(f, "index"),
             Sub => write!(f, "sub"),
             GSub => write!(f, "gsub"),
+            GenSub => write!(f, "gensub"),
             EscapeCSV => write!(f, "escape_csv"),
             EscapeTSV => write!(f, "escape_tsv"),
             JoinCSV => write!(f, "join_csv"),

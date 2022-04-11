@@ -1399,6 +1399,38 @@ this as well"#
         @input "6.18163e-27\n1.80782e-40\n2.38296e-05\n1.92843e-09\n7.37465e-39\n"
     );
 
+    test_program!(
+        gensub_basic,
+        r#"{$0 = gensub("(Hello), ([a-zA-Z]+)", "\\2", "g", $0)}; {print}"#,
+        "Joe\nNick\nBye, Joe\nRick\nBye, Rich\n",
+        @input "Hello, Joe\nHello, Nick\nBye, Joe\nHello, Rick\nBye, Rich\n"
+    );
+
+    test_program!(
+        gensub_first,
+        r#"BEGIN { v = "1234"; v = gensub("([0-9])([0-9])", "\\2", "1", v); print v}"#,
+        "234\n"
+    );
+
+    test_program!(
+        gensub_second,
+        r#"BEGIN { v = "1234"; v = gensub("([0-9])([0-9])", "\\2", "2", v); print v}"#,
+        "124\n"
+    );
+
+    test_program!(
+        gensub_third, // this matches nothing
+        r#"BEGIN { v = "1234"; v = gensub("([0-9])([0-9])", "\\2", "3", v); print v}"#,
+        "1234\n"
+    );
+
+    test_program!(
+        gensub_on_input, // this matches nothing
+        r#"{print gensub("a", "b", "g")}"#,
+        "bbobb\n",
+        @input "aboba\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 }
 

@@ -254,6 +254,12 @@ pub(crate) mod boilerplate {
                 f(dstin.into(), Some(x.into()));
                 f(dstin.into(), Some(y.into()));
             }
+            GenSubDynamic(dst, pat, s, how, in_s) => {
+                f(dst.into(), Some(pat.into()));
+                f(dst.into(), Some(s.into()));
+                f(dst.into(), Some(how.into()));
+                f(dst.into(), Some(in_s.into()));
+            }
             EscapeTSV(dst, src) | EscapeCSV(dst, src) => f(dst.into(), Some(src.into())),
             Substr(dst, x, y, z) => {
                 f(dst.into(), Some(x.into()));

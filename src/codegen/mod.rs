@@ -729,6 +729,16 @@ pub(crate) trait CodeGenerator: Backend {
                     self.call_intrinsic(intrinsic!(subst_all), &mut [rt, patv, sv, in_sv])?;
                 self.bind_val(res.reflect(), resv)
             }
+            GenSubDynamic(res, pat, s, how, in_s) => {
+                let rt = self.runtime_val();
+                let patv = self.get_val(pat.reflect())?;
+                let sv = self.get_val(s.reflect())?;
+                let howv = self.get_val(how.reflect())?;
+                let in_sv = self.get_val(in_s.reflect())?;
+                let resv =
+                    self.call_intrinsic(intrinsic!(gen_subst), &mut [rt, patv, sv, howv, in_sv])?;
+                self.bind_val(res.reflect(), resv)
+            }
             EscapeCSV(dst, s) => self.unop(intrinsic!(escape_csv), dst, s),
             EscapeTSV(dst, s) => self.unop(intrinsic!(escape_tsv), dst, s),
             Substr(res, base, l, r) => {
