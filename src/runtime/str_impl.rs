@@ -1048,7 +1048,7 @@ impl Write for DynamicBufHeap {
                 self.realloc(new_cap);
                 ptr::copy(
                     buf.as_ptr(),
-                    self.data.as_mut_ptr().offset(self.write_head as isize),
+                    self.data.as_mut_ptr().add(self.write_head),
                     buf.len(),
                 );
             // NB: even after copying, there may be uninitialized memory at the tail of the
@@ -1058,7 +1058,7 @@ impl Write for DynamicBufHeap {
             } else {
                 ptr::copy(
                     buf.as_ptr(),
-                    self.data.as_mut_ptr().offset(self.write_head as isize),
+                    self.data.as_mut_ptr().add(self.write_head),
                     buf.len(),
                 )
             }

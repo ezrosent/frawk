@@ -304,7 +304,7 @@ fn dump_bytecode(prog: &str, raw: &RawPrelude) -> String {
 fn main() {
     #[allow(unused_mut)]
     let mut app = Command::new("frawk")
-        .version("0.4.5")
+        .version("0.4.6")
         .author("Eli R.")
         .about("frawk is a pattern scanning and (semi-structured) text processing language")
         .arg(Arg::new("program-file")

@@ -959,7 +959,7 @@ mod tests {
         }
 
         let mut g = got.lock().unwrap();
-        g.sort();
+        g.sort_unstable();
 
         assert_eq!(*g, (0..60).collect::<Vec<_>>());
     }
