@@ -569,9 +569,14 @@ impl<'a> Str<'a> {
             if !how.is_empty() && (how[0] == b'g' || how[0] == b'G') {
                 self.gen_subst_all(pat, subst)
             } else {
-                // TODO: handle the case with empty "how" and case with gen_subst_n (need to parse)
-                // is there a consistent way to handle errors? or we just abort?
-                let which: Int = std::str::from_utf8(how).unwrap().parse().unwrap();
+                fn parse_int(bytes: &[u8]) -> Option<Int> {
+                    Some(std::str::from_utf8(bytes).ok()?.parse().ok()?)
+                }
+
+                let which = parse_int(how).unwrap_or_else(|| {
+                    eprintln_ignore!("gensub warning: Could not parse \"how\" argument as either 'g'/'G' or a number; Treating as '1'");
+                    1
+                });
                 let which = std::cmp::max(1, which);
                 self.gen_subst_n(pat, subst, which)
             }
@@ -1398,7 +1403,7 @@ fn process_match(matched: &[u8], subst: &[u8], w: &mut impl Write) -> io::Result
     Ok(())
 }
 
-/// Helper function for `subst_gen` function; handles the
+/// Helper function for `subst_gen` function; handles the syntax for &, \0, \1, etc...
 fn process_match_gen(matched: Captures, subst: &[u8], w: &mut impl Write) -> io::Result<()> {
     let mut start = 0;
     let mut escaped = false;
@@ -1408,8 +1413,15 @@ fn process_match_gen(matched: Captures, subst: &[u8], w: &mut impl Write) -> io:
                 if escaped {
                     w.write_all(&subst[start..i - 1])?;
                     let n = b - b'0';
-                    let match_ = matched.get(n as usize).unwrap(); // TODO: how to handle errors here?
-                    w.write_all(match_.as_bytes())?;
+                    match matched.get(n as usize) {
+                        Some(match_) => w.write_all(match_.as_bytes())?,
+                        None => eprintln_ignore!(
+                            // no match - no substitution (same as gawk); warning is nice though
+                            "Couldn't substitute match {}, we have only {}",
+                            n,
+                            matched.len()
+                        ),
+                    }
                 } else {
                     w.write_all(&subst[start..i])?;
                     w.write_all(&[b])?;
