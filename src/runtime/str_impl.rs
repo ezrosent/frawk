@@ -7,7 +7,7 @@
 ///
 /// TODO explain more about what is going on here.
 use crate::pushdown::FieldSet;
-use crate::runtime::{Float, Int};
+use crate::runtime::{strtoi, Float, Int};
 
 use regex::bytes::{Captures, Regex};
 use smallvec::SmallVec;
@@ -569,14 +569,8 @@ impl<'a> Str<'a> {
             if !how.is_empty() && (how[0] == b'g' || how[0] == b'G') {
                 self.gen_subst_all(pat, subst)
             } else {
-                fn parse_int(bytes: &[u8]) -> Option<Int> {
-                    Some(std::str::from_utf8(bytes).ok()?.parse().ok()?)
-                }
-
-                let which = parse_int(how).unwrap_or_else(|| {
-                    eprintln_ignore!("gensub warning: Could not parse \"how\" argument as either 'g'/'G' or a number; Treating as '1'");
-                    1
-                });
+                // this silently ignores strings that cannot be parsed and treats them as "1"
+                let which = strtoi(how);
                 let which = std::cmp::max(1, which);
                 self.gen_subst_n(pat, subst, which)
             }
