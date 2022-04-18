@@ -566,7 +566,7 @@ impl<'a> Str<'a> {
 
     pub fn gen_subst_dynamic(&self, pat: &Regex, subst: &Str<'a>, how: &Str<'a>) -> Str<'a> {
         how.with_bytes(|how| {
-            if !how.is_empty() && (how[0] == b'g' || how[0] == b'G') {
+            if !how.is_empty() && matches!(how[0], b'g' | b'G') {
                 self.gen_subst_all(pat, subst)
             } else {
                 // this silently ignores strings that cannot be parsed and treats them as "1"

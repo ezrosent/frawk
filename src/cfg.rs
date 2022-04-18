@@ -1739,7 +1739,7 @@ where
                 }
 
                 if builtins::Function::GenSub == bi && args.len() == 3 {
-                    // If a third argument isn't provided, we assume you mean $0.
+                    // If a fourth argument isn't provided, we assume you mean $0.
                     let e = &Expr::Unop(ast::Unop::Column, &Expr::ILit(0));
                     let (next, v) = self.convert_val(e, open)?;
                     open = next;
