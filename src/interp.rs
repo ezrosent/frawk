@@ -883,6 +883,18 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         *index_mut(&mut self.strs, in_s) = subbed;
                         *index_mut(&mut self.ints, res) = subs_made;
                     }
+                    GenSubDynamic(res, pat, s, how, in_s) => {
+                        let subbed = {
+                            let pat = index(&self.strs, pat);
+                            let s = index(&self.strs, s);
+                            let how = index(&self.strs, how);
+                            let in_s = index(&self.strs, in_s);
+                            self.core
+                                .regexes
+                                .with_regex(pat, |re| in_s.gen_subst_dynamic(re, s, how))?
+                        };
+                        *index_mut(&mut self.strs, res) = subbed;
+                    }
                     EscapeCSV(res, s) => {
                         *index_mut(&mut self.strs, res) = {
                             let s = index(&self.strs, s);

@@ -7,9 +7,9 @@
 ///
 /// TODO explain more about what is going on here.
 use crate::pushdown::FieldSet;
-use crate::runtime::{Float, Int};
+use crate::runtime::{strtoi, Float, Int};
 
-use regex::bytes::Regex;
+use regex::bytes::{Captures, Regex};
 use smallvec::SmallVec;
 
 use std::alloc::{alloc_zeroed, dealloc, realloc, Layout};
@@ -559,6 +559,84 @@ impl<'a> Str<'a> {
                 } else {
                     buf.write_all(&s[prev..s.len()]).unwrap();
                     (unsafe { buf.into_str() }, count)
+                }
+            })
+        })
+    }
+
+    pub fn gen_subst_dynamic(&self, pat: &Regex, subst: &Str<'a>, how: &Str<'a>) -> Str<'a> {
+        how.with_bytes(|how| {
+            if !how.is_empty() && matches!(how[0], b'g' | b'G') {
+                self.gen_subst_all(pat, subst)
+            } else {
+                // this silently ignores strings that cannot be parsed and treats them as "1"
+                let which = strtoi(how);
+                let which = std::cmp::max(1, which);
+                self.gen_subst_n(pat, subst, which)
+            }
+        })
+    }
+
+    pub fn gen_subst_all(&self, pat: &Regex, subst: &Str<'a>) -> Str<'a> {
+        self.with_bytes(|s| {
+            subst.with_bytes(|subst| {
+                let mut buf = DynamicBuf::new(0);
+                let mut prev = 0;
+                let mut count = 0;
+                for c in pat.captures_iter(s) {
+                    let m = c.get(0).unwrap();
+                    buf.write_all(&s[prev..m.start()]).unwrap();
+                    process_match_gen(c, subst, &mut buf).unwrap();
+                    prev = m.end();
+                    count += 1;
+                }
+                if count == 0 {
+                    self.clone()
+                } else {
+                    buf.write_all(&s[prev..s.len()]).unwrap();
+                    unsafe { buf.into_str() }
+                }
+            })
+        })
+    }
+
+    /// Handle the general substitution for a case of integer value in "how"
+    /// Will replace match number `which` (indexed from 1)
+    pub fn gen_subst_n(&self, pat: &Regex, subst: &Str<'a>, which: Int) -> Str<'a> {
+        self.with_bytes(|s| {
+            subst.with_bytes(|subst| {
+                // skip first
+                let start = if which > 1 {
+                    let start = pat
+                        .find_iter(s)
+                        .skip(
+                            which as usize - 2, // 1 to convert from 1-based to 0-based
+                                                // 1 to take the last "next" into account
+                        )
+                        .next();
+                    if let Some(start) = start {
+                        start.end()
+                    } else {
+                        // not enough matches, so return the string verbatim
+                        return self.clone();
+                    }
+                } else {
+                    // no need to skip anything
+                    0
+                };
+
+                if let Some(c) = pat.captures(&s[start..]) {
+                    let m = c.get(0).unwrap();
+                    let end = start + m.end();
+                    let start = start + m.start();
+
+                    let mut buf = DynamicBuf::new(s.len());
+                    buf.write_all(&s[0..start]).unwrap();
+                    process_match_gen(c, subst, &mut buf).unwrap();
+                    buf.write_all(&s[end..]).unwrap();
+                    unsafe { buf.into_str() }
+                } else {
+                    self.clone()
                 }
             })
         })
@@ -1319,6 +1397,57 @@ fn process_match(matched: &[u8], subst: &[u8], w: &mut impl Write) -> io::Result
     Ok(())
 }
 
+/// Helper function for `subst_gen` function; handles the syntax for &, \0, \1, etc...
+fn process_match_gen(matched: Captures, subst: &[u8], w: &mut impl Write) -> io::Result<()> {
+    let mut start = 0;
+    let mut escaped = false;
+    for (i, b) in subst.iter().cloned().enumerate() {
+        match b {
+            b'0'..=b'9' => {
+                if escaped {
+                    w.write_all(&subst[start..i - 1])?;
+                    let n = b - b'0';
+                    match matched.get(n as usize) {
+                        Some(match_) => w.write_all(match_.as_bytes())?,
+                        None => eprintln_ignore!(
+                            // no match - no substitution (same as gawk); warning is nice though
+                            "Couldn't substitute match {}, we have only {}",
+                            n,
+                            matched.len()
+                        ),
+                    }
+                } else {
+                    w.write_all(&subst[start..i])?;
+                    w.write_all(&[b])?;
+                }
+                start = i + 1;
+            }
+            b'&' => {
+                if escaped {
+                    w.write_all(&subst[start..i - 1])?;
+                    w.write_all(&[b'&'])?;
+                } else {
+                    w.write_all(&subst[start..i])?;
+                    w.write_all(matched.get(0).unwrap().as_bytes())?;
+                }
+                start = i + 1;
+            }
+            b'\\' => {
+                if !escaped {
+                    escaped = true;
+                    continue;
+                }
+                w.write_all(&subst[start..i])?;
+                start = i + 1;
+            }
+            _ => {}
+        }
+        escaped = false;
+    }
+    w.write_all(&subst[start..])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1473,6 +1602,36 @@ And this is the second part"#
         let (s6, subbed) = s1.subst_first(&re1, &s5);
         s6.with_bytes(|bs| assert_eq!(bs, b"hz&hbhc"));
         assert!(subbed);
+    }
+
+    #[test]
+    fn gen_subst_basic() {
+        let s1: Str = "String number one".into();
+        let s2: Str = "m".into();
+        let re1 = Regex::new("n").unwrap();
+        let s3 = s1.gen_subst_dynamic(&re1, &s2, &"g".into());
+        s3.with_bytes(|bs| assert_eq!(bs, b"Strimg mumber ome"));
+
+        let re2 = Regex::new("xxyz").unwrap();
+        let s4 = s3.gen_subst_dynamic(&re2, &s2, &"g".into());
+        assert_eq!(s3, s4);
+
+        let empty = Str::default();
+        let s5 = empty.gen_subst_dynamic(&re1, &s2, &"g".into());
+        assert_eq!(empty, s5);
+
+        let s6: Str = "xxyz substituted into another xxyz".into();
+        let s7 = s6.gen_subst_dynamic(&re2, &s1, &"1".into());
+        s7.with_bytes(|bs| assert_eq!(bs, b"String number one substituted into another xxyz"));
+    }
+
+    #[test]
+    fn gen_subst() {
+        let s1: Str = "abc def".into();
+        let s2: Str = "\\2 \\1 \\0".into();
+        let re1 = Regex::new("(.+) (.+)").unwrap();
+        let s3 = s1.gen_subst_dynamic(&re1, &s2, &"g".into());
+        s3.with_bytes(|bs| assert_eq!(bs, b"def abc abc def"));
     }
 }
 

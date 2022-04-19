@@ -35,6 +35,7 @@ pub enum Function {
     SubstrIndex,
     Sub,
     GSub,
+    GenSub,
     EscapeCSV,
     EscapeTSV,
     JoinCols,
@@ -203,6 +204,7 @@ static_map!(
     ["match", Function::Match],
     ["sub", Function::Sub],
     ["gsub", Function::GSub],
+    ["gensub", Function::GenSub],
     ["substr", Function::Substr],
     ["int", Function::ToInt],
     ["hex", Function::HexToInt],
@@ -298,6 +300,7 @@ impl Function {
                 ctx.nw.add_dep(v, arr, Constraint::ValIn(()));
                 ctx.nw.add_dep(arr, v, Constraint::Val(()));
             }
+            // TODO: GenSub?
             Function::Sub | Function::GSub => {
                 let out_str = args[2];
                 let str_const = ctx.constant(Scalar(BaseTy::Str).abs());
@@ -425,6 +428,7 @@ impl Function {
             Length => (smallvec![incoming[0]], Int),
             Close => (smallvec![Str], Str),
             Sub | GSub => (smallvec![Str, Str, Str], Int),
+            GenSub => (smallvec![Str, Str, Str, Str], Str),
             ToUpper | ToLower | EscapeCSV | EscapeTSV => (smallvec![Str], Str),
             Substr => (smallvec![Str, Int, Int], Str),
             Match => (smallvec![Str, Str], Int),
@@ -456,6 +460,7 @@ impl Function {
             SetFI | SubstrIndex | Match | Setcol | Binop(_) => 2,
             JoinCSV | JoinTSV | Delete | Contains => 2,
             IncMap | JoinCols | Substr | Sub | GSub | Split => 3,
+            GenSub => 4,
         })
     }
 
@@ -493,7 +498,7 @@ impl Function {
             | ReadErrCmd | ReadErrStdin | Contains | Delete | Match | Sub | GSub | ToInt
             | System | HexToInt => Ok(Scalar(BaseTy::Int).abs()),
             ToUpper | ToLower | JoinCSV | JoinTSV | JoinCols | EscapeCSV | EscapeTSV | Substr
-            | Unop(Column) | Binop(Concat) | Nextline | NextlineCmd | NextlineStdin => {
+            | Unop(Column) | Binop(Concat) | Nextline | NextlineCmd | NextlineStdin | GenSub => {
                 Ok(Scalar(BaseTy::Str).abs())
             }
             IncMap => Ok(step_arith(&types::val_of(&args[0])?, &args[2])),

@@ -133,6 +133,13 @@ pub(crate) enum Instr<'a> {
         /*for*/ Reg<Str<'a>>,
         /*in*/ Reg<Str<'a>>,
     ),
+    GenSubDynamic(
+        Reg<Str<'a>>,
+        /*pat*/ Reg<Str<'a>>,
+        /*for*/ Reg<Str<'a>>,
+        /*how*/ Reg<Str<'a>>,
+        /*in*/ Reg<Str<'a>>,
+    ),
     EscapeCSV(Reg<Str<'a>>, Reg<Str<'a>>),
     EscapeTSV(Reg<Str<'a>>, Reg<Str<'a>>),
     Substr(Reg<Str<'a>>, Reg<Str<'a>>, Reg<Int>, Reg<Int>),
@@ -556,6 +563,13 @@ impl<'a> Instr<'a> {
                 res.accum(&mut f);
                 pat.accum(&mut f);
                 s.accum(&mut f);
+                in_s.accum(&mut f);
+            }
+            GenSubDynamic(res, pat, s, how, in_s) => {
+                res.accum(&mut f);
+                pat.accum(&mut f);
+                s.accum(&mut f);
+                how.accum(&mut f);
                 in_s.accum(&mut f);
             }
             EscapeCSV(res, s) | EscapeTSV(res, s) => {

@@ -1505,6 +1505,18 @@ impl<'a, 'b> View<'a, 'b> {
                     conv_regs[2].into(),
                 ))
             }
+            GenSub => {
+                if res_reg != UNUSED {
+                    // TODO: emit specialized versions of GenSub (how to inspect constants?)
+                    self.pushl(LL::GenSubDynamic(
+                        res_reg.into(),
+                        conv_regs[0].into(),
+                        conv_regs[1].into(),
+                        conv_regs[2].into(),
+                        conv_regs[3].into(),
+                    ));
+                }
+            }
             EscapeCSV => {
                 if res_reg != UNUSED {
                     self.pushl(LL::EscapeCSV(res_reg.into(), conv_regs[0].into()))

@@ -1737,6 +1737,14 @@ where
                     }?;
                     return Ok((next, PrimExpr::Val(PrimVal::Var(res))));
                 }
+
+                if builtins::Function::GenSub == bi && args.len() == 3 {
+                    // If a fourth argument isn't provided, we assume you mean $0.
+                    let e = &Expr::Unop(ast::Unop::Column, &Expr::ILit(0));
+                    let (next, v) = self.convert_val(e, open)?;
+                    open = next;
+                    prim_args.push(v);
+                }
                 return Ok((open, PrimExpr::CallBuiltin(bi, prim_args)));
             }
         }
