@@ -341,7 +341,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &[u8], mut args: &[FormatArg]) -> 
                                 buf.push(ch);
                             };
                             next = None;
-                            while let Some((ix, ch)) = iter.next() {
+                            for (ix, ch) in iter.by_ref() {
                                 if !matches!(ch, b'0'..=b'9') {
                                     next = Some((ix, ch));
                                     break;

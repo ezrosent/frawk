@@ -142,7 +142,7 @@ impl<R: Read> RegexSplitter<R> {
                             continue;
                         }
                         Err(_) => {
-                            self.reader.state = ReaderState::ERROR;
+                            self.reader.state = ReaderState::Error;
                             (Str::default(), 0)
                         }
                     };
@@ -163,7 +163,7 @@ impl<R: Read> RegexSplitter<R> {
                             continue;
                         }
                         Err(_) => {
-                            self.reader.state = ReaderState::ERROR;
+                            self.reader.state = ReaderState::Error;
                             (Str::default(), 0)
                         }
                     };
@@ -247,7 +247,7 @@ mod tests {
                     eprintln!("mismatch at index {}:\ngot={:?}\nwant={:?}", i, l, e);
                 }
             }
-            assert!(false, "lines do not match");
+            panic!("lines do not match");
         }
     }
 
@@ -283,7 +283,7 @@ mod tests {
                     eprintln!("mismatch at index {}:\ngot=<{}>\nwant=<{}>", i, l, e);
                 }
             }
-            assert!(false, "number of lines does not match");
+            panic!("number of lines does not match");
         }
     }
 
@@ -324,7 +324,7 @@ mod tests {
                         eprintln!("mismatch at index {}:\ngot=<{}>\nwant=<{}>", i, l, e);
                     }
                 }
-                assert!(false, "number of lines does not match");
+                panic!("number of lines does not match");
             }
         }
     }

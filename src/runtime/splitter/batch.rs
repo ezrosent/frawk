@@ -109,7 +109,7 @@ impl LineReader for CSVReader<Box<dyn ChunkProducer<Chunk = OffsetChunk>>> {
     }
     fn read_state(&self) -> i64 {
         if self.cur_chunk.version != 0 && self.last_len == 0 {
-            ReaderState::EOF as i64
+            ReaderState::Eof as i64
         } else {
             ReaderState::OK as i64
         }
@@ -371,7 +371,7 @@ impl<'a> super::Line<'a> for Line {
 
 impl Line {
     pub fn promote(&mut self) {
-        let partial = mem::replace(&mut self.partial, Str::default());
+        let partial = mem::take(&mut self.partial);
         self.fields.push(partial);
     }
     pub fn promote_null(&mut self) {
@@ -1146,7 +1146,7 @@ mod generic {
         }
         // Do an unbuffered version for the remaining data
         while ix < len_minus_64 {
-            let (fields, nl) = iterate!(buf_ptr.offset(ix as isize));
+            let (fields, nl) = iterate!(buf_ptr.add(ix));
             flatten_bits(field_base_ptr, &mut field_base, ix as u64, fields);
             flatten_bits(newline_base_ptr, &mut newline_base, ix as u64, nl);
             ix += V::INPUT_SIZE;
@@ -1272,7 +1272,7 @@ mod sse2 {
         unsafe fn fill_input(bptr: *const u8) -> Self {
             Impl {
                 lo: _mm_loadu_si128(bptr as *const _),
-                hi: _mm_loadu_si128(bptr.offset(Self::VEC_BYTES as isize) as *const _),
+                hi: _mm_loadu_si128(bptr.add(Self::VEC_BYTES) as *const _),
             }
         }
 
@@ -1334,7 +1334,7 @@ mod avx2 {
         unsafe fn fill_input(bptr: *const u8) -> Self {
             Impl {
                 lo: _mm256_loadu_si256(bptr as *const _),
-                hi: _mm256_loadu_si256(bptr.offset(Self::VEC_BYTES as isize) as *const _),
+                hi: _mm256_loadu_si256(bptr.add(Self::VEC_BYTES) as *const _),
             }
         }
 
@@ -1641,7 +1641,7 @@ where
     }
     fn read_state(&self) -> i64 {
         if self.cur_chunk_version() != 0 && self.last_len == 0 {
-            ReaderState::EOF as i64
+            ReaderState::Eof as i64
         } else {
             ReaderState::OK as i64
         }
@@ -1941,7 +1941,7 @@ fn gallop(slice: &[u64], mut cmp: impl FnMut(u64) -> bool) -> usize {
     // TODO: experiment with doing just one round of the doubling/halving, and then doing a linear
     // search thereafter. Most rows where this matters will have a pretty small number of columns
 
-    return res;
+    res
 }
 
 #[cfg(test)]
@@ -1953,7 +1953,7 @@ mod tests {
     fn smoke_test<V: generic::Vector>() {
         let text: &'static str = r#"This,is,"a line with a quoted, comma",and
 unquoted,commas,"as well, including some long ones", and there we have it.""#;
-        let mut mem: Vec<u8> = text.as_bytes().iter().cloned().collect();
+        let mut mem: Vec<u8> = text.as_bytes().to_vec();
         mem.reserve(32);
         let mut offsets: Offsets = Default::default();
         let (in_quote, in_cr) =
@@ -2059,7 +2059,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
             .split(rs as char)
             .map(|line| {
                 expected_lines.push(Str::from(line));
-                if line.len() == 0 {
+                if line.is_empty() {
                     // For an empty line, Awk semantics are to have 0 fields.
                     Vec::new()
                 } else {
@@ -2281,7 +2281,7 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
                 expected_lines.push(line.into());
                 line.split(|c: char| c.is_ascii_whitespace())
                     // trim of leading and trailing whitespace.
-                    .filter(|x| *x != "")
+                    .filter(|x| !x.is_empty())
                     .map(|x| Str::from(x).unmoor())
                     .collect()
             })

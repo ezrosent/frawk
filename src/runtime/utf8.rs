@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_partial() {
-        let bs: Vec<_> = UTF8.as_bytes().iter().cloned().collect();
+        let bs: Vec<_> = UTF8.as_bytes().to_vec();
         let l = bs.len();
         let full = super::parse_utf8_clipped(&bs[..]).expect("full");
         assert_eq!(UTF8.as_str(), full);
@@ -162,7 +162,7 @@ mod tests {
         assert!(std::str::from_utf8(UTF8.as_bytes()).is_ok());
         assert!(super::is_utf8(UTF8.as_bytes()));
         // Corrupt it some
-        let mut bs: Vec<_> = UTF8.as_bytes().iter().cloned().collect();
+        let mut bs: Vec<_> = UTF8.as_bytes().to_vec();
         let l = bs.len();
         assert!(std::str::from_utf8(&bs[..l - 1]).is_err());
         assert!(!super::is_utf8(&bs[..l - 1]));
@@ -187,9 +187,7 @@ mod tests {
             if between.sample(&mut rng) < utf8_pct {
                 let c = rand::random::<char>();
                 let ix = res.len();
-                for _ in 0..c.len_utf8() {
-                    res.push(0);
-                }
+                res.resize(ix + c.len_utf8(), 0);
                 c.encode_utf8(&mut res[ix..]);
             } else {
                 res.push(ascii.sample(&mut rng))

@@ -526,6 +526,7 @@ impl<'a> Typer<'a> {
         self.main_offset.clone()
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn to_interp<LR: runtime::LineReader>(
         &mut self,
         reader: LR,

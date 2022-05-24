@@ -292,8 +292,8 @@ where
 #[repr(i64)]
 #[derive(PartialEq, Eq, Copy, Clone)]
 pub(crate) enum ReaderState {
-    ERROR = -1,
-    EOF = 0,
+    Error = -1,
+    Eof = 0,
     OK = 1,
 }
 
@@ -369,18 +369,18 @@ impl<R: Read> Reader<R> {
     }
 
     pub(crate) fn is_eof(&self) -> bool {
-        self.end == self.start && self.state == ReaderState::EOF
+        self.end == self.start && self.state == ReaderState::Eof
     }
 
     fn force_eof(&mut self) {
         self.start = self.end;
-        self.state = ReaderState::EOF;
+        self.state = ReaderState::Eof;
     }
 
     fn read_state(&self) -> i64 {
         match self.state {
             ReaderState::OK => self.state as i64,
-            ReaderState::ERROR | ReaderState::EOF => {
+            ReaderState::Error | ReaderState::Eof => {
                 // NB: last_len should really be "bytes consumed"; i.e. it should be the length
                 // of the line including any trimmed characters, and the record separator. I.e.
                 // "empty lines" that are actually in the input should result in a nonzero value
@@ -402,7 +402,7 @@ impl<R: Read> Reader<R> {
     }
 
     fn reset(&mut self) -> Result</*done*/ bool> {
-        if self.state == ReaderState::EOF {
+        if self.state == ReaderState::Eof {
             return Ok(true);
         }
         let (next_buf, next_len, input_len) = self.get_next_buf(self.start)?;
@@ -429,11 +429,7 @@ impl<R: Read> Reader<R> {
 
         // First, append the remaining bytes.
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                self.buf.as_ptr().offset(consume as isize),
-                data.as_mut_ptr(),
-                plen,
-            );
+            std::ptr::copy_nonoverlapping(self.buf.as_ptr().add(consume), data.as_mut_ptr(), plen);
         }
         let mut bytes = &mut data.as_mut_bytes()[..self.chunk_size];
         let bytes_read = plen + read_to_slice(&mut self.inner, &mut bytes[plen..])?;
@@ -466,7 +462,7 @@ impl<R: Read> Reader<R> {
         }
 
         if done {
-            self.state = ReaderState::EOF;
+            self.state = ReaderState::Eof;
         }
         Ok((data, ulen, bytes_read))
     }

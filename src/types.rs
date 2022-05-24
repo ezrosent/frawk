@@ -323,7 +323,7 @@ impl<T: Clone> TVar<T> {
 
 pub(crate) fn val_of(s: &State) -> Result<State> {
     match s {
-        Some(TVar::Map { val, .. }) => Ok(Some(TVar::Scalar(val.clone()))),
+        Some(TVar::Map { val, .. }) => Ok(Some(TVar::Scalar(*val))),
         None => Ok(None),
         Some(TVar::Iter(_)) => err!("attempting to get value out of iterator state"),
         Some(TVar::Scalar(_)) => err!("attempting to get value out of iterator scalar"),
@@ -359,18 +359,12 @@ impl<T> Constraint<T> {
             Constraint::IterValIn(_) => Constraint::IterValIn(s),
             Constraint::IterVal(_) => Constraint::IterVal(s),
             Constraint::Flows(_) => Constraint::Flows(s),
-            Constraint::CallBuiltin(args, f) => Constraint::CallBuiltin(args.clone(), f.clone()),
-            Constraint::CallUDF(nix, args, f) => {
-                Constraint::CallUDF(nix.clone(), args.clone(), f.clone())
-            }
+            Constraint::CallBuiltin(args, f) => Constraint::CallBuiltin(args.clone(), *f),
+            Constraint::CallUDF(nix, args, f) => Constraint::CallUDF(*nix, args.clone(), *f),
         }
     }
     fn is_flow(&self) -> bool {
-        if let Constraint::Flows(_) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Constraint::Flows(_))
     }
 }
 
@@ -381,14 +375,11 @@ impl Constraint<State> {
                 key: None,
                 val: None,
             })),
-            Constraint::KeyIn(Some(TVar::Scalar(k))) => Ok(Some(TVar::Map {
-                key: k.clone(),
-                val: None,
-            })),
+            Constraint::KeyIn(Some(TVar::Scalar(k))) => Ok(Some(TVar::Map { key: *k, val: None })),
             Constraint::KeyIn(op) => err!("Non-scalar KeyIn constraint: {:?}", op),
 
             Constraint::Key(None) => Ok(None),
-            Constraint::Key(Some(TVar::Map { key: s, .. })) => Ok(Some(TVar::Scalar(s.clone()))),
+            Constraint::Key(Some(TVar::Map { key: s, .. })) => Ok(Some(TVar::Scalar(*s))),
             Constraint::Key(op) => {
                 err!("invalid operand for Key constraint: {:?} (must be map)", op)
             }
@@ -397,38 +388,34 @@ impl Constraint<State> {
                 key: None,
                 val: None,
             })),
-            Constraint::ValIn(Some(TVar::Scalar(v))) => Ok(Some(TVar::Map {
-                key: None,
-                val: v.clone(),
-            })),
+            Constraint::ValIn(Some(TVar::Scalar(v))) => Ok(Some(TVar::Map { key: None, val: *v })),
             Constraint::ValIn(op) => err!("Non-scalar ValIn constraint: {:?}", op),
 
             Constraint::Val(None) => Ok(None),
-            Constraint::Val(Some(TVar::Map { val: s, .. })) => Ok(Some(TVar::Scalar(s.clone()))),
+            Constraint::Val(Some(TVar::Map { val: s, .. })) => Ok(Some(TVar::Scalar(*s))),
             Constraint::Val(op) => {
                 err!("invalid operand for Val constraint: {:?} (must be map)", op)
             }
 
             Constraint::IterValIn(None) => Ok(Some(TVar::Iter(None))),
-            Constraint::IterValIn(Some(TVar::Scalar(v))) => Ok(Some(TVar::Iter(v.clone()))),
+            Constraint::IterValIn(Some(TVar::Scalar(v))) => Ok(Some(TVar::Iter(*v))),
             Constraint::IterValIn(op) => err!("Non-scalar IterValIn constraint: {:?}", op),
 
             Constraint::IterVal(None) => Ok(None),
-            Constraint::IterVal(Some(TVar::Iter(s))) => Ok(Some(TVar::Scalar(s.clone()))),
+            Constraint::IterVal(Some(TVar::Iter(s))) => Ok(Some(TVar::Scalar(*s))),
             Constraint::IterVal(op) => err!(
                 "invalid operand for IterVal constraint: {:?} (must be iterator)",
                 op
             ),
 
-            Constraint::Flows(s) => Ok(s.clone()),
+            Constraint::Flows(s) => Ok(*s),
             Constraint::CallBuiltin(args, f) => {
-                let arg_state: SmallVec<State> =
-                    args.iter().map(|ix| tc.nw.read(*ix).clone()).collect();
+                let arg_state: SmallVec<State> = args.iter().map(|ix| *tc.nw.read(*ix)).collect();
                 f.step(&arg_state[..])
             }
             Constraint::CallUDF(nix, args, f) => {
                 let ret_ix = tc.get_function(&tc.func_table[*f as usize], args.clone(), *nix);
-                Ok(tc.nw.read(ret_ix).clone())
+                Ok(*tc.nw.read(ret_ix))
             }
         }
     }
@@ -472,12 +459,12 @@ impl Rule {
             }
         }
         if let Rule::Const(tv) = self {
-            return Ok((tv != prev, tv.clone()));
+            return Ok((tv != prev, *tv));
         }
         if let Rule::AlwaysNotify = self {
             return Ok((true, None));
         }
-        let mut cur = prev.clone();
+        let mut cur = *prev;
         for d in deps.iter().cloned() {
             use TVar::*;
             cur = match (cur, d) {
@@ -802,7 +789,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             let mut walker = self.nw.graph.neighbors_directed(ix, Incoming).detach();
             while let Some((e_ix, node_ix)) = walker.next(&self.nw.graph) {
                 let edge = self.nw.graph.edge_weight(e_ix).unwrap().clone();
-                let node_val = self.nw.graph.node_weight(node_ix).unwrap().cur_val.clone();
+                let node_val = self.nw.graph.node_weight(node_ix).unwrap().cur_val;
                 deps.push(edge.constraint.sub(node_val).eval(self)?);
                 if edge.constraint.is_flow() {
                     dep_indices.push(node_ix);
@@ -868,10 +855,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         }
     }
     pub(crate) fn get_node(&mut self, key: Args<Ident>) -> NodeIx {
-        self.env
-            .entry(key)
-            .or_insert(self.nw.add_rule(Rule::Var))
-            .clone()
+        *self.env.entry(key).or_insert(self.nw.add_rule(Rule::Var))
     }
 
     fn get_function<'a>(
@@ -893,10 +877,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
             arg_nodes.truncate(args.len());
         }
 
-        let arg_states = arg_nodes
-            .iter()
-            .map(|ix| self.nw.read(*ix).clone())
-            .collect();
+        let arg_states = arg_nodes.iter().map(|ix| *self.nw.read(*ix)).collect();
 
         let key = Args {
             id: *ident,
@@ -920,7 +901,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         let mut view = View {
             tc: self,
             frame_id: *ident,
-            frame_args: key.args.clone(),
+            frame_args: key.args,
         };
 
         // Apply the arguments appropriately:
@@ -1123,7 +1104,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
     }
 
     fn is_global(&self, id: &Ident) -> bool {
-        id.is_global(&self.local_globals)
+        id.is_global(self.local_globals)
     }
 
     fn ident_node(&mut self, id: &Ident) -> NodeIx {

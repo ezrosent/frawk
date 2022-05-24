@@ -505,10 +505,7 @@ impl<P: ChunkProducer + 'static> ParallelChunkProducer<P> {
             let mut p = p_factory();
             let mut n_failures = 0;
             loop {
-                let mut chunk = spent_receiver
-                    .try_recv()
-                    .ok()
-                    .unwrap_or_else(P::Chunk::default);
+                let mut chunk = spent_receiver.try_recv().ok().unwrap_or_default();
                 let chunk_res = p.get_chunk(&mut chunk);
                 if chunk_res.is_err() || matches!(chunk_res, Ok(true)) {
                     return;
@@ -777,7 +774,7 @@ mod tests {
         type Chunk = ItemChunk<I::Item>;
         fn next_file(&mut self) -> Result<bool> {
             // clear remaining items
-            while let Some(_) = self.iter.next() {}
+            for _ in self.iter.by_ref() {}
             Ok(false)
         }
         fn get_chunk(&mut self, chunk: &mut ItemChunk<I::Item>) -> Result<bool> {

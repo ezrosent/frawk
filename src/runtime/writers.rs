@@ -385,9 +385,9 @@ impl FileHandle {
         let mut done_count = 0;
         for (i, guard) in self.guards.iter().enumerate() {
             match guard.status() {
-                RequestStatus::ONGOING => break,
-                RequestStatus::OK => done_count = i,
-                RequestStatus::ERROR => return Err(self.read_error()),
+                RequestStatus::Ongoing => break,
+                RequestStatus::Ok => done_count = i,
+                RequestStatus::Error => return Err(self.read_error()),
             }
         }
         // TODO: off-by-one, should morally be ..=, but that doesn't handle the empty case.
@@ -400,7 +400,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn guard<'a>(&mut self) -> Box<WriteGuard> {
+    fn guard(&mut self) -> Box<WriteGuard> {
         if let Some(mut g) = self.old_guards.pop() {
             g.activate();
             g
@@ -426,7 +426,7 @@ impl FileHandle {
     }
 
     fn clear_batch(&mut self, upto: Option<usize>) -> Result<()> {
-        if self.cur_batch.data.len() == 0 {
+        if self.cur_batch.data.is_empty() {
             return Ok(());
         }
         let (flush, upto) = if let Some(ix) = upto {
@@ -474,7 +474,7 @@ impl FileHandle {
         self.raw.sender.send(req).unwrap();
         n.1.wait();
         self.guards.clear();
-        if let RequestStatus::ERROR = n.0.read() {
+        if let RequestStatus::Error = n.0.read() {
             Err(self.read_error())
         } else {
             Ok(())
@@ -497,39 +497,39 @@ impl Drop for FileHandle {
 
 /// A basic atomic error code type:
 ///
-/// * 0 => "ONGOING"
-/// * 1 => "OK"
-/// * 2 => "ERROR"
+/// * 0 => "Ongoing"
+/// * 1 => "Ok"
+/// * 2 => "Error"
 ///
 /// ErrorCode is used in write and flush requests to signal if a request is still pending, has
-/// completed successfully, or ran into an error. The "ERROR" case contains no additional error
+/// completed successfully, or ran into an error. The "Error" case contains no additional error
 /// information. FileHandle sets up a separate channel to transmit the full error; encountering an
-/// "ERROR" status is merely a signal to check this location for a more detailed error message.
+/// "Error" status is merely a signal to check this location for a more detailed error message.
 #[derive(Default)]
 struct ErrorCode(AtomicUsize);
 
 #[derive(Debug)]
 enum RequestStatus {
-    ONGOING = 0,
-    OK = 1,
-    ERROR = 2,
+    Ongoing = 0,
+    Ok = 1,
+    Error = 2,
 }
 
 impl ErrorCode {
     fn read(&self) -> RequestStatus {
         match self.0.load(Ordering::Acquire) {
-            0 => RequestStatus::ONGOING,
-            1 => RequestStatus::OK,
-            2 => RequestStatus::ERROR,
+            0 => RequestStatus::Ongoing,
+            1 => RequestStatus::Ok,
+            2 => RequestStatus::Error,
             _ => unreachable!(),
         }
     }
     fn set_ok(&self) {
-        self.0.store(RequestStatus::OK as usize, Ordering::Release);
+        self.0.store(RequestStatus::Ok as usize, Ordering::Release);
     }
     fn set_error(&self) {
         self.0
-            .store(RequestStatus::ERROR as usize, Ordering::Release);
+            .store(RequestStatus::Error as usize, Ordering::Release);
     }
 }
 
@@ -586,7 +586,7 @@ impl Drop for Request {
             Request::Write { status, .. } => {
                 // We have to have set this as either ok, or an error.
                 let status = unsafe { &**status }.read();
-                assert!(!matches!(status, RequestStatus::ONGOING));
+                assert!(!matches!(status, RequestStatus::Ongoing));
             }
             Request::Flush(n) => {
                 assert!(n.1.has_been_notified());
@@ -640,7 +640,7 @@ impl WriteGuard {
 impl Drop for WriteGuard {
     fn drop(&mut self) {
         let status = self.status();
-        assert!(!matches!(status, RequestStatus::ONGOING));
+        assert!(!matches!(status, RequestStatus::Ongoing));
     }
 }
 

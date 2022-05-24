@@ -736,7 +736,7 @@ impl<'a> TryFrom<&'a str> for Variable {
     }
 }
 
-impl<'a> TryFrom<usize> for Variable {
+impl TryFrom<usize> for Variable {
     type Error = (); // error means not found
     fn try_from(value: usize) -> std::result::Result<Variable, ()> {
         use Variable::*;

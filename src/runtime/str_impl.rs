@@ -707,7 +707,7 @@ impl<'a> Str<'a> {
                 .into()
             }),
             StrTag::Literal => rep.view_as(|l: &Literal| {
-                let new_ptr = l.ptr.offset(from as isize);
+                let new_ptr = l.ptr.add(from);
                 let new_len = (to - from) as u64;
                 Literal {
                     len: new_len,
@@ -957,7 +957,7 @@ impl<'a> From<&'a str> for Str<'a> {
 }
 impl<'a> From<&'a [u8]> for Str<'a> {
     fn from(bs: &'a [u8]) -> Str<'a> {
-        if bs.len() == 0 {
+        if bs.is_empty() {
             Default::default()
         } else if bs.len() <= MAX_INLINE_SIZE {
             Str::from_rep(unsafe { Inline::from_raw(bs.as_ptr(), bs.len()).into() })
@@ -984,7 +984,7 @@ impl<'a> From<&'a [u8]> for Str<'a> {
 
 impl<'a> From<String> for Str<'a> {
     fn from(s: String) -> Str<'a> {
-        if s.len() == 0 {
+        if s.is_empty() {
             return Default::default();
         }
         let buf = Buf::read_from_bytes(s.as_bytes());
@@ -1004,7 +1004,7 @@ impl<'a> From<Int> for Str<'a> {
     fn from(i: Int) -> Str<'a> {
         let mut itoabuf = itoa::Buffer::new();
         let s = itoabuf.format(i);
-        Buf::read_from_bytes(&s.as_bytes()).into_str()
+        Buf::read_from_bytes(s.as_bytes()).into_str()
     }
 }
 
@@ -1283,7 +1283,7 @@ impl Buf {
         )
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         unsafe { &(*self.0) }.size
     }
 
@@ -1500,11 +1500,11 @@ mod tests {
         let s = Str::from(base);
         let want = pat
             .split(base)
-            .skip_while(|x| x.len() == 0)
+            .skip_while(|x| x.is_empty())
             .collect::<Vec<_>>();
         let mut got = Vec::new();
         s.split(
-            &pat,
+            pat,
             |sub, _is_empty| {
                 got.push(sub);
                 1
@@ -1776,7 +1776,7 @@ mod formatting {
         }
     }
 
-    impl<'a> Debug for Buf {
+    impl Debug for Buf {
         fn fmt(&self, f: &mut Formatter) -> fmt::Result {
             let header = unsafe { &*self.0 };
             write!(

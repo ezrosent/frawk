@@ -18,7 +18,7 @@ pub struct Loc {
 
 pub type Spanned<T> = (Loc, T, Loc);
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Tok<'a> {
     Begin,
     Prepare,

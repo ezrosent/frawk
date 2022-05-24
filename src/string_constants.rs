@@ -155,7 +155,7 @@ impl<'a> StringConstantAnalysis<'a> {
     pub fn fi_info(&mut self, cols: &mut Vec<&'a [u8]>) -> bool /* known */ {
         match &self.dfa.query(Key::VarVal(Variable::FI)).0 {
             Some(ids) => {
-                if ids.len() == 0 || (ids.len() == 1 && ids.contains(&0 /*sentinel*/)) {
+                if ids.is_empty() || (ids.len() == 1 && ids.contains(&0 /*sentinel*/)) {
                     self.possible_strings_inner(Key::VarKey(Variable::FI), cols)
                 } else {
                     false
