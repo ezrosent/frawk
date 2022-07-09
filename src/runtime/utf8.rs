@@ -29,63 +29,16 @@ fn parse_utf8_clipped(bs: &[u8]) -> Option<&str> {
     validate_utf8_clipped(bs).map(|off| unsafe { str::from_utf8_unchecked(&bs[..off]) })
 }
 
-pub(crate) fn validate_utf8_clipped(mut bs: &[u8]) -> Option<usize> {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if is_x86_feature_detected!("sse2") {
-            // The SIMD implementation does not keep track of when a
-            // string becomes invalid. That's important here because
-            // `bs` could just be the prefix of a longer valid UTF8
-            // string.  To allow for this we walk backwards through `bs`
-            // to see if there's a potential incomplete character.
-            let mut i = 0;
-            for b in bs.iter().rev() {
-                i += 1;
-                if is_char_boundary(*b) {
-                    break;
-                }
-                if i == 4 {
-                    // We should have seen a char boundary after 4
-                    // bytes, regardless of any clipping.
-                    return None;
-                }
-            }
-
-            if i > 0 && str::from_utf8(&bs[bs.len() - i..]).is_err() {
-                bs = &bs[0..bs.len() - i];
-            }
-
-            let mut chunks = 0;
-            const CHUNK_SIZE: usize = 1024;
-            let valid = unsafe {
-                // See comments in [is_utf8] for the strategy here re:
-                // fast paths.
-                if bs.len() >= 32 && x86::validate_ascii(&bs[0..32]) {
-                    while bs.len() >= CHUNK_SIZE {
-                        if !x86::validate_ascii(&bs[..CHUNK_SIZE]) {
-                            break;
-                        }
-                        bs = &bs[CHUNK_SIZE..];
-                        chunks += 1;
-                    }
-                }
-                x86::validate_utf8(bs)
-            };
-            if valid {
-                Some(chunks * CHUNK_SIZE + bs.len())
-            } else {
-                None
-            }
+pub(crate) fn validate_utf8_clipped(bs: &[u8]) -> Option<usize> {
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "x86_64")] {
+            x86::parse_utf8_sse(bs)
         } else {
             validate_utf8_fallback(bs)
         }
     }
-
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    {
-        validate_utf8_fallback(bs)
-    }
 }
+
 fn validate_utf8_fallback(bs: &[u8]) -> Option<usize> {
     match str::from_utf8(bs) {
         Ok(res) => Some(res.len()),
@@ -100,34 +53,13 @@ fn validate_utf8_fallback(bs: &[u8]) -> Option<usize> {
     }
 }
 
-pub(crate) fn is_utf8(mut bs: &[u8]) -> bool {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if is_x86_feature_detected!("sse2") {
-            unsafe {
-                // We do a top-level fast path to speed up sequences with large all-ASCII prefixes
-                // (in particular 100%-ASCII sequences), falling back to slower UTF8 validation if
-                // ASCII validation fails. UTF8 validation itself has an ASCII fast path, so
-                // sequences that are almost all ASCII will still see a relative speed-up.
-                if bs.len() >= 32 && x86::validate_ascii(&bs[0..32]) {
-                    const CHUNK_SIZE: usize = 1024;
-                    while bs.len() >= CHUNK_SIZE {
-                        if !x86::validate_ascii(&bs[..CHUNK_SIZE]) {
-                            break;
-                        }
-                        bs = &bs[CHUNK_SIZE..];
-                    }
-                }
-                x86::validate_utf8(bs)
-            }
+pub(crate) fn is_utf8(bs: &[u8]) -> bool {
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "x86_64")] {
+            x86::is_utf8(bs)
         } else {
             str::from_utf8(bs).is_ok()
         }
-    }
-
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    {
-        str::from_utf8(bs).is_ok()
     }
 }
 
@@ -323,7 +255,78 @@ mod x86 {
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::*;
 
-    // TODO: use target_feature = "sse2" here?
+    fn is_utf8(mut bs: &[u8]) -> bool {
+        if is_x86_feature_detected!("sse2") {
+            unsafe {
+                // We do a top-level fast path to speed up sequences with large all-ASCII prefixes
+                // (in particular 100%-ASCII sequences), falling back to slower UTF8 validation if
+                // ASCII validation fails. UTF8 validation itself has an ASCII fast path, so
+                // sequences that are almost all ASCII will still see a relative speed-up.
+                if bs.len() >= 32 && validate_ascii(&bs[0..32]) {
+                    const CHUNK_SIZE: usize = 1024;
+                    while bs.len() >= CHUNK_SIZE {
+                        if !validate_ascii(&bs[..CHUNK_SIZE]) {
+                            break;
+                        }
+                        bs = &bs[CHUNK_SIZE..];
+                    }
+                }
+                validate_utf8(bs)
+            }
+        } else {
+            str::from_utf8(bs).is_ok()
+        }
+    }
+
+    fn parse_utf8_sse(mut bs: &[u8]) -> Option<usize> {
+        if is_x86_feature_detected!("sse2") {
+            // The SIMD implementation does not keep track of when a
+            // string becomes invalid. That's important here because
+            // `bs` could just be the prefix of a longer valid UTF8
+            // string.  To allow for this we walk backwards through `bs`
+            // to see if there's a potential incomplete character.
+            let mut i = 0;
+            for b in bs.iter().rev() {
+                i += 1;
+                if is_char_boundary(*b) {
+                    break;
+                }
+                if i == 4 {
+                    // We should have seen a char boundary after 4
+                    // bytes, regardless of any clipping.
+                    return None;
+                }
+            }
+
+            if i > 0 && str::from_utf8(&bs[bs.len() - i..]).is_err() {
+                bs = &bs[0..bs.len() - i];
+            }
+
+            let mut chunks = 0;
+            const CHUNK_SIZE: usize = 1024;
+            let valid = unsafe {
+                // See comments in [is_utf8] for the strategy here re:
+                // fast paths.
+                if bs.len() >= 32 && validate_ascii(&bs[0..32]) {
+                    while bs.len() >= CHUNK_SIZE {
+                        if !validate_ascii(&bs[..CHUNK_SIZE]) {
+                            break;
+                        }
+                        bs = &bs[CHUNK_SIZE..];
+                        chunks += 1;
+                    }
+                }
+                validate_utf8(bs)
+            };
+            if valid {
+                Some(chunks * CHUNK_SIZE + bs.len())
+            } else {
+                None
+            }
+        } else {
+            validate_utf8_fallback(bs)
+        }
+    }
 
     #[inline]
     unsafe fn check_smaller_than_0xf4(current_bytes: __m128i, has_error: &mut __m128i) {

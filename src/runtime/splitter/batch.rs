@@ -624,6 +624,7 @@ impl InputFormat {
 // will instead store a function pointer that is computed at startup based on the dynamically
 // available CPU features.
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn find_indexes_csv_avx2(
     buf: &[u8],
@@ -634,6 +635,7 @@ unsafe fn find_indexes_csv_avx2(
     generic::find_indexes_csv::<avx2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn find_indexes_tsv_avx2(
     buf: &[u8],
@@ -644,6 +646,7 @@ unsafe fn find_indexes_tsv_avx2(
     generic::find_indexes_tsv::<avx2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn find_indexes_csv_sse2(
     buf: &[u8],
@@ -654,6 +657,7 @@ unsafe fn find_indexes_csv_sse2(
     generic::find_indexes_csv::<sse2::Impl>(buf, offsets, prev_iter_inside_quote, prev_iter_cr_end)
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn find_indexes_tsv_sse2(
     buf: &[u8],
@@ -667,58 +671,74 @@ unsafe fn find_indexes_tsv_sse2(
 pub fn get_find_indexes(
     ifmt: InputFormat,
 ) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
-    #[cfg(feature = "allow_avx2")]
-    const ALLOW_AVX2: bool = true;
-    #[cfg(not(feature = "allow_avx2"))]
-    const ALLOW_AVX2: bool = false;
-
-    if ALLOW_AVX2 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("pclmulqdq") {
-        match ifmt {
-            InputFormat::CSV => find_indexes_csv_avx2,
-            InputFormat::TSV => find_indexes_tsv_avx2,
-        }
-    } else if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("pclmulqdq") {
-        match ifmt {
-            InputFormat::CSV => find_indexes_csv_sse2,
-            InputFormat::TSV => find_indexes_tsv_sse2,
-        }
-    } else {
-        match ifmt {
-            InputFormat::CSV => generic::find_indexes_csv::<generic::Impl>,
-            InputFormat::TSV => generic::find_indexes_tsv::<generic::Impl>,
+    cfg_if::cfg_if! {
+        if #[cfg(target_arg = "x86_64")] {
+            #[cfg(feature = "allow_avx2")]
+            const ALLOW_AVX2: bool = true;
+            #[cfg(not(feature = "allow_avx2"))]
+            const ALLOW_AVX2: bool = false;
+            if ALLOW_AVX2 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("pclmulqdq") {
+                 match ifmt {
+                     InputFormat::CSV => find_indexes_csv_avx2,
+                     InputFormat::TSV => find_indexes_tsv_avx2,
+                 }
+             } else if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("pclmulqdq") {
+                 match ifmt {
+                     InputFormat::CSV => find_indexes_csv_sse2,
+                     InputFormat::TSV => find_indexes_tsv_sse2,
+                 }
+             } else {
+                 match ifmt {
+                     InputFormat::CSV => generic::find_indexes_csv::<generic::Impl>,
+                     InputFormat::TSV => generic::find_indexes_tsv::<generic::Impl>,
+                 }
+             }
+        } else {
+            match ifmt {
+                InputFormat::CSV => generic::find_indexes_csv::<generic::Impl>,
+                InputFormat::TSV => generic::find_indexes_tsv::<generic::Impl>,
+            }
         }
     }
 }
 
 pub type BytesIndexKernel = unsafe fn(&[u8], &mut Offsets, u8, u8);
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn find_indexes_byte_avx2(buf: &[u8], offsets: &mut Offsets, field_sep: u8, record_sep: u8) {
     generic::find_indexes_byte::<avx2::Impl>(buf, offsets, field_sep, record_sep)
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn find_indexes_byte_sse2(buf: &[u8], offsets: &mut Offsets, field_sep: u8, record_sep: u8) {
     generic::find_indexes_byte::<sse2::Impl>(buf, offsets, field_sep, record_sep)
 }
 
 pub fn get_find_indexes_bytes() -> BytesIndexKernel {
-    #[cfg(feature = "allow_avx2")]
-    const ALLOW_AVX2: bool = true;
-    #[cfg(not(feature = "allow_avx2"))]
-    const ALLOW_AVX2: bool = false;
-
-    if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        find_indexes_byte_avx2
-    } else if is_x86_feature_detected!("sse2") {
-        find_indexes_byte_sse2
-    } else {
-        generic::find_indexes_byte::<generic::Impl>
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "x86_64")] {
+            #[cfg(feature = "allow_avx2")]
+            const ALLOW_AVX2: bool = true;
+            #[cfg(not(feature = "allow_avx2"))]
+            const ALLOW_AVX2: bool = false;
+            if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
+                find_indexes_byte_avx2
+            } else if is_x86_feature_detected!("sse2") {
+                find_indexes_byte_sse2
+            } else {
+                generic::find_indexes_byte::<generic::Impl>
+            }
+        } else {
+            generic::find_indexes_byte::<generic::Impl>
+        }
     }
 }
 
 pub type WhitespaceIndexKernel = unsafe fn(&[u8], &mut WhitespaceOffsets, u64) -> u64;
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn find_indexes_ascii_whitespace_avx2(
     buf: &[u8],
@@ -728,6 +748,7 @@ unsafe fn find_indexes_ascii_whitespace_avx2(
     generic::find_indexes_ascii_whitespace::<avx2::Impl>(buf, offsets, start_ws)
 }
 
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn find_indexes_ascii_whitespace_sse2(
     buf: &[u8],
@@ -738,17 +759,22 @@ unsafe fn find_indexes_ascii_whitespace_sse2(
 }
 
 pub fn get_find_indexes_ascii_whitespace() -> WhitespaceIndexKernel {
-    #[cfg(feature = "allow_avx2")]
-    const ALLOW_AVX2: bool = true;
-    #[cfg(not(feature = "allow_avx2"))]
-    const ALLOW_AVX2: bool = false;
-
-    if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
-        find_indexes_ascii_whitespace_avx2
-    } else if is_x86_feature_detected!("sse2") {
-        find_indexes_ascii_whitespace_sse2
-    } else {
-        generic::find_indexes_ascii_whitespace::<generic::Impl>
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "x86_64")] {
+            #[cfg(feature = "allow_avx2")]
+            const ALLOW_AVX2: bool = true;
+            #[cfg(not(feature = "allow_avx2"))]
+            const ALLOW_AVX2: bool = false;
+            if ALLOW_AVX2 && is_x86_feature_detected!("avx2") {
+                find_indexes_ascii_whitespace_avx2
+            } else if is_x86_feature_detected!("sse2") {
+                find_indexes_ascii_whitespace_sse2
+            } else {
+                generic::find_indexes_ascii_whitespace::<generic::Impl>
+            }
+        } else {
+            generic::find_indexes_ascii_whitespace::<generic::Impl>
+        }
     }
 }
 
