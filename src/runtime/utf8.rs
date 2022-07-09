@@ -300,9 +300,7 @@ mod bench {
             if between.sample(&mut rng) < utf8_pct {
                 let c = rand::random::<char>();
                 let ix = res.len();
-                for _ in 0..c.len_utf8() {
-                    res.push(0);
-                }
+                res.resize(res.len() + c.len_utf8(), 0);
                 c.encode_utf8(&mut res[ix..]);
             } else {
                 res.push(ascii.sample(&mut rng))

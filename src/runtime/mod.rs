@@ -251,7 +251,7 @@ impl FileWrite {
         };
         let mut text = str_impl::DynamicBuf::default();
         spec.with_bytes(|spec| printf::printf(&mut text, spec, pa))?;
-        let s = unsafe { text.into_str() };
+        let s = text.into_str();
         handle.write(&s, fspec)
     }
     pub(crate) fn write_all(

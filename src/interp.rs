@@ -1094,7 +1094,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         fmt_str
                             .with_bytes(|bs| runtime::printf::printf(&mut buf, bs, &scratch[..]))?;
                         scratch.clear();
-                        let res = unsafe { buf.into_str() };
+                        let res = buf.into_str();
                         let dst = *dst;
                         *self.get_mut(dst) = res;
                     }

@@ -476,7 +476,7 @@ impl<'a> Str<'a> {
                 buf.write_all(sep_bytes).unwrap();
             }
         }
-        unsafe { buf.into_str() }
+        buf.into_str()
     }
 
     pub fn join(&self, mut ss: impl Iterator<Item = Str<'a>>) -> Str<'a> {
@@ -521,7 +521,7 @@ impl<'a> Str<'a> {
                 for b in bs {
                     buf.push_byte(f(*b))
                 }
-                unsafe { buf.into_str() }
+                buf.into_str()
             }
         })
     }
@@ -534,7 +534,7 @@ impl<'a> Str<'a> {
                     buf.write_all(&s[0..m.start()]).unwrap();
                     process_match(&s[m.start()..m.end()], subst, &mut buf).unwrap();
                     buf.write_all(&s[m.end()..s.len()]).unwrap();
-                    (unsafe { buf.into_str() }, true)
+                    (buf.into_str(), true)
                 } else {
                     (self.clone(), false)
                 }
@@ -558,7 +558,7 @@ impl<'a> Str<'a> {
                     (self.clone(), count)
                 } else {
                     buf.write_all(&s[prev..s.len()]).unwrap();
-                    (unsafe { buf.into_str() }, count)
+                    (buf.into_str(), count)
                 }
             })
         })
@@ -594,7 +594,7 @@ impl<'a> Str<'a> {
                     self.clone()
                 } else {
                     buf.write_all(&s[prev..s.len()]).unwrap();
-                    unsafe { buf.into_str() }
+                    buf.into_str()
                 }
             })
         })
@@ -634,7 +634,7 @@ impl<'a> Str<'a> {
                     buf.write_all(&s[0..start]).unwrap();
                     process_match_gen(c, subst, &mut buf).unwrap();
                     buf.write_all(&s[end..]).unwrap();
-                    unsafe { buf.into_str() }
+                    buf.into_str()
                 } else {
                     self.clone()
                 }
@@ -1069,11 +1069,10 @@ impl DynamicBufHeap {
     pub fn into_buf(self) -> Buf {
         self.data.into_buf()
     }
-    pub unsafe fn into_str<'a>(mut self) -> Str<'a> {
-        // TODO: we can probably make this safe? I think this was unsafe from back when strings had
-        // to be utf8.
+
+    pub(crate) fn into_str<'a>(mut self) -> Str<'a> {
         // Shrink the buffer to fit.
-        self.realloc(self.write_head);
+        unsafe { self.realloc(self.write_head) };
         self.data.into_buf().into_str()
     }
     unsafe fn realloc(&mut self, new_cap: usize) {
@@ -1104,7 +1103,7 @@ impl DynamicBufHeap {
                 let new_cap = std::cmp::max(cap + 1, cap * 2);
                 self.realloc(new_cap);
             }
-            *self.data.as_mut_ptr().offset(self.write_head as isize) = b;
+            *self.data.as_mut_ptr().add(self.write_head) = b;
         };
         self.write_head += 1;
     }
@@ -1168,9 +1167,14 @@ impl DynamicBuf {
             DynamicBuf::Heap(DynamicBufHeap::new(size))
         }
     }
-    pub unsafe fn into_str<'a>(self) -> Str<'a> {
+    pub fn into_str<'a>(self) -> Str<'a> {
         match self {
-            DynamicBuf::Inline(sv) => Str::from_rep(Inline::from_unchecked(&sv[..]).into()),
+            // Safety: the 'unchecked' here refers to `sv` needing to fit within
+            // the inline size. But DynamicBuf::Inline and Inline's definition
+            // of the max size is the same (MAX_INLINE_SIZE).
+            DynamicBuf::Inline(sv) => unsafe {
+                Str::from_rep(Inline::from_unchecked(&sv[..]).into())
+            },
             DynamicBuf::Heap(dbuf) => dbuf.into_str(),
         }
     }
@@ -1341,7 +1345,7 @@ impl Buf {
         }
     }
 
-    pub unsafe fn read_from_raw(ptr: *const u8, len: usize) -> Buf {
+    pub(crate) unsafe fn read_from_raw(ptr: *const u8, len: usize) -> Buf {
         let mut ubuf = UniqueBuf::new(len);
         ptr::copy_nonoverlapping(ptr, ubuf.as_mut_ptr(), len);
         ubuf.into_buf()
@@ -1552,7 +1556,7 @@ mod tests {
         )
         .unwrap();
         write!(&mut d, "And this is the second part").unwrap();
-        let s = unsafe { d.into_str() };
+        let s = d.into_str();
         s.with_bytes(|bs| {
             assert_eq!(
                 bs,
@@ -1719,7 +1723,7 @@ mod bench {
         let mut dbuf = DynamicBuf::new(4096);
         let bs: Vec<u8> = (0..4096).map(|_| b'A').collect();
         dbuf.write_all(&bs[..]).unwrap();
-        let s = unsafe { dbuf.into_str() };
+        let s = dbuf.into_str();
         let mut i = 0;
         let len = 4096;
         b.iter(|| {

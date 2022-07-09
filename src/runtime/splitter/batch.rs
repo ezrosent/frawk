@@ -440,7 +440,7 @@ impl<'a> Stepper<'a> {
         self.prev_ix
     }
 
-    pub unsafe fn step(&mut self) -> usize {
+    pub(crate) unsafe fn step(&mut self) -> usize {
         let sep = self.ifmt.sep();
         let line_start = self.prev_ix;
         let bs = &self.buf.as_bytes()[0..self.buf_len];
@@ -1664,7 +1664,7 @@ where
 // shared. ByteReaderBase encapsulates the portions of the implementation that are different. This
 // isn't the cleanest abstraction, but given that it doesn't tend to "leak" into the rest of the
 // code-base, the win in code deduplication seems to justify its existence.
-pub trait ByteReaderBase {
+pub(crate) trait ByteReaderBase {
     fn read_line_inner<'a, 'b: 'a>(
         &'b mut self,
         line: &'a mut Str<'static>,
