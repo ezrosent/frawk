@@ -89,7 +89,7 @@ impl<W: io::Write, T: Fn(&str, FileSpec) -> io::Result<W> + Clone + 'static + Se
     type Output = W;
     type Stdout = grep_cli::StandardStream;
     fn build(&self, path: &str, spec: FileSpec) -> io::Result<W> {
-        (&self)(path, spec)
+        (self)(path, spec)
     }
     fn stdout(&self) -> Self::Stdout {
         grep_cli::stdout(termcolor::ColorChoice::Auto)
@@ -371,6 +371,7 @@ pub struct FileHandle {
     // guarantee. old_guards caches recent WriteGuards that have been discarded to avoid allocation
     // overheads in cases where we aren't using a fast malloc (in cases where we are, doing this
     // may still be marginally faster).
+    #[allow(clippy::vec_box)]
     old_guards: Vec<Box<WriteGuard>>,
     guards: VecDeque<Box<WriteGuard>>,
     cur_batch: Box<WriteGuard>,
