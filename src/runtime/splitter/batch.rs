@@ -2001,11 +2001,15 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
     }
     #[test]
     fn csv_smoke_test() {
-        if is_x86_feature_detected!("avx2") {
-            smoke_test::<avx2::Impl>();
-        }
-        if is_x86_feature_detected!("sse2") {
-            smoke_test::<sse2::Impl>();
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                if is_x86_feature_detected!("avx2") {
+                    smoke_test::<avx2::Impl>();
+                }
+                if is_x86_feature_detected!("sse2") {
+                    smoke_test::<sse2::Impl>();
+                }
+            }
         }
         smoke_test::<generic::Impl>();
     }
@@ -2199,11 +2203,15 @@ unquoted,commas,"as well, including some long ones", and there we have it.""#;
 
     #[test]
     fn bytes_splitter() {
-        if is_x86_feature_detected!("avx2") {
-            bytes_splitter_generic::<avx2::Impl>()
-        }
-        if is_x86_feature_detected!("sse2") {
-            bytes_splitter_generic::<sse2::Impl>()
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                if is_x86_feature_detected!("avx2") {
+                    bytes_splitter_generic::<avx2::Impl>()
+                }
+                if is_x86_feature_detected!("sse2") {
+                    bytes_splitter_generic::<sse2::Impl>()
+                }
+            }
         }
         bytes_splitter_generic::<generic::Impl>()
     }
@@ -2383,11 +2391,15 @@ xxxxxxxxxxxxxxxxxxxxxxxxxx    yyyyyyyyyyyyyyyyyyyyyyyy     4444444
 
     #[test]
     fn whitespace_splitter() {
-        if is_x86_feature_detected!("avx2") {
-            whitespace_splitter_generic::<avx2::Impl>()
-        }
-        if is_x86_feature_detected!("sse2") {
-            whitespace_splitter_generic::<sse2::Impl>()
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "x86_64")] {
+                if is_x86_feature_detected!("avx2") {
+                    whitespace_splitter_generic::<avx2::Impl>()
+                }
+                if is_x86_feature_detected!("sse2") {
+                    whitespace_splitter_generic::<sse2::Impl>()
+                }
+            }
         }
         whitespace_splitter_generic::<generic::Impl>()
     }

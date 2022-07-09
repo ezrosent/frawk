@@ -203,21 +203,27 @@ impl Jit for Generator {
 }
 
 fn jit_builder() -> Result<JITBuilder> {
-    use std::str::FromStr;
-    use target_lexicon::triple;
-
-    let mut shared_builder = settings::builder();
-    if let Err(e) = shared_builder.enable("enable_llvm_abi_extensions") {
-        return err!("unable to enable LLVM ABI extensions: {}", e);
+    // Adapted from the cranelift source.
+    let mut flag_builder = settings::builder();
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "aarch64")] {
+            // See https://github.com/bytecodealliance/wasmtime/issues/2735
+            flag_builder.set("is_pic", "false").unwrap();
+            // Notes from cranelift source: "On at least AArch64, 'colocated' calls use
+            // shorter-range relocations, which might not reach all definitions; we
+            // can't handle that here, so we require long-range relocation types."
+            flag_builder.set("use_colocated_libcalls", "false").unwrap();
+        } else {
+            flag_builder.set("is_pic", "true").unwrap();
+        }
     }
-    let shared_flags = settings::Flags::new(shared_builder);
-    match isa::lookup(triple!("x86_64")) {
-        Err(e) => return err!("failed to look up x86_64 ISA: {}", e),
-        Ok(isa_builder) => Ok(JITBuilder::with_isa(
-            isa_builder.finish(shared_flags),
-            default_libcall_names(),
-        )),
-    }
+    let isa_builder = cranelift_native::builder()
+        .map_err(|msg| err_raw!("host machine is not supported by cranelift: {}", msg))?;
+    flag_builder.enable("enable_llvm_abi_extensions").unwrap();
+    let isa = isa_builder
+        .finish(settings::Flags::new(flag_builder))
+        .map_err(|e| err_raw!("failed to initialize cranelift isa: {:?}", e))?;
+    Ok(JITBuilder::with_isa(isa, default_libcall_names()))
 }
 
 impl Generator {
@@ -344,12 +350,7 @@ impl Generator {
     fn define_cur_function(&mut self, id: FuncId) -> Result<()> {
         self.shared
             .module
-            .define_function(
-                id,
-                &mut self.cctx,
-                &mut codegen::binemit::NullTrapSink {},
-                &mut codegen::binemit::NullStackMapSink {},
-            )
+            .define_function(id, &mut self.cctx)
             .map_err(|e| CompileError(e.to_string()))?;
         self.shared.module.clear_context(&mut self.cctx);
         Ok(())

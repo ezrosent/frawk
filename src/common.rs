@@ -183,16 +183,22 @@ impl std::fmt::Display for CompileError {
     }
 }
 
-macro_rules! err {
+macro_rules! err_raw {
     ($head:expr) => {
-        Err($crate::common::CompileError(
+        $crate::common::CompileError(
                 format!(concat!("[", file!(), ":", line!(), ":", column!(), "] ", $head))
-        ))
+        )
     };
     ($head:expr, $($t:expr),+) => {
-        Err($crate::common::CompileError(
+        $crate::common::CompileError(
                 format!(concat!("[", file!(), ":", line!(), ":", column!(), "] ", $head), $($t),*)
-        ))
+        )
+    };
+}
+
+macro_rules! err {
+    ($($x:tt)*) => {
+        Err(err_raw!($($x)*))
     };
 }
 
