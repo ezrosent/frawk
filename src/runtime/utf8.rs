@@ -244,6 +244,7 @@ mod bench {
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86 {
+    use std::str;
     // Most of this is a line-by-line translation of
     // https://github.com/lemire/fastvalidate-utf-8/blob/master/include/simdutf8check.h. But with
     // added notes gleaned from the code, as well as the simdjson paper:
@@ -255,7 +256,9 @@ mod x86 {
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::*;
 
-    fn is_utf8(mut bs: &[u8]) -> bool {
+    use super::{is_char_boundary, validate_utf8_fallback};
+
+    pub(crate) fn is_utf8(mut bs: &[u8]) -> bool {
         if is_x86_feature_detected!("sse2") {
             unsafe {
                 // We do a top-level fast path to speed up sequences with large all-ASCII prefixes
@@ -278,7 +281,7 @@ mod x86 {
         }
     }
 
-    fn parse_utf8_sse(mut bs: &[u8]) -> Option<usize> {
+    pub(crate) fn parse_utf8_sse(mut bs: &[u8]) -> Option<usize> {
         if is_x86_feature_detected!("sse2") {
             // The SIMD implementation does not keep track of when a
             // string becomes invalid. That's important here because

@@ -672,7 +672,7 @@ pub fn get_find_indexes(
     ifmt: InputFormat,
 ) -> unsafe fn(&[u8], &mut Offsets, u64, u64) -> (u64, u64) {
     cfg_if::cfg_if! {
-        if #[cfg(target_arg = "x86_64")] {
+        if #[cfg(target_arch = "x86_64")] {
             #[cfg(feature = "allow_avx2")]
             const ALLOW_AVX2: bool = true;
             #[cfg(not(feature = "allow_avx2"))]
