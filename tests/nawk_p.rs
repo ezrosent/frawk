@@ -8,7 +8,7 @@
 //! * `length` is not syntactic sugar for `length($0)`.
 //! * frawk prints more digits on floating point values by default.
 //! * frawk's parser requires semicolons between a last statement and a `}` sometimes
-//! * frawk's rules aronud comparing strings and numbers are different, e.g. "Russia < 1" is true
+//! * frawk's rules around comparing strings and numbers are different, e.g. "Russia < 1" is true
 //!   in frawk but false in awk/mawk.
 
 use assert_cmd::Command;

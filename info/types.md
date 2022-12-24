@@ -33,7 +33,7 @@ $ awk 'BEGIN { x = "0"; y = x + 2; x = y + 1; print x, y;}'
 Are perfectly valid. This one prints `3 2`. This places Awk somewhere between
 languages like Python, where one variable can be a string at one moment and a
 dictionary at the next, and languages like Rust, where one must make a new type
-to repesent a variable's ability to contain either a number or a string.
+to represent a variable's ability to contain either a number or a string.
 
 Awk arrays have string keys and have scalars as values, though some Awk
 implementations have specialized arrays to handle the case where all the keys
@@ -130,7 +130,7 @@ Into the following SSA:
 ```
 0:
     x0 = 0
-    # If x0, jump to label 1, otherise jump to label 2
+    # If x0, jump to label 1, otherwise jump to label 2
     brif x0 1: 2:
 1:
     x1 = 3

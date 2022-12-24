@@ -6,7 +6,7 @@
 //! wrapper for a couple reasons:
 //!
 //! 1. bumpalo returns a mutable reference by default, but all of the uses of arena-allocated data
-//!    in this proejct use immutable references.
+//!    in this project use immutable references.
 //! 2. For byte slices and strings, frawk's runtime has special runtime requirements, so we use the
 //!    extra wrapper to enforce those rather than passing them down to the user.
 use std::ptr;

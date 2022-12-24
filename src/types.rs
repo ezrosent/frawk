@@ -267,7 +267,7 @@
 //! string and an integer) does not change these initial guesses; so the solver would return its
 //! current solution.
 //!
-//! This sort of achitecture is inspired by classic [static analysis algorithms] that find the least
+//! This sort of architecture is inspired by classic [static analysis algorithms] that find the least
 //! fixed points of recursive equations phrased as monotone functions on some partial order with
 //! finite height, along with [Propagators]
 //!
@@ -844,7 +844,7 @@ impl<'b, 'c> TypeContext<'b, 'c> {
         }
     }
     pub(crate) fn constrain_as_map(&mut self, ix: NodeIx) {
-        // To be completely explicit, this function assigns a unique `Flows` constaint into a map
+        // To be completely explicit, this function assigns a unique `Flows` constraint into a map
         // from the constant node that "just specifies the node is a Map".
         if self.maps.insert(ix) {
             let is_map = self.constant(Some(TVar::Map {

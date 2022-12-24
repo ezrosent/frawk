@@ -252,7 +252,7 @@ surprised to discover there were bugs in frawk's parser.
 * frawk has a builtin `join_fields` function that produces a string of a
   particular range of input columns.
 * frawk provides an `int` function for converting a scalar value to an integer,
-  and a `hex` function for converting a hexidecimal string to an integer. It
+  and a `hex` function for converting a hexadecimal string to an integer. It
   also supports hexadecimal numeric literals.
 * For scripts run with either of the `icsv`, `itsv` options, scripts that only
   split by whitespace, or scripts that only use one single-byte record and

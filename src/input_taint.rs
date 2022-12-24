@@ -2,7 +2,7 @@
 //!
 //! The goal is to detect any strings that are passed to the system shell whose content is
 //! "tainted" by user input. At a high level, we want to allow executing string constants and
-//! concatentations of multiple string constants, but we don't want to allow anything that has
+//! concatenations of multiple string constants, but we don't want to allow anything that has
 //! "touched" user input. We do this to avoid scripts being unexpectedly hijacked based on user
 //! input abusing (e.g.) shell escaping rules in an unexpected way. "tainted", a term we borrow
 //! from Perl's taint checking, essentially means "whose contents are derived from". For example:

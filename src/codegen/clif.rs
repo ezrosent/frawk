@@ -48,7 +48,7 @@ const PLACEHOLDER: Ref = (compile::UNUSED, compile::Ty::Null);
 // for debugging
 const DUMP_IR: bool = false;
 
-/// After a function is declared, some additional information is required to map parameteres to
+/// After a function is declared, some additional information is required to map parameters to
 /// variables. `Prelude` contains that information.
 struct Prelude {
     /// The Cranelift-level signature for the function
@@ -953,7 +953,7 @@ impl<'a> View<'a> {
     /// are assumed to be floating point values if `is_float` and (signed, as is the case in frawk)
     /// integer values otherwise.
     ///
-    /// As with the LLVM, we use the "ordered" variants on comparsion: the ones that return false
+    /// As with the LLVM, we use the "ordered" variants on comparison: the ones that return false
     /// if either operand is NaN.
     fn cmp(&mut self, op: crate::codegen::Cmp, is_float: bool, l: Value, r: Value) -> Value {
         use crate::codegen::Cmp::*;

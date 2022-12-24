@@ -1711,7 +1711,7 @@ where
                     // and the result of the call to (g)sub.
                     //
                     // We do the computation, then we assign the substituted string to the
-                    // asignee expression, yielding the saved result.
+                    // assignee expression, yielding the saved result.
                     let to_set = self.fresh_local();
                     let res = self.fresh_local();
                     let last_arg = mem::replace(&mut prim_args[2], PrimVal::Var(to_set));
