@@ -532,7 +532,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             return Ok(1);
         }
         // For handling the worker portion, we want to transfer the current stdin progress to a
-        // worker thread, but to withold any progress on other files open for read. We'll swap
+        // worker thread, but to withhold any progress on other files open for read. We'll swap
         // these back in when we execute the `end` block, if there is one.
         let mut old_read_files = mem::take(&mut self.read_files.inputs);
         fn wrap_error<T, S>(r: std::result::Result<Result<T>, S>) -> Result<T> {

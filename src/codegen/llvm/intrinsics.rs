@@ -1,6 +1,6 @@
 //! Plumbing used to expose external functions written in rust to LLVM.
 //!
-//! The core data-structure here is [`IntrinsicMap`], which lazily decalres external functions
+//! The core data-structure here is [`IntrinsicMap`], which lazily declares external functions
 //! based on a type signature.
 use super::attr;
 use crate::codegen::FunctionAttr;

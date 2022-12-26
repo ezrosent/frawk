@@ -79,7 +79,7 @@ pub trait FileFactory: Clone + 'static + Send + Sync {
         command_for_write(cmd)
     }
     fn build(&self, path: &str, spec: FileSpec) -> io::Result<Self::Output>;
-    // TODO maybe we shold support this returning an error.
+    // TODO maybe we should support this returning an error.
     fn stdout(&self) -> Self::Stdout;
 }
 
@@ -412,7 +412,7 @@ impl FileHandle {
 
     fn read_error(&self) -> CompileError {
         // The receiver shut down before we did. That means something went wrong: probably an IO
-        // error of some kind. In that case, the receiver thread stashed away the error it recieved
+        // error of some kind. In that case, the receiver thread stashed away the error it received
         // in raw.error for us to read it out. We don't optimize this path too aggressively because
         // IO errors in frawk scripts are fatal.
         const BAD_SHUTDOWN_MSG: &str = "internal error: (writer?) thread did not shut down cleanly";

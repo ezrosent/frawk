@@ -204,7 +204,7 @@ impl<P: ChunkProducer<Chunk = OffsetChunk>> CSVReader<P> {
         self.cur_chunk.buf = old_buf.try_unique().ok();
         if self.prod.get_chunk(&mut self.cur_chunk)? {
             // We may have received an EOF without getting any data. Increment the version so this
-            // regsiters as an EOF through the `read_state` interface.
+            // registers as an EOF through the `read_state` interface.
             self.cur_chunk.version = std::cmp::max(prev_version, 1);
             return Ok((true, false));
         }

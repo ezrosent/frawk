@@ -262,7 +262,7 @@ impl<T: Clone + Hash + Eq> WorkList<T> {
 }
 
 /// Notification is a simple object used to synchronize multiple threads around a single event
-/// occuring.
+/// occurring.
 ///
 /// Notifications are "one-shot": they only transition from "not notified" to "notified" once.
 /// Based on the absl object of the same name.

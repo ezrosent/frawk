@@ -341,7 +341,7 @@ pub(crate) struct Typer<'a> {
     local_globals: HashSet<NumTy>,
     // Why not just store FuncInfo's fields in a Frame?
     // We access Frames one at a time (through a View); but we need access to function arity and
-    // return types across invidual views. We expose these fields in a separate type immutably to
+    // return types across individual views. We expose these fields in a separate type immutably to
     // facilitate that.
     //
     // Another option would be to pass a mutable reference to `frames` for all of bytecode-building
@@ -448,7 +448,7 @@ struct View<'a, 'b> {
     local_globals: &'b HashSet<NumTy>,
     arity: &'b HashMap<NumTy, NumTy>,
     func_info: &'b Vec<FuncInfo>,
-    // The current basic block being filled; It'll be swaped into `frame.cfg` as we translate a
+    // The current basic block being filled; It'll be swapped into `frame.cfg` as we translate a
     // given function cfg.
     stream: &'b mut Node<'a>,
 }
@@ -980,7 +980,7 @@ impl<'a> Typer<'a> {
         // functions that a given function calls.
         //
         // TODO I think the traditional technique here is to use a bit set rather than a hash set.
-        // That's probably the right choice here, because there wont be that many globals and
+        // That's probably the right choice here, because there won't be that many globals and
         // global references aren't likely to be sparse (which is the case where hash sets win).
         //
         // If this ever becomes a problem, that's the obvious optimization to make. Unions for
@@ -1364,7 +1364,7 @@ impl<'a, 'b> View<'a, 'b> {
         // builtin function at the cfg-level to a bytecode instruction. Most of it is pretty
         // mechanical. One subtlety to watch out for is the role of res_reg. reg_reg may be unused,
         // and we are careful not to leak any unused registers into the final bytecode. How to we
-        // handle an unsed result register? It depends:
+        // handle an unused result register? It depends:
         //
         // 1. If the instruction has no side-effects, we just discard the instruction.
         // 2. If the instruction has side-effects, then we allocate a fresh register and use it.

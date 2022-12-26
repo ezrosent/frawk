@@ -1,4 +1,4 @@
-//! This module contains "function defintions" called by compiled frawk programs
+//! This module contains "function definitions" called by compiled frawk programs
 //!
 //! Unlike the intrinsics module, which exposes Rust implementations of some functionality through
 //! some standard calling convention, these "builtins" are implemented in LLVM.

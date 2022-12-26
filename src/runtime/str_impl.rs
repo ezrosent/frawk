@@ -1,8 +1,8 @@
-/// Custom string implemenation.
+/// Custom string implementation.
 ///
 /// There is a lot of unsafe code here. Many of the features here can and were implementable in
 /// terms of safe code using enums, and various components of the standard library. We moved to
-/// this representation because it significanly improved some benchmarks in terms of time and
+/// this representation because it significantly improved some benchmarks in terms of time and
 /// space, and it also makes for more ergonomic interop with LLVM.
 ///
 /// TODO explain more about what is going on here.
@@ -377,7 +377,7 @@ impl<'a> From<Str<'a>> for UniqueStr<'a> {
     }
 }
 
-// Why UnsafeCell? We want something that wont increase the size of StrRep, but we also need to
+// Why UnsafeCell? We want something that won't increase the size of StrRep, but we also need to
 // mutate it in-place. We can *almost* just use Cell here, but we cannot implement Clone behind
 // cell.
 #[derive(Default)]

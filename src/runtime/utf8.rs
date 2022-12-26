@@ -1,6 +1,6 @@
 /// SIMD-accelerated UTF8 validation. A good clip faster in the ASCII fast-path,
 /// and over 3x faster when validating non-ASCII UTF-8. Only x86 is supported for now, with
-/// fallback to the standard libary string conversion routines if SSE2 is unavailable.
+/// fallback to the standard library string conversion routines if SSE2 is unavailable.
 // TODO: support AVX2 or neon?
 use std::str;
 
@@ -370,7 +370,7 @@ mod x86 {
         //
         // This computation helps check this by shifting the lengths to the right by 1 and
         // subtracting 1, then 2/by 2, then 3/by 3 and summing all 4 of the vectors. The last two can
-        // be done in one step by first summing the inital vector and the vector shifted by 1, and
+        // be done in one step by first summing the initial vector and the vector shifted by 1, and
         // then shifting that intermediate sum by 2.
         //
         //     initial = [4 0 0 0 3 0 0 1], previous = [2 1 2 1 4 3 2 1]

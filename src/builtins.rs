@@ -373,12 +373,12 @@ impl Function {
             Contains => match incoming[0] {
                 MapIntInt | MapIntStr | MapIntFloat => (smallvec![incoming[0], Int], Int),
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
-                _ => return err!("invalid input spec fo Contains: {:?}", incoming),
+                _ => return err!("invalid input spec for Contains: {:?}", incoming),
             },
             Delete => match incoming[0] {
                 MapIntInt | MapIntStr | MapIntFloat => (smallvec![incoming[0], Int], Int),
                 MapStrInt | MapStrStr | MapStrFloat => (smallvec![incoming[0], Str], Int),
-                _ => return err!("invalid input spec fo Delete: {:?}", incoming),
+                _ => return err!("invalid input spec for Delete: {:?}", incoming),
             },
             IncMap => {
                 let map = incoming[0];
