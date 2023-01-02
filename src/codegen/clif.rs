@@ -266,7 +266,11 @@ impl Generator {
             },
         };
         global.mains = stage;
-        global.shared.module.finalize_definitions();
+        global
+            .shared
+            .module
+            .finalize_definitions()
+            .map_err(|err| CompileError(format!("{}", err)))?;
         Ok(global)
     }
 
@@ -342,7 +346,6 @@ impl Generator {
         }
         view.builder.ins().return_(&[]);
         view.builder.finalize();
-        mem::drop(view);
         self.define_cur_function(res)?;
         Ok(res)
     }
@@ -491,10 +494,10 @@ impl<'a> View<'a> {
     fn stack_slot_bytes(&mut self, bytes: u32) -> StackSlot {
         debug_assert!(bytes > 0); // This signals a bug; all frawk types have positive size.
         let data = StackSlotData::new(StackSlotKind::ExplicitSlot, bytes);
-        self.builder.create_stack_slot(data)
+        self.builder.create_sized_stack_slot(data)
     }
 
-    fn gen_function_body(&mut self, insts: &compile::Frame) -> Result<()> {
+    fn gen_function_body(mut self, insts: &compile::Frame) -> Result<()> {
         let nodes = insts.cfg.raw_nodes();
         let bbs: Vec<_> = (0..nodes.len())
             .map(|_| self.builder.create_block())
@@ -572,10 +575,10 @@ impl<'a> View<'a> {
         self.execute_actions()?;
         self.builder.ins().jump(bbs[0], &[]);
         self.builder.seal_all_blocks();
-        self.builder.finalize();
         if DUMP_IR {
             eprintln!("{}", self.builder.func);
         }
+        self.builder.finalize();
         Ok(())
     }
 
@@ -946,7 +949,9 @@ impl<'a> View<'a> {
     /// coercions).
     fn bool_to_int(&mut self, b: Value) -> Value {
         let int_ty = self.get_ty(compile::Ty::Int);
-        self.builder.ins().bint(int_ty, b)
+        let zero = self.builder.ins().iconst(int_ty, 0);
+        let one = self.builder.ins().iconst(int_ty, 1);
+        self.builder.ins().select(b, one, zero)
     }
 
     /// Generate a new value according to the comparison instruction, applied to `l` and `r`, which
