@@ -1068,6 +1068,7 @@ unsafe fn wrap_args<'a>(
             Ty::Int => mem::transmute::<usize, Int>(arg).into(),
             Ty::Float => Float::from_bits(arg as u64).into(),
             Ty::Str => mem::transmute::<usize, &Str>(arg).clone().into(),
+            Ty::Null => FormatArg::Null,
             _ => fail!(
                 _rt,
                 "invalid format arg {:?} (this should have been caught earlier)",

@@ -925,6 +925,30 @@ print w,z;
     );
 
     test_program!(
+        recursive_array_func,
+        r#"
+BEGIN {
+    f()
+}
+            
+function f(depth, a, k) {
+    ++n
+    a[n] = 100-n
+    if (depth < 3) {
+        f(depth+1)
+    }
+    for (k in a) {
+        printf "depth %d: k=%d v=%d\n", depth, k, a[k]
+    }
+}"#,
+        r#"depth 3: k=4 v=96
+depth 2: k=3 v=97
+depth 1: k=2 v=98
+depth 0: k=1 v=99
+"#
+    );
+
+    test_program!(
         map_ops,
         r#"BEGIN {
         for (i=0; i<10; ++i) m[i]=2*i;

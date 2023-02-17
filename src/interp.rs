@@ -490,6 +490,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             Ty::Str => self.get(Reg::<Str<'a>>::from(reg)).clone().into(),
             Ty::Int => (*self.get(Reg::<Int>::from(reg))).into(),
             Ty::Float => (*self.get(Reg::<Float>::from(reg))).into(),
+            Ty::Null => runtime::FormatArg::Null,
             _ => return err!("non-scalar (s)printf argument type {:?}", ty),
         })
     }

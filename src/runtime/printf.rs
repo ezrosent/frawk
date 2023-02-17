@@ -50,6 +50,7 @@ pub(crate) enum FormatArg<'a> {
     S(Str<'a>),
     F(Float),
     I(Int),
+    Null,
 }
 
 impl<'a> From<Str<'a>> for FormatArg<'a> {
@@ -89,6 +90,7 @@ impl<'a> FormatArg<'a> {
             S(s) => convert::<_, f64>(s),
             F(f) => *f,
             I(i) => convert::<_, f64>(*i),
+            Null => 0.0,
         }
     }
     fn to_int(&self) -> i64 {
@@ -97,6 +99,7 @@ impl<'a> FormatArg<'a> {
             S(s) => convert::<_, i64>(s),
             F(f) => convert::<_, i64>(*f),
             I(i) => *i,
+            Null => 0,
         }
     }
     fn with_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
@@ -105,6 +108,7 @@ impl<'a> FormatArg<'a> {
             S(s) => s.clone(),
             F(f) => convert::<_, Str>(*f),
             I(i) => convert::<_, Str>(*i),
+            Null => return f(&[]),
         };
         s.with_bytes(f)
     }

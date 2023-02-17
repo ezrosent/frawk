@@ -25,7 +25,7 @@ ryu = "1.0"
 libc = "0.2"
 tikv-jemallocator = { version = "0.4", optional = true }
 rand = "0.8.4"
-lalrpop-util = "0.19.6"
+lalrpop-util = "0.19.8"
 unicode-xid = "0.2.2"
 llvm-sys = {version = "120", optional = true }
 clap = "3.0"
@@ -46,7 +46,7 @@ cranelift-module = "0.91"
 cranelift-native = "0.91"
 cranelift-jit = "0.91"
 fast-float = "0.2"
-bumpalo = { version = "3.6", features = ["collections"] }
+bumpalo = { version = "3.11.1", features = ["collections"] }
 target-lexicon = "0.12.2"
 
 [dev-dependencies]
