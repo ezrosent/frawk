@@ -1381,7 +1381,7 @@ where
                 )?;
                 Ok((next, res))
             }
-            _ => err!("unsupprted assignment LHS: {:?}", v),
+            _ => err!("unsupported assignment LHS: {:?}", v),
         }
     }
     fn do_assign_index<'c>(
