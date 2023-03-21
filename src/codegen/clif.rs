@@ -587,9 +587,10 @@ impl<'a> View<'a> {
     fn branch(&mut self, tcase: Option<(Ref, Block)>, ecase: Block) -> Result<()> {
         if let Some((cond, b)) = tcase {
             let cv = self.get_val(cond)?;
-            self.builder.ins().brnz(cv, b, &[]);
+            self.builder.ins().brif(cv, b, &[], ecase, &[]);
+        } else {
+            self.builder.ins().jump(ecase, &[]);
         }
-        self.builder.ins().jump(ecase, &[]);
         Ok(())
     }
 

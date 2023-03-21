@@ -39,19 +39,19 @@ termcolor = "1.1"
 itertools = "0.10"
 assert_cmd = "2.0.3"
 paste = "1.0"
-cranelift = "0.91"
-cranelift-codegen = "0.91"
-cranelift-frontend = "0.91"
-cranelift-module = "0.91"
-cranelift-native = "0.91"
-cranelift-jit = "0.91"
+cranelift = "0.93"
+cranelift-codegen = "0.93"
+cranelift-frontend = "0.93"
+cranelift-module = "0.93"
+cranelift-native = "0.93"
+cranelift-jit = "0.93"
 fast-float = "0.2"
 bumpalo = { version = "3.11.1", features = ["collections"] }
 target-lexicon = "0.12.2"
 
 [dev-dependencies]
 assert_cmd = "2.0.3"
-tempfile = "3.3"
+tempfile = "3.4"
 
 
 [features]
