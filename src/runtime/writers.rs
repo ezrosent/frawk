@@ -331,7 +331,7 @@ impl<F: FileFactory> Root for RootImpl<F> {
         let global_name = local_name.clone();
         let handle = build_handle(
             move |_| local_factory.cmd(&*local_name),
-            /*is_stdout=*/ true,
+            /*is_stdout=*/ false,
         );
         let _old = cmds.insert(global_name, handle.clone());
         debug_assert!(
