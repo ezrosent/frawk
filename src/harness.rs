@@ -311,8 +311,8 @@ pub(crate) fn used_fields(prog: &str) -> Result<FieldSet> {
     compile::used_fields(&mut ctx)
 }
 
-pub(crate) fn parse_program<'a, 'inp>(
-    prog: &'inp str,
+pub(crate) fn parse_program<'a>(
+    prog: &str,
     a: &'a Arena,
     esc: Escaper,
     strat: ExecutionStrategy,
@@ -427,11 +427,11 @@ pub(crate) fn run_prog<'a>(
         }
         with_interp!(interp, {
             for (i, func) in interp.instrs().iter().enumerate() {
-                write!(&mut instrs_buf, "function {} {{\n", i).unwrap();
+                writeln!(&mut instrs_buf, "function {} {{", i).unwrap();
                 for (j, inst) in func.iter().enumerate() {
-                    write!(&mut instrs_buf, "\t[{:2}] {:?}\n", j, inst).unwrap();
+                    writeln!(&mut instrs_buf, "\t[{:2}] {:?}", j, inst).unwrap();
                 }
-                write!(&mut instrs_buf, "}}\n").unwrap();
+                writeln!(&mut instrs_buf, "}}").unwrap();
             }
             let instrs = String::from_utf8(instrs_buf).unwrap();
             if _PRINT_DEBUG_INFO {

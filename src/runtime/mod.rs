@@ -96,9 +96,9 @@ impl RegexCache {
         // when the column is nonzero, or someone has overwritten a nonzero column.
         Ok((changed, line.get_col(0, pat, pat, self)?.clone().upcast()))
     }
-    pub(crate) fn get_line_stdin_reuse<'a, LR: LineReader>(
+    pub(crate) fn get_line_stdin_reuse<LR: LineReader>(
         &mut self,
-        pat: &Str<'a>,
+        pat: &Str,
         reg: &mut FileRead<LR>,
         old_line: &mut LR::Line,
     ) -> Result</*file changed */ bool> {
@@ -380,10 +380,10 @@ impl<LR: LineReader> FileRead<LR> {
         self.stdin.read_state()
     }
 
-    pub(crate) fn read_err<'a>(&mut self, path: &Str<'a>) -> Result<Int> {
+    pub(crate) fn read_err(&mut self, path: &Str) -> Result<Int> {
         self.with_file(path, |reader| Ok(reader.read_state()))
     }
-    pub(crate) fn read_err_cmd<'a>(&mut self, cmd: &Str<'a>) -> Result<Int> {
+    pub(crate) fn read_err_cmd(&mut self, cmd: &Str) -> Result<Int> {
         self.with_cmd(cmd, |reader| Ok(reader.read_state()))
     }
 
@@ -392,9 +392,9 @@ impl<LR: LineReader> FileRead<LR> {
         Ok(())
     }
 
-    fn with_cmd<'a, R>(
+    fn with_cmd<R>(
         &mut self,
-        cmd: &Str<'a>,
+        cmd: &Str,
         f: impl FnMut(&mut RegexSplitter<ChildStdout>) -> Result<R>,
     ) -> Result<R> {
         let check_utf8 = self.stdin.check_utf8();
@@ -413,9 +413,9 @@ impl<LR: LineReader> FileRead<LR> {
         )
     }
 
-    fn with_file<'a, R>(
+    fn with_file<R>(
         &mut self,
-        path: &Str<'a>,
+        path: &Str,
         f: impl FnMut(&mut RegexSplitter<File>) -> Result<R>,
     ) -> Result<R> {
         let check_utf8 = self.stdin.check_utf8();

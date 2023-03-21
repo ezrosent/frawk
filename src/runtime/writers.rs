@@ -168,11 +168,7 @@ impl Registry {
         }
     }
 
-    pub fn get_handle<'a>(
-        &mut self,
-        name: Option<&Str<'a>>,
-        fspec: FileSpec,
-    ) -> Result<&mut FileHandle> {
+    pub fn get_handle(&mut self, name: Option<&Str>, fspec: FileSpec) -> Result<&mut FileHandle> {
         let name = if let Some(s) = name {
             s
         } else {
@@ -184,7 +180,7 @@ impl Registry {
         }
     }
 
-    pub fn close<'a>(&mut self, path_or_cmd: &Str<'a>) -> Result<()> {
+    pub fn close(&mut self, path_or_cmd: &Str) -> Result<()> {
         // TODO: implement a newtype for heterogeneous lookup. We shouldn't have to do the clone or
         // the unmoor here, but we need to because we cannot implement Borrow<Str<'a>> for
         // Borrow<Str<'static>> (conflicts with the blanket impl for Borrow).
@@ -199,7 +195,7 @@ impl Registry {
         path_or_cmd.with_bytes(|bs| self.global.close(bs))
     }
 
-    pub fn get_cmd<'a>(&mut self, cmd: &Str<'a>) -> Result<&mut FileHandle> {
+    pub fn get_cmd(&mut self, cmd: &Str) -> Result<&mut FileHandle> {
         use hashbrown::hash_map::Entry;
         // borrowed by with_bytes closure.
         let global = &self.global;
@@ -211,7 +207,7 @@ impl Registry {
         }
     }
 
-    pub fn get_file<'a>(&mut self, name: Option<&Str<'a>>) -> Result<&mut FileHandle> {
+    pub fn get_file(&mut self, name: Option<&Str>) -> Result<&mut FileHandle> {
         match name {
             Some(path) => {
                 use hashbrown::hash_map::Entry;
@@ -330,7 +326,7 @@ impl<F: FileFactory> Root for RootImpl<F> {
         let local_name = Box::<[u8]>::from(cmd);
         let global_name = local_name.clone();
         let handle = build_handle(
-            move |_| local_factory.cmd(&*local_name),
+            move |_| local_factory.cmd(&local_name),
             /*is_stdout=*/ false,
         );
         let _old = cmds.insert(global_name, handle.clone());
@@ -406,7 +402,7 @@ impl FileHandle {
             g.activate();
             g
         } else {
-            Box::new(WriteGuard::default())
+            Box::<WriteGuard>::default()
         }
     }
 
@@ -437,7 +433,7 @@ impl FileHandle {
         };
         self.clear_guards()?;
         let mut next_batch = self.guard();
-        self.cur_batch.peel(upto, &mut *next_batch);
+        self.cur_batch.peel(upto, &mut next_batch);
         let req = self.cur_batch.request(flush);
         self.raw.sender.send(req).unwrap();
         std::mem::swap(&mut next_batch, &mut self.cur_batch);
@@ -445,13 +441,13 @@ impl FileHandle {
         Ok(())
     }
 
-    pub fn write_all<'a>(&mut self, ss: &[&Str<'a>], spec: FileSpec) -> Result<()> {
+    pub fn write_all(&mut self, ss: &[&Str], spec: FileSpec) -> Result<()> {
         let cur_len = self.cur_batch.data.len();
         let mut added_bytes = 0;
         let mut last_line = None;
         for s in ss.iter() {
             let bs = unsafe { &*s.get_bytes() };
-            self.cur_batch.extend(&*bs, spec);
+            self.cur_batch.extend(bs, spec);
             if self.raw.line_buffer {
                 if let Some(ix) = memchr::memchr(b'\n', bs) {
                     // +1 to include the newline
@@ -465,7 +461,7 @@ impl FileHandle {
         }
         Ok(())
     }
-    pub fn write<'a>(&mut self, s: &Str<'a>, spec: FileSpec) -> Result<()> {
+    pub fn write(&mut self, s: &Str, spec: FileSpec) -> Result<()> {
         self.write_all(&[s], spec)
     }
 
@@ -913,7 +909,7 @@ pub mod testing {
             let mut written = 0;
             let mut data = self.0.data.lock().unwrap();
             for b in bufs {
-                let bytes: &[u8] = &*b;
+                let bytes: &[u8] = b;
                 data.extend(bytes);
                 written += bytes.len();
             }

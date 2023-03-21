@@ -388,10 +388,11 @@ impl<Arg> Drop for Cleanup<Arg> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 #[repr(i64)]
 pub enum FileSpec {
     Trunc = 0,
+    #[default]
     Append = 1,
     Cmd = 2,
 }
@@ -417,12 +418,6 @@ impl std::convert::TryFrom<i64> for FileSpec {
         } else {
             Err(InvalidFileSpec)
         }
-    }
-}
-
-impl Default for FileSpec {
-    fn default() -> FileSpec {
-        FileSpec::Append
     }
 }
 

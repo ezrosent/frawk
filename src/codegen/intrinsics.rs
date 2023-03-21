@@ -467,7 +467,7 @@ pub(crate) unsafe extern "C" fn read_err(
     is_file: Int,
 ) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
-    let res = try_abort!(
+    try_abort!(
         runtime,
         with_input!(&mut runtime.input_data, |(_, read_files)| {
             let file = &*(file as *mut Str);
@@ -478,8 +478,7 @@ pub(crate) unsafe extern "C" fn read_err(
             }
         }),
         "unexpected error when reading error status of file:"
-    );
-    res
+    )
 }
 
 pub(crate) unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
@@ -687,12 +686,12 @@ pub(crate) unsafe extern "C" fn join_cols(
 }
 
 pub(crate) unsafe extern "C" fn to_upper_ascii(s: *mut U128) -> U128 {
-    let res = (&*(s as *mut Str as *const Str)).to_upper_ascii();
+    let res = (*(s as *mut Str as *const Str)).to_upper_ascii();
     mem::transmute::<Str, U128>(res)
 }
 
 pub(crate) unsafe extern "C" fn to_lower_ascii(s: *mut U128) -> U128 {
-    let res = (&*(s as *mut Str as *const Str)).to_lower_ascii();
+    let res = (*(s as *mut Str as *const Str)).to_lower_ascii();
     mem::transmute::<Str, U128>(res)
 }
 
@@ -878,7 +877,7 @@ pub(crate) unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 
 }
 
 pub(crate) unsafe extern "C" fn ref_str(s: *mut c_void) {
-    mem::forget((&*(s as *mut Str)).clone())
+    mem::forget((*(s as *mut Str)).clone())
 }
 
 // This is a "slow path" drop, used by cranelift only for the time being.
@@ -887,7 +886,7 @@ pub(crate) unsafe extern "C" fn drop_str(s: *mut U128) {
 }
 
 pub(crate) unsafe extern "C" fn drop_str_slow(s: *mut U128, tag: u64) {
-    (&*(s as *mut Str)).drop_with_tag(tag)
+    (*(s as *mut Str)).drop_with_tag(tag)
 }
 
 unsafe fn ref_map_generic<K, V>(m: *mut c_void) {
@@ -943,7 +942,7 @@ pub(crate) unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U12
 pub(crate) unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
-        let s = (&*(s as *mut Str)).clone();
+        let s = (*(s as *mut Str)).clone();
         try_abort!(runtime, runtime.core.vars.store_str(var, s))
     } else {
         fail!(runtime, "invalid variable code={}", var)

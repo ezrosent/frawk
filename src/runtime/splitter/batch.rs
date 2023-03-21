@@ -784,9 +784,9 @@ lazy_static! {
     static ref TAB: Regex = Regex::new(r#"\t"#).unwrap();
     static ref NEWLINE: Regex = Regex::new(r#"\n"#).unwrap();
     static ref NEEDS_ESCAPE_TSV: bytes::RegexSet =
-        bytes::RegexSet::new(&[r#"\t"#, r#"\n"#]).unwrap();
+        bytes::RegexSet::new([r#"\t"#, r#"\n"#]).unwrap();
     static ref NEEDS_ESCAPE_CSV: bytes::RegexSet =
-        bytes::RegexSet::new(&[r#"""#, r#"\t"#, r#"\n"#, ","]).unwrap();
+        bytes::RegexSet::new([r#"""#, r#"\t"#, r#"\n"#, ","]).unwrap();
 }
 
 pub fn escape_csv<'a>(s: &Str<'a>) -> Str<'a> {

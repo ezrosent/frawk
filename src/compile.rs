@@ -25,7 +25,7 @@ use std::sync::Arc;
 pub(crate) const UNUSED: u32 = u32::max_value();
 pub(crate) const NULL_REG: u32 = UNUSED - 1;
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash, Default)]
 pub(crate) enum Ty {
     Int = 0,
     Float = 1,
@@ -38,6 +38,7 @@ pub(crate) enum Ty {
     MapStrStr = 8,
     IterInt = 9,
     IterStr = 10,
+    #[default]
     Null = 11,
 }
 
@@ -62,12 +63,6 @@ impl std::convert::TryFrom<u32> for Ty {
             11 => Null,
             _ => return Err(()),
         })
-    }
-}
-
-impl Default for Ty {
-    fn default() -> Ty {
-        Ty::Null
     }
 }
 
@@ -131,14 +126,14 @@ impl Ty {
     }
 }
 
-fn visit_used_fields<'a>(stmt: &Instr<'a>, cur_func_id: NumTy, ufa: &mut UsedFieldAnalysis) {
+fn visit_used_fields(stmt: &Instr, cur_func_id: NumTy, ufa: &mut UsedFieldAnalysis) {
     match stmt {
         Either::Left(l) => ufa.visit_ll(l),
         Either::Right(r) => ufa.visit_hl(cur_func_id, r),
     }
 }
 
-fn visit_taint_analysis<'a>(stmt: &Instr<'a>, func_id: NumTy, tsa: &mut TaintedStringAnalysis) {
+fn visit_taint_analysis(stmt: &Instr, func_id: NumTy, tsa: &mut TaintedStringAnalysis) {
     match stmt {
         Either::Left(ll) => tsa.visit_ll(ll),
         Either::Right(hl) => tsa.visit_hl(func_id, hl),

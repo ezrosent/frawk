@@ -219,16 +219,16 @@ pub fn new_chained_offset_chunk_producer_ascii_whitespace<
 impl<C: Chunk> ChunkProducer for Box<dyn ChunkProducer<Chunk = C>> {
     type Chunk = C;
     fn try_dyn_resize(&self, requested_size: usize) -> DynamicProducers<C> {
-        (&**self).try_dyn_resize(requested_size)
+        (**self).try_dyn_resize(requested_size)
     }
     fn wait(&self) -> bool {
-        (&**self).wait()
+        (**self).wait()
     }
     fn next_file(&mut self) -> Result<bool> {
-        (&mut **self).next_file()
+        (**self).next_file()
     }
     fn get_chunk(&mut self, chunk: &mut C) -> Result<bool> {
-        (&mut **self).get_chunk(chunk)
+        (**self).get_chunk(chunk)
     }
 }
 
@@ -254,7 +254,7 @@ impl<Off: Default> Default for OffsetChunk<Off> {
 
 impl<Off: Default + Send> Chunk for OffsetChunk<Off> {
     fn get_name(&self) -> &str {
-        &*self.name
+        &self.name
     }
 }
 
@@ -385,7 +385,7 @@ impl<R: Read, F: FnMut(&[u8], &mut WhitespaceOffsets, u64) -> u64> ChunkProducer
                             self.0.inner.start = buf_end;
                             let mut start = chunk.off.0.rel.fields.len() as isize - 1;
                             while start > 0 {
-                                if chunk.off.0.rel.fields[start as usize] > nl_off as u64 {
+                                if chunk.off.0.rel.fields[start as usize] > nl_off {
                                     // We are removing trailing fields from the input, but we know
                                     // that newlines are whitespace, so we reset the start_ws
                                     // variable to 1.
@@ -763,7 +763,7 @@ mod tests {
 
     impl<T: Send + Default> Chunk for ItemChunk<T> {
         fn get_name(&self) -> &str {
-            &*self.name
+            &self.name
         }
     }
 

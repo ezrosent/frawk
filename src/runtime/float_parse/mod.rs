@@ -2,7 +2,7 @@
 //! semantics (no failures, just 0s and stopping early). Mistakes are surely my own.
 
 fn is_integer(c: u8) -> bool {
-    matches!(c, b'0'..=b'9')
+    c.is_ascii_digit()
 }
 
 /// The simdjson repo has more optimizations to add for int parsing, but this is a big win over libc

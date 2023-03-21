@@ -72,11 +72,7 @@ impl Inline {
             std::hint::unreachable_unchecked();
         }
         let mut res = ((len << 3) | StrTag::Inline as usize) as u128;
-        ptr::copy_nonoverlapping(
-            ptr,
-            mem::transmute::<&mut u128, *mut u8>(&mut res).offset(1),
-            len,
-        );
+        ptr::copy_nonoverlapping(ptr, (&mut res as *mut u128 as *mut u8).offset(1), len);
         Inline(res)
     }
     unsafe fn from_unchecked(bs: &[u8]) -> Inline {
@@ -86,12 +82,7 @@ impl Inline {
         (self.0 as usize & 0xFF) >> 3
     }
     fn bytes(&self) -> &[u8] {
-        unsafe {
-            slice::from_raw_parts(
-                mem::transmute::<&Inline, *const u8>(self).offset(1),
-                self.len(),
-            )
-        }
+        unsafe { slice::from_raw_parts((self as *const Inline as *const u8).offset(1), self.len()) }
     }
 }
 
@@ -454,7 +445,7 @@ impl<'a> Str<'a> {
         });
     }
 
-    pub fn join_slice<'other, 'b>(&self, inps: &[Str<'other>]) -> Str<'b> {
+    pub fn join_slice<'b>(&self, inps: &[Str]) -> Str<'b> {
         // We've noticed that performance of `join_slice` is very sensitive to the number of
         // `realloc` calls that happen when pushing onto DynamicBufHeap, so we spend the extra time
         // of computing the size of the joined string ahead of time exactly.
@@ -881,7 +872,7 @@ impl<'a> Str<'a> {
             match tag {
                 StrTag::Inline => rep.view_as_inline(|i| i.bytes() as *const _),
                 StrTag::Literal => rep.view_as(|lit: &Literal| {
-                    slice::from_raw_parts(lit.ptr, lit.len as usize) as *const _
+                    std::ptr::slice_from_raw_parts(lit.ptr, lit.len as usize) as *const _
                 }),
                 StrTag::Shared => rep.view_as(|s: &Shared| {
                     &s.buf.as_bytes()[s.start as usize..s.end as usize] as *const _

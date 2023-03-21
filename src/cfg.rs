@@ -133,17 +133,12 @@ impl Ident {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 pub enum Escaper {
     CSV,
     TSV,
+    #[default]
     Identity,
-}
-
-impl Default for Escaper {
-    fn default() -> Escaper {
-        Escaper::Identity
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1484,7 +1479,7 @@ where
                 Ok(())
             }
             None => {
-                return err!("{} statement must be inside a loop", name);
+                err!("{} statement must be inside a loop", name)
             }
         }
     }
@@ -1904,11 +1899,7 @@ where
             }
         }
 
-        fn rename_recursive<'b, I>(
-            f: &mut Function<'b, I>,
-            cur: NodeIx,
-            state: &mut Vec<RenameStack>,
-        ) {
+        fn rename_recursive<I>(f: &mut Function<I>, cur: NodeIx, state: &mut Vec<RenameStack>) {
             // We need to remember which new variables are introduced in this frame so we can
             // remove them when we are done.
             let mut defs = smallvec::SmallVec::<[NumTy; 16]>::new();

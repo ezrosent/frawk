@@ -839,12 +839,12 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     }
                     MatchConst(res, x, pat) => {
                         *index_mut(&mut self.ints, res) =
-                            runtime::RegexCache::regex_const_match(&*pat, index(&self.strs, x))
+                            runtime::RegexCache::regex_const_match(pat, index(&self.strs, x))
                                 as Int;
                     }
                     IsMatchConst(res, x, pat) => {
                         *index_mut(&mut self.ints, res) =
-                            self.core.match_const_regex(index(&self.strs, x), &*pat)?;
+                            self.core.match_const_regex(index(&self.strs, x), pat)?;
                     }
                     SubstrIndex(res, s, t) => {
                         let res = *res;
@@ -1315,11 +1315,11 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                     JmpIf(cond, lbl) => {
                         let cond = *cond;
                         if *self.get(cond) != 0 {
-                            break lbl.0 as usize;
+                            break lbl.0;
                         }
                     }
                     Jmp(lbl) => {
-                        break lbl.0 as usize;
+                        break lbl.0;
                     }
                     Push(ty, reg) => self.push_reg(*ty, *reg),
                     Pop(ty, reg) => self.pop_reg(*ty, *reg),
@@ -1333,7 +1333,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         if let Some((func, Label(inst))) = self.stack.pop() {
                             cur_fn = func;
                             instrs = &mut self.instrs[func];
-                            break inst as usize;
+                            break inst;
                         } else {
                             break 'outer Ok(0);
                         }

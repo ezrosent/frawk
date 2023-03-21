@@ -10,11 +10,11 @@ fn prepare_command(bs: &[u8]) -> io::Result<Command> {
     };
     if cfg!(target_os = "windows") {
         let mut cmd = Command::new("cmd");
-        cmd.args(&["/C", prog]);
+        cmd.args(["/C", prog]);
         Ok(cmd)
     } else {
         let mut cmd = Command::new("sh");
-        cmd.args(&["-c", prog]);
+        cmd.args(["-c", prog]);
         Ok(cmd)
     }
 }

@@ -321,7 +321,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &[u8], mut args: &[FormatArg]) -> 
                             continue 'outer;
                         }
                         (ch, _) if is_spec(ch) => {
-                            fs.spec = ch as u8;
+                            fs.spec = ch;
                             process_spec(&mut w, &mut fs, next_arg())?;
                             state = Raw(ix + 1);
                             continue 'outer;
@@ -346,7 +346,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &[u8], mut args: &[FormatArg]) -> 
                             };
                             next = None;
                             for (ix, ch) in iter.by_ref() {
-                                if !matches!(ch, b'0'..=b'9') {
+                                if !ch.is_ascii_digit() {
                                     next = Some((ix, ch));
                                     break;
                                 }
@@ -370,7 +370,7 @@ pub(crate) fn printf(mut w: impl Write, spec: &[u8], mut args: &[FormatArg]) -> 
                             buf.clear();
                             next = None;
                             for (ix, ch) in iter.by_ref() {
-                                if !matches!(ch, b'0'..=b'9') {
+                                if !ch.is_ascii_digit() {
                                     next = Some((ix, ch));
                                     break;
                                 }

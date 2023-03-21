@@ -208,7 +208,7 @@ mod tests {
             RegexSplitter::new(c, /*chunk_size=*/ 512, "", /*check_utf8=*/ false);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
-            let line = rdr.read_line_regex(&*BS).upcast();
+            let line = rdr.read_line_regex(&BS).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
@@ -234,7 +234,7 @@ mod tests {
         let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
-            let line = rdr.read_line_regex(&*LINE).upcast();
+            let line = rdr.read_line_regex(&LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
@@ -271,7 +271,7 @@ mod tests {
         let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
         let mut lines = Vec::new();
         while !rdr.reader.is_eof() {
-            let line = rdr.read_line_regex(&*LINE).upcast();
+            let line = rdr.read_line_regex(&LINE).upcast();
             assert!(rdr.read_state() != -1);
             lines.push(line);
         }
@@ -307,7 +307,7 @@ mod tests {
             let mut rdr = RegexSplitter::new(c, chunk_size, "", /*check_utf8=*/ true);
             let mut lines = Vec::new();
             while !rdr.reader.is_eof() {
-                let line = rdr.read_line_regex(&*LINE).upcast();
+                let line = rdr.read_line_regex(&LINE).upcast();
                 assert!(rdr.read_state() != -1);
                 lines.push(line);
             }

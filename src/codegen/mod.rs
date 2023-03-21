@@ -306,7 +306,7 @@ pub(crate) trait CodeGenerator: Backend {
     fn runtime_val(&mut self) -> Self::Val;
     fn const_int(&mut self, i: i64) -> Self::Val;
     fn const_float(&mut self, f: f64) -> Self::Val;
-    fn const_str<'a>(&mut self, s: &UniqueStr<'a>) -> Self::Val;
+    fn const_str(&mut self, s: &UniqueStr) -> Self::Val;
 
     // const ptr should not be called directly.
     fn const_ptr<T>(&mut self, r: *const T) -> Self::Val;

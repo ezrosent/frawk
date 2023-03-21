@@ -549,13 +549,16 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn potential_re(&self) -> bool {
-        match &self.prev_tok {
-            Some(Tok::Ident(_)) | Some(Tok::StrLit(_)) | Some(Tok::PatLit(_))
-            | Some(Tok::ILit(_)) | Some(Tok::FLit(_)) | Some(Tok::RParen) | Some(Tok::RBrack) => {
-                false
-            }
-            _ => true,
-        }
+        !matches!(
+            &self.prev_tok,
+            Some(Tok::Ident(_))
+                | Some(Tok::StrLit(_))
+                | Some(Tok::PatLit(_))
+                | Some(Tok::ILit(_))
+                | Some(Tok::FLit(_))
+                | Some(Tok::RParen)
+                | Some(Tok::RBrack)
+        )
     }
 }
 

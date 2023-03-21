@@ -94,13 +94,7 @@ pub(crate) unsafe fn gen_drop_str(
 
     // Slow path, call the slow drop
     LLVMPositionBuilderAtEnd(builder, slow);
-    LLVMBuildCall(
-        builder,
-        drop_slow,
-        (&mut [arg, tag]).as_mut_ptr(),
-        2,
-        c_str!(""),
-    );
+    LLVMBuildCall(builder, drop_slow, [arg, tag].as_mut_ptr(), 2, c_str!(""));
     LLVMBuildRetVoid(builder);
     LLVMDisposeBuilder(builder);
     decl

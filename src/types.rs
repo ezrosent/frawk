@@ -369,7 +369,7 @@ impl<T> Constraint<T> {
 }
 
 impl Constraint<State> {
-    fn eval<'a, 'b>(&self, tc: &mut TypeContext<'a, 'b>) -> Result<State> {
+    fn eval(&self, tc: &mut TypeContext) -> Result<State> {
         match self {
             Constraint::KeyIn(None) => Ok(Some(TVar::Map {
                 key: None,
@@ -955,7 +955,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
         self.nw.wl.insert(to);
     }
 
-    fn constrain_stmt<'a>(&mut self, stmt: &cfg::PrimStmt<'a>) {
+    fn constrain_stmt(&mut self, stmt: &cfg::PrimStmt) {
         use cfg::PrimStmt::*;
         match stmt {
             AsgnIndex(arr, ix, v) => {
@@ -1023,7 +1023,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
         }
     }
 
-    fn constrain_expr<'a>(&mut self, expr: &cfg::PrimExpr<'a>, to: NodeIx) {
+    fn constrain_expr(&mut self, expr: &cfg::PrimExpr, to: NodeIx) {
         use cfg::PrimExpr::*;
         match expr {
             Val(pv) => {
@@ -1093,7 +1093,7 @@ impl<'b, 'c, 'd> View<'b, 'c, 'd> {
         };
     }
 
-    fn val_node<'a>(&mut self, val: &cfg::PrimVal<'a>) -> NodeIx {
+    fn val_node(&mut self, val: &cfg::PrimVal) -> NodeIx {
         use cfg::PrimVal::*;
         match val {
             Var(id) => self.ident_node(id),

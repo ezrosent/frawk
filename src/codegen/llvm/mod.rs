@@ -232,7 +232,7 @@ impl<'a> CodeGenerator for View<'a> {
         unsafe { LLVMConstReal(self.get_ty(Ty::Float), f) }
     }
 
-    fn const_str<'b>(&mut self, s: &runtime::UniqueStr<'b>) -> Self::Val {
+    fn const_str(&mut self, s: &runtime::UniqueStr) -> Self::Val {
         // We don't know where we're storing this string literal. If it's in the middle of
         // a loop, we could be calling drop on it repeatedly. If the string is boxed, that
         // will lead to double-frees. In our current setup, these literals will all be

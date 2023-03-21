@@ -296,11 +296,7 @@ impl Generator {
 
         // And now we allocate global variables. First, grab the globals we need from the FuncInfo
         // stored for `udf`.
-        let globals = self.shared.func_ids[udf as usize]
-            .as_ref()
-            .unwrap()
-            .globals
-            .clone();
+        let globals = self.shared.func_ids[udf].as_ref().unwrap().globals.clone();
 
         // We'll keep track of these variables and their types so we can drop them at the end.
         let mut vars = Vec::with_capacity(globals.len());
@@ -320,7 +316,7 @@ impl Generator {
             let ptr_ty = view.ptr_to(cl_ty);
             view.builder.declare_var(var, ptr_ty);
 
-            let slot = view.stack_slot_bytes(cl_ty.lane_bits() as u32 / 8);
+            let slot = view.stack_slot_bytes(cl_ty.lane_bits() / 8);
             let default = view.default_value(ty)?;
             if let compile::Ty::Str = ty {
                 view.store_string(slot, default);
@@ -1331,7 +1327,7 @@ impl<'a> CodeGenerator for View<'a> {
     fn const_float(&mut self, f: f64) -> Self::Val {
         self.builder.ins().f64const(f)
     }
-    fn const_str<'b>(&mut self, s: &UniqueStr<'b>) -> Self::Val {
+    fn const_str(&mut self, s: &UniqueStr) -> Self::Val {
         // iconst does not support I128, so we concatenate two I64 constants.
         let bits: u128 = s.clone_str().into_bits();
         let low = bits as i64;

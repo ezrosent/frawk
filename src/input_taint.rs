@@ -93,7 +93,7 @@ impl TaintedStringAnalysis {
             self.dfa.add_dep(dst, src.unwrap(), ())
         })
     }
-    pub(crate) fn visit_ll<'a>(&mut self, inst: &Instr<'a>) {
+    pub(crate) fn visit_ll(&mut self, inst: &Instr) {
         // NB: this analysis currently tracks taint even in string-to-integer operations. I cannot
         // currently think of any security issues around interpolating an arbitrary integer (or
         // float, though perhaps that is more plausible) into a shell command. It's a easy and
@@ -193,7 +193,7 @@ mod tests {
         ];
 
         for p in progs.iter() {
-            assert_analysis_reject(*p);
+            assert_analysis_reject(p);
         }
     }
 
@@ -209,7 +209,7 @@ mod tests {
             BEGIN {  system(x($2, "dog") ? "echo hello" : "echo goodbye"); }"#,
         ];
         for p in progs.iter() {
-            assert_analysis_accept(*p);
+            assert_analysis_accept(p);
         }
     }
 }
