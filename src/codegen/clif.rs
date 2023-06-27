@@ -280,7 +280,7 @@ impl Generator {
     /// a parameter) and then calls into that function.
     fn define_main_function(&mut self, name: &str, udf: usize) -> Result<FuncId> {
         // first, synthesize a `Prelude` matching a main function. This is pretty simple.
-        let mut sig = Signature::new(isa::CallConv::SystemV);
+        let mut sig = Signature::new(self.cctx.func.signature.call_conv);
         let ptr_ty = self.shared.module.target_config().pointer_type();
         sig.params.push(AbiParam::new(ptr_ty));
         let res = self
