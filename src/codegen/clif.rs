@@ -409,7 +409,7 @@ impl Generator {
     /// their bodies.
     fn declare_local_funcs(&mut self, typer: &mut Typer) -> Result<()> {
         let globals = typer.get_global_refs();
-        let cc = isa::CallConv::Fast;
+        let cc = self.cctx.func.signature.call_conv;
         let ptr_ty = self.shared.module.target_config().pointer_type();
         for (i, (info, refs)) in typer.func_info.iter().zip(globals.iter()).enumerate() {
             if !typer.frames[i].is_called {
