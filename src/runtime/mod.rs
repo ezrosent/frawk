@@ -312,6 +312,7 @@ impl<LR: LineReader> FileRead<LR> {
 
     pub(crate) fn close(&mut self, path: &Str) {
         self.inputs.files.remove(path);
+        self.inputs.commands.remove(path);
     }
 
     pub(crate) fn new(
