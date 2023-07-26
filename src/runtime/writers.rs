@@ -481,7 +481,7 @@ impl FileHandle {
     pub fn close(&mut self) -> Result<()> {
         self.clear_batch(None)?;
         self.raw.sender.send(Request::Close).unwrap();
-        Ok(())
+        self.flush()
     }
 }
 
