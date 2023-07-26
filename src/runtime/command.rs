@@ -1,5 +1,7 @@
 use std::io;
-use std::process::{ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
+
+use grep_cli::{CommandError, CommandReader};
 
 use crate::runtime::Int;
 
@@ -39,8 +41,7 @@ pub fn command_for_write(bs: &[u8]) -> io::Result<ChildStdin> {
     Ok(child.stdin.take().unwrap())
 }
 
-pub fn command_for_read(bs: &[u8]) -> io::Result<ChildStdout> {
+pub fn command_for_read(bs: &[u8]) -> Result<CommandReader, CommandError> {
     let mut cmd = prepare_command(bs)?;
-    let mut child = cmd.stdin(Stdio::inherit()).stdout(Stdio::piped()).spawn()?;
-    Ok(child.stdout.take().unwrap())
+    CommandReader::new(&mut cmd)
 }

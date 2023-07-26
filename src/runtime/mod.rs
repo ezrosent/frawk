@@ -1,4 +1,5 @@
 use crate::common::{FileSpec, Result};
+use grep_cli::CommandReader;
 use hashbrown::HashMap;
 use regex::bytes::Regex;
 use std::cell::{Cell, RefCell};
@@ -7,7 +8,6 @@ use std::hash::Hash;
 use std::io;
 use std::iter::FromIterator;
 use std::mem;
-use std::process::ChildStdout;
 use std::rc::Rc;
 use std::str;
 
@@ -274,7 +274,7 @@ pub const CHUNK_SIZE: usize = 8 << 10;
 #[derive(Default)]
 pub(crate) struct Inputs {
     files: Registry<RegexSplitter<File>>,
-    commands: Registry<RegexSplitter<ChildStdout>>,
+    commands: Registry<RegexSplitter<CommandReader>>,
 }
 
 pub(crate) struct FileRead<LR = RegexSplitter<Box<dyn io::Read + Send>>> {
@@ -396,7 +396,7 @@ impl<LR: LineReader> FileRead<LR> {
     fn with_cmd<R>(
         &mut self,
         cmd: &Str,
-        f: impl FnMut(&mut RegexSplitter<ChildStdout>) -> Result<R>,
+        f: impl FnMut(&mut RegexSplitter<CommandReader>) -> Result<R>,
     ) -> Result<R> {
         let check_utf8 = self.stdin.check_utf8();
         self.inputs.commands.get_fallible(
