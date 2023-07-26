@@ -408,7 +408,7 @@ impl<LR: LineReader> FileRead<LR> {
                     cmd.clone().unmoor(),
                     check_utf8,
                 )),
-                Err(e) => err!("failed to crate command for reading: {}", e),
+                Err(e) => err!("failed to create command for reading: {}", e),
             },
             f,
         )
