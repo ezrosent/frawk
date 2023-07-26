@@ -44,7 +44,7 @@ impl<T> From<u32> for Reg<T> {
 }
 impl<T> Clone for Reg<T> {
     fn clone(&self) -> Reg<T> {
-        Reg(self.0, PhantomData)
+        *self
     }
 }
 impl<T> Copy for Reg<T> {}
