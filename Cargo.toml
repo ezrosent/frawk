@@ -28,7 +28,7 @@ rand = "0.8.4"
 lalrpop-util = "0.19.8"
 unicode-xid = "0.2.2"
 llvm-sys = {version = "120", optional = true }
-clap = "3.0"
+clap = "3.2.25"
 crossbeam-channel = "0.5"
 crossbeam = "0.8.1"
 num_cpus = "1.13.1"

@@ -1455,6 +1455,21 @@ this as well"#
         @input "aboba\n"
     );
 
+    test_program!(map_global_var, r#"
+BEGIN {
+	unused_string_map["a"] = "abc"
+}
+
+function do_something(v) {
+	return v
+}
+
+{ print do_something($0) }
+    "#,
+        "hello\n",
+        @input "hello\n"
+    );
+
     // TODO test more operators, consider more edge cases around functions
 }
 

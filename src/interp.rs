@@ -1558,7 +1558,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                 *index_mut(&mut self.maps_str_float, &dst.into()) = pop(&mut self.maps_str_float)
             }
             Ty::MapStrStr => {
-                *index_mut(&mut self.maps_str_float, &dst.into()) = pop(&mut self.maps_str_float)
+                *index_mut(&mut self.maps_str_str, &dst.into()) = pop(&mut self.maps_str_str)
             }
             Ty::Null | Ty::IterInt | Ty::IterStr => {
                 panic!("unsupported register type for pop operation: {:?}", ty)
