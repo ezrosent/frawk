@@ -68,7 +68,7 @@ with embedded commas in some fields, such as
 ```
 Item,Quantity
 Carrot,2
-"The Deluge: The Great War, America and the Remaking of the Global Order, 1916-1931", 3
+"The Deluge: The Great War, America and the Remaking of the Global Order, 1916-1931",3
 Banana,4
 ```
 
