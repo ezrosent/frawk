@@ -1,5 +1,10 @@
 # frawk
 
+*Note (2024, ezrosent@) While the [policy](https://github.com/ezrosent/frawk?tab=readme-ov-file#bugs-and-feature-requests)
+on bugs and feature requests remains unchanged I've had much less time over the last 1-2 years to devote to bug fixes and
+feature requests for frawk. Other awks are more actively maintained, and CSV support is now a much
+more common feature in awk compared to when this project started; I'll update this notice if frawk's status changes.*
+
 frawk is a small programming language for writing short programs processing
 textual data. To a first approximation, it is an implementation of the
 [AWK](https://en.wikipedia.org/wiki/AWK) language; many common Awk programs
