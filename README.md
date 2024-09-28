@@ -42,7 +42,8 @@ to use the LLVM backend, you will need an installation of LLVM 12 on your machin
 * See [this site](https://apt.llvm.org/) for installation instructions on some debian-based Linux distros.
   See also the comments on [this issue](https://github.com/ezrosent/frawk/issues/63) for docker files that
   can be used to build a binary on Ubuntu.
-* On Red Hat-based distros `dnf install llvm12-devel`.
+* On Red Hat-based distros `dnf install llvm12-devel`. (Recent versions of Fedora require
+  `zlib-ng-compat-devel` additionally.)
 * On Arch `pacman -Sy llvm llvm-libs` and a C compiler (e.g. `clang`) are sufficient as of September 2020.
 * `brew install llvm@12` or similar seem to work on Mac OS.
 
