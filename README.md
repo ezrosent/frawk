@@ -43,6 +43,7 @@ to use the LLVM backend, you will need an installation of LLVM 12 on your machin
   See also the comments on [this issue](https://github.com/ezrosent/frawk/issues/63) for docker files that
   can be used to build a binary on Ubuntu.
 * On Arch `pacman -Sy llvm llvm-libs` and a C compiler (e.g. `clang`) are sufficient as of September 2020.
+* On Ubuntu (22.04) `sudo apt install make llvm-12-dev libclang-common-12-dev zlib1g-dev` and a C compiler (e.g. `clang`).
 * `brew install llvm@12` or similar seem to work on Mac OS.
 
 Depending on where your package manager puts these libraries, you may need to
