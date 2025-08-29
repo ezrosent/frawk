@@ -653,7 +653,7 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
             cur = loop {
                 debug_assert!(cur < unsafe { (*instrs).len() });
                 use Variable::*;
-                match unsafe { (*instrs).get_unchecked(cur) } {
+                match unsafe { (&(*instrs)).get_unchecked(cur) } {
                     StoreConstStr(sr, s) => {
                         let sr = *sr;
                         *self.get_mut(sr) = s.clone_str()

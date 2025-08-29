@@ -1128,8 +1128,8 @@ mod generic {
         let len = buf.len();
         let len_minus_64 = len.saturating_sub(V::INPUT_SIZE);
         let mut ix = 0;
-        let field_base_ptr: *mut u64 = field_offsets.fields.get_unchecked_mut(0);
-        let newline_base_ptr: *mut u64 = newline_offsets.fields.get_unchecked_mut(0);
+        let field_base_ptr: *mut u64 = field_offsets.fields.as_mut_ptr();
+        let newline_base_ptr: *mut u64 = newline_offsets.fields.as_mut_ptr();
         let mut field_base = 0;
         let mut newline_base = 0;
 
