@@ -16,10 +16,10 @@ pub struct Arena(bumpalo::Bump);
 pub type Vec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
 impl Arena {
-    pub fn vec_with_capacity<T>(&self, capacity: usize) -> Vec<T> {
+    pub fn vec_with_capacity<T>(&self, capacity: usize) -> Vec<'_, T> {
         Vec::with_capacity_in(capacity, &self.0)
     }
-    pub fn new_vec<T>(&self) -> Vec<T> {
+    pub fn new_vec<T>(&self) -> Vec<'_, T> {
         Vec::new_in(&self.0)
     }
     pub fn new_vec_from_slice<'a, T: Clone>(&'a self, elts: &[T]) -> Vec<'a, T> {

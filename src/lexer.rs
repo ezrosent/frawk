@@ -683,7 +683,7 @@ impl<'a> Iterator for Tokenizer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn lex_str(s: &str) -> Vec<Spanned<Tok>> {
+    fn lex_str(s: &str) -> Vec<Spanned<Tok<'_>>> {
         Tokenizer::new(s).map(|x| x.ok().unwrap()).collect()
     }
 

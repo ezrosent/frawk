@@ -130,7 +130,7 @@ impl<'a> MainFunction<'a> {
 
 pub(crate) trait Jit: Sized {
     fn main_pointers(&mut self) -> Result<Stage<*const u8>>;
-    fn main_functions(&mut self) -> Result<Stage<MainFunction>> {
+    fn main_functions(&mut self) -> Result<Stage<MainFunction<'_>>> {
         Ok(self.main_pointers()?.map(MainFunction::from_ptr))
     }
 }

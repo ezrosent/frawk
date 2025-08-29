@@ -373,7 +373,7 @@ impl Generator {
     }
 
     /// Initialize a new user-defined function and prepare it for full code generation.
-    fn create_view(&mut self, Prelude { sig, refs, n_args }: Prelude) -> View {
+    fn create_view(&mut self, Prelude { sig, refs, n_args }: Prelude) -> View<'_> {
         // Initialize a frame for the function at the given offset, declare variables corresponding
         // to globals and params, return a View to proceed with the rest of code generation.
         let n_params = sig.params.len();

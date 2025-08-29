@@ -189,7 +189,7 @@ mod tests {
     }
 
     // Helps type inference along.
-    fn ref_str(s: &[u8]) -> Str {
+    fn ref_str(s: &[u8]) -> Str<'_> {
         std::str::from_utf8(s).unwrap().into()
     }
 
