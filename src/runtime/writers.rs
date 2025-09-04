@@ -685,7 +685,7 @@ fn write_all(batch: &mut WriteBatch, w: &mut impl Write) -> io::Result</*close=*
             let buf: &[u8] = slice.deref();
             w.write_all(buf)
         })
-        .fold_results(true, |a, _| a)
+        .fold_ok(true, |a, _| a)
 }
 
 impl WriteBatch {
