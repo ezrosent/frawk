@@ -9,7 +9,7 @@ use unicode_xid::UnicodeXID;
 
 use crate::arena::Arena;
 
-#[derive(PartialEq, Eq, Clone, Debug, Default)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Default)]
 pub struct Loc {
     pub line: usize,
     pub col: usize,
