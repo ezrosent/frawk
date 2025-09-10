@@ -1137,7 +1137,7 @@ mod generic {
         macro_rules! iterate {
             ($buf:expr) => {{
                 #[cfg(feature = "unstable")]
-                std::intrinsics::prefetch_read_data($buf.offset(128), 3);
+                std::intrinsics::prefetch_read_data::<_, 3>($buf.offset(128));
                 let (s, mask, nl) = f(state, $buf);
                 state = s;
                 (mask, nl)
