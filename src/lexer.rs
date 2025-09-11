@@ -632,6 +632,22 @@ impl<'a> Iterator for Tokenizer<'a> {
         let span = if let Some((ix, c)) = self.text[self.cur..].char_indices().next() {
             let ix = self.cur + ix;
             match c {
+                '}' => {
+                    // In awk statements are terminated by semicolons, newlines or right braces.
+                    // The current lalrpop grammar does not support parsing statements that are
+                    // terminated by a right brace from an upper level, so a ';' gets injected
+                    // before a '}' if none of the following conditions occurs:
+                    //   - Previous token is not a newline or ';'.
+                    //   - Previous token is not a '{', as "{}" should not be converted to
+                    //     invalid "{;}".
+                    match self.prev_tok {
+                        Some(Tok::Semi)|Some(Tok::Newline)|Some(Tok::LBrace) => {
+                            self.cur += 1;
+                            self.spanned(ix, self.cur, Tok::RBrace)
+                        },
+                        _ => self.spanned(ix, self.cur, Tok::Semi),
+                    }
+                }
                 '"' => {
                     self.cur += 1;
                     let (s, new_start) = try_tok!(self.string_lit());
