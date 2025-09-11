@@ -1119,10 +1119,16 @@ unsafe fn wrap_args<'a>(
                 ty_code
             )
         };
+
         let typed_arg: FormatArg = match ty {
-            Ty::Int => mem::transmute::<usize, Int>(arg).into(),
+            Ty::Int => (arg.cast_signed() as i64).into(),
             Ty::Float => Float::from_bits(arg as u64).into(),
-            Ty::Str => mem::transmute::<usize, &Str>(arg).clone().into(),
+            Ty::Str => {
+                unsafe {
+                    let str_ref = std::ptr::with_exposed_provenance::<Str>(arg).as_ref().unwrap();
+                    str_ref.clone().into()
+                }
+            },
             Ty::Null => FormatArg::Null,
             _ => fail!(
                 _rt,
