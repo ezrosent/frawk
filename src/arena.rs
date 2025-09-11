@@ -106,7 +106,7 @@ mod bench {
         expr
     }
 
-    fn build_2(a: &Arena, depth: usize) -> &Arith2 {
+    fn build_2<'a>(a: &'a Arena, depth: usize) -> &'a Arith2<'a> {
         use Arith2::*;
         let mut expr = a.alloc(N(1));
         for i in 0..depth {
@@ -119,7 +119,7 @@ mod bench {
         expr
     }
 
-    fn build_2_cheat(a: &Arena, depth: usize) -> &Arith2 {
+    fn build_2_cheat<'a>(a: &'a Arena, depth: usize) -> &'a Arith2<'a> {
         use Arith2::*;
         let n1 = a.alloc(N(1));
         let mut expr = n1;
