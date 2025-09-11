@@ -448,7 +448,7 @@ pub(crate) unsafe extern "C" fn run_system(cmd: *mut U128) -> Int {
 
 pub(crate) unsafe extern "C" fn rand_float(runtime: *mut c_void) -> f64 {
     let runtime = &mut *(runtime as *mut Runtime);
-    runtime.core.rng.gen_range(0.0..=1.0)
+    runtime.core.rng.random_range(0.0..=1.0)
 }
 
 pub(crate) unsafe extern "C" fn seed_rng(runtime: *mut c_void, seed: Int) -> Int {

@@ -1638,11 +1638,11 @@ mod bench {
     use test::{black_box, Bencher};
 
     fn bench_max_min(b: &mut Bencher, min: i64, max: i64) {
-        use rand::{thread_rng, Rng};
-        let mut rng = thread_rng();
+        use rand::{rng as rand_rng, Rng};
+        let mut rng = rand_rng();
         let mut v = Vec::new();
         let size = 1 << 12;
-        v.resize_with(size, || rng.gen_range(min..=max));
+        v.resize_with(size, || rng.random_range(min..=max));
         let mut i = 0;
         b.iter(|| {
             let n = unsafe { *v.get_unchecked(i) };

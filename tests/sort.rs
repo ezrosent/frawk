@@ -1,6 +1,6 @@
 use assert_cmd::Command;
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::rng;
 use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
@@ -9,7 +9,7 @@ fn numbers_str(n: usize) -> (String, String) {
     let mut input = String::new();
     let mut sorted = String::new();
     let mut vs: Vec<_> = (0..n).collect();
-    vs.shuffle(&mut thread_rng());
+    vs.shuffle(&mut rng());
     for (i, n) in vs.into_iter().enumerate() {
         sorted.push_str(format!("{}\n", i).as_str());
         input.push_str(format!("{}\n", n).as_str());
