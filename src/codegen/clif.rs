@@ -473,12 +473,6 @@ impl Generator {
     }
 }
 
-macro_rules! external {
-    ($name:ident) => {
-        crate::codegen::intrinsics::$name as *const u8
-    };
-}
-
 impl<'a> View<'a> {
     fn stack_slot_bytes(&mut self, bytes: u32) -> StackSlot {
         debug_assert!(bytes > 0); // This signals a bug; all frawk types have positive size.
