@@ -64,6 +64,16 @@ allow_avx2 = []
 llvm_backend = ["llvm-sys"]
 unstable = []
 
+[profile.dev.package."*"]
+# Set the default for dependencies in Development mode.
+opt-level = 1
+debug-assertions = true
+
+[profile.dev]
+# Turn on a small amount of optimisation in Development mode.
+opt-level = 1
+debug-assertions = true
+
 [profile.release]
 lto = "thin"
 
