@@ -1,6 +1,7 @@
 use crate::common::{FileSpec, Result};
 use grep_cli::CommandReader;
 use hashbrown::HashMap;
+use ordermap::map::{OrderMap, RawEntryApiV1};
 use regex::bytes::Regex;
 use std::cell::{Cell, RefCell};
 use std::fs::File;
@@ -584,7 +585,7 @@ where
 // NB These are repr(transparent) because we pass them around as void* when compiling with LLVM.
 #[repr(transparent)]
 #[derive(Debug)]
-pub(crate) struct SharedMap<K, V>(pub(crate) Rc<RefCell<HashMap<K, V>>>);
+pub(crate) struct SharedMap<K, V>(pub(crate) Rc<RefCell<OrderMap<K, V>>>);
 
 impl<K, V> Default for SharedMap<K, V> {
     fn default() -> SharedMap<K, V> {
@@ -610,7 +611,7 @@ impl<K: Hash + Eq, V> SharedMap<K, V> {
     }
     pub(crate) fn iter<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(hashbrown::hash_map::Iter<K, V>) -> R,
+        F: FnOnce(ordermap::map::Iter<'_, K, V>) -> R,
     {
         f(self.0.borrow().iter())
     }
@@ -647,16 +648,16 @@ impl<K: Hash + Eq + Clone, V: Inc + Default + Clone> SharedMap<K, V> {
 // When sending SharedMaps across threads we have to clone them and clone their contents, as Rc is
 // not thread-safe (and we don't want to pay the cost of Arc clones during normal execution).
 pub(crate) struct Shuttle<T>(T);
-impl<'a> From<Shuttle<HashMap<Int, UniqueStr<'a>>>> for IntMap<Str<'a>> {
-    fn from(sh: Shuttle<HashMap<Int, UniqueStr<'a>>>) -> Self {
+impl<'a> From<Shuttle<OrderMap<Int, UniqueStr<'a>>>> for IntMap<Str<'a>> {
+    fn from(sh: Shuttle<OrderMap<Int, UniqueStr<'a>>>) -> Self {
         SharedMap(Rc::new(RefCell::new(
             sh.0.into_iter().map(|(x, y)| (x, y.into_str())).collect(),
         )))
     }
 }
 
-impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
-    fn from(sh: Shuttle<HashMap<UniqueStr<'a>, Int>>) -> Self {
+impl<'a> From<Shuttle<OrderMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
+    fn from(sh: Shuttle<OrderMap<UniqueStr<'a>, Int>>) -> Self {
         SharedMap(Rc::new(RefCell::new(
             sh.0.into_iter().map(|(x, y)| (x.into_str(), y)).collect(),
         )))
@@ -664,7 +665,7 @@ impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
 }
 
 impl<K, V> SharedMap<K, V> {
-    fn borrow_mut(&self) -> impl std::ops::DerefMut<Target = HashMap<K, V>> + '_ {
+    fn borrow_mut(&self) -> impl std::ops::DerefMut<Target = OrderMap<K, V>> + '_ {
         // Unlike the full std::collections APIs, we are careful not to hand out any references
         // internal to a SharedMap from a public function. That means that functions which mutate
         // the map are "Cell"-like, in that they swap out values or drop them in, but never hold
@@ -699,7 +700,7 @@ impl<K: Hash + Eq, V: Clone> SharedMap<K, V> {
 impl<K: Hash + Eq + Clone, V: Clone + Default> SharedMap<K, V> {
     pub(crate) fn get(&self, k: &K) -> V {
         self.borrow_mut()
-            .raw_entry_mut()
+            .raw_entry_mut_v1()
             .from_key(k)
             .or_insert_with(|| (k.clone(), V::default()))
             .1
@@ -708,7 +709,7 @@ impl<K: Hash + Eq + Clone, V: Clone + Default> SharedMap<K, V> {
 }
 
 impl<'a> IntMap<Str<'a>> {
-    pub(crate) fn shuttle(&self) -> Shuttle<HashMap<Int, UniqueStr<'a>>> {
+    pub(crate) fn shuttle(&self) -> Shuttle<OrderMap<Int, UniqueStr<'a>>> {
         Shuttle(
             self.0
                 .borrow()
@@ -720,7 +721,7 @@ impl<'a> IntMap<Str<'a>> {
 }
 
 impl<'a> StrMap<'a, Int> {
-    pub(crate) fn shuttle(&self) -> Shuttle<HashMap<UniqueStr<'a>, Int>> {
+    pub(crate) fn shuttle(&self) -> Shuttle<OrderMap<UniqueStr<'a>, Int>> {
         Shuttle(
             self.0
                 .borrow()
@@ -740,8 +741,8 @@ impl<K: Hash + Eq + Clone, V> SharedMap<K, V> {
     }
 }
 
-impl<K: Hash + Eq, V> From<HashMap<K, V>> for SharedMap<K, V> {
-    fn from(m: HashMap<K, V>) -> SharedMap<K, V> {
+impl<K: Hash + Eq, V> From<OrderMap<K, V>> for SharedMap<K, V> {
+    fn from(m: OrderMap<K, V>) -> SharedMap<K, V> {
         SharedMap(Rc::new(RefCell::new(m)))
     }
 }
@@ -752,7 +753,7 @@ impl<K: Hash + Eq, V> FromIterator<(K, V)> for SharedMap<K, V> {
         T: IntoIterator<Item = (K, V)>,
     {
         SharedMap(Rc::new(RefCell::new(
-            iter.into_iter().collect::<HashMap<K, V>>(),
+            iter.into_iter().collect::<OrderMap<K, V>>(),
         )))
     }
 }

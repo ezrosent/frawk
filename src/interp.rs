@@ -7,7 +7,7 @@ use crate::runtime::{self, Float, Int, Line, LineReader, Str, UniqueStr};
 
 use crossbeam::scope;
 use crossbeam_channel::bounded;
-use hashbrown::HashMap;
+use ordermap::map::OrderMap;
 use rand::{self, rngs::StdRng, Rng, SeedableRng};
 use regex::bytes::Regex;
 
@@ -51,12 +51,12 @@ pub(crate) struct Slots {
     pub int: Vec<Int>,
     pub float: Vec<Float>,
     pub strs: Vec<UniqueStr<'static>>,
-    pub intint: Vec<HashMap<Int, Int>>,
-    pub intfloat: Vec<HashMap<Int, Float>>,
-    pub intstr: Vec<HashMap<Int, UniqueStr<'static>>>,
-    pub strint: Vec<HashMap<UniqueStr<'static>, Int>>,
-    pub strfloat: Vec<HashMap<UniqueStr<'static>, Float>>,
-    pub strstr: Vec<HashMap<UniqueStr<'static>, UniqueStr<'static>>>,
+    pub intint: Vec<OrderMap<Int, Int>>,
+    pub intfloat: Vec<OrderMap<Int, Float>>,
+    pub intstr: Vec<OrderMap<Int, UniqueStr<'static>>>,
+    pub strint: Vec<OrderMap<UniqueStr<'static>, Int>>,
+    pub strfloat: Vec<OrderMap<UniqueStr<'static>, Float>>,
+    pub strstr: Vec<OrderMap<UniqueStr<'static>, UniqueStr<'static>>>,
 }
 
 /// A Simple helper trait for implement aggregations for slot values and variables.
@@ -83,8 +83,8 @@ impl<'a> Agg for UniqueStr<'a> {
         }
     }
 }
-impl<K: std::hash::Hash + Eq, V: Agg + Default> Agg for HashMap<K, V> {
-    fn agg(mut self, other: HashMap<K, V>) -> HashMap<K, V> {
+impl<K: std::hash::Hash + Eq, V: Agg + Default> Agg for OrderMap<K, V> {
+    fn agg(mut self, other: OrderMap<K, V>) -> OrderMap<K, V> {
         for (k, v) in other {
             let entry = self.entry(k).or_default();
             let v2 = mem::take(entry);
