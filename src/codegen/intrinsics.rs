@@ -171,6 +171,8 @@ pub(crate) fn register_all(cg: &mut impl Backend) -> Result<()> {
         store_var_intstrmap(rt_ty, int_ty, map_ty);
         [ReadOnly] load_var_strintmap(rt_ty, int_ty) -> map_ty;
         store_var_strintmap(rt_ty, int_ty, map_ty);
+        [ReadOnly] load_var_strstrmap(rt_ty, str_ref_ty) -> map_ty;
+        store_var_strstrmap(rt_ty, str_ref_ty, map_ty);
 
         [ReadOnly] str_lt(str_ref_ty, str_ref_ty) -> int_ty;
         [ReadOnly] str_gt(str_ref_ty, str_ref_ty) -> int_ty;
@@ -1011,6 +1013,29 @@ pub(crate) unsafe extern "C" fn store_var_strintmap(rt: *mut c_void, var: usize,
     if let Ok(var) = Variable::try_from(var) {
         let map = mem::transmute::<*mut c_void, StrMap<Int>>(map);
         try_abort!(runtime, runtime.core.vars.store_strintmap(var, map.clone()));
+        mem::forget(map);
+    } else {
+        fail!(runtime, "invalid variable code={}", var)
+    }
+}
+
+#[inline(never)]
+pub(crate) unsafe extern "C" fn load_var_strstrmap(rt: *mut c_void, var: usize) -> *mut c_void {
+    let runtime = &mut *(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        let res = try_abort!(runtime, runtime.core.vars.load_strstrmap(var));
+        mem::transmute::<StrMap<_>, *mut c_void>(res)
+    } else {
+        fail!(runtime, "invalid variable code={}", var)
+    }
+}
+
+#[inline(never)]
+pub(crate) unsafe extern "C" fn store_var_strstrmap(rt: *mut c_void, var: usize, map: *mut c_void) {
+    let runtime = &mut *(rt as *mut Runtime);
+    if let Ok(var) = Variable::try_from(var) {
+        let map = mem::transmute::<*mut c_void, StrMap<Str>>(map);
+        try_abort!(runtime, runtime.core.vars.store_strstrmap(var, map.clone()));
         mem::forget(map);
     } else {
         fail!(runtime, "invalid variable code={}", var)

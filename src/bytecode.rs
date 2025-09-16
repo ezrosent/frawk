@@ -299,6 +299,8 @@ pub(crate) enum Instr<'a> {
     StoreVarIntStrMap(Variable, Reg<runtime::IntMap<Str<'a>>>),
     LoadVarStrIntMap(Reg<runtime::StrMap<'a, Int>>, Variable),
     StoreVarStrIntMap(Variable, Reg<runtime::StrMap<'a, Int>>),
+    LoadVarStrStrMap(Reg<runtime::StrMap<'a, Str<'a>>>, Variable),
+    StoreVarStrStrMap(Variable, Reg<runtime::StrMap<'a, Str<'a>>>),
 
     LoadSlot {
         ty: Ty,
@@ -800,6 +802,8 @@ impl<'a> Instr<'a> {
             StoreVarIntStrMap(_var, src) => src.accum(&mut f),
             LoadVarStrIntMap(dst, _var) => dst.accum(&mut f),
             StoreVarStrIntMap(_var, src) => src.accum(&mut f),
+            LoadVarStrStrMap(dst, _var) => dst.accum(&mut f),
+            StoreVarStrStrMap(_var, src) => src.accum(&mut f),
 
             LoadSlot { ty, dst, .. } => f(*dst, *ty),
             StoreSlot { ty, src, .. } => f(*src, *ty),

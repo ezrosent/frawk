@@ -381,6 +381,14 @@ pub(crate) mod boilerplate {
                 f(Key::VarKey(*v), Some(Key::MapKey(reg, ty)));
                 f(Key::VarVal(*v), Some(Key::MapVal(reg, ty)));
             },
+            StoreVarStrStrMap(v, reg) | LoadVarStrStrMap(reg, v) => {
+                let (reg, ty) = reg.reflect();
+
+                f(Key::MapKey(reg, ty), Some(Key::VarKey(*v)));
+                f(Key::MapVal(reg, ty), Some(Key::VarVal(*v)));
+                f(Key::VarKey(*v), Some(Key::MapKey(reg, ty)));
+                f(Key::VarVal(*v), Some(Key::MapVal(reg, ty)));
+            },
             StoreVarStr(v, src) => f(Key::Var(*v), Some(src.into())),
             StoreVarInt(v, src) => f(Key::Var(*v), Some(src.into())),
 

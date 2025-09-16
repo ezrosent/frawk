@@ -663,6 +663,14 @@ impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, Int>>> for StrMap<'a, Int> {
     }
 }
 
+impl<'a> From<Shuttle<HashMap<UniqueStr<'a>, UniqueStr<'a>>>> for StrMap<'a, Str<'a>> {
+    fn from(sh: Shuttle<HashMap<UniqueStr<'a>, UniqueStr<'a>>>) -> Self {
+        SharedMap(Rc::new(RefCell::new(
+            sh.0.into_iter().map(|(x, y)| (x.into_str(), y.into_str())).collect(),
+        )))
+    }
+}
+
 impl<K, V> SharedMap<K, V> {
     fn borrow_mut(&self) -> impl std::ops::DerefMut<Target = HashMap<K, V>> + '_ {
         // Unlike the full std::collections APIs, we are careful not to hand out any references
@@ -726,6 +734,18 @@ impl<'a> StrMap<'a, Int> {
                 .borrow()
                 .iter()
                 .map(|(x, y)| (UniqueStr::from(x.clone()), *y))
+                .collect(),
+        )
+    }
+}
+
+impl<'a> StrMap<'a, Str<'a>> {
+    pub(crate) fn shuttle(&self) -> Shuttle<HashMap<UniqueStr<'a>, UniqueStr<'a>>> {
+        Shuttle(
+            self.0
+                .borrow()
+                .iter()
+                .map(|(x, y)| (UniqueStr::from(x.clone()), UniqueStr::from(y.clone())))
                 .collect(),
         )
     }

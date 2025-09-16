@@ -1886,6 +1886,7 @@ impl<'a, 'b> View<'a, 'b> {
                     Ty::Int => LL::LoadVarInt(target_reg.into(), *bv),
                     Ty::MapIntStr => LL::LoadVarIntStrMap(target_reg.into(), *bv),
                     Ty::MapStrInt => LL::LoadVarStrIntMap(target_reg.into(), *bv),
+                    Ty::MapStrStr => LL::LoadVarStrStrMap(target_reg.into(), *bv),
                     _ => unreachable!(),
                 });
                 self.convert(dst_reg, dst_ty, target_reg, target_ty)?
@@ -1936,6 +1937,7 @@ impl<'a, 'b> View<'a, 'b> {
                     Str => LL::StoreVarStr(*v, reg.into()),
                     MapIntStr => LL::StoreVarIntStrMap(*v, reg.into()),
                     MapStrInt => LL::StoreVarStrIntMap(*v, reg.into()),
+                    MapStrStr => LL::StoreVarStrStrMap(*v, reg.into()),
                     Int => LL::StoreVarInt(*v, reg.into()),
                     _ => return err!("unexpected type for variable {} : {:?}", v, ty),
                 });

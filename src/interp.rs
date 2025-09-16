@@ -1233,6 +1233,16 @@ impl<'a, LR: LineReader> Interp<'a, LR> {
                         let s = self.get(src).clone();
                         self.core.vars.store_strintmap(*var, s)?;
                     }
+                    LoadVarStrStrMap(dst, var) => {
+                        let arr = self.core.vars.load_strstrmap(*var)?;
+                        let dst = *dst;
+                        *self.get_mut(dst) = arr;
+                    }
+                    StoreVarStrStrMap(var, src) => {
+                        let src = *src;
+                        let s = self.get(src).clone();
+                        self.core.vars.store_strstrmap(*var, s)?;
+                    }
 
                     IterBegin { map_ty, map, dst } => self.iter_begin(*map_ty, *map, *dst),
                     IterHasNext { iter_ty, dst, iter } => self.iter_has_next(*iter_ty, *dst, *iter),
