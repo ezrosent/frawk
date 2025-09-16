@@ -968,31 +968,31 @@ pub(crate) trait CodeGenerator: Backend {
                 self.call_void(external!(store_var_int), &mut [rt, varv, srcv])?;
                 Ok(())
             }
-            LoadVarIntMap(dst, var) => {
+            LoadVarIntStrMap(dst, var) => {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
-                let res = self.call_intrinsic(intrinsic!(load_var_intmap), &mut [rt, varv])?;
+                let res = self.call_intrinsic(intrinsic!(load_var_intstrmap), &mut [rt, varv])?;
                 let dref = dst.reflect();
                 self.bind_val(dref, res)
             }
-            StoreVarIntMap(var, src) => {
+            StoreVarIntStrMap(var, src) => {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_void(external!(store_var_intmap), &mut [rt, varv, srcv])
+                self.call_void(external!(store_var_intstrmap), &mut [rt, varv, srcv])
             }
-            LoadVarStrMap(dst, var) => {
+            LoadVarStrIntMap(dst, var) => {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
-                let res = self.call_intrinsic(intrinsic!(load_var_strmap), &mut [rt, varv])?;
+                let res = self.call_intrinsic(intrinsic!(load_var_strintmap), &mut [rt, varv])?;
                 let dref = dst.reflect();
                 self.bind_val(dref, res)
             }
-            StoreVarStrMap(var, src) => {
+            StoreVarStrIntMap(var, src) => {
                 let rt = self.runtime_val();
                 let varv = self.const_int(*var as i64);
                 let srcv = self.get_val(src.reflect())?;
-                self.call_void(external!(store_var_strmap), &mut [rt, varv, srcv])?;
+                self.call_void(external!(store_var_strintmap), &mut [rt, varv, srcv])?;
                 Ok(())
             }
             LoadSlot { ty, dst, slot } => self.load_slot((*dst, *ty), *slot),

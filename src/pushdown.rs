@@ -274,8 +274,8 @@ impl UsedFieldAnalysis {
                 self.dfa.add_src(dst, FieldSet::singleton(*i as usize))
             }
 
-            LoadVarStrMap(_, Variable::FI)
-            | StoreVarStrMap(Variable::FI, _)
+            LoadVarStrIntMap(_, Variable::FI)
+            | StoreVarStrIntMap(Variable::FI, _)
             | Lookup { .. }
             | Store { .. }
             | IterBegin { .. }
