@@ -215,6 +215,7 @@ impl Display for Variable {
                 RLENGTH => "RLENGTH",
                 PID => "PID",
                 FI => "FI",
+                ENVIRON => "ENVIRON",
             }
         )
     }

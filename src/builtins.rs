@@ -526,6 +526,7 @@ pub(crate) enum Variable {
     FNR = 11,
     PID = 12,
     FI = 13,
+    ENVIRON = 14,
 }
 
 impl From<Variable> for compile::Ty {
@@ -536,6 +537,7 @@ impl From<Variable> for compile::Ty {
             PID | ARGC | NF | NR | FNR | RSTART | RLENGTH => compile::Ty::Int,
             ARGV => compile::Ty::MapIntStr,
             FI => compile::Ty::MapStrInt,
+            ENVIRON => compile::Ty::MapStrStr,
         }
     }
 }
@@ -555,6 +557,7 @@ pub(crate) struct Variables<'a> {
     pub rlength: Int,
     pub pid: Int,
     pub fi: StrMap<'a, Int>,
+    pub environ: StrMap<'a, Str<'a>>,
 }
 
 impl<'a> Default for Variables<'a> {
@@ -574,9 +577,11 @@ impl<'a> Default for Variables<'a> {
             pid: 0,
             rlength: -1,
             fi: Default::default(),
+            environ: load_env_variables(),
         }
     }
 }
+
 impl<'a> Variables<'a> {
     pub fn load_int(&self, var: Variable) -> Result<Int> {
         use Variable::*;
@@ -588,7 +593,9 @@ impl<'a> Variables<'a> {
             RSTART => self.rstart,
             RLENGTH => self.rlength,
             PID => self.pid,
-            FI | ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
+            ARGV | OFS | ORS | FS | RS | FILENAME | FI | ENVIRON => {
+                return err!("var {} not an int", var)
+            }
         })
     }
 
@@ -602,7 +609,9 @@ impl<'a> Variables<'a> {
             RSTART => self.rstart = i,
             RLENGTH => self.rlength = i,
             PID => self.pid = i,
-            FI | ORS | OFS | FS | RS | FILENAME | ARGV => return err!("var {} not an int", var),
+            ARGV | OFS | ORS | FS | RS | FILENAME | FI | ENVIRON => {
+                return err!("var {} not an int", var)
+            }
         }
         Ok(())
     }
@@ -610,12 +619,12 @@ impl<'a> Variables<'a> {
     pub fn load_str(&self, var: Variable) -> Result<Str<'a>> {
         use Variable::*;
         Ok(match var {
-            FS => self.fs.clone(),
             OFS => self.ofs.clone(),
             ORS => self.ors.clone(),
+            FS => self.fs.clone(),
             RS => self.rs.clone(),
             FILENAME => self.filename.clone(),
-            FI | PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+            ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH | PID | FI | ENVIRON => {
                 return err!("var {} not a string", var)
             }
         })
@@ -624,61 +633,89 @@ impl<'a> Variables<'a> {
     pub fn store_str(&mut self, var: Variable, s: Str<'a>) -> Result<()> {
         use Variable::*;
         match var {
-            FS => self.fs = s,
             OFS => self.ofs = s,
             ORS => self.ors = s,
+            FS => self.fs = s,
             RS => self.rs = s,
             FILENAME => self.filename = s,
-            FI | PID | ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH => {
+            ARGC | ARGV | NF | NR | FNR | RSTART | RLENGTH | PID | FI | ENVIRON => {
                 return err!("var {} not a string", var)
             }
         };
         Ok(())
     }
 
-    pub fn load_intmap(&self, var: Variable) -> Result<IntMap<Str<'a>>> {
+    pub fn load_intstrmap(&self, var: Variable) -> Result<IntMap<Str<'a>>> {
         use Variable::*;
         match var {
             ARGV => Ok(self.argv.clone()),
-            FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
-                err!("var {} is not an int-keyed map", var)
+            ARGC | OFS | ORS | FS | RS | NF | NR | FNR | FILENAME | RSTART | RLENGTH
+            | PID | FI | ENVIRON => {
+                err!("var {} is not an int->string map", var)
             }
         }
     }
 
-    pub fn store_intmap(&mut self, var: Variable, m: IntMap<Str<'a>>) -> Result<()> {
+    pub fn store_intstrmap(&mut self, var: Variable, m: IntMap<Str<'a>>) -> Result<()> {
         use Variable::*;
         match var {
             ARGV => {
                 self.argv = m;
                 Ok(())
             }
-            FI | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART | RLENGTH => {
-                err!("var {} is not an int-keyed map", var)
-            }
-        }
-    }
-    pub fn load_strmap(&self, var: Variable) -> Result<StrMap<'a, Int>> {
-        use Variable::*;
-        match var {
-            FI => Ok(self.fi.clone()),
-            ARGV | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART
-            | RLENGTH => {
-                err!("var {} is not a string-keyed map", var)
+            ARGC | OFS | ORS | FS | RS | NF | NR | FNR | FILENAME | RSTART | RLENGTH
+            | PID | FI | ENVIRON => {
+                err!("var {} is not an int->string map", var)
             }
         }
     }
 
-    pub fn store_strmap(&mut self, var: Variable, m: StrMap<'a, Int>) -> Result<()> {
+    pub fn load_strintmap(&self, var: Variable) -> Result<StrMap<'a, Int>> {
+        use Variable::*;
+        match var {
+            FI => Ok(self.fi.clone()),
+            ARGC | ARGV | OFS | ORS | FS | RS | NF | NR | FNR | FILENAME | RSTART | RLENGTH
+            | PID | ENVIRON => {
+                err!("var {} is not a string->int map", var)
+            }
+        }
+    }
+
+    pub fn store_strintmap(&mut self, var: Variable, m: StrMap<'a, Int>) -> Result<()> {
         use Variable::*;
         match var {
             FI => {
                 self.fi = m;
                 Ok(())
             }
-            ARGV | PID | ORS | OFS | ARGC | NF | NR | FNR | FS | RS | FILENAME | RSTART
-            | RLENGTH => {
-                err!("var {} is not a string-keyed map", var)
+            ARGC | ARGV | OFS | ORS | FS | RS | NF | NR | FNR | FILENAME | RSTART | RLENGTH
+            | PID | ENVIRON => {
+                err!("var {} is not a string->int map", var)
+            }
+        }
+    }
+
+    pub fn load_strstrmap(&self, var: Variable) -> Result<StrMap<'a, Str<'a>>> {
+        use Variable::*;
+        match var {
+            ENVIRON => Ok(self.environ.clone()),
+            ARGC | ARGV | OFS | ORS | FS | RS | NF | NR | FNR | FILENAME | RSTART | RLENGTH
+            | PID | FI => {
+                err!("var {} is not a string->string map", var)
+            }
+        }
+    }
+
+    pub fn store_strstrmap(&mut self, var: Variable, m: StrMap<'a, Str<'a>>) -> Result<()> {
+        use Variable::*;
+        match var {
+            ENVIRON => {
+                self.environ = m;
+                Ok(())
+            }
+            ARGC | ARGV | OFS | ORS | FS | RS | NF | NR | FNR | FILENAME | RSTART | RLENGTH
+            | PID | FI => {
+                err!("var {} is not a string-string map", var)
             }
         }
     }
@@ -721,6 +758,10 @@ impl Variable {
                 key: types::BaseTy::Str,
                 val: types::BaseTy::Int,
             },
+            ENVIRON => types::TVar::Map {
+                key: types::BaseTy::Str,
+                val: types::BaseTy::Str,
+            },
             ORS | OFS | FS | RS | FILENAME => types::TVar::Scalar(types::BaseTy::Str),
         }
     }
@@ -755,6 +796,7 @@ impl TryFrom<usize> for Variable {
             11 => Ok(FNR),
             12 => Ok(PID),
             13 => Ok(FI),
+            14 => Ok(ENVIRON),
             _ => Err(()),
         }
     }
@@ -775,5 +817,14 @@ static_map!(
     ["RSTART", Variable::RSTART],
     ["RLENGTH", Variable::RLENGTH],
     ["PID", Variable::PID],
-    ["FI", Variable::FI]
+    ["FI", Variable::FI],
+    ["ENVIRON", Variable::ENVIRON]
 );
+
+fn load_env_variables<'a>() -> StrMap<'a, Str<'a>> {
+    let env = StrMap::default();
+    for (k, v) in std::env::vars() {
+        env.insert(k.into(), v.into());
+    }
+    env
+}

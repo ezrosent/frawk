@@ -162,6 +162,7 @@ impl<'a> Core<'a> {
         let filename: UniqueStr<'a> = self.vars.filename.clone().into();
         let argv = self.vars.argv.shuttle();
         let fi = self.vars.fi.shuttle();
+        let environ = self.vars.environ.shuttle();
         let slots = self.slots.clone();
         move || {
             let vars = Variables {
@@ -179,6 +180,7 @@ impl<'a> Core<'a> {
                 argc: 0,
                 argv: argv.into(),
                 fi: fi.into(),
+                environ: environ.into(),
             };
             Core {
                 vars,
