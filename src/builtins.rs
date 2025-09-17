@@ -823,7 +823,9 @@ static_map!(
 
 fn load_env_variables<'a>() -> StrMap<'a, Str<'a>> {
     let env = StrMap::default();
-    for (k, v) in std::env::vars() {
+    for (k, v) in std::env::vars_os() {
+        let k = k.as_encoded_bytes().to_owned();
+        let v = v.as_encoded_bytes().to_owned();
         env.insert(k.into(), v.into());
     }
     env
