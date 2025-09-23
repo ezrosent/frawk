@@ -189,7 +189,7 @@ mod tests {
     }
 
     // Helps type inference along.
-    fn ref_str(s: &[u8]) -> Str {
+    fn ref_str(s: &[u8]) -> Str<'_> {
         std::str::from_utf8(s).unwrap().into()
     }
 
@@ -331,10 +331,10 @@ mod tests {
 
     fn bytes(n: usize, line_pct: f64, space_pct: f64) -> Vec<u8> {
         let mut res = Vec::with_capacity(n);
-        use rand::distributions::{Distribution, Uniform};
-        let between = Uniform::new_inclusive(0.0, 1.0);
-        let ascii = Uniform::new_inclusive(33u8, 126u8);
-        let mut rng = rand::thread_rng();
+        use rand::distr::{Distribution, Uniform};
+        let between = Uniform::new_inclusive(0.0, 1.0).unwrap();
+        let ascii = Uniform::new_inclusive(33u8, 126u8).unwrap();
+        let mut rng = rand::rng();
         for _ in 0..n {
             let s = between.sample(&mut rng);
             if s < line_pct {
@@ -464,10 +464,10 @@ mod bench {
 
     fn bytes(n: usize, line_pct: f64, space_pct: f64) -> Vec<u8> {
         let mut res = Vec::with_capacity(n);
-        use rand::distributions::{Distribution, Uniform};
-        let between = Uniform::new_inclusive(0.0, 1.0);
-        let ascii = Uniform::new_inclusive(33u8, 126u8);
-        let mut rng = rand::thread_rng();
+        use rand::distr::{Distribution, Uniform};
+        let between = Uniform::new_inclusive(0.0, 1.0).unwrap();
+        let ascii = Uniform::new_inclusive(33u8, 126u8).unwrap();
+        let mut rng = rand::rng();
         for _ in 0..n {
             let s = between.sample(&mut rng);
             if s < line_pct {

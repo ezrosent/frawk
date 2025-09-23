@@ -727,7 +727,8 @@ impl<'a> Str<'a> {
         );
         let new_len = to - from;
         if new_len <= MAX_INLINE_SIZE {
-            return Str::from_rep(Inline::from_unchecked(&(*self.get_bytes())[from..to]).into());
+            let bytes: &[u8] = &*self.get_bytes();
+            return Str::from_rep(Inline::from_unchecked(&bytes[from..to]).into());
         }
         let tag = self.rep().get_tag();
         let u32_max = u32::max_value() as usize;
@@ -1637,11 +1638,11 @@ mod bench {
     use test::{black_box, Bencher};
 
     fn bench_max_min(b: &mut Bencher, min: i64, max: i64) {
-        use rand::{thread_rng, Rng};
-        let mut rng = thread_rng();
+        use rand::{rng as rand_rng, Rng};
+        let mut rng = rand_rng();
         let mut v = Vec::new();
         let size = 1 << 12;
-        v.resize_with(size, || rng.gen_range(min..=max));
+        v.resize_with(size, || rng.random_range(min..=max));
         let mut i = 0;
         b.iter(|| {
             let n = unsafe { *v.get_unchecked(i) };

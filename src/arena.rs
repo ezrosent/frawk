@@ -16,10 +16,10 @@ pub struct Arena(bumpalo::Bump);
 pub type Vec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
 impl Arena {
-    pub fn vec_with_capacity<T>(&self, capacity: usize) -> Vec<T> {
+    pub fn vec_with_capacity<T>(&self, capacity: usize) -> Vec<'_, T> {
         Vec::with_capacity_in(capacity, &self.0)
     }
-    pub fn new_vec<T>(&self) -> Vec<T> {
+    pub fn new_vec<T>(&self) -> Vec<'_, T> {
         Vec::new_in(&self.0)
     }
     pub fn new_vec_from_slice<'a, T: Clone>(&'a self, elts: &[T]) -> Vec<'a, T> {
@@ -106,7 +106,7 @@ mod bench {
         expr
     }
 
-    fn build_2(a: &Arena, depth: usize) -> &Arith2 {
+    fn build_2<'a>(a: &'a Arena, depth: usize) -> &'a Arith2<'a> {
         use Arith2::*;
         let mut expr = a.alloc(N(1));
         for i in 0..depth {
@@ -119,7 +119,7 @@ mod bench {
         expr
     }
 
-    fn build_2_cheat(a: &Arena, depth: usize) -> &Arith2 {
+    fn build_2_cheat<'a>(a: &'a Arena, depth: usize) -> &'a Arith2<'a> {
         use Arith2::*;
         let n1 = a.alloc(N(1));
         let mut expr = n1;

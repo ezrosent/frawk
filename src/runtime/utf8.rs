@@ -111,10 +111,10 @@ mod tests {
 
     fn bytes(n: usize, utf8_pct: f64) -> Vec<u8> {
         let mut res = Vec::with_capacity(n);
-        use rand::distributions::{Distribution, Uniform};
-        let ascii = Uniform::new_inclusive(0u8, 127u8);
-        let between = Uniform::new_inclusive(0.0, 1.0);
-        let mut rng = rand::thread_rng();
+        use rand::distr::{Distribution, Uniform};
+        let ascii = Uniform::new_inclusive(0u8, 127u8).unwrap();
+        let between = Uniform::new_inclusive(0.0, 1.0).unwrap();
+        let mut rng = rand::rng();
         for _ in 0..n {
             if between.sample(&mut rng) < utf8_pct {
                 let c = rand::random::<char>();
@@ -224,10 +224,10 @@ mod bench {
 
     fn bytes(n: usize, utf8_pct: f64) -> Vec<u8> {
         let mut res = Vec::with_capacity(n);
-        use rand::distributions::{Distribution, Uniform};
-        let ascii = Uniform::new_inclusive(0u8, 127u8);
-        let between = Uniform::new_inclusive(0.0, 1.0);
-        let mut rng = rand::thread_rng();
+        use rand::distr::{Distribution, Uniform};
+        let ascii = Uniform::new_inclusive(0u8, 127u8).unwrap();
+        let between = Uniform::new_inclusive(0.0, 1.0).unwrap();
+        let mut rng = rand::rng();
         for _ in 0..n {
             if between.sample(&mut rng) < utf8_pct {
                 let c = rand::random::<char>();
