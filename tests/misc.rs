@@ -369,6 +369,23 @@ fn nested_loops() {
 }
 
 #[test]
+fn for_loops_with_continue_and_update_statement() {
+    let expected = "0 0\n0 1\n0 3\n0 4\n0 5\n2 0\n2 1\n2 3\n2 4\n2 5\n3 0\n3 1\n3 3\n3 4\n3 5\n4 0\n4 1\n4 3\n4 4\n4 5\n";
+    let prog: String =
+        "BEGIN { for (i = 0; i < 5; i++) { if (i == 1) { continue; } for (j = -1; j < 5;) { j += 1; if (j == 2) { continue; } print i,j; } } }".into();
+    for backend_arg in BACKEND_ARGS {
+        let output = Command::cargo_bin("frawk")
+            .unwrap()
+            .arg(String::from(*backend_arg))
+            .arg(prog.clone())
+            .output()
+            .unwrap()
+            .stdout;
+        unordered_output_equals(expected.as_bytes(), &output[..]);
+    }
+}
+
+#[test]
 fn dont_reorder_files_with_f() {
     let expected = "1 1\n2 2\n3 3\n";
     let prog = "NR == FNR { print NR, FNR}";
