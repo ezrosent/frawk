@@ -974,6 +974,31 @@ impl<'a> From<&'a [u8]> for Str<'a> {
     }
 }
 
+impl<'a> From<Vec<u8>> for Str<'a> {
+    fn from(bs: Vec<u8>) -> Str<'a> {
+        if bs.is_empty() {
+            Default::default()
+        } else if bs.len() <= MAX_INLINE_SIZE {
+            Str::from_rep(unsafe { Inline::from_raw(bs.as_ptr(), bs.len()).into() })
+        } else if bs.as_ptr() as usize & 0x7 != 0 {
+            // Vec<u8> are not guaranteed to be word aligned. Copy over Vec<u8> that aren't.
+            let buf = Buf::read_from_bytes(&bs);
+            let boxed = Boxed {
+                len: bs.len() as u64,
+                buf,
+            };
+            Str::from_rep(boxed.into())
+        } else {
+            let literal = Literal {
+                len: bs.len() as u64,
+                ptr: bs.as_ptr(),
+                _marker: PhantomData,
+            };
+            Str::from_rep(literal.into())
+        }
+    }
+}
+
 impl<'a> From<String> for Str<'a> {
     fn from(s: String) -> Str<'a> {
         if s.is_empty() {

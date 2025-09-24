@@ -101,8 +101,8 @@ impl<'a> StringConstantAnalysis<'a> {
             }
             // Note that variables can be set "out of band", so by default we aren't treating them
             // as standard registers.
-            StoreVarStrMap(Variable::FI, _)
-            | LoadVarStrMap(_, Variable::FI)
+            StoreVarStrIntMap(Variable::FI, _)
+            | LoadVarStrIntMap(_, Variable::FI)
             | Lookup { .. }
             | Store { .. }
             | IterBegin { .. }
