@@ -122,7 +122,6 @@ struct Frame {
     // somewhat differently).
     header_block: Block,
     n_params: usize,
-    n_vars: usize,
 }
 
 /// Function-independent data used in compilation
@@ -205,18 +204,15 @@ impl Jit for Generator {
 fn jit_builder() -> Result<JITBuilder> {
     // Adapted from the cranelift source.
     let mut flag_builder = settings::builder();
-    cfg_if::cfg_if! {
-        if #[cfg(target_arch = "aarch64")] {
-            // See https://github.com/bytecodealliance/wasmtime/issues/2735
-            flag_builder.set("is_pic", "false").unwrap();
-            // Notes from cranelift source: "On at least AArch64, 'colocated' calls use
-            // shorter-range relocations, which might not reach all definitions; we
-            // can't handle that here, so we require long-range relocation types."
-            flag_builder.set("use_colocated_libcalls", "false").unwrap();
-        } else {
-            flag_builder.set("is_pic", "true").unwrap();
-        }
-    }
+    flag_builder.set("is_pic", "false").unwrap();
+
+    // See https://github.com/bytecodealliance/wasmtime/issues/2735
+    // Notes from cranelift source: "On at least AArch64, 'colocated' calls use
+    // shorter-range relocations, which might not reach all definitions; we
+    // can't handle that here, so we require long-range relocation types."
+    #[cfg(target_arch = "aarch64")]
+    flag_builder.set("use_colocated_libcalls", "false").unwrap();
+
     let isa_builder = cranelift_native::builder()
         .map_err(|msg| err_raw!("host machine is not supported by cranelift: {}", msg))?;
     flag_builder.enable("enable_llvm_abi_extensions").unwrap();
@@ -309,12 +305,10 @@ impl Generator {
         // Now, build each global variable "by hand". Allocate a variable for it, assign it to the
         // address of a default value of the type in question on the stack.
         for (reg, ty) in globals {
-            let var = Variable::new(view.f.n_vars);
-            vars.push((var, ty));
-            view.f.n_vars += 1;
+            let var = view.builder.declare_var(ptr_ty);
             let cl_ty = view.get_ty(ty);
             let ptr_ty = view.ptr_to(cl_ty);
-            view.builder.declare_var(var, ptr_ty);
+            view.builder.declare_var(ptr_ty);
 
             let slot = view.stack_slot_bytes(cl_ty.lane_bits() / 8);
             let default = view.default_value(ty)?;
@@ -393,7 +387,6 @@ impl Generator {
                 header_block,
                 // this will get overwritten in process_args
                 runtime: Variable::new(0),
-                n_vars: 0,
                 vars: Default::default(),
                 iters: Default::default(),
                 header_actions: Default::default(),
@@ -480,16 +473,10 @@ impl Generator {
     }
 }
 
-macro_rules! external {
-    ($name:ident) => {
-        crate::codegen::intrinsics::$name as *const u8
-    };
-}
-
 impl<'a> View<'a> {
     fn stack_slot_bytes(&mut self, bytes: u32) -> StackSlot {
         debug_assert!(bytes > 0); // This signals a bug; all frawk types have positive size.
-        let data = StackSlotData::new(StackSlotKind::ExplicitSlot, bytes);
+        let data = StackSlotData::new(StackSlotKind::ExplicitSlot, bytes, 0);
         self.builder.create_sized_stack_slot(data)
     }
 
@@ -609,9 +596,7 @@ impl<'a> View<'a> {
             .cloned()
             .collect();
         for (i, (val, (rf, ty))) in params.into_iter().zip(param_tys).enumerate() {
-            let var = Variable::new(self.f.n_vars);
-            self.f.n_vars += 1;
-            self.builder.declare_var(var, ty);
+            let var = self.builder.declare_var(ty);
             self.builder.def_var(var, val);
             if i == self.f.n_params - 1 {
                 // runtime
@@ -830,26 +815,24 @@ impl<'a> View<'a> {
     /// Initialize the `Variable` associated with a non-iterator local variable of type `ty`.
     fn declare_local(&mut self, ty: compile::Ty) -> Result<Variable> {
         use compile::Ty::*;
-        let next_var = Variable::new(self.f.n_vars);
-        self.f.n_vars += 1;
         let cl_ty = self.get_ty(ty);
+        let next_var = match ty {
+            Null | Int | Float => {
+                self.builder.declare_var(cl_ty)
+            },
+            Str => {
+                let ptr_ty = self.ptr_to(cl_ty);
+                self.builder.declare_var(ptr_ty)
+            },
+            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
+                self.builder.declare_var(cl_ty)
+            },
+            IterInt | IterStr => return err!("iterators cannot be declared"),
+        };
         // Remember to allocate/initialize this variable in the header
         self.f
             .header_actions
             .push(EntryDeclaration { ty, var: next_var });
-        match ty {
-            Null | Int | Float => {
-                self.builder.declare_var(next_var, cl_ty);
-            }
-            Str => {
-                let ptr_ty = self.ptr_to(cl_ty);
-                self.builder.declare_var(next_var, ptr_ty);
-            }
-            MapIntInt | MapIntFloat | MapIntStr | MapStrInt | MapStrFloat | MapStrStr => {
-                self.builder.declare_var(next_var, cl_ty);
-            }
-            IterInt | IterStr => return err!("iterators cannot be declared"),
-        }
         Ok(next_var)
     }
 
@@ -858,13 +841,9 @@ impl<'a> View<'a> {
         use compile::Ty::*;
         match ty {
             IterStr | IterInt => {
-                let bytes = Variable::new(self.f.n_vars);
-                let cur = Variable::new(self.f.n_vars + 1);
-                let base = Variable::new(self.f.n_vars + 2);
-                self.f.n_vars += 3;
-                self.builder.declare_var(bytes, types::I64);
-                self.builder.declare_var(cur, types::I64);
-                self.builder.declare_var(base, self.void_ptr_ty());
+                let bytes = self.builder.declare_var(types::I64);
+                let cur = self.builder.declare_var(types::I64);
+                let base = self.builder.declare_var(self.void_ptr_ty());
                 Ok(IterState { bytes, cur, base })
             }
             Null | Int | Float | Str | MapIntInt | MapIntFloat | MapIntStr | MapStrInt

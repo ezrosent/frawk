@@ -437,30 +437,36 @@ impl<'a> Drop for Runtime<'a> {
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn exit(runtime: *mut c_void, code: Int) {
     exit!(runtime, code as i32);
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn run_system(cmd: *mut U128) -> Int {
     let s: &Str = &*(cmd as *mut Str);
     s.with_bytes(runtime::run_command)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn rand_float(runtime: *mut c_void) -> f64 {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.rng.random_range(0.0..=1.0)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn seed_rng(runtime: *mut c_void, seed: Int) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.reseed(seed as u64) as Int
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn reseed_rng(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     runtime.core.reseed_random() as Int
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn read_err(
     runtime: *mut c_void,
     file: *mut c_void,
@@ -481,12 +487,14 @@ pub(crate) unsafe extern "C" fn read_err(
     )
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn read_err_stdin(runtime: *mut c_void) -> Int {
     let runtime = &mut *(runtime as *mut Runtime);
     with_input!(&mut runtime.input_data, |(_, read_files)| read_files
         .read_err_stdin())
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let changed = try_abort!(
@@ -504,6 +512,7 @@ pub(crate) unsafe extern "C" fn next_line_stdin_fused(runtime: *mut c_void) {
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn next_file(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     try_abort!(
@@ -514,6 +523,7 @@ pub(crate) unsafe extern "C" fn next_file(runtime: *mut c_void) {
     );
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let (changed, res) = try_abort!(
@@ -532,6 +542,7 @@ pub(crate) unsafe extern "C" fn next_line_stdin(runtime: *mut c_void) -> U128 {
     mem::transmute::<Str, U128>(res)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn next_line(
     runtime: *mut c_void,
     file: *mut c_void,
@@ -551,6 +562,7 @@ pub(crate) unsafe extern "C" fn next_line(
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let fi = &runtime.core.vars.fi;
@@ -559,6 +571,7 @@ pub(crate) unsafe extern "C" fn update_used_fields(runtime: *mut c_void) {
     });
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn set_fi_entry(runtime: *mut c_void, key: Int, val: Int) {
     let rt = &mut *(runtime as *mut Runtime);
     let fi = &rt.core.vars.fi;
@@ -566,6 +579,7 @@ pub(crate) unsafe extern "C" fn set_fi_entry(runtime: *mut c_void, key: Int, val
     fi.insert(k, val);
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn split_str(
     runtime: *mut c_void,
     to_split: *mut c_void,
@@ -588,6 +602,7 @@ pub(crate) unsafe extern "C" fn split_str(
     res
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn split_int(
     runtime: *mut c_void,
     to_split: *mut c_void,
@@ -610,6 +625,7 @@ pub(crate) unsafe extern "C" fn split_int(
     res
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 {
     let runtime = &mut *(runtime as *mut Runtime);
     let col_str = with_input!(&mut runtime.input_data, |(line, _)| {
@@ -627,6 +643,7 @@ pub(crate) unsafe extern "C" fn get_col(runtime: *mut c_void, col: Int) -> U128 
     mem::transmute::<Str, U128>(res)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
     let sep: Str<'static> = ",".into();
     let runtime = &mut *(runtime as *mut Runtime);
@@ -645,6 +662,7 @@ pub(crate) unsafe extern "C" fn join_csv(runtime: *mut c_void, start: Int, end: 
     mem::transmute::<Str, U128>(res)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: Int) -> U128 {
     let sep: Str<'static> = "\t".into();
     let runtime = &mut *(runtime as *mut Runtime);
@@ -663,6 +681,7 @@ pub(crate) unsafe extern "C" fn join_tsv(runtime: *mut c_void, start: Int, end: 
     mem::transmute::<Str, U128>(res)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn join_cols(
     runtime: *mut c_void,
     start: Int,
@@ -685,16 +704,19 @@ pub(crate) unsafe extern "C" fn join_cols(
     mem::transmute::<Str, U128>(res)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn to_upper_ascii(s: *mut U128) -> U128 {
     let res = (*(s as *mut Str as *const Str)).to_upper_ascii();
     mem::transmute::<Str, U128>(res)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn to_lower_ascii(s: *mut U128) -> U128 {
     let res = (*(s as *mut Str as *const Str)).to_lower_ascii();
     mem::transmute::<Str, U128>(res)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut c_void) {
     let runtime = &mut *(runtime as *mut Runtime);
     let s = &*(s as *mut Str);
@@ -708,11 +730,13 @@ pub(crate) unsafe extern "C" fn set_col(runtime: *mut c_void, col: Int, s: *mut 
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn str_len(s: *mut c_void) -> usize {
     let s = &*(s as *mut Str);
     s.len()
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn starts_with_const(
     s1: *mut c_void,
     base: *const u8,
@@ -725,6 +749,7 @@ pub(crate) unsafe extern "C" fn starts_with_const(
     ((s1_bytes.len() >= other.len()) && &s1_bytes[..other.len()] == other) as Int
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128 {
     let s1 = &*(s1 as *mut Str);
     let s2 = &*(s2 as *mut Str);
@@ -732,6 +757,7 @@ pub(crate) unsafe extern "C" fn concat(s1: *mut c_void, s2: *mut c_void) -> U128
     mem::transmute::<Str, U128>(res)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn match_pat(
     runtime: *mut c_void,
     s: *mut c_void,
@@ -748,12 +774,14 @@ pub(crate) unsafe extern "C" fn match_pat(
     res as Int
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn match_const_pat(s: *mut c_void, pat: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     let pat = &*(pat as *const Regex);
     RegexCache::regex_const_match(pat, s) as Int
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn match_pat_loc(
     runtime: *mut c_void,
     s: *mut c_void,
@@ -770,6 +798,7 @@ pub(crate) unsafe extern "C" fn match_pat_loc(
     res as Int
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn match_const_pat_loc(
     runtime: *mut c_void,
     s: *mut c_void,
@@ -785,12 +814,14 @@ pub(crate) unsafe extern "C" fn match_const_pat_loc(
     )
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn substr_index(s: *mut U128, t: *mut U128) -> Int {
     let s = &*(s as *mut Str);
     let t = &*(t as *mut Str);
     runtime::string_search::index_substr(/*needle*/ t, /*haystack*/ s)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn subst_first(
     runtime: *mut c_void,
     pat: *mut U128,
@@ -812,6 +843,7 @@ pub(crate) unsafe extern "C" fn subst_first(
     new as Int
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn subst_all(
     runtime: *mut c_void,
     pat: *mut U128,
@@ -833,6 +865,7 @@ pub(crate) unsafe extern "C" fn subst_all(
     nsubs
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn gen_subst(
     runtime: *mut c_void,
     pat: *mut U128,
@@ -855,14 +888,17 @@ pub(crate) unsafe extern "C" fn gen_subst(
     mem::transmute::<Str, U128>(subbed)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn escape_csv(s: *mut U128) -> U128 {
     mem::transmute::<Str, U128>(runtime::escape_csv(&*(s as *mut Str)))
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn escape_tsv(s: *mut U128) -> U128 {
     mem::transmute::<Str, U128>(runtime::escape_tsv(&*(s as *mut Str)))
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 {
     use std::cmp::{max, min};
     let base = &*(base as *mut Str);
@@ -876,15 +912,18 @@ pub(crate) unsafe extern "C" fn substr(base: *mut U128, l: Int, r: Int) -> U128 
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn ref_str(s: *mut c_void) {
     mem::forget((*(s as *mut Str)).clone())
 }
 
 // This is a "slow path" drop, used by cranelift only for the time being.
+#[inline(never)]
 pub(crate) unsafe extern "C" fn drop_str(s: *mut U128) {
     std::ptr::drop_in_place(s as *mut Str)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn drop_str_slow(s: *mut U128, tag: u64) {
     (*(s as *mut Str)).drop_with_tag(tag)
 }
@@ -902,33 +941,40 @@ unsafe fn drop_map_generic<K, V>(m: *mut c_void) {
 // XXX: relying on this doing the same thing regardless of type. We probably want a custom Rc to
 // guarantee this.
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn ref_map(m: *mut c_void) {
     ref_map_generic::<Int, Str>(m)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn int_to_str(i: Int) -> U128 {
     mem::transmute::<Str, U128>(runtime::convert::<Int, Str>(i))
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn float_to_str(f: Float) -> U128 {
     mem::transmute::<Str, U128>(runtime::convert::<Float, Str>(f))
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     runtime::convert::<&Str, Int>(s)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn hex_str_to_int(s: *mut c_void) -> Int {
     let s = &*(s as *mut Str);
     s.with_bytes(runtime::hextoi)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn str_to_float(s: *mut c_void) -> Float {
     let s = &*(s as *mut Str);
     runtime::convert::<&Str, Float>(s)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U128 {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
@@ -939,6 +985,7 @@ pub(crate) unsafe extern "C" fn load_var_str(rt: *mut c_void, var: usize) -> U12
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
@@ -949,6 +996,7 @@ pub(crate) unsafe extern "C" fn store_var_str(rt: *mut c_void, var: usize, s: *m
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
@@ -966,6 +1014,7 @@ pub(crate) unsafe extern "C" fn load_var_int(rt: *mut c_void, var: usize) -> Int
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: Int) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
@@ -975,6 +1024,7 @@ pub(crate) unsafe extern "C" fn store_var_int(rt: *mut c_void, var: usize, i: In
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
@@ -985,6 +1035,7 @@ pub(crate) unsafe extern "C" fn load_var_intmap(rt: *mut c_void, var: usize) -> 
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, map: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
@@ -996,6 +1047,7 @@ pub(crate) unsafe extern "C" fn store_var_intmap(rt: *mut c_void, var: usize, ma
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> *mut c_void {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
@@ -1006,6 +1058,7 @@ pub(crate) unsafe extern "C" fn load_var_strmap(rt: *mut c_void, var: usize) -> 
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, map: *mut c_void) {
     let runtime = &mut *(rt as *mut Runtime);
     if let Ok(var) = Variable::try_from(var) {
@@ -1019,6 +1072,7 @@ pub(crate) unsafe extern "C" fn store_var_strmap(rt: *mut c_void, var: usize, ma
 
 macro_rules! str_compare_inner {
     ($name:ident, $op:tt) => {
+        #[inline(never)]
         pub(crate) unsafe extern "C" fn $name(s1: *mut c_void, s2: *mut c_void) -> Int {
             let s1 = &*(s1 as *mut Str);
             let s2 = &*(s2 as *mut Str);
@@ -1035,10 +1089,12 @@ str_compare! {
     str_lt(<); str_gt(>); str_lte(<=); str_gte(>=); str_eq(==);
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn drop_iter_int(iter: *mut Int, len: usize) {
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(iter, len)))
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn drop_iter_str(iter: *mut U128, len: usize) {
     let p = iter as *mut Str;
     mem::drop(Box::from_raw(slice::from_raw_parts_mut(p, len)))
@@ -1063,10 +1119,16 @@ unsafe fn wrap_args<'a>(
                 ty_code
             )
         };
+
         let typed_arg: FormatArg = match ty {
-            Ty::Int => mem::transmute::<usize, Int>(arg).into(),
+            Ty::Int => (arg.cast_signed() as i64).into(),
             Ty::Float => Float::from_bits(arg as u64).into(),
-            Ty::Str => mem::transmute::<usize, &Str>(arg).clone().into(),
+            Ty::Str => {
+                unsafe {
+                    let str_ref = std::ptr::with_exposed_provenance::<Str>(arg).as_ref().unwrap();
+                    str_ref.clone().into()
+                }
+            },
             Ty::Null => FormatArg::Null,
             _ => fail!(
                 _rt,
@@ -1079,6 +1141,7 @@ unsafe fn wrap_args<'a>(
     format_args
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usize, num_args: Int) {
     let args_wrapped: &[&Str] =
         slice::from_raw_parts(args as *const usize as *const &Str, num_args as usize);
@@ -1086,6 +1149,7 @@ pub(crate) unsafe extern "C" fn print_all_stdout(rt: *mut c_void, args: *mut usi
     try_silent_abort!(rt, (*rt).core.write_files.write_all(args_wrapped, None))
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn print_all_file(
     rt: *mut c_void,
     args: *mut usize,
@@ -1110,6 +1174,7 @@ pub(crate) unsafe extern "C" fn print_all_file(
     )
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn printf_impl_file(
     rt: *mut c_void,
     spec: *mut U128,
@@ -1134,6 +1199,7 @@ pub(crate) unsafe extern "C" fn printf_impl_file(
     )
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn sprintf_impl(
     rt: *mut c_void,
     spec: *mut U128,
@@ -1152,6 +1218,7 @@ pub(crate) unsafe extern "C" fn sprintf_impl(
     mem::transmute::<Str, U128>(buf.into_str())
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn printf_impl_stdout(
     rt: *mut c_void,
     spec: *mut U128,
@@ -1170,6 +1237,7 @@ pub(crate) unsafe extern "C" fn printf_impl_stdout(
     }
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     let rt = &mut *(rt as *mut Runtime);
     let file = &*(file as *mut Str);
@@ -1177,42 +1245,52 @@ pub(crate) unsafe extern "C" fn close_file(rt: *mut c_void, file: *mut U128) {
     try_abort!(rt, rt.core.write_files.close(file));
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_cos(f: Float) -> Float {
     f.cos()
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_sin(f: Float) -> Float {
     f.sin()
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_log(f: Float) -> Float {
     f.ln()
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_log2(f: Float) -> Float {
     f.log2()
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_log10(f: Float) -> Float {
     f.log10()
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_exp(f: Float) -> Float {
     f.exp()
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_atan(f: Float) -> Float {
     f.atan()
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_atan2(x: Float, y: Float) -> Float {
     x.atan2(y)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_pow(x: Float, y: Float) -> Float {
     Float::powf(x, y)
 }
 
+#[inline(never)]
 pub(crate) unsafe extern "C" fn _frawk_fprem(x: Float, y: Float) -> Float {
     x % y
 }
@@ -1302,11 +1380,13 @@ macro_rules! convert_out {
 macro_rules! map_impl {
     ($ty:ident, $k:tt, $v:tt) => {
         paste! {
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [< alloc_ $ty >]() -> *mut c_void {
                 let res: runtime::SharedMap<$k, $v> = Default::default();
                 mem::transmute::<runtime::SharedMap<$k, $v>, *mut c_void>(res)
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [< iter_ $ty >](map: *mut c_void) -> iter_ty!($k) {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
@@ -1316,6 +1396,7 @@ macro_rules! map_impl {
                 Box::into_raw(b) as _
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<len_ $ty>](map: *mut c_void) -> Int {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
@@ -1324,6 +1405,7 @@ macro_rules! map_impl {
                 res as Int
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<lookup_ $ty>](map: *mut c_void, k: in_ty!($k)) -> out_ty!($v) {
                 // TODO: this should probably insert the value as well!
                 debug_assert!(!map.is_null());
@@ -1334,6 +1416,7 @@ macro_rules! map_impl {
                 convert_out!($v, res)
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<contains_ $ty>](map: *mut c_void, k: in_ty!($k)) -> Int {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
@@ -1343,6 +1426,7 @@ macro_rules! map_impl {
                 res
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<insert_ $ty>](map: *mut c_void, k: in_ty!($k), v: in_ty!($v)) {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
@@ -1352,6 +1436,7 @@ macro_rules! map_impl {
                 mem::forget(map);
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<delete_ $ty>](map: *mut c_void, k: in_ty!($k)) {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
@@ -1360,6 +1445,7 @@ macro_rules! map_impl {
                 mem::forget(map);
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<clear_ $ty>](map: *mut c_void) {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
@@ -1367,11 +1453,13 @@ macro_rules! map_impl {
                 mem::forget(map);
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<drop_ $ty>](map: *mut c_void) {
                 debug_assert!(!map.is_null());
                 drop_map_generic::<$k, $v>(map)
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<inc_int_ $ty>](map: *mut c_void, k: in_ty!($k), by: Int) -> out_ty!($v) {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
@@ -1381,6 +1469,7 @@ macro_rules! map_impl {
                 convert_out!($v, res)
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<inc_float_ $ty>](map: *mut c_void, k: in_ty!($k), by: Float) -> out_ty!($v) {
                 debug_assert!(!map.is_null());
                 let map = mem::transmute::<*mut c_void, runtime::SharedMap<$k, $v>>(map);
@@ -1403,11 +1492,13 @@ map_impl!(strstr, Str, Str);
 macro_rules! slot_impl {
     ($name:ident, $ty:tt) => {
         paste! {
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<load_slot_ $name>](runtime: *mut c_void, slot: Int) -> out_ty!($ty) {
                 let runtime = &mut *(runtime as *mut Runtime);
                 convert_out!($ty, runtime.core.[<load_ $name>](slot as usize))
             }
 
+            #[inline(never)]
             pub(crate) unsafe extern "C" fn [<store_slot_ $name>](runtime: *mut c_void, slot: Int, v: in_ty!($ty)) {
                 let runtime = &mut *(runtime as *mut Runtime);
                 runtime

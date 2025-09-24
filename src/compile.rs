@@ -25,6 +25,7 @@ use std::sync::Arc;
 pub(crate) const UNUSED: u32 = u32::max_value();
 pub(crate) const NULL_REG: u32 = UNUSED - 1;
 
+#[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash, Default)]
 pub(crate) enum Ty {
     Int = 0,
