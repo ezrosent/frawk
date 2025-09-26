@@ -321,6 +321,29 @@ fn trivial_parallel_rc() {
 }
 
 #[test]
+fn statement_closed_by_right_brace() {
+    let expected = "test\n";
+    for (prog, rc) in [
+        (r#"BEGIN { if (1 == 1) print "test" }"#, 0),
+        (r#"BEGIN { if (1 == 1) if (2==2) print "test" }"#, 0),
+        (r#"BEGIN { if (1 == 1) if (2==3) print "wrongtest"; else print "test" }"#, 0),
+        (r#"BEGIN { for (i=0; i<1; i++) print "test" }"#, 0),
+        (r#"BEGIN { print "test"; while(n-->0){}}"#, 0),
+    ] {
+        for backend_arg in BACKEND_ARGS {
+            Command::cargo_bin("frawk")
+                .unwrap()
+                .arg(String::from(*backend_arg))
+                .arg(String::from(prog))
+                .arg("-pr")
+                .assert()
+                .stdout(expected)
+                .code(rc);
+        }
+    }
+}
+
+#[test]
 fn multi_rc() {
     let mut text = String::default();
     for _ in 0..50_000 {
